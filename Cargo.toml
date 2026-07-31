@@ -1,0 +1,36 @@
+[workspace]
+members = ["quality/harness"]
+default-members = ["quality/harness"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+nursery = "deny"
+must_use_candidate = "deny"
+missing_errors_doc = "deny"
+missing_panics_doc = "deny"
+return_self_not_must_use = "deny"
+use_self = "deny"
+allow_attributes_without_reason = "deny"
+as_underscore = "deny"
+dbg_macro = "deny"
+else_if_without_else = "deny"
+exit = "deny"
+expect_used = "deny"
+mem_forget = "deny"
+panic = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+undocumented_unsafe_blocks = "deny"

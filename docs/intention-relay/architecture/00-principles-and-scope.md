@@ -52,7 +52,7 @@ A crate is not considered complete because it compiles or has unit tests. Each d
 
 ### 11. Reproducible quality gates are architectural
 
-Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, immediate tiered coverage requirements, feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates, and CI invokes `make ci` only. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
+Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, immediate tiered coverage requirements, feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates, and `make ci` is the sole CI verification gate after explicit runner setup. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Scope boundaries
 

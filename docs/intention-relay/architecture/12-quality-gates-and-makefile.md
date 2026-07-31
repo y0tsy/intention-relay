@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` initially aliases `make verify` so local and CI behavior cannot drift.
+`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` initially aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner may run explicit pinned-tool setup before it invokes `make ci`.
 
 ## Reproducible tooling
 
@@ -122,7 +122,7 @@ Where Clippy cannot enforce a rule, `make architecture` owns the check.
 
 Coverage is a blocking guardrail from the moment a crate contains production code. There is no grace baseline and no gradual ramp.
 
-The first implementation milestone must add a versioned coverage-policy file and checker over `cargo llvm-cov` output. The checker classifies crates, enforces thresholds, records exclusions, and emits a report artifact.
+The first implementation milestone must add a versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source files to each declared production crate, enforces that crate's individual tier, records exclusions, and emits a report artifact.
 
 ### Tiered line coverage thresholds
 
@@ -201,7 +201,8 @@ An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an i
 
 `make deps` and blocking CI must run:
 
-- `cargo deny` for advisories, licenses, banned crates, allowed sources, and duplicate-version policy;
+- `cargo metadata --locked` as the authoritative lockfile check;
+- `cargo deny check` for advisories, licenses, banned crates, allowed sources, and duplicate-version policy, using the supported syntax of the pinned cargo-deny version;
 - `cargo audit` as an independent advisory source;
 - `cargo udeps` for unused dependencies;
 - `cargo machete` for manifest hygiene;
@@ -250,7 +251,7 @@ The quality foundation is accepted only when the plans and, later, implementatio
 
 - formatting, compilation, linting, tests, documentation, architecture checks, coverage, and supply-chain checks are blocking;
 - tool versions are pinned and checked before every reproducible quality run;
-- Makefile commands orchestrate every non-mutating quality gate and CI calls `make ci` only;
+- Makefile commands orchestrate every non-mutating quality gate and CI invokes `make ci` as its sole verification command after explicit setup;
 - coverage thresholds apply immediately by crate tier with no unreviewed escape hatch;
 - adapters use mapping/contract/outcome evidence rather than a misleading aggregate UI line target;
 - linting is strict but pragmatic, with narrow justified exceptions rather than a blanket unworkable lint set;

@@ -1,0 +1,6 @@
+/target/
+/quality/reports/
+/.cargo-home/
+/.rustup-home/
+__pycache__/
+*.py[cod]
