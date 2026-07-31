@@ -1,0 +1,30 @@
+surface_id,area,visible_entry,frontend_handler,service_or_store,ipc_or_event,status,notes
+chat.send,Agent interaction,InputArea send,hSend,chatService.sendMessage,gateway.sendMessage -> send_message,proved,Creates session if needed and streams output
+chat.stop,Agent interaction,InputArea stop,hStop,chatService.stopAgent,gateway.stopAgent -> stop_agent,proved,Stops active session agent
+chat.retry,Agent interaction,ChatArea retry,hRetry,chatService.retryLastMessage,gateway.sendMessage -> send_message,proved,Resends the last user message
+chat.drop_files,Workspace,InputArea file drop,inline handler,inputService.ingestDroppedFiles,gateway.ingestDroppedFiles -> ingest_dropped_files,proved,Appends returned text to draft
+session.create,Sessions,TabBar/history creation,hCreateSession,sessionService.createSession,gateway.createSession -> create_session,proved,Can create with current project directory
+session.switch,Sessions,TabBar,hSwitchTab,sessionService.switchTab,gateway.getSession/getUsageStats/getTodos,proved,Restores view state and refreshes side effects
+session.open_history,Sessions,HistoryPanel,inline handler,sessionService.openInTab,gateway.getSession -> get_session,proved,Opens existing session in a tab
+session.close,Sessions,TabBar,hCloseTab,sessionService.closeTab,session store -> gateway.deleteSession,partial,Store route requires separate verification
+project.open,Workspace,TabBar project chooser,inline handler,sessionService.createOrOpenProject,gateway.createOrOpenProject -> create_or_open_project,proved,Native directory dialog then creates session
+project.switch,Workspace,TabBar/history,inline handler,sessionService.switchToProject,gateway.touchProject/getProject/createSession,proved,Switches project then opens a new session
+project.relink,Workspace,Sidebar Relink,hRelink,projectService.relinkProject,gateway.relinkProject -> relink_project,proved,Native directory dialog
+project.file_status,Workspace,Sidebar project indicators,hCheckFiles,projectStore.checkProjectFiles,gateway.checkProjectFiles -> check_project_files,proved,Shows AGENTS.md and memory presence
+mode.switch,Models,Build/Plan buttons,hToggleMode,modelStore.toggleMode,gateway.switchMode -> switch_mode,partial,Backend call is not awaited
+model.select,Models,Model popup,hSwitchModel,modelStore.switchModel,gateway.switchModel -> switch_model,proved,Optimistic selection with rollback
+reasoning.select,Models,ReasoningEffort,onSetReasoningEffort,modelStore.switchReasoningEffort,gateway.switchReasoningEffort -> switch_reasoning_effort,proved,Optimistic selection with rollback
+config.open,Configuration,Sidebar config button,onSetOpenPanel,shellStore,none,proved,Opens ConfigEditor
+config.save,Configuration,ConfigEditor save,ConfigEditor internal,configService,gateway.updateConfig/updateConfigFromToml -> backend,proved,Persists validated config but reload behavior is limited
+appearance.theme,Personalization,Sidebar theme,hToggleTheme,shell,local UI state,proved,Changes theme
+appearance.locale,Personalization,Sidebar language,hSetLocale,shell/Paraglide,local UI state,proved,Switches English/Russian locale
+plan.confirm,Plan workflow,PlanApproval,hConfirmPlan,chatService.confirmPlan,gateway.confirmPlan -> confirm_plan,proved,Streams plan execution response
+plan.reject,Plan workflow,PlanApproval,hRejectPlan,chatService.rejectPlan,gateway.rejectPlan -> reject_plan,proved,Streams feedback response
+question.answer,Questions,AskUserModal,hAnswer,confirmationService.answerAskUser,gateway.answerAskUser -> answer_ask_user,proved,Responds to backend question
+permission.respond,Permissions,ConfirmationBanner,component internal,confirmationService.confirmAction,gateway.confirmAction -> confirm_action,partial,Overlay dismiss policy not fully evidenced
+panel.agents,Observability,Sidebar agents button,onSetOpenPanel,TogglePanel/SubAgentsPanel,gateway.getSubAgents/cancelSubAgent,proved,Shows and cancels sub-agents
+panel.logs,Observability,Sidebar logs button,onSetOpenPanel,LogPanel,gateway.getLogBuffer/openLogStream,proved,Shows buffered and streamed logs
+panel.history,Observability,Sidebar history button,onOpenFullHistory,TogglePanel/HistoryPanel,session service,proved,Displays session history
+mcp.status,Integrations,McpStatusWidget,component internal,mcpService.getMcpStatus,gateway.getMcpStatus -> get_mcp_status,proved,Status-only UI
+status.usage,Observability,StatusBar,startup/session effects,usageStore,gateway.getUsageStats -> get_usage_stats,proved,Displays session usage
+status.todos,Observability,ChatArea/TodoPanel,stream/session effects,chatStore,gateway.getTodos plus stream chunks,proved,Displays task list

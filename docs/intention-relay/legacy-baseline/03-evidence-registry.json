@@ -1,0 +1,14 @@
+{
+  "audit_revision": "8604fde0566d4dfadf8124e0724c5a82df3b89de",
+  "standard": "static frontend-to-backend reachability",
+  "capabilities": [
+    {"id":"chat","status":"proved","entry":"InputArea","chain":"App.hSend > chatService.sendMessage > gateway.sendMessage > commands.sendMessage > Rust send_message","sources":["frontend/src/App.svelte","frontend/src/lib/chat-service.ts","frontend/src/lib/gateway.ts","src/commands.rs"]},
+    {"id":"sessions","status":"proved","entry":"TabBar and HistoryPanel","chain":"App handlers > sessionService > sessionStore/gateway > session commands","sources":["frontend/src/components/TabBar.svelte","frontend/src/components/HistoryPanel.svelte","frontend/src/lib/session-service.ts","src/commands.rs"]},
+    {"id":"projects","status":"proved","entry":"TabBar, HistoryPanel, Sidebar","chain":"sessionService/projectService > projectStore/gateway > project commands","sources":["frontend/src/App.svelte","frontend/src/lib/project-store.svelte.ts","frontend/src/lib/application-service.ts","src/commands.rs"]},
+    {"id":"models","status":"proved","entry":"Sidebar model and reasoning controls","chain":"App > modelStore > gateway > mode/model/provider commands","sources":["frontend/src/components/Sidebar.svelte","frontend/src/lib/model-store.svelte.ts","src/commands.rs"]},
+    {"id":"config","status":"proved","entry":"ConfigEditor","chain":"ConfigEditor > configService > gateway > config commands","sources":["frontend/src/components/ConfigEditor.svelte","frontend/src/lib/application-service.ts","src/commands.rs"]},
+    {"id":"plans_questions","status":"proved","entry":"OverlayHost","chain":"App handlers/event listeners > chat or confirmation services > gateway > plan/question commands","sources":["frontend/src/components/OverlayHost.svelte","frontend/src/lib/chat-service.ts","frontend/src/lib/event-listeners.ts","src/commands.rs"]},
+    {"id":"observability","status":"proved","entry":"StatusBar and TogglePanel","chain":"stores/services > gateway/event listeners > observability commands/events","sources":["frontend/src/components/StatusBar.svelte","frontend/src/components/TogglePanel.svelte","frontend/src/lib/application-service.ts","src/commands.rs"]},
+    {"id":"agent_behaviors","status":"proved-with-restart-limit","entry":"ConfigEditor plus chat","chain":"config update > startup create_agent > tools/prompt/compression > send_message","sources":["evidence/12-agent-runtime-behavior.md"]}
+  ]
+}
