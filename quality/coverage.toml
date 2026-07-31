@@ -1,0 +1,18 @@
+[tiers]
+A = 95.0
+B = 90.0
+C = 85.0
+
+[policy]
+phase = "m0"
+production_crates = []
+adapter_crates = []
+
+[crate_tiers]
+
+[[exclusions]]
+path = ""
+rationale = "M0 has no coverage exclusions."
+owner = ""
+equivalent_test_evidence = ""
+enabled = false

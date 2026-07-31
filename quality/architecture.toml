@@ -1,0 +1,153 @@
+[policy]
+phase = "m0"
+quality_harness = "quality-harness"
+allowed_m0_workspace_members = ["quality-harness"]
+
+[forbidden]
+source_patterns = [
+  "std::env::current_dir",
+  "std::process::exit",
+  "serde_json::Value",
+  "rusqlite::",
+  "tauri::",
+]
+reason_required_attributes = ["allow", "expect"]
+secret_assignment_patterns = ["api_key", "api-key", "secret", "token", "password"]
+
+[[future_crates]]
+name = "intention-types"
+responsibility = "Identifiers, schema versions, common errors, time, pagination, and envelopes."
+test_target = "dto and validation tests"
+coverage_tier = "A"
+
+[[future_crates]]
+name = "intention-domain"
+responsibility = "Domain DTOs, value validation, domain events, and invariants."
+test_target = "domain state and invariant tests"
+coverage_tier = "A"
+
+[[future_crates]]
+name = "intention-application"
+responsibility = "Commands, queries, use cases, and transaction orchestration."
+test_target = "use-case and architecture tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-runtime"
+responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
+test_target = "deterministic actor integration tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-storage"
+responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
+test_target = "repository contract tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-storage-sqlite"
+responsibility = "SQLite schema, migrations, projections, and repository implementation."
+test_target = "migration and transaction fault-injection tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-config"
+responsibility = "TOML parsing, validation, migrations, and resolved configuration DTOs."
+test_target = "configuration fixture tests"
+coverage_tier = "A"
+
+[[future_crates]]
+name = "intention-model"
+responsibility = "Provider-neutral model DTOs and driver contract."
+test_target = "model contract and stream tests"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-provider-openrouter"
+responsibility = "OpenRouter SDK translation."
+test_target = "provider stream and error fixtures"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-provider-generic-chat"
+responsibility = "Generic Chat Completion translation."
+test_target = "provider stream and capability fixtures"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-tools"
+responsibility = "Typed tool registry and core tool contracts."
+test_target = "tool invocation and policy tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-workspace"
+responsibility = "WorkspaceRoot path policy and process CWD enforcement."
+test_target = "workspace containment tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-hooks"
+responsibility = "Typed hook phases, ordering, contexts, and dispatch."
+test_target = "hook ordering and rejection tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-vfr"
+responsibility = "VFR transformation, mapping, expansion, and raw-read tools."
+test_target = "transform and expansion outcome tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-headroom"
+responsibility = "Headroom transform, CCR retention, and retrieve tool."
+test_target = "compression, retrieval, and expiry tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-plans"
+responsibility = "Plan artifacts, hidden frontmatter, and Plan/Build policy."
+test_target = "plan integrity and mode-policy tests"
+coverage_tier = "B"
+
+[[future_crates]]
+name = "intention-protocol"
+responsibility = "Versioned transport commands, queries, and events."
+test_target = "protocol compatibility fixtures"
+coverage_tier = "A"
+
+[[future_crates]]
+name = "intention-transport"
+responsibility = "Socket framing, server/client protocol, and subscriptions."
+test_target = "transport integration tests"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-client"
+responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
+test_target = "client contract and reconnect tests"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention"
+responsibility = "Composition root, factories, and daemon application facade."
+test_target = "composition wiring smoke tests"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-daemon"
+responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
+test_target = "bootstrap and recovery integration tests"
+coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-tauri"
+responsibility = "Tauri bootstrap and native bridge."
+test_target = "mapping contract and fixture-daemon smoke tests"
+coverage_tier = "adapter"
+
+[[future_crates]]
+name = "intention-tui"
+responsibility = "TUI and REPL presentation adapters."
+test_target = "mapping contract and fixture-daemon smoke tests"
+coverage_tier = "adapter"

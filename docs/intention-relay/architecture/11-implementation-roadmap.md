@@ -52,14 +52,15 @@ Every milestone after Milestone 0 must:
 ### Deliver
 
 - pinned Rust toolchain and required components;
-- pinned external-tool manifest for nextest, llvm-cov, deny, audit, udeps, machete, and outdated;
+- pinned external-tool manifest for nextest, llvm-cov, deny, audit, udeps, machete, and outdated, including validated invocation syntax for the pinned versions;
 - root Makefile following [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md), with explicit mutating versus non-mutating targets;
 - strict pragmatic workspace lint configuration with warnings denied and documented local-exception mechanism;
 - versioned coverage-tier policy and checker;
+- a minimal non-production `quality-harness` workspace member, used only to prove M0 Cargo, lint, test, documentation, and coverage pipelines before M1 creates product crates;
 - machine-readable required-v1-crate-set, responsibility, test-target, and feature-profile policies;
 - initial architecture-test harness;
 - supply-chain policy/allowlist files;
-- CI configuration that invokes `make ci` only.
+- CI configuration that performs explicit pinned-tool setup and invokes `make ci` as its only verification command.
 
 ### Tests first
 
@@ -78,7 +79,7 @@ Every milestone after Milestone 0 must:
 ### Acceptance outcomes
 
 - `make quick`, `make check`, `make verify`, and `make ci` have documented, reproducible, non-mutating behavior.
-- `make ci` is the only CI command and initially aliases the full `make verify` gate.
+- `make ci` is the only CI verification command and initially aliases the full `make verify` gate.
 - Each intentional quality defect above fails the intended gate.
 - The quality pipeline never installs tools, updates lockfiles, or repairs source implicitly.
 - No production crate can merge without a declared tier, test target, and architecture ownership entry.

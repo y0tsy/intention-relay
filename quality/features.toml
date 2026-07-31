@@ -1,0 +1,9 @@
+[profiles]
+default = []
+no_default = ["--no-default-features"]
+all = ["--all-features"]
+
+[[critical_combinations]]
+name = "none"
+features = []
+enabled = false

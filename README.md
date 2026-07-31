@@ -1,6 +1,6 @@
 # Intention Relay
 
-This repository currently contains the documented product baseline for a clean Intention Relay implementation. It does not yet contain application code.
+This repository currently contains the documented product baseline and M0 quality foundation for a clean Intention Relay implementation. It does not yet contain application or `intention-*` product crates.
 
 ## Documentation
 
