@@ -15,8 +15,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CARGO_TERM_COLOR: never
-      CARGO_HOME: ${{ github.workspace }}/.cargo-home
-      RUSTUP_HOME: ${{ github.workspace }}/.rustup-home
     steps:
       - uses: actions/checkout@v4
 
@@ -24,16 +22,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            .cargo-home/bin
-            .cargo-home/registry
-            .cargo-home/advisory-db
-            .cargo-home/git
-            .rustup-home
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/advisory-db
+            ~/.cargo/git
+            ~/.rustup
             target
             quality/reports
           key: quality-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'quality/tools.toml', 'quality/features.toml', 'Cargo.lock', 'deny.toml') }}
           restore-keys: |
             quality-${{ runner.os }}-
+
+      - name: Set canonical Rust homes
+        run: |
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Install pinned Rust toolchains
         run: |
@@ -44,9 +48,6 @@ jobs:
 
       - name: Install pinned quality tools
         run: make bootstrap-tools
-
-      - name: Expose canonical Cargo binaries
-        run: echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Run repository quality gate
         run: make ci
