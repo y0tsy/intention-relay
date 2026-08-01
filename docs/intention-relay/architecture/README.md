@@ -81,6 +81,7 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
+4. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
 
 ## Document map
 
