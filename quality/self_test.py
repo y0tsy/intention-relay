@@ -15,13 +15,21 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(command: list[str], *, cwd: Path, expect_success: bool) -> None:
+def run(
+    command: list[str],
+    *,
+    cwd: Path,
+    expect_success: bool,
+    expected_output: str | None = None,
+) -> None:
     completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    output = (completed.stdout + "\n" + completed.stderr).strip()
     succeeded = completed.returncode == 0
     if succeeded != expect_success:
-        output = (completed.stdout + "\n" + completed.stderr).strip()
         expectation = "succeed" if expect_success else "fail"
         raise RuntimeError(f"expected {' '.join(command)} to {expectation}, got {completed.returncode}: {output}")
+    if expected_output is not None and expected_output not in output:
+        raise RuntimeError(f"expected output to contain {expected_output!r}, got: {output}")
 
 
 @contextmanager
@@ -109,6 +117,55 @@ def test_m1_dependency_boundary(root: Path) -> None:
             encoding="utf-8",
         )
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+
+
+def test_workspace_dependency_cycle(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    manifest = root / "crates/intention-types/Cargo.toml"
+    with modified(policy), modified(manifest):
+        replace_once(policy, '"intention-types" = []', '"intention-types" = ["intention-protocol"]')
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "\n[dev-dependencies]\n",
+                '\nintention-protocol = { path = "../intention-protocol", version = "=0.0.0" }\n\n[dev-dependencies]\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="workspace dependency cycle: intention-types -> intention-protocol -> intention-domain -> intention-types",
+        )
+
+
+def test_executable_test_target_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts"]', 'test_targets = ["does-not-exist"]')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-types: declared integration test targets",
+        )
+    with modified(policy):
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts"]', 'test_targets = ["contracts", "contracts"]')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="future crate intention-types has duplicate test targets",
+        )
+    with modified(policy):
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = []', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-application: M1 skeleton must not declare integration test targets",
+        )
 
 
 def test_m1_skeleton_api_boundary(root: Path) -> None:
@@ -297,6 +354,8 @@ def main() -> None:
         test_tool_version_mismatch,
         test_missing_crate_metadata,
         test_m1_dependency_boundary,
+        test_workspace_dependency_cycle,
+        test_executable_test_target_policy,
         test_m1_skeleton_api_boundary,
         test_m1_public_resource_leak,
         test_m1_secret_projection,
