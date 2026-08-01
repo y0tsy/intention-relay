@@ -77,6 +77,7 @@ def main() -> None:
     if not isinstance(nightly_rustc_version, str) or not nightly_rustc_version:
         fail("nightly_rustc_version must be an explicit Rust version pin")
     require_version("Rust nightly", ["rustup", "run", nightly, "rustc", "--version"], nightly_rustc_version)
+    run(["rustup", "run", nightly, "rustdoc", "--version"])
 
     for component in policy["components"]["stable"]:
         require_component(stable, component)

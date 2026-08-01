@@ -103,6 +103,19 @@ concrete_implementation_crates = [
 ]
 
 [public_contracts]
+forbidden_type_prefixes = [
+  "std::fs::",
+  "std::path::",
+  "std::process::",
+  "tokio::",
+  "rusqlite::",
+  "tauri::",
+  "serde_json::Value",
+  "async_openai::",
+  "openrouter_sdk::",
+  "openrouter::",
+  "reqwest::",
+]
 provider_sdk_resource_patterns = [
   "async_openai::",
   "openrouter_sdk::",
