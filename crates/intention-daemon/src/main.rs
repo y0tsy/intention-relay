@@ -7,15 +7,13 @@
 )]
 
 use std::env;
-use std::path::PathBuf;
 
 use intention_transport::LocalEndpoint;
 
 fn main() {
-    let endpoint = env::args_os()
+    let endpoint = env::args()
         .nth(1)
-        .map(PathBuf::from)
-        .map(LocalEndpoint::from_path)
+        .map(LocalEndpoint::from_instance_id)
         .transpose()
         .and_then(|configured| configured.map_or_else(LocalEndpoint::platform_default, Ok));
     match endpoint.and_then(intention_daemon::run) {
