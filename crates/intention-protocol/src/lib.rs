@@ -1,12 +1,16 @@
 //! Versioned public local-protocol DTOs for Intention Relay.
 //!
-//! This crate contains no socket framing, client bootstrap, daemon lifecycle, or
-//! presentation logic. Those implementation boundaries start in M2.
+//! This crate defines typed wire contracts only. It contains no socket framing,
+//! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    GetSessionSnapshotQueryDto, RunModeDto, SendUserTurnCommandDto, StopRunCommandDto,
+    DomainEventDto, GetSessionSnapshotQueryDto, RunModeDto, SendUserTurnCommandDto,
+    StopRunCommandDto,
 };
-use intention_types::{DtoResult, ErrorDto, SchemaVersionDto, SessionEventSequenceDto, SessionId};
+use intention_types::{
+    CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 /// The protocol version negotiated before a client uses local transport.
@@ -58,6 +62,10 @@ impl ProtocolVersionDto {
 pub enum ProtocolCapabilityDto {
     /// The peer can subscribe to ordered session snapshots and event tails.
     SessionSubscriptions,
+    /// The peer can exchange correlation-bound request and response envelopes.
+    CorrelatedRequests,
+    /// The peer can obtain daemon health and readiness projections.
+    DaemonHealth,
 }
 
 /// A safe metadata handshake exchanged before any protocol command.
@@ -130,17 +138,78 @@ impl ProtocolHelloDto {
     }
 }
 
+/// The daemon's current readiness for requests after protocol negotiation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonReadinessDto {
+    /// The daemon has started but cannot yet serve session requests.
+    Starting,
+    /// The daemon can serve requests for its supported protocol version.
+    Ready,
+    /// The daemon is stopping and should not accept new work.
+    Draining,
+    /// The daemon cannot currently serve requests.
+    Unavailable,
+}
+
+/// A versioned, credential-free health projection from the daemon authority.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DaemonHealthDto {
+    schema_version: SchemaVersionDto,
+    protocol_version: ProtocolVersionDto,
+    readiness: DaemonReadinessDto,
+}
+
+impl DaemonHealthDto {
+    /// Creates a typed daemon health and readiness projection.
+    #[must_use]
+    pub const fn new(
+        schema_version: SchemaVersionDto,
+        protocol_version: ProtocolVersionDto,
+        readiness: DaemonReadinessDto,
+    ) -> Self {
+        Self {
+            schema_version,
+            protocol_version,
+            readiness,
+        }
+    }
+
+    /// Returns the projection schema version.
+    #[must_use]
+    pub const fn schema_version(self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the protocol version served by the daemon.
+    #[must_use]
+    pub const fn protocol_version(self) -> ProtocolVersionDto {
+        self.protocol_version
+    }
+
+    /// Returns the current daemon readiness state.
+    #[must_use]
+    pub const fn readiness(self) -> DaemonReadinessDto {
+        self.readiness
+    }
+}
+
 /// A subscription request scoped to one durable session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscribeSessionCommandDto {
     schema_version: SchemaVersionDto,
     session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<RunId>,
     after_sequence: Option<SessionEventSequenceDto>,
     requested_mode: RunModeDto,
 }
 
 impl SubscribeSessionCommandDto {
-    /// Creates a typed subscription request.
+    /// Creates a typed session-wide subscription request.
+    ///
+    /// This preserves the version-one constructor shape. Use
+    /// [`Self::with_run_id`] to scope a subscription to a particular run.
     #[must_use]
     pub const fn new(
         schema_version: SchemaVersionDto,
@@ -151,6 +220,25 @@ impl SubscribeSessionCommandDto {
         Self {
             schema_version,
             session_id,
+            run_id: None,
+            after_sequence,
+            requested_mode,
+        }
+    }
+
+    /// Creates a typed subscription request with an optional run scope.
+    #[must_use]
+    pub const fn with_run_id(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        run_id: Option<RunId>,
+        after_sequence: Option<SessionEventSequenceDto>,
+        requested_mode: RunModeDto,
+    ) -> Self {
+        Self {
+            schema_version,
+            session_id,
+            run_id,
             after_sequence,
             requested_mode,
         }
@@ -166,6 +254,12 @@ impl SubscribeSessionCommandDto {
     #[must_use]
     pub const fn session_id(self) -> SessionId {
         self.session_id
+    }
+
+    /// Returns the optional run scope requested by the adapter.
+    #[must_use]
+    pub const fn run_id(self) -> Option<RunId> {
+        self.run_id
     }
 
     /// Returns the last durable sequence already observed, if any.
@@ -197,6 +291,8 @@ pub enum ProtocolCommandDto {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolQueryDto {
+    /// Obtains the daemon's latest health and readiness projection.
+    GetDaemonHealth,
     /// Obtains the latest durable session projection.
     GetSessionSnapshot(GetSessionSnapshotQueryDto),
 }
@@ -212,48 +308,445 @@ pub enum ProtocolCommandResultDto {
 }
 
 /// The immutable correlation data returned for an accepted command.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProtocolAcceptedDto {
-    correlation_id: String,
+    correlation_id: CorrelationIdDto,
 }
 
-impl<'de> Deserialize<'de> for ProtocolAcceptedDto {
+impl ProtocolAcceptedDto {
+    /// Creates an accepted-command result bound to a canonical correlation ID.
+    #[must_use]
+    pub const fn new(correlation_id: CorrelationIdDto) -> Self {
+        Self { correlation_id }
+    }
+
+    /// Returns the opaque canonical correlation reference.
+    #[must_use]
+    pub const fn correlation_id(self) -> CorrelationIdDto {
+        self.correlation_id
+    }
+}
+
+/// A versioned current position for a durable session projection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionSnapshotDto {
+    schema_version: SchemaVersionDto,
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+}
+
+impl SessionSnapshotDto {
+    /// Creates a typed session snapshot checkpoint.
+    ///
+    /// The snapshot's durable state payload remains daemon-owned; this checkpoint
+    /// establishes the session and event position from which a client may tail.
+    #[must_use]
+    pub const fn new(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        at_sequence: SessionEventSequenceDto,
+    ) -> Self {
+        Self {
+            schema_version,
+            session_id,
+            at_sequence,
+        }
+    }
+
+    /// Returns the snapshot schema version.
+    #[must_use]
+    pub const fn schema_version(self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the durable session identity represented by the snapshot.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the durable event sequence included by the snapshot.
+    #[must_use]
+    pub const fn at_sequence(self) -> SessionEventSequenceDto {
+        self.at_sequence
+    }
+}
+
+/// A validated, ordered event tail for one durable session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionEventTailBatchDto {
+    schema_version: SchemaVersionDto,
+    session_id: SessionId,
+    after_sequence: SessionEventSequenceDto,
+    events: Vec<EventEnvelopeDto<DomainEventDto>>,
+}
+
+impl<'de> Deserialize<'de> for SessionEventTailBatchDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawProtocolAcceptedDto {
-            correlation_id: String,
+        struct RawSessionEventTailBatchDto {
+            schema_version: SchemaVersionDto,
+            session_id: SessionId,
+            after_sequence: SessionEventSequenceDto,
+            events: Vec<EventEnvelopeDto<DomainEventDto>>,
         }
 
-        let raw = RawProtocolAcceptedDto::deserialize(deserializer)?;
-        Self::new(raw.correlation_id).map_err(de::Error::custom)
+        let raw = RawSessionEventTailBatchDto::deserialize(deserializer)?;
+        Self::new(
+            raw.schema_version,
+            raw.session_id,
+            raw.after_sequence,
+            raw.events,
+        )
+        .map_err(de::Error::custom)
     }
 }
 
-impl ProtocolAcceptedDto {
-    /// Creates a non-empty opaque command correlation reference.
+impl SessionEventTailBatchDto {
+    /// Creates a contiguous ordered event tail after a known durable position.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the reference is blank.
-    pub fn new(correlation_id: impl Into<String>) -> DtoResult<Self> {
-        let correlation_id = correlation_id.into();
-        if correlation_id.trim().is_empty() {
-            Err(ErrorDto::validation(
-                "invalid_correlation_id",
-                "correlation identifier must not be empty",
-            ))
-        } else {
-            Ok(Self { correlation_id })
+    /// Returns a validation error when an event belongs to another session or the
+    /// tail is not contiguous from `after_sequence`.
+    pub fn new(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        after_sequence: SessionEventSequenceDto,
+        events: Vec<EventEnvelopeDto<DomainEventDto>>,
+    ) -> DtoResult<Self> {
+        let mut expected = after_sequence.value();
+        for event in &events {
+            expected = expected.checked_add(1).ok_or_else(|| {
+                ErrorDto::validation(
+                    "invalid_event_tail",
+                    "event tail cannot follow the maximum sequence position",
+                )
+            })?;
+            if event.session_id() != session_id || event.sequence().value() != expected {
+                return Err(ErrorDto::validation(
+                    "invalid_event_tail",
+                    "event tail must be contiguous and scoped to its session",
+                ));
+            }
+        }
+        Ok(Self {
+            schema_version,
+            session_id,
+            after_sequence,
+            events,
+        })
+    }
+
+    /// Returns the tail schema version.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the session to which every event in the tail belongs.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the durable position immediately preceding the first event.
+    #[must_use]
+    pub const fn after_sequence(&self) -> SessionEventSequenceDto {
+        self.after_sequence
+    }
+
+    /// Returns the validated ordered events in this tail batch.
+    #[must_use]
+    pub fn events(&self) -> &[EventEnvelopeDto<DomainEventDto>] {
+        &self.events
+    }
+
+    /// Returns the durable position after the last event in this batch.
+    #[must_use]
+    pub fn next_after_sequence(&self) -> SessionEventSequenceDto {
+        self.events
+            .last()
+            .map_or(self.after_sequence, EventEnvelopeDto::sequence)
+    }
+}
+
+/// The reviewed reason why a subscriber must obtain a fresh snapshot.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionResyncReasonDto {
+    /// The requested event history is no longer available for replay.
+    HistoryUnavailable,
+    /// The request did not identify a usable contiguous event position.
+    InvalidPosition,
+}
+
+/// A typed instruction to discard local subscription state and resynchronize.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionResyncDto {
+    schema_version: SchemaVersionDto,
+    session_id: SessionId,
+    reason: SessionResyncReasonDto,
+}
+
+impl SessionResyncDto {
+    /// Creates a safe, typed session resynchronization instruction.
+    #[must_use]
+    pub const fn new(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        reason: SessionResyncReasonDto,
+    ) -> Self {
+        Self {
+            schema_version,
+            session_id,
+            reason,
         }
     }
 
-    /// Returns the opaque correlation reference.
+    /// Returns the resynchronization schema version.
     #[must_use]
-    pub fn correlation_id(&self) -> &str {
-        &self.correlation_id
+    pub const fn schema_version(self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the session that must be resynchronized.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the reviewed typed reason for resynchronization.
+    #[must_use]
+    pub const fn reason(self) -> SessionResyncReasonDto {
+        self.reason
+    }
+}
+
+/// A subscription response containing either a consistent snapshot and tail or a resync instruction.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum SessionSubscriptionResponseDto {
+    /// A snapshot checkpoint and its contiguous tail from that checkpoint.
+    SnapshotAndTail {
+        /// The consistent session checkpoint.
+        snapshot: SessionSnapshotDto,
+        /// Events immediately following the snapshot checkpoint.
+        tail: SessionEventTailBatchDto,
+    },
+    /// The subscriber must discard local state and request a new snapshot.
+    ResyncRequired(SessionResyncDto),
+}
+
+impl<'de> Deserialize<'de> for SessionSubscriptionResponseDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        enum RawSessionSubscriptionResponseDto {
+            SnapshotAndTail {
+                snapshot: SessionSnapshotDto,
+                tail: SessionEventTailBatchDto,
+            },
+            ResyncRequired(SessionResyncDto),
+        }
+
+        match RawSessionSubscriptionResponseDto::deserialize(deserializer)? {
+            RawSessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } => {
+                Self::snapshot_and_tail(snapshot, tail).map_err(de::Error::custom)
+            }
+            RawSessionSubscriptionResponseDto::ResyncRequired(resync) => {
+                Ok(Self::ResyncRequired(resync))
+            }
+        }
+    }
+}
+
+impl SessionSubscriptionResponseDto {
+    /// Creates a consistent snapshot and tail response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error unless the tail starts exactly at the snapshot
+    /// position and both values identify the same session.
+    pub fn snapshot_and_tail(
+        snapshot: SessionSnapshotDto,
+        tail: SessionEventTailBatchDto,
+    ) -> DtoResult<Self> {
+        let session_matches = snapshot.session_id() == tail.session_id();
+        let position_matches = snapshot.at_sequence() == tail.after_sequence();
+        if !(session_matches && position_matches) {
+            return Err(ErrorDto::validation(
+                "invalid_subscription_response",
+                "snapshot and tail must share one session and event position",
+            ));
+        }
+        Ok(Self::SnapshotAndTail { snapshot, tail })
+    }
+
+    /// Creates a typed subscription resynchronization response.
+    #[must_use]
+    pub const fn resync_required(resync: SessionResyncDto) -> Self {
+        Self::ResyncRequired(resync)
+    }
+}
+
+/// A typed query result independent of a transport codec.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", content = "data", rename_all = "snake_case")]
+pub enum ProtocolQueryResultDto {
+    /// A current daemon health projection.
+    DaemonHealth(DaemonHealthDto),
+    /// A current session checkpoint.
+    SessionSnapshot(SessionSnapshotDto),
+    /// The query was safely rejected before execution.
+    Rejected(ErrorDto),
+}
+
+/// A request payload carried in a correlated wire message.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum ProtocolRequestPayloadDto {
+    /// A daemon command.
+    Command(ProtocolCommandDto),
+    /// A daemon query.
+    Query(ProtocolQueryDto),
+}
+
+/// A response payload carried in a correlated wire message.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum ProtocolResponsePayloadDto {
+    /// A response to a daemon command.
+    CommandResult(ProtocolCommandResultDto),
+    /// A response to a daemon query.
+    QueryResult(ProtocolQueryResultDto),
+    /// A response to a session subscription request.
+    Subscription(SessionSubscriptionResponseDto),
+}
+
+/// A schema-versioned typed message payload suitable for a local wire codec.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProtocolMessageDto<T> {
+    schema_version: SchemaVersionDto,
+    payload: T,
+}
+
+impl<T> ProtocolMessageDto<T> {
+    /// Creates a versioned typed protocol message.
+    #[must_use]
+    pub const fn new(schema_version: SchemaVersionDto, payload: T) -> Self {
+        Self {
+            schema_version,
+            payload,
+        }
+    }
+
+    /// Returns the message schema version.
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the typed message payload.
+    #[must_use]
+    pub const fn payload(&self) -> &T {
+        &self.payload
+    }
+
+    /// Consumes the message and returns its typed payload.
+    #[must_use]
+    pub fn into_payload(self) -> T {
+        self.payload
+    }
+}
+
+/// A correlated client-to-daemon local protocol request envelope.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProtocolRequestEnvelopeDto {
+    protocol_version: ProtocolVersionDto,
+    correlation_id: CorrelationIdDto,
+    message: ProtocolMessageDto<ProtocolRequestPayloadDto>,
+}
+
+impl ProtocolRequestEnvelopeDto {
+    /// Creates a versioned request envelope with a canonical correlation ID.
+    #[must_use]
+    pub const fn new(
+        protocol_version: ProtocolVersionDto,
+        correlation_id: CorrelationIdDto,
+        message: ProtocolMessageDto<ProtocolRequestPayloadDto>,
+    ) -> Self {
+        Self {
+            protocol_version,
+            correlation_id,
+            message,
+        }
+    }
+
+    /// Returns the negotiated wire protocol version.
+    #[must_use]
+    pub const fn protocol_version(&self) -> ProtocolVersionDto {
+        self.protocol_version
+    }
+
+    /// Returns the request-response correlation identifier.
+    #[must_use]
+    pub const fn correlation_id(&self) -> CorrelationIdDto {
+        self.correlation_id
+    }
+
+    /// Returns the schema-versioned request message.
+    #[must_use]
+    pub const fn message(&self) -> &ProtocolMessageDto<ProtocolRequestPayloadDto> {
+        &self.message
+    }
+}
+
+/// A correlated daemon-to-client local protocol response envelope.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProtocolResponseEnvelopeDto {
+    protocol_version: ProtocolVersionDto,
+    correlation_id: CorrelationIdDto,
+    message: ProtocolMessageDto<ProtocolResponsePayloadDto>,
+}
+
+impl ProtocolResponseEnvelopeDto {
+    /// Creates a versioned response envelope echoing a request correlation ID.
+    #[must_use]
+    pub const fn new(
+        protocol_version: ProtocolVersionDto,
+        correlation_id: CorrelationIdDto,
+        message: ProtocolMessageDto<ProtocolResponsePayloadDto>,
+    ) -> Self {
+        Self {
+            protocol_version,
+            correlation_id,
+            message,
+        }
+    }
+
+    /// Returns the negotiated wire protocol version.
+    #[must_use]
+    pub const fn protocol_version(&self) -> ProtocolVersionDto {
+        self.protocol_version
+    }
+
+    /// Returns the echoed request-response correlation identifier.
+    #[must_use]
+    pub const fn correlation_id(&self) -> CorrelationIdDto {
+        self.correlation_id
+    }
+
+    /// Returns the schema-versioned response message.
+    #[must_use]
+    pub const fn message(&self) -> &ProtocolMessageDto<ProtocolResponsePayloadDto> {
+        &self.message
     }
 }
 
@@ -265,7 +758,28 @@ mod tests {
     )]
 
     use super::*;
-    use intention_types::TurnId;
+    use intention_types::{EventId, EventMetadataDto, TimestampDto, TurnId};
+
+    fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
+        let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
+        EventEnvelopeDto::new(
+            EventMetadataDto::new(
+                SchemaVersionDto::new(1, 0),
+                EventId::new(),
+                session_id,
+                None,
+                None,
+                SessionEventSequenceDto::new(sequence),
+                occurred_at,
+            ),
+            DomainEventDto::RunStatusChanged(intention_domain::RunStatusChangedEventDto::new(
+                session_id,
+                RunId::new(),
+                intention_domain::RunStatusDto::Running,
+                occurred_at,
+            )),
+        )
+    }
 
     #[test]
     fn protocol_versions_and_hello_validate_all_paths() {
@@ -291,10 +805,6 @@ mod tests {
         )
         .expect("fixture hello is valid");
         assert_eq!(hello.version(), version);
-        assert_eq!(
-            hello.capabilities(),
-            &[ProtocolCapabilityDto::SessionSubscriptions]
-        );
         assert_eq!(hello.adapter_name(), "fixture");
         assert_eq!(
             ProtocolHelloDto::new(version, Vec::new(), " ")
@@ -307,18 +817,15 @@ mod tests {
     #[test]
     fn protocol_wrappers_and_results_preserve_domain_dtos() {
         let session_id = SessionId::new();
-        let subscription = SubscribeSessionCommandDto::new(
+        let subscription = SubscribeSessionCommandDto::with_run_id(
             SchemaVersionDto::new(1, 0),
             session_id,
+            Some(RunId::new()),
             Some(SessionEventSequenceDto::new(4)),
             RunModeDto::Plan,
         );
-        assert_eq!(subscription.schema_version(), SchemaVersionDto::new(1, 0));
         assert_eq!(subscription.session_id(), session_id);
-        assert_eq!(
-            subscription.after_sequence(),
-            Some(SessionEventSequenceDto::new(4))
-        );
+        assert!(subscription.run_id().is_some());
         assert_eq!(subscription.requested_mode(), RunModeDto::Plan);
 
         let commands = [
@@ -326,10 +833,7 @@ mod tests {
                 SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
                     .expect("fixture turn is valid"),
             ),
-            ProtocolCommandDto::StopRun(StopRunCommandDto::new(
-                session_id,
-                intention_types::RunId::new(),
-            )),
+            ProtocolCommandDto::StopRun(StopRunCommandDto::new(session_id, RunId::new())),
             ProtocolCommandDto::SubscribeSession(subscription),
         ];
         for command in commands {
@@ -337,29 +841,36 @@ mod tests {
             let _: ProtocolCommandDto =
                 serde_json::from_str(&encoded).expect("command parsing succeeds");
         }
-        let query =
-            ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id));
-        let query_encoded = serde_json::to_string(&query).expect("query serialization succeeds");
-        let _: ProtocolQueryDto =
-            serde_json::from_str(&query_encoded).expect("query parsing succeeds");
+        let accepted = ProtocolAcceptedDto::new(CorrelationIdDto::new());
+        assert_eq!(accepted.correlation_id(), accepted.correlation_id());
+        let result = ProtocolCommandResultDto::Accepted(accepted);
+        let encoded = serde_json::to_string(&result).expect("result serialization succeeds");
+        let _: ProtocolCommandResultDto =
+            serde_json::from_str(&encoded).expect("result parsing succeeds");
+    }
 
-        let accepted =
-            ProtocolAcceptedDto::new("correlation").expect("non-empty correlation is valid");
-        assert_eq!(accepted.correlation_id(), "correlation");
-        assert_eq!(
-            ProtocolAcceptedDto::new(" ")
-                .expect_err("blank correlation must fail")
-                .code(),
-            "invalid_correlation_id"
+    #[test]
+    fn tails_and_subscription_responses_validate_continuity() {
+        let schema = SchemaVersionDto::new(1, 0);
+        let session_id = SessionId::new();
+        let snapshot = SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(2));
+        let tail = SessionEventTailBatchDto::new(
+            schema,
+            session_id,
+            snapshot.at_sequence(),
+            vec![fixture_event(session_id, 3)],
+        )
+        .expect("contiguous tail is valid");
+        assert_eq!(tail.next_after_sequence(), SessionEventSequenceDto::new(3));
+        assert!(SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail).is_ok());
+        assert!(
+            SessionEventTailBatchDto::new(
+                schema,
+                session_id,
+                SessionEventSequenceDto::new(2),
+                vec![fixture_event(session_id, 4)],
+            )
+            .is_err()
         );
-        let results = [
-            ProtocolCommandResultDto::Accepted(accepted),
-            ProtocolCommandResultDto::Rejected(ErrorDto::validation("fixture", "message")),
-        ];
-        for result in results {
-            let encoded = serde_json::to_string(&result).expect("result serialization succeeds");
-            let _: ProtocolCommandResultDto =
-                serde_json::from_str(&encoded).expect("result parsing succeeds");
-        }
     }
 }
