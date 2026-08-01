@@ -115,6 +115,11 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
         for field in ("responsibility", "test_target"):
             if not isinstance(crate.get(field), str) or not crate[field]:
                 fail(f"future crate {name} requires {field}")
+        targets = crate.get("test_targets")
+        if not isinstance(targets, list) or not all(isinstance(target, str) and target for target in targets):
+            fail(f"future crate {name} requires test_targets as a string list")
+        if len(targets) != len(set(targets)):
+            fail(f"future crate {name} has duplicate test targets")
         if crate.get("coverage_tier") not in valid_tiers:
             fail(f"future crate {name} has invalid coverage tier")
         result[name] = crate
@@ -138,6 +143,57 @@ def package_dependencies(package: dict[str, object]) -> set[str]:
 
 def workspace_dependencies(package: dict[str, object], workspace_names: set[str]) -> set[str]:
     return package_dependencies(package) & workspace_names
+
+
+def integration_test_targets(package: dict[str, object]) -> set[str]:
+    targets = package.get("targets")
+    if not isinstance(targets, list):
+        fail(f"package {package.get('name')} has no target list")
+    result: set[str] = set()
+    for target in targets:
+        if not isinstance(target, dict):
+            fail(f"package {package.get('name')} has an invalid target")
+        name = target.get("name")
+        kinds = target.get("kind")
+        if not isinstance(name, str) or not isinstance(kinds, list) or not all(isinstance(kind, str) for kind in kinds):
+            fail(f"package {package.get('name')} has an invalid target shape")
+        if kinds == ["test"]:
+            result.add(name)
+    return result
+
+
+def workspace_dependency_graph(packages: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+    workspace_names = set(packages)
+    return {
+        package_name: workspace_dependencies(package, workspace_names)
+        for package_name, package in packages.items()
+    }
+
+
+def check_workspace_dependency_cycles(packages: dict[str, dict[str, object]]) -> list[str]:
+    graph = workspace_dependency_graph(packages)
+    states: dict[str, str] = {name: "unvisited" for name in graph}
+    stack: list[str] = []
+    failures: list[str] = []
+
+    def visit(package_name: str) -> None:
+        states[package_name] = "visiting"
+        stack.append(package_name)
+        for dependency in sorted(graph[package_name]):
+            state = states[dependency]
+            if state == "unvisited":
+                visit(dependency)
+            elif state == "visiting":
+                start = stack.index(dependency)
+                cycle = stack[start:] + [dependency]
+                failures.append(f"workspace dependency cycle: {' -> '.join(cycle)}")
+        stack.pop()
+        states[package_name] = "visited"
+
+    for package_name in sorted(graph):
+        if states[package_name] == "unvisited":
+            visit(package_name)
+    return failures
 
 
 def external_dependencies(package: dict[str, object], workspace_names: set[str]) -> set[str]:
@@ -234,14 +290,30 @@ def check_m1_policy(
                 f"{package_name}: external dependencies must equal {sorted(expected_external)}, "
                 f"got {sorted(actual_external)}"
             )
-        tests = Path(str(packages[package_name]["manifest_path"])).parent / "tests"
-        if not any(tests.glob("*.rs")):
-            failures.append(f"{package_name}: active M1 crate requires an integration contract test")
+        actual_targets = integration_test_targets(packages[package_name])
+        declared_targets = set(declared[package_name]["test_targets"])
+        if not declared_targets:
+            failures.append(f"{package_name}: active M1 crate requires declared integration test targets")
+        if declared_targets != actual_targets:
+            failures.append(
+                f"{package_name}: declared integration test targets must equal Cargo targets "
+                f"{sorted(actual_targets)}, got {sorted(declared_targets)}"
+            )
     for package_name in skeleton_set:
         direct_dependencies = package_dependencies(packages[package_name])
         if direct_dependencies:
             failures.append(
                 f"{package_name}: M1 skeleton cannot declare dependencies, got {sorted(direct_dependencies)}"
+            )
+        actual_targets = integration_test_targets(packages[package_name])
+        declared_targets = set(declared[package_name]["test_targets"])
+        if declared_targets:
+            failures.append(
+                f"{package_name}: M1 skeleton must not declare integration test targets, got {sorted(declared_targets)}"
+            )
+        if actual_targets:
+            failures.append(
+                f"{package_name}: M1 skeleton must not expose integration test targets, got {sorted(actual_targets)}"
             )
         public_items = []
         for source in source_files_for_package(packages[package_name]):
@@ -386,6 +458,7 @@ def main() -> None:
     packages = packages_by_name(metadata)
     texts = source_texts(root)
     failures = check_m1_policy(root, policy, packages, texts)
+    failures.extend(check_workspace_dependency_cycles(packages))
     failures.extend(check_declared_boundaries(policy, packages, texts))
     failures.extend(check_coverage_policy(root, policy))
 
