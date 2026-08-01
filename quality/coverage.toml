@@ -4,17 +4,25 @@ B = 90.0
 C = 85.0
 
 [policy]
-phase = "m1"
+phase = "m2"
 production_crates = [
   "intention-types",
   "intention-domain",
   "intention-protocol",
   "intention-config",
+  "intention-transport",
+  "intention-client",
+  "intention",
+  "intention-daemon",
 ]
-adapter_crates = []
+adapter_crates = ["intention-tauri", "intention-tui"]
 
 [crate_tiers]
 "intention-types" = "A"
 "intention-domain" = "A"
 "intention-protocol" = "A"
 "intention-config" = "A"
+"intention-transport" = "C"
+"intention-client" = "C"
+"intention" = "C"
+"intention-daemon" = "C"
