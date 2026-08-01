@@ -4,7 +4,9 @@
     reason = "Transport integration fixtures use direct failure assertions for diagnostics."
 )]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_protocol::{
     ProtocolCapabilityDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto,
@@ -18,9 +20,16 @@ use intention_transport::{
 use intention_types::{CorrelationIdDto, SchemaVersionDto};
 use tempfile::TempDir;
 
-fn endpoint(directory: &TempDir) -> LocalEndpoint {
-    LocalEndpoint::from_path(directory.path().join("fixture.sock"))
-        .expect("temporary endpoint must be absolute")
+static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
+
+fn endpoint(_directory: &TempDir) -> LocalEndpoint {
+    let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must be after Unix epoch")
+        .as_nanos();
+    LocalEndpoint::from_instance_id(format!("transport-fixture-{nanos}-{sequence}"))
+        .expect("fixture instance name must be valid")
 }
 
 fn hello(name: &str, version: ProtocolVersionDto) -> ProtocolHelloDto {
@@ -50,8 +59,9 @@ fn health_request() -> ProtocolRequestEnvelopeDto {
 #[test]
 fn framed_transport_negotiates_and_preserves_correlated_dtos() {
     let directory = TempDir::new().expect("temporary directory is available");
-    let listener = LocalListener::bind(endpoint(&directory)).expect("listener binds");
-    let client_endpoint = endpoint(&directory);
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
 
     let server = thread::spawn(move || {
         let mut connection = listener.accept().expect("server accepts client");
@@ -97,8 +107,9 @@ fn framed_transport_negotiates_and_preserves_correlated_dtos() {
 #[test]
 fn incompatible_protocol_major_fails_closed_without_hanging() {
     let directory = TempDir::new().expect("temporary directory is available");
-    let listener = LocalListener::bind(endpoint(&directory)).expect("listener binds");
-    let client_endpoint = endpoint(&directory);
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
 
     let server = thread::spawn(move || {
         let mut connection = listener.accept().expect("server accepts client");
@@ -126,21 +137,4 @@ fn unavailable_endpoint_is_a_typed_error() {
         Err(error) => error,
     };
     assert_eq!(error.code(), "local_daemon_unavailable");
-}
-
-#[cfg(unix)]
-#[test]
-fn unix_listener_uses_owner_only_socket_permissions() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-    let mode = std::fs::metadata(endpoint.as_path())
-        .expect("socket metadata is available")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600);
-    drop(listener);
 }

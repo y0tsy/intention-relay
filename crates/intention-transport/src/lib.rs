@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_protocol::{
@@ -29,108 +29,102 @@ const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
 /// protocol DTO or an error message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalEndpoint {
+    instance_id: String,
     path: PathBuf,
 }
 
 impl LocalEndpoint {
-    /// Creates an endpoint for an explicit absolute local socket path.
+    /// Creates a local endpoint from a safe logical instance identifier.
+    ///
+    /// The identifier is not an operating-system path. It contains only ASCII
+    /// letters, digits, `_`, and `-`, and resolves below the current user's
+    /// platform runtime directory.
     ///
     /// # Errors
     ///
-    /// Returns a safe validation error when the path is empty, relative, or does
-    /// not use the platform's expected local IPC form.
-    pub fn from_path(path: impl Into<PathBuf>) -> DtoResult<Self> {
-        let path = path.into();
-        if path.as_os_str().is_empty() || !path.is_absolute() {
+    /// Returns a validation error for an unsafe logical identifier or an
+    /// unavailable error if the platform runtime directory cannot be determined.
+    pub fn from_instance_id(instance_id: impl Into<String>) -> DtoResult<Self> {
+        let instance_id = instance_id.into();
+        let valid = !instance_id.is_empty()
+            && instance_id.len() <= 100
+            && instance_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+        if !valid {
             return Err(ErrorDto::validation(
-                "invalid_local_endpoint",
-                "local daemon endpoint must be an absolute path",
+                "invalid_local_endpoint_instance",
+                "local daemon instance identifier must be a safe logical name",
             ));
         }
-        #[cfg(windows)]
-        if !path.to_string_lossy().starts_with(r"\\.\pipe\") {
-            return Err(ErrorDto::validation(
-                "invalid_local_endpoint",
-                "local daemon endpoint must use the named pipe namespace",
-            ));
-        }
-        Ok(Self { path })
+        Ok(Self {
+            path: platform_endpoint_path(&instance_id)?,
+            instance_id,
+        })
     }
 
-    /// Derives the standard per-user endpoint from a platform runtime directory.
+    /// Derives the standard per-user daemon endpoint.
     ///
     /// # Errors
     ///
     /// Returns a safe unavailable error when a usable platform runtime directory
     /// cannot be determined.
     pub fn platform_default() -> DtoResult<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            let base = std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .or_else(|| {
-                    std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join("intention-relay"))
-                })
-                .or_else(|| {
-                    std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|candidate| candidate.is_absolute())
-                        .map(|candidate| candidate.join(".config/intention-relay"))
-                })
-                .ok_or_else(|| {
-                    ErrorDto::unavailable(
-                        "local_runtime_directory_unavailable",
-                        "a local runtime directory could not be determined",
-                    )
-                })?;
-            Self::from_path(base.join("intention-relay.sock"))
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let base = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|candidate| candidate.is_absolute())
-                .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
-                .ok_or_else(|| {
-                    ErrorDto::unavailable(
-                        "local_runtime_directory_unavailable",
-                        "a local runtime directory could not be determined",
-                    )
-                })?;
-            Self::from_path(base.join("intention-relay.sock"))
-        }
-        #[cfg(windows)]
-        {
-            let user = std::env::var("USERNAME").map_err(|_| {
-                ErrorDto::unavailable(
-                    "local_runtime_directory_unavailable",
-                    "a local runtime directory could not be determined",
-                )
-            })?;
-            return Self::from_path(PathBuf::from(format!(r"\\.\pipe\intention-relay-{user}")));
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-        {
-            Err(ErrorDto::unavailable(
-                "local_transport_unsupported",
-                "the current platform does not support the local daemon transport",
-            ))
-        }
+        Self::from_instance_id("intention-relay")
     }
 
-    /// Returns a private filesystem representation for crate-internal verification.
+    /// Returns the safe logical endpoint instance identifier.
     #[must_use]
-    pub fn as_path(&self) -> &Path {
-        &self.path
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
     }
 
     fn socket_name(&self) -> DtoResult<interprocess::local_socket::Name<'_>> {
         GenericFilePath::map(self.path.as_os_str().into())
             .map_err(|_| unavailable("local_endpoint_unavailable"))
+    }
+}
+
+fn platform_endpoint_path(instance_id: &str) -> DtoResult<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|candidate| candidate.is_absolute())
+            .or_else(|| {
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .filter(|candidate| candidate.is_absolute())
+                    .map(|candidate| candidate.join("intention-relay"))
+            })
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .filter(|candidate| candidate.is_absolute())
+                    .map(|candidate| candidate.join(".config/intention-relay"))
+            })
+            .ok_or_else(|| unavailable("local_runtime_directory_unavailable"))?;
+        Ok(base.join(format!("{instance_id}.sock")))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let base = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|candidate| candidate.is_absolute())
+            .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
+            .ok_or_else(|| unavailable("local_runtime_directory_unavailable"))?;
+        Ok(base.join(format!("{instance_id}.sock")))
+    }
+    #[cfg(windows)]
+    {
+        Ok(PathBuf::from(format!(r"\\.\pipe\{instance_id}")))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        Err(ErrorDto::unavailable(
+            "local_transport_unsupported",
+            "the current platform does not support the local daemon transport",
+        ))
     }
 }
 

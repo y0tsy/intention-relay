@@ -127,9 +127,11 @@ name = "intention-client"
 version = "0.0.0"
 dependencies = [
  "fs4",
+ "intention-domain",
  "intention-protocol",
  "intention-transport",
  "intention-types",
+ "tempfile",
 ]
 
 [[package]]
@@ -233,6 +235,8 @@ version = "0.0.0"
 dependencies = [
  "intention-client",
  "intention-protocol",
+ "intention-transport",
+ "intention-types",
 ]
 
 [[package]]
