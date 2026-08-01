@@ -8,3 +8,11 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+intention-client = { path = "../intention-client", version = "=0.0.0" }
+intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
+intention-types = { path = "../intention-types", version = "=0.0.0" }
+
+[dev-dependencies]
+intention-transport = { path = "../intention-transport", version = "=0.0.0" }
