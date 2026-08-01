@@ -18,10 +18,3 @@ adapter_crates = []
 "intention-domain" = "A"
 "intention-protocol" = "A"
 "intention-config" = "A"
-
-[[exclusions]]
-path = ""
-rationale = "M1 has no coverage exclusions."
-owner = ""
-equivalent_test_evidence = ""
-enabled = false
