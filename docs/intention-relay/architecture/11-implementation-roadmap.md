@@ -11,16 +11,15 @@ The required quality commands, pinned tools, coverage tiers, lint policy, featur
 ```mermaid
 flowchart TD
   Q[M0 Quality foundation] --> A[M1 Types config workspace]
-  Q --> B[M2 Protocol client daemon]
-  Q --> C[M3 Storage sessions events]
-  Q --> D[M4 Model and one run]
-  Q --> E[M5 Tools workspace hooks]
-  Q --> F[M6 Tauri bridge UI]
-  Q --> G[M7 Plan Build artifacts]
-  Q --> H[M8 VFR Headroom]
-  Q --> I[M9 End to end hardening]
-  A --> B
-  A --> C
+  A --> P[M1+ Quality hardening]
+  P --> B[M2 Protocol client daemon]
+  P --> C[M3 Storage sessions events]
+  P --> D[M4 Model and one run]
+  P --> E[M5 Tools workspace hooks]
+  P --> F[M6 Tauri bridge UI]
+  P --> G[M7 Plan Build artifacts]
+  P --> H[M8 VFR Headroom]
+  P --> I[M9 End to end hardening]
   B --> D
   C --> D
   A --> E
@@ -134,6 +133,52 @@ configuration policy:
 - M1 accepts only `openrouter` and `generic-chat-completion-api` provider kinds.
   `openai` remains unavailable until a separately declared OpenAI Responses
   driver crate, contract, and boundary policy are introduced.
+
+## Milestone 1+: Quality policy hardening
+
+M1+ is a completed quality-enforcement milestone between the M1 contract
+foundation and M2 functional delivery. It does not activate additional
+production crates or claim daemon, transport, storage, runtime, adapter, or
+provider-driver behavior. Its implementation baseline and verification matrix
+are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md).
+
+### Deliver
+
+- workspace-wide dependency graph construction and deterministic cycle-path
+  rejection in `make architecture`;
+- machine-readable Cargo integration `test_targets` for every planned crate,
+  exact metadata enforcement for active M1 crates, and empty target sets for
+  M1 skeletons;
+- pinned-nightly rustdoc JSON analysis of public reachable active-crate APIs,
+  including aliases, fields, nested generic arguments, function signatures,
+  trait surfaces, and re-exports;
+- exact-file coverage-exclusion policy with owner, report-path, and denominator
+  enforcement;
+- isolated expected-failure fixtures for every new quality rule.
+
+### Tests first
+
+- a policy-aligned workspace dependency cycle fixture that reports its closed
+  path;
+- unknown, duplicate, and skeleton integration-target declaration fixtures;
+- public API alias, wrapper, generic, signature, and re-export resource-leak
+  fixtures;
+- valid denominator-reduction and invalid coverage-exclusion fixtures for
+  missing metadata, unsafe paths, wrong owner, absent report path, duplicates,
+  and all-source removal.
+
+### Acceptance outcomes
+
+- `make architecture` rejects a policy-aligned cycle before a regular Cargo
+  compile gate and reports the involved packages;
+- every active M1 crate's declared integration targets exactly equal Cargo
+  metadata and are included by the standard all-targets test gate;
+- public contract leaks fail from rustdoc JSON rather than only literal source
+  scans;
+- `make coverage` applies only valid exact-file exclusions before per-crate
+  coverage arithmetic and rejects exception misuse;
+- all new rules are proved by isolated failure fixtures and final `make verify`
+  passes in every required feature profile.
 
 ## Milestone 2: Local protocol, client, and daemon bootstrap
 

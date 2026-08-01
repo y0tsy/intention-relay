@@ -116,13 +116,13 @@ The policy deliberately does **not** deny all `pedantic` or all `restriction` li
 - `unsafe` and process-level escape hatches without an approved, local explanation;
 - raw debug output or secret-bearing errors reaching checked paths.
 
-The current public-API scan is pattern-based. Signature-aware detection for aliases, wrappers, re-exports, generic resources, and unlisted implementation resources is a documented M2+ strengthening, not an M0/M1 claim.
+`make architecture` detects workspace dependency cycles, validates that active-crate machine-readable integration targets exactly equal Cargo metadata, and prevents direct forbidden source patterns. It also runs `quality/check_public_api.py`, which uses the pinned nightly rustdoc JSON output to reject forbidden implementation resources and provider SDK namespaces in public reachable aliases, fields, wrappers, nested generic arguments, function signatures, trait surfaces, and re-exports. Private-only implementation details are outside this public-contract check.
 
 ## Coverage policy
 
 Coverage is a blocking guardrail from the moment a crate contains production code. There is no grace baseline and no gradual ramp.
 
-M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source files to each declared production crate, enforces that crate's individual line tier, validates metadata for enabled exclusions, requires branch metrics, and emits JSON report artifacts. The M1 reports prove the policy for its four active Tier A crates.
+M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source files to each declared production crate, enforces that crate's individual line tier, requires branch metrics, and emits JSON report artifacts. Enabled exclusions are exact repository-relative source-file paths with rationale, owner, and equivalent test evidence; they must resolve under the active owner's `src` root, appear exactly once in the coverage report, and are subtracted from that crate's numerator and denominator. The M1 reports prove the policy for its four active Tier A crates.
 
 ### Tiered line coverage thresholds
 
@@ -145,7 +145,7 @@ Branch coverage is reported. Critical safety and recovery branches are not excus
 - Coverage reports are stored as CI artifacts.
 - Test code and generated code must not inflate the production coverage denominator.
 
-Applying an enabled exclusion to the denominator and validating its ownership and path against coverage-report data are deferred M2+ coverage-checker hardening. M0/M1 has no enabled exclusions.
+Applying an enabled exclusion is explicit and reviewable. The checker rejects duplicate, absolute, traversing, unowned, out-of-source-root, absent, unreported, and all-source-removing exclusions. M1+ preserves no enabled exclusions in the committed policy.
 
 ## Cargo feature-profile policy
 

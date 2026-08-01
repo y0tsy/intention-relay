@@ -12,7 +12,7 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
 - M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation only. Revision persistence, daemon reload, and attaching a snapshot to a run remain later ownership.
-- `quality/architecture.toml` is the machine-readable source for active-crate external dependencies, adapter and protocol allowlists, composition-only implementations, and provider-SDK resource patterns.
+- `quality/architecture.toml` is the machine-readable source for active-crate external dependencies, executable integration test targets, adapter and protocol allowlists, composition-only implementations, and forbidden public-contract type prefixes.
 
 ## Planned crates
 
