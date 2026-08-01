@@ -21,6 +21,7 @@ def run(
     cwd: Path,
     expect_success: bool,
     expected_output: str | None = None,
+    expected_outputs: tuple[str, ...] = (),
 ) -> None:
     completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
     output = (completed.stdout + "\n" + completed.stderr).strip()
@@ -30,6 +31,9 @@ def run(
         raise RuntimeError(f"expected {' '.join(command)} to {expectation}, got {completed.returncode}: {output}")
     if expected_output is not None and expected_output not in output:
         raise RuntimeError(f"expected output to contain {expected_output!r}, got: {output}")
+    for expected in expected_outputs:
+        if expected not in output:
+            raise RuntimeError(f"expected output to contain {expected!r}, got: {output}")
 
 
 @contextmanager
@@ -176,6 +180,28 @@ def test_m1_skeleton_api_boundary(root: Path) -> None:
             encoding="utf-8",
         )
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+
+
+def test_signature_aware_public_api_leaks(root: Path) -> None:
+    source = root / "crates/intention-types/src/lib.rs"
+    with modified(source):
+        source.write_text(
+            source.read_text(encoding="utf-8")
+            + "\nuse std::fs;\n"
+            + "pub type LeakedAlias = fs::File;\n"
+            + "pub struct LeakedWrapper(pub fs::File);\n"
+            + "pub struct GenericWrapper<T>(pub T);\n"
+            + "pub type LeakedGeneric = GenericWrapper<fs::File>;\n"
+            + "pub fn leaked_signature(value: fs::File) -> fs::File { value }\n"
+            + "pub use std::fs::File as LeakedReexport;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_public_api.py"],
+            cwd=root,
+            expect_success=False,
+            expected_outputs=("LeakedAlias", "LeakedWrapper", "LeakedGeneric", "leaked_signature", "LeakedReexport"),
+        )
 
 
 def test_m1_public_resource_leak(root: Path) -> None:
@@ -357,6 +383,7 @@ def main() -> None:
         test_workspace_dependency_cycle,
         test_executable_test_target_policy,
         test_m1_skeleton_api_boundary,
+        test_signature_aware_public_api_leaks,
         test_m1_public_resource_leak,
         test_m1_secret_projection,
         test_forbidden_source_boundary,

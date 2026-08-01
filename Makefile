@@ -47,6 +47,7 @@ docs-check: tools-check ## Verify Rust docs, Markdown links, Mermaid, and secret
 
 architecture: tools-check ## Verify workspace membership and architectural policy.
 	$(PYTHON) quality/check_architecture.py
+	$(PYTHON) quality/check_public_api.py
 
 coverage: tools-check ## Collect branch-aware coverage and enforce declared tiers.
 	$(PYTHON) quality/run_coverage.py
