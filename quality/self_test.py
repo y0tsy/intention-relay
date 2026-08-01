@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -278,6 +279,23 @@ def test_error_detail_and_correlation_validation(root: Path) -> None:
         )
 
 
+def coverage_report(root: Path, files: list[tuple[str, int, int]]) -> str:
+    return json.dumps({
+        "data": [{
+            "files": [
+                {
+                    "filename": str(root / path),
+                    "summary": {
+                        "lines": {"count": count, "covered": covered},
+                        "branches": {"percent": 100.0},
+                    },
+                }
+                for path, count, covered in files
+            ],
+        }],
+    })
+
+
 def test_coverage_failures(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/coverage-low.json"
@@ -290,9 +308,7 @@ def test_coverage_failures(root: Path) -> None:
         )
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
         report.write_text(
-            '{"data": [{"files": [{"filename": "'
-            + str(root / "crates/intention-types/src/lib.rs")
-            + '", "summary": {"lines": {"count": 100, "covered": 1}, "branches": {"percent": 0.0}}}], "totals": {"branches": {"percent": 0.0}}}]}\n',
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 1)]),
             encoding="utf-8",
         )
         run(
@@ -300,11 +316,82 @@ def test_coverage_failures(root: Path) -> None:
             cwd=root,
             expect_success=False,
         )
-        replace_once(policy, "enabled = false", "enabled = true")
+
+
+def test_coverage_exclusion_semantics(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/m1plus-coverage.json"
+    target = root / "crates/intention-types/src/excluded_fixture.rs"
+    unreported = root / "crates/intention-types/src/unreported_fixture.rs"
+    outside_source = root / "crates/intention-types/outside_fixture.rs"
+    with modified(target), modified(unreported), modified(outside_source), modified(policy), modified(report):
+        target.write_text("pub const EXCLUDED_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        unreported.write_text("pub const UNREPORTED_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        outside_source.write_text("pub const OUTSIDE_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/excluded_fixture.rs", 100, 0),
+                    ("crates/intention-domain/src/lib.rs", 100, 100),
+                    ("crates/intention-protocol/src/lib.rs", 100, 100),
+                    ("crates/intention-config/src/lib.rs", 100, 100),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        valid = """
+[[exclusions]]
+path = "crates/intention-types/src/excluded_fixture.rs"
+rationale = "Synthetic denominator fixture."
+owner = "intention-types"
+equivalent_test_evidence = "quality/self_test.py:test_coverage_exclusion_semantics"
+enabled = true
+"""
+        policy.write_text(policy.read_text(encoding="utf-8") + valid, encoding="utf-8")
+        run(
+            [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
+            cwd=root,
+            expect_success=True,
+            expected_output="excluding crates/intention-types/src/excluded_fixture.rs from intention-types denominator",
+        )
+        invalid_cases = [
+            ("missing-metadata", valid.replace('rationale = "Synthetic denominator fixture."', 'rationale = ""'), "enabled exclusion requires rationale"),
+            ("absolute-path", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', f'path = "{target}"'), "workspace-relative without traversal"),
+            ("traversal", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', 'path = "crates/intention-types/src/../src/excluded_fixture.rs"'), "workspace-relative without traversal"),
+            ("other-owner", valid.replace('owner = "intention-types"', 'owner = "intention-domain"'), "must be under intention-domain source root"),
+            ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-application"'), "owner must be an active production crate"),
+            ("unreported", valid.replace('excluded_fixture.rs', 'unreported_fixture.rs'), "must appear exactly once in coverage report"),
+            ("outside-source", valid.replace('crates/intention-types/src/excluded_fixture.rs', 'crates/intention-types/outside_fixture.rs'), "must be under intention-types source root"),
+            ("duplicate", valid + valid, "duplicate enabled exclusion path"),
+        ]
+        for _name, invalid, expected_output in invalid_cases:
+            policy.write_text(policy.read_text(encoding="utf-8").split("\n[[exclusions]]", 1)[0] + invalid, encoding="utf-8")
+            run(
+                [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
+                cwd=root,
+                expect_success=False,
+                expected_output=expected_output,
+            )
+        policy.write_text(policy.read_text(encoding="utf-8").split("\n[[exclusions]]", 1)[0] + valid, encoding="utf-8")
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/excluded_fixture.rs", 100, 0),
+                    ("crates/intention-domain/src/lib.rs", 100, 100),
+                    ("crates/intention-protocol/src/lib.rs", 100, 100),
+                    ("crates/intention-config/src/lib.rs", 100, 100),
+                ],
+            ),
+            encoding="utf-8",
+        )
         run(
             [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
             cwd=root,
             expect_success=False,
+            expected_output="intention-types' has no reportable non-excluded source lines",
         )
 
 
@@ -393,6 +480,7 @@ def main() -> None:
         test_provider_sdk_public_contract_boundary,
         test_error_detail_and_correlation_validation,
         test_coverage_failures,
+        test_coverage_exclusion_semantics,
         test_missing_feature_profile,
         test_supply_chain_policy_failures,
         test_secret_fixture,

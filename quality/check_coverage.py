@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate per-crate coverage tiers and cargo-llvm-cov summary reports."""
+"""Validate per-crate coverage tiers and exact exclusion semantics."""
 
 from __future__ import annotations
 
@@ -19,13 +19,13 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def package_source_roots() -> dict[str, Path]:
+def package_source_roots(root: Path) -> dict[str, Path]:
     completed = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         check=True,
         capture_output=True,
         text=True,
-        cwd=ROOT,
+        cwd=root,
     )
     metadata = json.loads(completed.stdout)
     return {
@@ -51,15 +51,12 @@ def report_files(report: object) -> list[dict[str, object]]:
 
 
 def require_branch_metrics(files: list[dict[str, object]]) -> None:
-    branch_metrics_found = False
     for item in files:
         summary = item.get("summary")
         branches = summary.get("branches") if isinstance(summary, dict) else None
         if isinstance(branches, dict) and isinstance(branches.get("percent"), (int, float)):
-            branch_metrics_found = True
-            break
-    if not branch_metrics_found:
-        fail("coverage report does not expose branch coverage")
+            return
+    fail("coverage report does not expose branch coverage")
 
 
 def line_totals(files: list[dict[str, object]]) -> tuple[int, int]:
@@ -86,12 +83,65 @@ def is_under(path: Path, parent: Path) -> bool:
     return True
 
 
+def enabled_exclusion_paths(
+    root: Path,
+    exclusions: object,
+    production_crates: set[str],
+    source_roots: dict[str, Path],
+    files: list[dict[str, object]],
+) -> set[Path]:
+    if not isinstance(exclusions, list):
+        fail("exclusions must be a list")
+    report_paths: dict[Path, int] = {}
+    for item in files:
+        filename = item.get("filename")
+        if isinstance(filename, str):
+            path = Path(filename).resolve()
+            report_paths[path] = report_paths.get(path, 0) + 1
+
+    excluded: set[Path] = set()
+    for exclusion in exclusions:
+        if not isinstance(exclusion, dict):
+            fail("coverage exclusion must be a table")
+        enabled = exclusion.get("enabled", False)
+        if not isinstance(enabled, bool):
+            fail("coverage exclusion enabled must be a boolean")
+        if not enabled:
+            continue
+        for field in ("path", "rationale", "owner", "equivalent_test_evidence"):
+            value = exclusion.get(field)
+            if not isinstance(value, str) or not value:
+                fail(f"enabled exclusion requires {field}")
+        relative = Path(str(exclusion["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            fail(f"enabled exclusion path must be workspace-relative without traversal: {relative}")
+        path = (root / relative).resolve()
+        if path in excluded:
+            fail(f"duplicate enabled exclusion path: {relative}")
+        if not path.is_file():
+            fail(f"enabled exclusion path must be an existing regular file: {relative}")
+        owner = str(exclusion["owner"])
+        if owner not in production_crates:
+            fail(f"enabled exclusion owner must be an active production crate: {owner}")
+        source_root = source_roots.get(owner)
+        if source_root is None or not is_under(path, source_root):
+            fail(f"enabled exclusion path must be under {owner} source root: {relative}")
+        occurrences = report_paths.get(path, 0)
+        if occurrences != 1:
+            fail(f"enabled exclusion path must appear exactly once in coverage report: {relative}, got {occurrences}")
+        excluded.add(path)
+        print(f"coverage-check: excluding {relative} from {owner} denominator")
+    return excluded
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--report", type=Path, required=True)
     arguments = parser.parse_args()
 
+    root = arguments.root.resolve()
     with arguments.policy.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
     with arguments.report.open(encoding="utf-8") as report_file:
@@ -106,18 +156,16 @@ def main() -> None:
     for tier, threshold in tiers.items():
         if tier not in {"A", "B", "C"} or not isinstance(threshold, (int, float)):
             fail("tiers must define numeric A, B, and C thresholds")
-    for exclusion in exclusions:
-        if exclusion.get("enabled"):
-            for field in ("path", "rationale", "owner", "equivalent_test_evidence"):
-                if not exclusion.get(field):
-                    fail(f"enabled exclusion requires {field}")
 
     production_crates = policy_state.get("production_crates")
-    if not isinstance(production_crates, list):
-        fail("production_crates must be a list")
-    source_roots = package_source_roots()
+    if not isinstance(production_crates, list) or not all(isinstance(crate, str) for crate in production_crates):
+        fail("production_crates must be a string list")
+    production_set = set(production_crates)
+    source_roots = package_source_roots(root)
     files = report_files(report)
     require_branch_metrics(files)
+    excluded_paths = enabled_exclusion_paths(root, exclusions, production_set, source_roots, files)
+
     for crate in production_crates:
         tier = classifications.get(crate)
         if tier not in tiers:
@@ -128,11 +176,13 @@ def main() -> None:
         crate_files = [
             item
             for item in files
-            if isinstance(item.get("filename"), str) and is_under(Path(item["filename"]), source_root)
+            if isinstance(item.get("filename"), str)
+            and is_under(Path(item["filename"]), source_root)
+            and Path(item["filename"]).resolve() not in excluded_paths
         ]
         covered, count = line_totals(crate_files)
         if count == 0:
-            fail(f"production crate {crate!r} has no reportable source lines")
+            fail(f"production crate {crate!r} has no reportable non-excluded source lines")
         observed = 100.0 * covered / count
         required = float(tiers[tier])
         if observed < required:
