@@ -2,8 +2,10 @@
 
 Intention Relay is a local-first, single-user Rust workspace for a daemon-owned
 coding-agent system. The repository now contains the approved architecture,
-M0 quality foundation, and the **M1 contracts, configuration, and workspace
-skeleton**.
+M0 quality foundation, the **M1 contracts, configuration, and workspace
+skeleton**, and the **M1+ quality policy hardening** that enforces workspace
+graphs, executable test targets, public API signatures, and coverage-exception
+semantics.
 
 ## M1 workspace
 

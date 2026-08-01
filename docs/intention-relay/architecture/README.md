@@ -82,6 +82,7 @@ flowchart TD
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
 4. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
+5. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
 
 ## Document map
 

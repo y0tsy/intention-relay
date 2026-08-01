@@ -94,15 +94,24 @@ M1 is closed only for the following scope:
 - M1 accepts only `openrouter` and `generic-chat-completion-api` provider kinds. An `openai` provider and OpenAI Responses support require a separately declared driver crate, contract, boundary policy, and owning milestone.
 - This closeout does not claim user-visible outcome scenarios that belong to later milestones; those stay governed by the scenario portfolio in [Test-Driven Delivery and Verification](../architecture/10-test-driven-delivery-and-verification.md).
 
-### Intentionally deferred M2+ quality hardening
+### M1+ disposition of originally deferred hardening
 
-The following gaps are explicit deferred work, not evidence claimed by M0/M1:
+The four items in the historical list below were deliberately not claimed as
+M0/M1 enforcement. They were subsequently completed in the separate [M1+
+Quality Hardening Evidence](m1-plus-quality-hardening-evidence.md) baseline.
+This link preserves the original M0/M1 audit record rather than rewriting it.
 
-1. **Dependency-cycle detection.** `check_architecture.py` validates declared dependencies and M1 boundary subsets but does not construct the complete workspace graph or contain a controlled cycle fixture. M2+ must add graph construction, cycle rejection, and an expected-failure cycle test.
-2. **Executable `test_target` policy.** The checker requires non-empty `test_target` policy text and integration-test presence for active M1 crates. It does not prove the named test target exists or is executed. M2+ must define machine-executable target identifiers and validate their presence and execution.
-3. **Signature-aware public API analysis.** The current DTO/resource-leak protection is primarily literal source-pattern scanning. M2+ must add signature-aware or compile-fail checks covering aliases, wrappers, re-exports, generic resource types, and implementation resources not yet enumerated by policy.
-4. **Coverage-exclusion semantics.** Enabled exclusions require rationale, owner, and equivalent-test metadata, but the checker does not subtract them from the denominator or validate their ownership/path against coverage-report data. M2+ must implement both semantics and focused failure fixtures.
+### Historical M0/M1 deferred hardening, closed by M1+
+
+The following gaps were explicit deferred work when this M0/M1 evidence was
+captured. Their subsequent M1+ completion is recorded above; these historical
+entries preserve the original scope and do not describe current enforcement:
+
+1. **Dependency-cycle detection.** At M0/M1, `check_architecture.py` validated declared dependencies and M1 boundary subsets but did not construct the complete workspace graph or contain a controlled cycle fixture.
+2. **Executable `test_target` policy.** At M0/M1, the checker required non-empty `test_target` policy text and integration-test presence for active M1 crates, but did not prove the named target existed or executed.
+3. **Signature-aware public API analysis.** At M0/M1, DTO/resource-leak protection was primarily literal source-pattern scanning and did not cover aliases, wrappers, re-exports, generic resource types, or unlisted implementation resources.
+4. **Coverage-exclusion semantics.** At M0/M1, enabled exclusions required rationale, owner, and equivalent-test metadata, but the checker did not subtract them from the denominator or validate ownership/path against coverage-report data.
 
 ## Exceptions and known risks
 
-No M0/M1 lint, coverage, feature-profile, dependency, or architecture exception is enabled for this baseline. The four deferred hardening items above are known quality-system boundaries; they do not weaken the successfully executed M0/M1 checks, but they must not be represented as coverage already provided by those checks.
+No M0/M1 lint, coverage, feature-profile, dependency, or architecture exception is enabled for this baseline. The four historical M0/M1 quality-system boundaries above were completed by M1+; they must not be represented as coverage already provided by the earlier M0/M1 checks.
