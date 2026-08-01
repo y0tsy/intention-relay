@@ -1,0 +1,21 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0
+  },
+  "revision_id": "44444444-4444-4444-8444-444444444444",
+  "captured_at": 1700000000,
+  "resolved": {
+    "schema_version": {
+      "major": 1,
+      "minor": 0
+    },
+    "provider": {
+      "kind": "openrouter",
+      "model": "example-chat-model",
+      "endpoint": "https://example.invalid/v1",
+      "credential_configured": true
+    },
+    "source_kind": "explicit"
+  }
+}

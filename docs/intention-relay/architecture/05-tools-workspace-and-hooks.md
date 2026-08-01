@@ -66,6 +66,10 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
 
 A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
 
+### Safe missing-path outcome
+
+When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath { path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the authorized workspace, such as `src/missing.rs`. The tool must not disclose the absolute workspace root, a canonical or symlink target, an OS error string, command details, or file content in the error message, detail, or display form.
+
 ## Tool pipeline
 
 ```mermaid

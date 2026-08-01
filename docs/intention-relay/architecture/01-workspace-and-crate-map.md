@@ -11,6 +11,8 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - An adapter may depend on `intention-client` and presentation-only crates, never on application, runtime, storage implementation, tools, or provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
+- M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation only. Revision persistence, daemon reload, and attaching a snapshot to a run remain later ownership.
+- `quality/architecture.toml` is the machine-readable source for active-crate external dependencies, adapter and protocol allowlists, composition-only implementations, and provider-SDK resource patterns.
 
 ## Planned crates
 
@@ -97,11 +99,12 @@ The workspace must have tests that fail when these rules are broken:
 
 1. no cyclic crate dependencies;
 2. the required v1 crate set exists, and every crate has a single declared responsibility;
-3. adapters do not import forbidden implementation crates;
+3. adapters do not import forbidden implementation crates or declare forbidden workspace/external dependencies;
 4. only `intention` selects concrete storage/provider/tool extension implementations;
 5. `intention-protocol` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
-6. public cross-crate methods accept/return DTOs, not implementation resources;
-7. every planned crate has a stated test target before implementation begins.
+6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
+7. every planned crate has a stated test target before implementation begins;
+8. every declared boundary has an isolated expected-failure fixture in the quality self-test.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The mandatory pinned tooling, coverage tiers, feature profiles, lint policy, and Makefile/CI contract are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 

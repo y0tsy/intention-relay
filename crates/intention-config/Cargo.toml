@@ -1,0 +1,18 @@
+[package]
+name = "intention-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+intention-types = { path = "../intention-types", version = "=0.0.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.0.3"
+
+[dev-dependencies]
+serde_json = "1.0.149"
