@@ -10,7 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-fs4 = { version = "0.13.1", features = ["sync"] }
+fs4 = { version = "1.1.0", features = ["sync"] }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
 intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }

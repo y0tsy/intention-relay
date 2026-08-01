@@ -12,7 +12,6 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fs4::fs_std::FileExt;
 use intention_protocol::{
     DaemonHealthDto, ProtocolCapabilityDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto,
     ProtocolQueryResultDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
@@ -387,23 +386,22 @@ impl StartupLock {
             .read(true)
             .write(true)
             .truncate(false)
-            .open(path)
+            .open(&path)
             .map_err(|_| unavailable("startup_lock_unavailable"))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(file_path(&file)?, fs::Permissions::from_mode(0o600))
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
                 .map_err(|_| unavailable("startup_lock_unavailable"))?;
         }
-        file.lock_exclusive()
-            .map_err(|_| unavailable("startup_lock_unavailable"))?;
+        fs4::FileExt::lock(&file).map_err(|_| unavailable("startup_lock_unavailable"))?;
         Ok(Self { file })
     }
 }
 
 impl Drop for StartupLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        let _ = fs4::FileExt::unlock(&self.file);
     }
 }
 
@@ -455,14 +453,6 @@ fn platform_state_directory() -> DtoResult<PathBuf> {
     {
         Err(unavailable("startup_lock_unavailable"))
     }
-}
-
-#[cfg(unix)]
-fn file_path(file: &std::fs::File) -> DtoResult<PathBuf> {
-    use std::os::unix::io::AsRawFd;
-
-    let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
-    fs::read_link(descriptor_path).map_err(|_| unavailable("startup_lock_unavailable"))
 }
 
 fn is_daemon_unavailable(error: &ErrorDto) -> bool {
