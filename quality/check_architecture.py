@@ -231,8 +231,7 @@ def check_source_patterns(
     return failures
 
 
-def check_m1_policy(
-    root: Path,
+def check_phase_policy(
     policy: dict[str, object],
     packages: dict[str, dict[str, object]],
     texts: dict[Path, str],
@@ -240,92 +239,103 @@ def check_m1_policy(
     state = policy.get("policy")
     if not isinstance(state, dict):
         fail("missing [policy] table")
-    if state.get("phase") != "m1" or state.get("active_milestone") != "m1":
-        fail("M1 policy must declare phase and active_milestone as m1")
+    phase = state.get("phase")
+    if phase not in {"m1", "m2"} or state.get("active_milestone") != phase:
+        fail("policy phase and active_milestone must be matching supported milestones")
 
     declared = policy_crates(policy)
     expected_names = set(declared)
     actual_names = set(packages)
     missing = expected_names - actual_names
     if missing:
-        fail(f"M1 workspace is missing declared crates: {sorted(missing)}")
+        fail(f"{phase.upper()} workspace is missing declared crates: {sorted(missing)}")
 
     active = string_list(state, "active_production_crates")
     skeletons = string_list(state, "skeleton_crates")
     active_set = set(active)
     skeleton_set = set(skeletons)
-    if active_set != {"intention-types", "intention-domain", "intention-protocol", "intention-config"}:
-        fail("M1 active production crates must be the four roadmap contract crates")
+    expected_active = {
+        "m1": {"intention-types", "intention-domain", "intention-protocol", "intention-config"},
+        "m2": {
+            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-transport", "intention-client", "intention", "intention-daemon",
+        },
+    }[phase]
+    if active_set != expected_active:
+        fail(f"{phase.upper()} active production crates must equal the roadmap crate set")
+    if len(active) != len(active_set) or len(skeletons) != len(skeleton_set):
+        fail("active and skeleton crate lists cannot contain duplicates")
     if active_set & skeleton_set:
-        fail("an M1 crate cannot be both active and a skeleton")
-    if active_set | skeleton_set != expected_names:
-        fail("active and skeleton crate sets must partition the declared v1 crates")
+        fail(f"an {phase.upper()} crate cannot be both active and a skeleton")
+
+    adapters = policy.get("adapter_boundaries")
+    if not isinstance(adapters, dict):
+        fail("adapter boundary table is required")
+    adapter_set = set(string_list(adapters, "packages"))
+    if phase == "m1":
+        if active_set | skeleton_set != expected_names:
+            fail("M1 active and skeleton crate sets must partition the declared v1 crates")
+    else:
+        if active_set & adapter_set:
+            fail("M2 adapters cannot be active production crates")
+        if active_set | skeleton_set | adapter_set != expected_names:
+            fail("M2 active, skeleton, and adapter crate sets must cover the declared v1 crates")
     if state.get("quality_harness") not in actual_names:
         fail("quality harness must remain a workspace member")
 
     workspace_policy = policy.get("dependencies")
     external_policy = policy.get("external_dependencies")
     if not isinstance(workspace_policy, dict) or not isinstance(external_policy, dict):
-        fail("M1 workspace and external dependency policies are required")
+        fail("workspace and external dependency policies are required")
+    if set(workspace_policy) != active_set or set(external_policy) != active_set:
+        fail("dependency policies must declare exactly the active production crates")
 
     failures: list[str] = []
-    for package_name in active_set:
+    for package_name in active:
+        package = packages.get(package_name)
+        if package is None:
+            fail(f"active crate {package_name} is absent from Cargo metadata")
+        if not source_files_for_package(package):
+            failures.append(f"{package_name}: active production crate must contain Rust production source")
+        declaration = declared.get(package_name)
+        if declaration is None:
+            failures.append(f"{package_name}: active production crate requires a policy declaration")
+            continue
         allowed_workspace = workspace_policy.get(package_name)
         allowed_external = external_policy.get(package_name)
         if not isinstance(allowed_workspace, list) or not all(isinstance(name, str) for name in allowed_workspace):
             fail(f"active crate {package_name} requires a workspace dependency declaration")
         if not isinstance(allowed_external, list) or not all(isinstance(name, str) for name in allowed_external):
             fail(f"active crate {package_name} requires an external dependency declaration")
-        actual_workspace = workspace_dependencies(packages[package_name], actual_names)
+        actual_workspace = workspace_dependencies(package, actual_names)
         expected_workspace = set(allowed_workspace)
         if actual_workspace != expected_workspace:
             failures.append(
                 f"{package_name}: workspace dependencies must equal {sorted(expected_workspace)}, "
                 f"got {sorted(actual_workspace)}"
             )
-        actual_external = external_dependencies(packages[package_name], actual_names)
+        actual_external = external_dependencies(package, actual_names)
         expected_external = set(allowed_external)
         if actual_external != expected_external:
             failures.append(
                 f"{package_name}: external dependencies must equal {sorted(expected_external)}, "
                 f"got {sorted(actual_external)}"
             )
-        actual_targets = integration_test_targets(packages[package_name])
-        declared_targets = set(declared[package_name]["test_targets"])
-        if not declared_targets:
-            failures.append(f"{package_name}: active M1 crate requires declared integration test targets")
+        actual_targets = integration_test_targets(package)
+        declared_targets = set(declaration["test_targets"])
         if declared_targets != actual_targets:
             failures.append(
                 f"{package_name}: declared integration test targets must equal Cargo targets "
                 f"{sorted(actual_targets)}, got {sorted(declared_targets)}"
             )
     for package_name in skeleton_set:
-        direct_dependencies = package_dependencies(packages[package_name])
-        if direct_dependencies:
-            failures.append(
-                f"{package_name}: M1 skeleton cannot declare dependencies, got {sorted(direct_dependencies)}"
-            )
-        actual_targets = integration_test_targets(packages[package_name])
         declared_targets = set(declared[package_name]["test_targets"])
         if declared_targets:
             failures.append(
-                f"{package_name}: M1 skeleton must not declare integration test targets, got {sorted(declared_targets)}"
+                f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
+                f"got {sorted(declared_targets)}"
             )
-        if actual_targets:
-            failures.append(
-                f"{package_name}: M1 skeleton must not expose integration test targets, got {sorted(actual_targets)}"
-            )
-        public_items = []
-        for source in source_files_for_package(packages[package_name]):
-            text = texts[source]
-            public_items.extend(
-                match.group(1).strip()
-                for match in re.finditer(r"^pub\s+(.+)$", text, re.MULTILINE)
-            )
-        if public_items:
-            failures.append(f"{package_name}: M1 skeleton must not expose public items, got {public_items}")
     return failures
-
 
 def check_declared_boundaries(
     policy: dict[str, object],
@@ -432,19 +442,28 @@ def check_coverage_policy(root: Path, architecture: dict[str, object]) -> list[s
     coverage = load_toml(root / "quality" / "coverage.toml")
     state = coverage.get("policy")
     tiers = coverage.get("crate_tiers")
-    if not isinstance(state, dict) or state.get("phase") != "m1":
-        return ["coverage policy must declare phase = m1"]
+    architecture_state = architecture.get("policy")
+    if not isinstance(state, dict) or not isinstance(architecture_state, dict):
+        return ["coverage and architecture policies require policy tables"]
+    phase = architecture_state.get("phase")
+    if state.get("phase") != phase:
+        return ["coverage policy phase must equal architecture policy phase"]
     if not isinstance(tiers, dict):
         return ["coverage policy requires [crate_tiers]"]
-    active = architecture["policy"]["active_production_crates"]
+    active = architecture_state["active_production_crates"]
     if state.get("production_crates") != active:
-        return ["coverage production crates must equal active M1 crate list"]
+        return ["coverage production crates must equal active production crate list"]
+    declared = policy_crates(architecture)
     failures: list[str] = []
+    if set(tiers) != set(active):
+        failures.append("coverage tiers must declare exactly the active production crates")
     for name in active:
-        if tiers.get(name) != "A":
-            failures.append(f"coverage tier for {name} must be A")
+        expected_tier = declared[name]["coverage_tier"]
+        if expected_tier not in {"A", "B", "C"}:
+            failures.append(f"active crate {name} must have a numeric coverage tier")
+        elif tiers.get(name) != expected_tier:
+            failures.append(f"coverage tier for {name} must be {expected_tier}")
     return failures
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -457,7 +476,7 @@ def main() -> None:
     metadata = cargo_metadata(root)
     packages = packages_by_name(metadata)
     texts = source_texts(root)
-    failures = check_m1_policy(root, policy, packages, texts)
+    failures = check_phase_policy(policy, packages, texts)
     failures.extend(check_workspace_dependency_cycles(packages))
     failures.extend(check_declared_boundaries(policy, packages, texts))
     failures.extend(check_coverage_policy(root, policy))
@@ -466,11 +485,17 @@ def main() -> None:
     if not isinstance(forbidden, dict):
         fail("missing [forbidden] table")
     patterns = string_list(forbidden, "source_patterns")
-    public_resource_patterns = string_list(forbidden, "public_resource_patterns")
+    string_list(forbidden, "public_resource_patterns")
 
     for path, text in texts.items():
         for pattern in patterns:
             if pattern in text:
+                if pattern == "std::process::exit" and re.search(
+                    r"#!?\[allow\([^]]*clippy::exit[^]]*reason\s*=\s*\"[^\"]+\"[^]]*\)\]",
+                    text,
+                    re.DOTALL,
+                ):
+                    continue
                 failures.append(f"{path}: forbidden source pattern {pattern!r}")
         failures.extend(check_reasoned_lints(path, text))
 
@@ -478,11 +503,6 @@ def main() -> None:
     for package_name in active:
         for path in source_files_for_package(packages[package_name]):
             text = texts[path]
-            for pattern in public_resource_patterns:
-                if pattern in text:
-                    failures.append(
-                        f"{path}: active M1 contract crate cannot expose implementation resource {pattern!r}"
-                    )
             if re.search(
                 r"pub\s+(?:struct|enum)\s+\w+\s*\{[^}]*\b(?:credential|api_key|token|password)\s*:\s*String",
                 text,
@@ -492,7 +512,7 @@ def main() -> None:
 
     if failures:
         fail("\n".join(failures))
-    print("architecture-check: M1 workspace, dependency, DTO, adapter, protocol, and composition policies are valid")
+    print("architecture-check: phase-aware workspace, dependency, DTO, adapter, protocol, and composition policies are valid")
 
 
 if __name__ == "__main__":

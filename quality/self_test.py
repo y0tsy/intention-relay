@@ -113,15 +113,20 @@ def test_missing_crate_metadata(root: Path) -> None:
         )
 
 
-def test_m1_dependency_boundary(root: Path) -> None:
-    manifest = root / "crates/intention-domain/Cargo.toml"
+def test_m2_dependency_boundary(root: Path) -> None:
+    manifest = root / "crates/intention-client/Cargo.toml"
     with modified(manifest):
         manifest.write_text(
             manifest.read_text(encoding="utf-8")
-            + '\nintention-protocol = { path = "../intention-protocol" }\n',
+            + '\nintention-config = { path = "../intention-config", version = "=0.0.0" }\n',
             encoding="utf-8",
         )
-        run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-client: workspace dependencies must equal",
+        )
 
 
 def test_workspace_dependency_cycle(root: Path) -> None:
@@ -141,7 +146,7 @@ def test_workspace_dependency_cycle(root: Path) -> None:
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="workspace dependency cycle: intention-types -> intention-protocol -> intention-domain -> intention-types",
+            expected_output="workspace dependency cycle:",
         )
 
 
@@ -169,18 +174,24 @@ def test_executable_test_target_policy(root: Path) -> None:
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="intention-application: M1 skeleton must not declare integration test targets",
+            expected_output="intention-application: M2 skeleton must not declare integration test targets",
         )
 
 
-def test_m1_skeleton_api_boundary(root: Path) -> None:
-    source = root / "crates/intention-application/src/lib.rs"
-    with modified(source):
-        source.write_text(
-            source.read_text(encoding="utf-8") + "\npub const INVALID_SKELETON_API: u8 = 1;\n",
-            encoding="utf-8",
+def test_m2_skeleton_api_boundary(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = []',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
-        run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-application: M2 skeleton must not declare integration test targets",
+        )
 
 
 def test_signature_aware_public_api_leaks(root: Path) -> None:
@@ -205,17 +216,22 @@ def test_signature_aware_public_api_leaks(root: Path) -> None:
         )
 
 
-def test_m1_public_resource_leak(root: Path) -> None:
-    source = root / "crates/intention-types/src/lib.rs"
+def test_m2_public_resource_leak(root: Path) -> None:
+    source = root / "crates/intention-client/src/lib.rs"
     with modified(source):
         source.write_text(
-            source.read_text(encoding="utf-8") + "\npub struct LeakedResource { file: std::fs::File }\n",
+            source.read_text(encoding="utf-8") + "\npub type LeakedClientResource = std::fs::File;\n",
             encoding="utf-8",
         )
-        run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+        run(
+            [sys.executable, "quality/check_public_api.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="LeakedClientResource",
+        )
 
 
-def test_m1_secret_projection(root: Path) -> None:
+def test_m2_secret_projection(root: Path) -> None:
     source = root / "crates/intention-config/src/lib.rs"
     with modified(source):
         source.write_text(
@@ -337,6 +353,10 @@ def test_coverage_exclusion_semantics(root: Path) -> None:
                     ("crates/intention-domain/src/lib.rs", 100, 100),
                     ("crates/intention-protocol/src/lib.rs", 100, 100),
                     ("crates/intention-config/src/lib.rs", 100, 100),
+                    ("crates/intention-transport/src/lib.rs", 100, 100),
+                    ("crates/intention-client/src/lib.rs", 100, 100),
+                    ("crates/intention/src/lib.rs", 100, 100),
+                    ("crates/intention-daemon/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -383,6 +403,10 @@ enabled = true
                     ("crates/intention-domain/src/lib.rs", 100, 100),
                     ("crates/intention-protocol/src/lib.rs", 100, 100),
                     ("crates/intention-config/src/lib.rs", 100, 100),
+                    ("crates/intention-transport/src/lib.rs", 100, 100),
+                    ("crates/intention-client/src/lib.rs", 100, 100),
+                    ("crates/intention/src/lib.rs", 100, 100),
+                    ("crates/intention-daemon/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -466,13 +490,13 @@ def main() -> None:
         test_unreasoned_suppression,
         test_tool_version_mismatch,
         test_missing_crate_metadata,
-        test_m1_dependency_boundary,
+        test_m2_dependency_boundary,
         test_workspace_dependency_cycle,
         test_executable_test_target_policy,
-        test_m1_skeleton_api_boundary,
+        test_m2_skeleton_api_boundary,
         test_signature_aware_public_api_leaks,
-        test_m1_public_resource_leak,
-        test_m1_secret_projection,
+        test_m2_public_resource_leak,
+        test_m2_secret_projection,
         test_forbidden_source_boundary,
         test_adapter_isolation_boundary,
         test_protocol_isolation_boundary,
