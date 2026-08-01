@@ -1,5 +1,394 @@
-//! intention-transport is a compile-only M1 skeleton.
+//! Framed, local-only IPC for Intention Relay.
 //!
-//! Its approved responsibility is declared in quality/architecture.toml and
-//! docs/intention-relay/architecture/01-workspace-and-crate-map.md. This crate
-//! intentionally exposes no production API until its owning milestone.
+//! The public surface accepts only `intention-protocol` DTOs. A bounded,
+//! length-prefixed JSON codec remains private to this crate, and the underlying
+//! Unix-domain socket or Windows named pipe never crosses its crate boundary.
+
+use std::fs;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use intention_protocol::{
+    ProtocolHelloDto, ProtocolRequestEnvelopeDto, ProtocolResponseEnvelopeDto, ProtocolVersionDto,
+};
+use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
+use interprocess::ConnectWaitMode;
+use interprocess::local_socket::prelude::{LocalSocketListener, LocalSocketStream};
+use interprocess::local_socket::traits::Listener as _;
+use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, PathNameType};
+
+const FRAME_LENGTH_BYTES: usize = 4;
+const MAX_FRAME_BYTES: usize = 1_048_576;
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A validated, private-to-the-current-user location for a local daemon endpoint.
+///
+/// The value is intentionally not serializable and is never included in a public
+/// protocol DTO or an error message.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalEndpoint {
+    path: PathBuf,
+}
+
+impl LocalEndpoint {
+    /// Creates an endpoint for an explicit absolute local socket path.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe validation error when the path is empty, relative, or does
+    /// not use the platform's expected local IPC form.
+    pub fn from_path(path: impl Into<PathBuf>) -> DtoResult<Self> {
+        let path = path.into();
+        if path.as_os_str().is_empty() || !path.is_absolute() {
+            return Err(ErrorDto::validation(
+                "invalid_local_endpoint",
+                "local daemon endpoint must be an absolute path",
+            ));
+        }
+        #[cfg(windows)]
+        if !path.to_string_lossy().starts_with(r"\\.\pipe\") {
+            return Err(ErrorDto::validation(
+                "invalid_local_endpoint",
+                "local daemon endpoint must use the named pipe namespace",
+            ));
+        }
+        Ok(Self { path })
+    }
+
+    /// Derives the standard per-user endpoint from a platform runtime directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe unavailable error when a usable platform runtime directory
+    /// cannot be determined.
+    pub fn platform_default() -> DtoResult<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let base = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .filter(|candidate| candidate.is_absolute())
+                .or_else(|| {
+                    std::env::var_os("XDG_CONFIG_HOME")
+                        .map(PathBuf::from)
+                        .filter(|candidate| candidate.is_absolute())
+                        .map(|candidate| candidate.join("intention-relay"))
+                })
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .filter(|candidate| candidate.is_absolute())
+                        .map(|candidate| candidate.join(".config/intention-relay"))
+                })
+                .ok_or_else(|| {
+                    ErrorDto::unavailable(
+                        "local_runtime_directory_unavailable",
+                        "a local runtime directory could not be determined",
+                    )
+                })?;
+            Self::from_path(base.join("intention-relay.sock"))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let base = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|candidate| candidate.is_absolute())
+                .map(|candidate| candidate.join("Library/Application Support/intention-relay"))
+                .ok_or_else(|| {
+                    ErrorDto::unavailable(
+                        "local_runtime_directory_unavailable",
+                        "a local runtime directory could not be determined",
+                    )
+                })?;
+            Self::from_path(base.join("intention-relay.sock"))
+        }
+        #[cfg(windows)]
+        {
+            let user = std::env::var("USERNAME").map_err(|_| {
+                ErrorDto::unavailable(
+                    "local_runtime_directory_unavailable",
+                    "a local runtime directory could not be determined",
+                )
+            })?;
+            return Self::from_path(PathBuf::from(format!(r"\\.\pipe\intention-relay-{user}")));
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        {
+            Err(ErrorDto::unavailable(
+                "local_transport_unsupported",
+                "the current platform does not support the local daemon transport",
+            ))
+        }
+    }
+
+    /// Returns a private filesystem representation for crate-internal verification.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+
+    fn socket_name(&self) -> DtoResult<interprocess::local_socket::Name<'_>> {
+        GenericFilePath::map(self.path.as_os_str().into())
+            .map_err(|_| unavailable("local_endpoint_unavailable"))
+    }
+}
+
+/// A local framed connection which exchanges only typed protocol DTOs.
+pub struct LocalConnection {
+    stream: LocalSocketStream,
+}
+
+impl LocalConnection {
+    /// Connects to the endpoint with a bounded wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe typed unavailable error when the daemon endpoint cannot be
+    /// reached, rather than exposing an OS path or error string.
+    pub fn connect(endpoint: &LocalEndpoint) -> DtoResult<Self> {
+        let stream = ConnectOptions::new()
+            .name(endpoint.socket_name()?)
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+            .connect_sync()
+            .map_err(|_| unavailable("local_daemon_unavailable"))?;
+        Ok(Self { stream })
+    }
+
+    /// Writes one bounded request envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable error when the connected peer no longer
+    /// accepts data or the DTO cannot be encoded into the fixed protocol codec.
+    pub fn send_request(&mut self, request: &ProtocolRequestEnvelopeDto) -> DtoResult<()> {
+        write_frame(&mut self.stream, request)
+    }
+
+    /// Reads one bounded request envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or unavailable error for malformed, oversized,
+    /// incomplete, or disconnected frames.
+    pub fn receive_request(&mut self) -> DtoResult<ProtocolRequestEnvelopeDto> {
+        read_frame(&mut self.stream)
+    }
+
+    /// Writes one bounded response envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable error when the connected peer no longer
+    /// accepts data or the DTO cannot be encoded into the fixed protocol codec.
+    pub fn send_response(&mut self, response: &ProtocolResponseEnvelopeDto) -> DtoResult<()> {
+        write_frame(&mut self.stream, response)
+    }
+
+    /// Reads one bounded response envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or unavailable error for malformed, oversized,
+    /// incomplete, or disconnected frames.
+    pub fn receive_response(&mut self) -> DtoResult<ProtocolResponseEnvelopeDto> {
+        read_frame(&mut self.stream)
+    }
+
+    /// Sends a typed protocol hello during connection negotiation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable error when the connection cannot send a
+    /// complete frame.
+    pub fn send_hello(&mut self, hello: &ProtocolHelloDto) -> DtoResult<()> {
+        write_frame(&mut self.stream, hello)
+    }
+
+    /// Receives a typed protocol hello during connection negotiation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or unavailable error for malformed, oversized,
+    /// incomplete, or disconnected frames.
+    pub fn receive_hello(&mut self) -> DtoResult<ProtocolHelloDto> {
+        read_frame(&mut self.stream)
+    }
+}
+
+/// A local listener that accepts framed, typed client connections.
+pub struct LocalListener {
+    listener: LocalSocketListener,
+    endpoint: LocalEndpoint,
+}
+
+impl LocalListener {
+    /// Binds a user-private local endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe typed error when the parent directory cannot be prepared,
+    /// the endpoint is already serving another daemon, or platform IPC is
+    /// unavailable. It never removes a path that was not created by this host.
+    pub fn bind(endpoint: LocalEndpoint) -> DtoResult<Self> {
+        prepare_parent_directory(&endpoint)?;
+        let listener = listener_options(&endpoint)?.create_sync().map_err(|_| {
+            ErrorDto::new(
+                "local_daemon_endpoint_in_use",
+                ErrorCategoryDto::Conflict,
+                "the local daemon endpoint is already in use",
+                ErrorRetryDto::Immediate,
+                None,
+            )
+            .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
+        })?;
+        Ok(Self { listener, endpoint })
+    }
+
+    /// Accepts one client connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe typed unavailable error if the listener cannot accept the
+    /// next peer connection.
+    pub fn accept(&self) -> DtoResult<LocalConnection> {
+        let stream = self
+            .listener
+            .accept()
+            .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+        Ok(LocalConnection { stream })
+    }
+}
+
+impl Drop for LocalListener {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = fs::remove_file(&self.endpoint.path);
+        }
+    }
+}
+
+/// Performs the mandatory client/daemon hello exchange.
+///
+/// # Errors
+///
+/// Returns the typed protocol mismatch error when the peer major version differs,
+/// or a typed transport error when the handshake cannot complete.
+pub fn negotiate_client(
+    connection: &mut LocalConnection,
+    local: ProtocolHelloDto,
+) -> DtoResult<ProtocolHelloDto> {
+    connection.send_hello(&local)?;
+    let remote = connection.receive_hello()?;
+    local.version().ensure_compatible_with(remote.version())?;
+    Ok(remote)
+}
+
+/// Performs the daemon side of the mandatory hello exchange.
+///
+/// # Errors
+///
+/// Returns the typed protocol mismatch error when the peer major version differs,
+/// or a typed transport error when the handshake cannot complete.
+pub fn negotiate_daemon(
+    connection: &mut LocalConnection,
+    local: ProtocolHelloDto,
+) -> DtoResult<ProtocolHelloDto> {
+    let remote = connection.receive_hello()?;
+    local.version().ensure_compatible_with(remote.version())?;
+    connection.send_hello(&local)?;
+    Ok(remote)
+}
+
+/// Returns the currently implemented local protocol version.
+#[must_use]
+pub const fn local_protocol_version() -> ProtocolVersionDto {
+    ProtocolVersionDto::new(1, 0)
+}
+
+fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {
+    let options = ListenerOptions::new()
+        .name(endpoint.socket_name()?)
+        .reclaim_name(false)
+        .try_overwrite(false)
+        .max_spin_time(LISTENER_SPIN_TIMEOUT);
+    #[cfg(unix)]
+    {
+        use interprocess::os::unix::local_socket::ListenerOptionsExt;
+
+        Ok(options.mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(options)
+    }
+}
+
+fn prepare_parent_directory(endpoint: &LocalEndpoint) -> DtoResult<()> {
+    #[cfg(unix)]
+    {
+        let parent = endpoint.path.parent().ok_or_else(|| {
+            ErrorDto::validation(
+                "invalid_local_endpoint",
+                "local daemon endpoint must have a parent directory",
+            )
+        })?;
+        fs::create_dir_all(parent)
+            .map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
+    }
+    Ok(())
+}
+
+fn write_frame<T: serde::Serialize>(stream: &mut LocalSocketStream, value: &T) -> DtoResult<()> {
+    let payload = serde_json::to_vec(value).map_err(|_| {
+        ErrorDto::validation(
+            "local_protocol_encode_failed",
+            "a typed local protocol message could not be encoded",
+        )
+    })?;
+    let length = u32::try_from(payload.len()).map_err(|_| oversized_frame())?;
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(oversized_frame());
+    }
+    stream
+        .write_all(&length.to_be_bytes())
+        .and_then(|_| stream.write_all(&payload))
+        .and_then(|_| stream.flush())
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))
+}
+
+fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut LocalSocketStream) -> DtoResult<T> {
+    let mut header = [0_u8; FRAME_LENGTH_BYTES];
+    stream
+        .read_exact(&mut header)
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    let length = usize::try_from(u32::from_be_bytes(header)).map_err(|_| oversized_frame())?;
+    if length > MAX_FRAME_BYTES {
+        return Err(oversized_frame());
+    }
+    let mut payload = vec![0_u8; length];
+    stream
+        .read_exact(&mut payload)
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    serde_json::from_slice(&payload).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_local_protocol_frame",
+            "a local protocol frame was invalid",
+        )
+    })
+}
+
+fn oversized_frame() -> ErrorDto {
+    ErrorDto::validation(
+        "local_protocol_frame_too_large",
+        "a local protocol frame exceeded the configured limit",
+    )
+}
+
+fn unavailable(code: &'static str) -> ErrorDto {
+    ErrorDto::unavailable(code, "the local daemon connection is unavailable")
+}
