@@ -1,12 +1,43 @@
 [workspace]
-members = ["quality/harness"]
-default-members = ["quality/harness"]
+members = [
+  "crates/intention-types",
+  "crates/intention-domain",
+  "crates/intention-application",
+  "crates/intention-runtime",
+  "crates/intention-storage",
+  "crates/intention-storage-sqlite",
+  "crates/intention-config",
+  "crates/intention-model",
+  "crates/intention-provider-openrouter",
+  "crates/intention-provider-generic-chat",
+  "crates/intention-tools",
+  "crates/intention-workspace",
+  "crates/intention-hooks",
+  "crates/intention-vfr",
+  "crates/intention-headroom",
+  "crates/intention-plans",
+  "crates/intention-protocol",
+  "crates/intention-transport",
+  "crates/intention-client",
+  "crates/intention",
+  "crates/intention-daemon",
+  "crates/intention-tauri",
+  "crates/intention-tui",
+  "quality/harness",
+]
+default-members = [
+  "crates/intention-types",
+  "crates/intention-domain",
+  "crates/intention-protocol",
+  "crates/intention-config",
+]
 resolver = "3"
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.97"
+license = "Apache-2.0"
 publish = false
 
 [workspace.lints.rust]

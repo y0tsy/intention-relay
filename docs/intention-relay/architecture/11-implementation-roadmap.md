@@ -110,6 +110,31 @@ Every milestone after Milestone 0 must:
 - architecture checks reject an intentional forbidden adapter/storage or provider-SDK contract dependency;
 - Tier A crates meet 95% line coverage without excluding validation, migration, or redaction logic.
 
+### M1 implementation decisions
+
+The M1 implementation makes the following decisions required by the roadmap and
+configuration policy:
+
+- all planned v1 crates are workspace members; only `intention-types`,
+  `intention-domain`, `intention-protocol`, and `intention-config` are active
+  Tier A production crates, while every later crate is an implementation-free
+  skeleton until its owning milestone;
+- the M0 `quality-harness` remains a non-production workspace member;
+- configuration discovers a platform-standard config location, with a validated
+  explicit absolute-path override for tests, portable invocation, and future
+  daemon composition. It never falls back to process CWD;
+- the initial TOML schema is version 1, includes a tested supported v0-to-v1
+  migration, rejects future schemas with an `ErrorDto`, and exposes only
+  redacted public configuration projections;
+- M1 defines a serializable, credential-free `ConfigSnapshotDto` contract
+  foundation with `ConfigRevisionId` and capture time. Configuration revision
+  persistence, daemon application/reload, and attaching a snapshot to a live
+  run remain owned by M3/M4; the intended application behavior is new-run-only
+  until a later explicit, tested transition is introduced;
+- M1 accepts only `openrouter` and `generic-chat-completion-api` provider kinds.
+  `openai` remains unavailable until a separately declared OpenAI Responses
+  driver crate, contract, and boundary policy are introduced.
+
 ## Milestone 2: Local protocol, client, and daemon bootstrap
 
 ### Deliver
@@ -183,8 +208,7 @@ Every milestone after Milestone 0 must:
 
 - a fixture model stream produces ordered assistant events and durable run completion;
 - the application rejects unsupported provider/model combinations before execution;
-- Generic Chat Completion does not silently claim support for models requiring a future Responses driver;
-- provider/runtime coverage and redaction gates pass without leaking SDK or credential details.
+- provider selection preserves the configured provider/model pair; provider/runtime coverage and redaction gates pass without leaking SDK or credential details.
 
 ## Milestone 5: Typed tools, WorkspaceRoot, and hooks
 

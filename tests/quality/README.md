@@ -1,9 +1,11 @@
-# M0 quality checks
+# M1 contract tests
 
-This directory is reserved for quality-gate integration evidence. M0 keeps its
-isolated expected-failure inputs under `quality/fixtures/` and runs them through
-`make quality-self-test`, because deliberately invalid source must never be a
-normal workspace member.
+The active M1 crates own test-first DTO, validation, migration, redaction, and
+protocol compatibility evidence. Versioned fixtures prove supported legacy
+error decoding, typed correlation/detail safety, persisted-event and protocol
+compatibility, credential-free snapshots, and malformed wire rejection. The
+quality self-test additionally proves adapter/protocol isolation,
+composition-only implementation selection, and provider-SDK leakage gates.
 
-M1 may add crate-specific integration tests under the applicable crate while
-preserving the repository-level quality checks here.
+Every fixture uses only recognizable fake credentials; no test fixture contains
+a real credential.

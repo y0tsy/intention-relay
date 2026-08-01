@@ -93,7 +93,6 @@ The implementation must demonstrably provide:
 - Automatic continuation of interrupted model, tool, or shell processes after daemon restart.
 - A general source editor, a proven LSP integration, or a Files panel.
 - Direct user administration of MCP servers or direct manual sub-agent spawning.
-- Treating generic Chat Completion as a substitute for a future OpenAI Responses driver.
 
 ## Implementation-required decisions
 

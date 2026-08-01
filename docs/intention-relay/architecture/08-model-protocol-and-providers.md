@@ -72,15 +72,11 @@ It owns:
 - documented capability limitations;
 - normalized failures.
 
-This adapter is not a universal route for every model.
-
-### Future OpenAI Responses driver
-
-GPT-5+, GPT-4o, o-series, and Codex models require a dedicated OpenAI Responses API driver when they are supported. They must not be configured through the generic Chat Completion adapter merely because a model name appears OpenAI-like.
+Provider/model selection is explicit configuration. During M1, the only configuration kind strings are `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M1 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
 
 ## Provider selection
 
-Resolved TOML configuration selects a provider and model. A run receives an immutable `ConfigSnapshotDto` and provider/model selection snapshot at startup.
+Resolved TOML configuration selects a provider and model. M1 defines a serializable, credential-free `ConfigSnapshotDto` foundation containing a `ConfigRevisionId`, capture timestamp, and redacted resolved selection. M1 does not persist revisions, apply daemon reload, or attach snapshots to runs; M3/M4 own those workflows. A later run receives the immutable snapshot selected at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future explicit, tested runtime transition is introduced.
 
@@ -108,7 +104,7 @@ Exact backoff values and retryable status mapping are implementation-required be
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
 | Tool call boundary | Runtime/provider integration test. | Provider emits a tool-call DTO; only runtime invokes the tool registry. |
-| Generic limitation | Configuration test. | Unsupported GPT-5+/Responses case is rejected or requires a dedicated driver. |
+| Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
 | Secret redaction | Provider error fixture. | API key never appears in `ProviderErrorDto`, logs, or events. |
 

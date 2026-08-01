@@ -1,0 +1,8 @@
+{
+  "version": {
+    "major": 1,
+    "minor": 0
+  },
+  "capabilities": ["session_subscriptions"],
+  "adapter_name": "fixture-tui"
+}

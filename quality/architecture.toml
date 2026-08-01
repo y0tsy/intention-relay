@@ -1,7 +1,34 @@
 [policy]
-phase = "m0"
+phase = "m1"
+active_milestone = "m1"
 quality_harness = "quality-harness"
-allowed_m0_workspace_members = ["quality-harness"]
+active_production_crates = [
+  "intention-types",
+  "intention-domain",
+  "intention-protocol",
+  "intention-config",
+]
+skeleton_crates = [
+  "intention-application",
+  "intention-runtime",
+  "intention-storage",
+  "intention-storage-sqlite",
+  "intention-model",
+  "intention-provider-openrouter",
+  "intention-provider-generic-chat",
+  "intention-tools",
+  "intention-workspace",
+  "intention-hooks",
+  "intention-vfr",
+  "intention-headroom",
+  "intention-plans",
+  "intention-transport",
+  "intention-client",
+  "intention",
+  "intention-daemon",
+  "intention-tauri",
+  "intention-tui",
+]
 
 [forbidden]
 source_patterns = [
@@ -13,6 +40,75 @@ source_patterns = [
 ]
 reason_required_attributes = ["allow", "expect"]
 secret_assignment_patterns = ["api_key", "api-key", "secret", "token", "password"]
+public_resource_patterns = [
+  "std::fs::File",
+  "std::path::PathBuf",
+  "std::process::Command",
+  "tokio::",
+  "rusqlite::",
+  "tauri::",
+  "serde_json::Value",
+]
+
+[dependencies]
+"intention-types" = []
+"intention-domain" = ["intention-types"]
+"intention-config" = ["intention-types"]
+"intention-protocol" = ["intention-types", "intention-domain"]
+
+[external_dependencies]
+"intention-types" = ["serde", "serde_json", "uuid"]
+"intention-domain" = ["serde", "serde_json"]
+"intention-config" = ["serde", "serde_json", "toml"]
+"intention-protocol" = ["serde", "serde_json"]
+
+[adapter_boundaries]
+packages = ["intention-tauri", "intention-tui"]
+allowed_workspace_dependencies = ["intention-client", "intention-protocol"]
+allowed_external_dependencies = []
+forbidden_source_patterns = [
+  "intention_application::",
+  "intention_runtime::",
+  "intention_storage::",
+  "intention_storage_sqlite::",
+  "intention_tools::",
+  "intention_provider_",
+  "rusqlite::",
+  "tauri::",
+]
+
+[protocol_boundary]
+package = "intention-protocol"
+allowed_workspace_dependencies = ["intention-types", "intention-domain"]
+allowed_external_dependencies = ["serde", "serde_json"]
+forbidden_source_patterns = [
+  "tauri::",
+  "rusqlite::",
+  "intention_tauri::",
+  "intention_tui::",
+  "intention_provider_",
+  "async_openai::",
+  "openrouter_sdk::",
+]
+
+[composition]
+root_package = "intention"
+concrete_implementation_crates = [
+  "intention-storage-sqlite",
+  "intention-provider-openrouter",
+  "intention-provider-generic-chat",
+  "intention-vfr",
+  "intention-headroom",
+  "intention-plans",
+]
+
+[public_contracts]
+provider_sdk_resource_patterns = [
+  "async_openai::",
+  "openrouter_sdk::",
+  "openrouter::",
+  "reqwest::",
+]
 
 [[future_crates]]
 name = "intention-types"

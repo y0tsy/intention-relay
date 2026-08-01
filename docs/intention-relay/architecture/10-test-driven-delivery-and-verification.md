@@ -81,7 +81,8 @@ Every planned crate must declare a test target before implementation. Minimum ex
 
 | Crate area | Minimum evidence |
 | --- | --- |
-| `types`, `domain`, `protocol` | DTO round trip, validation, compatibility fixtures. |
+| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, versioned valid/invalid compatibility fixtures, and explicit additive-field policy proof. |
+| `config` | TOML migration/validation, credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
 | `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
 | `storage`, `storage-sqlite` | Repository contract tests, migration tests, transaction fault injection. |
 | `model`, providers | Stream/error fixtures, capability and redaction tests. |
@@ -92,6 +93,18 @@ Every planned crate must declare a test target before implementation. Minimum ex
 | composition root | Wiring smoke tests using explicit test configuration only. |
 
 The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated invariant, contract, failure mode, and outcome. Immediate tiered coverage targets are mandatory guardrails and are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
+
+## M1 serialized-contract evidence
+
+M1 owns versioned JSON fixtures for legacy and current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
+
+- supported legacy errors decode with absent additive `detail` and `correlation_id` fields;
+- typed `MissingWorkspacePath` detail and canonical `CorrelationIdDto` serialize safely, and malformed/absolute/traversing paths or malformed correlations fail at wire decoding;
+- required fields, IDs, closed enum variants, incompatible config/protocol schema majors, and invalid scalar types fail safely;
+- the documented additive-field policy is tested, rather than inferred from serde defaults;
+- public resolved-config and snapshot projections exclude credentials and local `ConfigPathDto` values.
+
+`make architecture` also contains isolated expected-failure fixtures for adapter isolation, protocol isolation, composition-only concrete selection, and provider-SDK public-contract leakage.
 
 ## Result-oriented acceptance scenarios
 

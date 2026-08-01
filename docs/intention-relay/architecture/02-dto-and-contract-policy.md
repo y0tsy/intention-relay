@@ -41,6 +41,7 @@ PlanId
 PlanRevisionId
 ToolCallId
 EventId
+ConfigRevisionId
 ```
 
 IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO.
@@ -74,8 +75,13 @@ ErrorDto
   category: validation | policy | not_found | conflict | unavailable | internal
   message: safe human-readable message
   retry: never | immediate | delayed | manual
-  correlation_id: optional diagnostic reference
+  correlation_id: optional `CorrelationIdDto` UUID diagnostic reference
+  detail: optional closed `ErrorDetailDto`
 ```
+
+`CorrelationIdDto` accepts only a canonical UUID string and is an opaque reference, not diagnostic content. Dynamic user-visible context belongs only in a reviewed `ErrorDetailDto` variant. M1 defines `MissingWorkspacePath { path: WorkspaceRelativePathDto }`: the path is normalized, slash-separated, logical, and relative to an already-authorized workspace. It never includes an absolute root, canonical target, symlink target, OS error, command line, stack trace, or file content.
+
+Messages are code-owned safe guidance. Runtime data must never be interpolated into `message` or placed in a map/`serde_json::Value`; it must be added through a reviewed typed detail variant. `Display` remains exactly `code: message` and never renders correlation or detail data.
 
 Provider secrets, filesystem content not intended for display, raw stack traces, and SDK objects never appear in `ErrorDto`.
 
@@ -93,6 +99,8 @@ The following must not cross a boundary as public inputs or outputs:
 `serde_json::Value` may exist inside a tightly bounded provider or protocol codec implementation, but it must be decoded into a DTO before leaving that implementation boundary.
 
 ## Validation ownership
+
+Public DTO deserialization is a validation boundary. A wire decoder must deserialize into validated types or a private raw shape followed by `TryFrom`/constructor validation; derived `Deserialize` must not bypass declared non-blank, path, ID, timestamp, pagination, schema, or closed-enum invariants.
 
 Validation occurs at the earliest boundary that has the necessary context:
 
@@ -130,15 +138,17 @@ A live event is emitted only after the storage commit succeeds. The command resu
 ## Versioning and compatibility
 
 - Every transport and persisted event schema has an explicit version.
-- Changes are additive by default. Removal or semantic change requires a migration plan.
+- Changes are additive by default. Supported legacy payloads may omit additive fields such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode as `None`.
+- Public M1 DTOs tolerate unknown additive JSON fields unless a closed configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and incompatible schema/protocol majors always fail safely.
 - Daemon/client protocol negotiation rejects incompatible major versions with a typed error.
 - SQLite migrations and persisted DTO decoders must preserve enough information to read prior supported records.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation
 
-- serialization round-trip tests for every public DTO family;
+- versioned JSON fixtures for every public DTO family, including valid current fixtures, supported legacy fixtures, and malformed/compatibility cases;
 - invalid-shape and invalid-ID tests at every input boundary;
+- explicit wire-validation tests for non-blank, path, timestamp, pagination, and schema invariants;
 - schema compatibility fixtures for transport and persisted events;
 - compile-time tests proving forbidden implementation types do not appear in public signatures where tooling permits;
 - consumer-driven contract tests for `intention-client` against daemon transport;

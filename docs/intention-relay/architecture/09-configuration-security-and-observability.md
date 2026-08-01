@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document defines TOML-only configuration, automatic configuration persistence, open-text credential handling, redaction, configuration snapshots, daemon diagnostics, and operational observability.
+This document defines TOML-only configuration, later configuration persistence, open-text credential handling, redaction, configuration snapshots, daemon diagnostics, and operational observability.
 
 It does not introduce remote authentication, cloud secrets management, or multi-user configuration.
 
@@ -14,8 +14,9 @@ It does not introduce remote authentication, cloud secrets management, or multi-
 - schema validation;
 - defaults and resolved configuration;
 - configuration migrations;
-- revisioning;
-- `ResolvedConfigDto` and immutable `ConfigSnapshotDto`.
+- the M1 `ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
+
+M1 accepts only `openrouter` and `generic-chat-completion-api` provider kinds. A future `openai` kind is not implied: it requires a separately declared OpenAI Responses driver crate and architecture decision.
 
 No YAML, JSON, database-only, or UI-only configuration source is authoritative in v1. YAML is reserved for internal plan frontmatter, not application configuration.
 
@@ -31,7 +32,11 @@ flowchart LR
   RS --> RT[Run actor]
 ```
 
-### Rules
+### M1 contract foundation and later lifecycle
+
+M1 parses, migrates, validates, and projects configuration. It defines the immutable, serializable `ConfigSnapshotDto` shape but does **not** persist a config revision, apply a daemon reload, or attach a snapshot to a run. Those workflows belong to M3/M4 and require their own transaction and integration evidence.
+
+### Later lifecycle rules
 
 - A valid persisted configuration revision is recorded automatically when configuration changes are accepted.
 - A new run receives an immutable config snapshot.
@@ -57,9 +62,10 @@ Provider credentials may be stored in TOML in open text by explicit product deci
 | Class | Examples | May persist | May emit to adapters | May log |
 | --- | --- | --- | --- | --- |
 | Public operational | run status, model ID, plan status, usage. | Yes. | Yes. | Yes, policy-limited. |
-| Workspace-sensitive | file path, source/result content. | Yes, scoped. | Only through user-visible tool/session policy. | Redacted or minimized. |
+| Workspace-sensitive | logical relative workspace path, source/result content. | Yes, scoped. | Only through user-visible tool/session policy. | Redacted or minimized. |
 | Secret | API keys, auth headers, credentials. | TOML only by decision. | No. | No. |
-| Internal diagnostic | socket path, correlation ID, backtrace. | Limited/audited. | Safe identifier only. | Safe/redacted. |
+| Internal diagnostic | socket path, canonical `CorrelationIdDto`, backtrace. | Limited/audited. | Safe identifier only. | Safe/redacted. |
+| Local configuration path | `ConfigPathDto`. | Local configuration operation only. | No, including resolved config/snapshot projections. | No. |
 
 ## Redaction boundary
 
@@ -110,7 +116,8 @@ Adapters render observations. They do not infer daemon health from presentation 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
 | TOML validation | Parser/migration fixture tests. | Invalid config returns typed errors without partial state replacement. |
-| Snapshot immutability | Run/config integration test. | Active run behavior remains on its starting config revision. |
+| M1 snapshot contract | Versioned snapshot fixture and invalid-wire tests. | Snapshot projection is serializable and omits credentials and config paths. |
+| Snapshot immutability | Run/config integration test in M3/M4. | Active run behavior remains on its starting config revision. |
 | New-run configuration | Config update then run test. | Next run receives updated immutable snapshot. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
 | Redaction | Table-driven secret injection tests. | Secret is absent from every event, snapshot, error, log, and presentation DTO. |
@@ -119,7 +126,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Quality-gate integration
 
-`intention-config` is a Tier A coverage target. TOML parsing, migrations, snapshot immutability, permissions, redaction, and safe observability tests are blocking `make verify` inputs. A recognizable fake secret is a mandatory regression fixture across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+`intention-config` is a Tier A coverage target. TOML parsing, migrations, M1 snapshot serialization, permissions, redaction, and safe observability tests are blocking `make verify` inputs. M3/M4 add revision-persistence and run-snapshot integration coverage. A recognizable fake secret is a mandatory regression fixture across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
 
