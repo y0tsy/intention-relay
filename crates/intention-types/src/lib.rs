@@ -196,6 +196,25 @@ impl SessionEventSequenceDto {
     }
 }
 
+/// A zero-based durable position for a queued user turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct QueuePositionDto(u64);
+
+impl QueuePositionDto {
+    /// Creates an explicit durable queue position.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the raw durable queue ordering position.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// An opaque continuation marker for a bounded collection query.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PageCursorDto(String);

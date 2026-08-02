@@ -4,12 +4,14 @@
 //! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    DomainEventDto, GetSessionSnapshotQueryDto, RunModeDto, SendUserTurnCommandDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
+    RemoveQueuedTurnCommandDto, RunModeDto, SendUserTurnCommandDto, SessionProjectionDto,
     StopRunCommandDto,
 };
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, ProjectId,
+    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId,
+    WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -279,8 +281,12 @@ impl SubscribeSessionCommandDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolCommandDto {
+    /// Requests durable creation of a session.
+    CreateSession(CreateSessionCommandDto),
     /// Sends an accepted user turn to the daemon authority.
     SendUserTurn(SendUserTurnCommandDto),
+    /// Requests removal of an unstarted queued user turn.
+    RemoveQueuedTurn(RemoveQueuedTurnCommandDto),
     /// Requests cancellation of an active daemon-owned run.
     StopRun(StopRunCommandDto),
     /// Begins a typed session event subscription.
@@ -308,38 +314,298 @@ pub enum ProtocolCommandResultDto {
 }
 
 /// The immutable correlation data returned for an accepted command.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProtocolAcceptedDto {
     correlation_id: CorrelationIdDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result: Option<ProtocolAcceptedResultDto>,
+}
+
+impl<'de> Deserialize<'de> for ProtocolAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProtocolAcceptedDto {
+            correlation_id: CorrelationIdDto,
+            #[serde(default)]
+            result: Option<ProtocolAcceptedResultDto>,
+        }
+        let raw = RawProtocolAcceptedDto::deserialize(deserializer)?;
+        Ok(Self {
+            correlation_id: raw.correlation_id,
+            result: raw.result,
+        })
+    }
 }
 
 impl ProtocolAcceptedDto {
-    /// Creates an accepted-command result bound to a canonical correlation ID.
+    /// Creates a legacy-compatible acceptance containing no operation payload.
     #[must_use]
     pub const fn new(correlation_id: CorrelationIdDto) -> Self {
-        Self { correlation_id }
+        Self {
+            correlation_id,
+            result: None,
+        }
+    }
+
+    /// Creates an acceptance with one operation-specific typed result.
+    #[must_use]
+    pub const fn with_result(
+        correlation_id: CorrelationIdDto,
+        result: ProtocolAcceptedResultDto,
+    ) -> Self {
+        Self {
+            correlation_id,
+            result: Some(result),
+        }
     }
 
     /// Returns the opaque canonical correlation reference.
     #[must_use]
-    pub const fn correlation_id(self) -> CorrelationIdDto {
+    pub const fn correlation_id(&self) -> CorrelationIdDto {
         self.correlation_id
+    }
+
+    /// Returns operation-specific acceptance evidence when supplied by an M3 peer.
+    #[must_use]
+    pub const fn result(&self) -> Option<&ProtocolAcceptedResultDto> {
+        self.result.as_ref()
+    }
+}
+
+/// Typed acceptance evidence for a state-changing protocol operation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum ProtocolAcceptedResultDto {
+    /// A durable session was created.
+    CreateSession(CreateSessionAcceptedDto),
+    /// A user turn was accepted and either started or queued.
+    SendUserTurn(SendUserTurnAcceptedDto),
+    /// A queued user turn was removed.
+    RemoveQueuedTurn(RemoveQueuedTurnAcceptedDto),
+    /// A stop request was durably accepted for a run.
+    StopRun(StopRunAcceptedDto),
+}
+
+/// Typed acceptance evidence for a created session.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateSessionAcceptedDto {
+    project_id: ProjectId,
+    workspace_id: WorkspaceId,
+    session_id: SessionId,
+    committed_sequence: SessionEventSequenceDto,
+}
+impl CreateSessionAcceptedDto {
+    /// Creates durable session acceptance evidence.
+    #[must_use]
+    pub const fn new(
+        project_id: ProjectId,
+        workspace_id: WorkspaceId,
+        session_id: SessionId,
+        committed_sequence: SessionEventSequenceDto,
+    ) -> Self {
+        Self {
+            project_id,
+            workspace_id,
+            session_id,
+            committed_sequence,
+        }
+    }
+    /// Returns the owning project identity.
+    #[must_use]
+    pub const fn project_id(self) -> ProjectId {
+        self.project_id
+    }
+    /// Returns the daemon-owned workspace identity.
+    #[must_use]
+    pub const fn workspace_id(self) -> WorkspaceId {
+        self.workspace_id
+    }
+    /// Returns the durable created session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the final sequence committed by this operation.
+    #[must_use]
+    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
+        self.committed_sequence
+    }
+}
+
+/// The durable disposition of an accepted M3 user turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SendUserTurnOutcomeDto {
+    /// The accepted turn started a run with its immutable configuration revision.
+    Started {
+        run_id: RunId,
+        config_revision_id: ConfigRevisionId,
+    },
+    /// The accepted turn was committed behind active work at its stable queue ticket.
+    Queued { queue_position: QueuePositionDto },
+}
+
+/// Typed acceptance evidence for one user turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SendUserTurnAcceptedDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    committed_sequence: SessionEventSequenceDto,
+    outcome: SendUserTurnOutcomeDto,
+}
+impl SendUserTurnAcceptedDto {
+    /// Creates complete durable turn-acceptance evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        turn_id: TurnId,
+        committed_sequence: SessionEventSequenceDto,
+        outcome: SendUserTurnOutcomeDto,
+    ) -> Self {
+        Self {
+            session_id,
+            turn_id,
+            committed_sequence,
+            outcome,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the accepted turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the final sequence committed by this operation.
+    #[must_use]
+    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
+        self.committed_sequence
+    }
+    /// Returns whether the turn started a run or received a stable queue ticket.
+    #[must_use]
+    pub const fn outcome(self) -> SendUserTurnOutcomeDto {
+        self.outcome
+    }
+}
+
+/// Typed acceptance evidence for a removed queued turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoveQueuedTurnAcceptedDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    committed_sequence: SessionEventSequenceDto,
+}
+impl RemoveQueuedTurnAcceptedDto {
+    /// Creates complete queued-turn removal acceptance evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        turn_id: TurnId,
+        committed_sequence: SessionEventSequenceDto,
+    ) -> Self {
+        Self {
+            session_id,
+            turn_id,
+            committed_sequence,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the removed turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the final sequence committed by this operation.
+    #[must_use]
+    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
+        self.committed_sequence
+    }
+}
+
+/// Typed acceptance evidence for a stop request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StopRunAcceptedDto {
+    session_id: SessionId,
+    run_id: RunId,
+    committed_sequence: SessionEventSequenceDto,
+}
+impl StopRunAcceptedDto {
+    /// Creates complete stop-request acceptance evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        committed_sequence: SessionEventSequenceDto,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            committed_sequence,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the stopping run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+    /// Returns the final sequence committed by this operation.
+    #[must_use]
+    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
+        self.committed_sequence
     }
 }
 
 /// A versioned current position for a durable session projection.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionSnapshotDto {
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     at_sequence: SessionEventSequenceDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    projection: Option<SessionProjectionDto>,
+}
+
+impl<'de> Deserialize<'de> for SessionSnapshotDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionSnapshotDto {
+            schema_version: SchemaVersionDto,
+            session_id: SessionId,
+            at_sequence: SessionEventSequenceDto,
+            #[serde(default)]
+            projection: Option<SessionProjectionDto>,
+        }
+        let raw = RawSessionSnapshotDto::deserialize(deserializer)?;
+        Self::from_optional_projection(
+            raw.schema_version,
+            raw.session_id,
+            raw.at_sequence,
+            raw.projection,
+        )
+        .map_err(de::Error::custom)
+    }
 }
 
 impl SessionSnapshotDto {
-    /// Creates a typed session snapshot checkpoint.
-    ///
-    /// The snapshot's durable state payload remains daemon-owned; this checkpoint
-    /// establishes the session and event position from which a client may tail.
+    /// Creates a legacy-compatible session snapshot without a projection.
     #[must_use]
     pub const fn new(
         schema_version: SchemaVersionDto,
@@ -350,25 +616,66 @@ impl SessionSnapshotDto {
             schema_version,
             session_id,
             at_sequence,
+            projection: None,
         }
+    }
+
+    /// Creates an M3 session snapshot containing a coherent state projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when projection session identity or durable
+    /// sequence differs from this snapshot checkpoint.
+    pub fn with_projection(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        at_sequence: SessionEventSequenceDto,
+        projection: SessionProjectionDto,
+    ) -> DtoResult<Self> {
+        Self::from_optional_projection(schema_version, session_id, at_sequence, Some(projection))
+    }
+
+    fn from_optional_projection(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        at_sequence: SessionEventSequenceDto,
+        projection: Option<SessionProjectionDto>,
+    ) -> DtoResult<Self> {
+        if projection.as_ref().is_some_and(|value| {
+            value.session_id() != session_id || value.at_sequence() != at_sequence
+        }) {
+            return Err(ErrorDto::validation(
+                "invalid_session_snapshot_projection",
+                "snapshot projection must share the snapshot session and sequence",
+            ));
+        }
+        Ok(Self {
+            schema_version,
+            session_id,
+            at_sequence,
+            projection,
+        })
     }
 
     /// Returns the snapshot schema version.
     #[must_use]
-    pub const fn schema_version(self) -> SchemaVersionDto {
+    pub const fn schema_version(&self) -> SchemaVersionDto {
         self.schema_version
     }
-
     /// Returns the durable session identity represented by the snapshot.
     #[must_use]
-    pub const fn session_id(self) -> SessionId {
+    pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
-
     /// Returns the durable event sequence included by the snapshot.
     #[must_use]
-    pub const fn at_sequence(self) -> SessionEventSequenceDto {
+    pub const fn at_sequence(&self) -> SessionEventSequenceDto {
         self.at_sequence
+    }
+    /// Returns the M3 public state projection, or `None` for an M1/M2 snapshot.
+    #[must_use]
+    pub const fn projection(&self) -> Option<&SessionProjectionDto> {
+        self.projection.as_ref()
     }
 }
 
@@ -527,6 +834,14 @@ impl SessionResyncDto {
 }
 
 /// A subscription response containing either a consistent snapshot and tail or a resync instruction.
+///
+/// `SnapshotAndTail` deliberately retains value fields: boxing either field
+/// would change the public Rust DTO contract while providing no wire-format
+/// benefit, because serde already serializes the same tagged value.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "SnapshotAndTail is an established public DTO variant; boxing its value fields would break Rust consumers without changing the serde wire format."
+)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionSubscriptionResponseDto {
@@ -548,6 +863,10 @@ impl<'de> Deserialize<'de> for SessionSubscriptionResponseDto {
     {
         #[derive(Deserialize)]
         #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        #[expect(
+            clippy::large_enum_variant,
+            reason = "The private deserialization intermediary mirrors the public unboxed DTO so serde can validate snapshot and tail coherence after decoding."
+        )]
         enum RawSessionSubscriptionResponseDto {
             SnapshotAndTail {
                 snapshot: SessionSnapshotDto,

@@ -539,6 +539,18 @@ impl ConfigSnapshotDto {
     pub const fn resolved(&self) -> &ResolvedConfigDto {
         &self.resolved
     }
+
+    /// Verifies the already-redacted snapshot remains suitable for durable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when either nested public schema major is unsupported.
+    pub fn validate_for_persistence(&self) -> DtoResult<()> {
+        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
+            .ensure_compatible_with(self.schema_version)?;
+        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
+            .ensure_compatible_with(self.resolved.schema_version())
+    }
 }
 
 impl Display for ResolvedConfigDto {

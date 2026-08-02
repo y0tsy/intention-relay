@@ -8,7 +8,7 @@
 use intention_domain::{
     DomainEventDto, RunModeDto, SendUserTurnCommandDto, SessionCreatedEventDto, WorkspaceRootDto,
 };
-use intention_types::{ProjectId, SessionId, TimestampDto, TurnId};
+use intention_types::{ProjectId, SessionId, TimestampDto, TurnId, WorkspaceId};
 
 #[test]
 fn send_turn_requires_a_non_empty_message_and_typed_session_identity() {
@@ -41,6 +41,7 @@ fn domain_events_round_trip_with_typed_identity_and_mode() {
     let event = DomainEventDto::SessionCreated(SessionCreatedEventDto::new(
         ProjectId::new(),
         SessionId::new(),
+        WorkspaceId::new(),
         WorkspaceRootDto::parse("/workspace/project").expect("fixture root is absolute"),
         RunModeDto::Plan,
         TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
