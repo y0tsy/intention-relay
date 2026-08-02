@@ -12,9 +12,17 @@ use intention_config::{
 
 const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 
+fn fixture_path(filename: &str) -> String {
+    std::env::temp_dir()
+        .join(filename)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn explicit_source() -> ConfigSourceDto {
     ConfigSourceDto::Explicit(
-        ConfigPathDto::parse("/tmp/intention.toml").expect("fixture config path is absolute"),
+        ConfigPathDto::parse(fixture_path("intention.toml"))
+            .expect("fixture config path is absolute"),
     )
 }
 
@@ -95,7 +103,8 @@ fn generic_chat_preserves_configured_model_identifier() {
 
 #[test]
 fn explicit_path_overrides_platform_default_resolution() {
-    let explicit = ConfigPathDto::parse("/tmp/override.toml").expect("fixture path is absolute");
+    let fixture_path = fixture_path("override.toml");
+    let explicit = ConfigPathDto::parse(fixture_path.as_str()).expect("fixture path is absolute");
     let source =
         ConfigPathResolver::resolve(Some(explicit.clone())).expect("explicit path is valid");
 
@@ -104,8 +113,9 @@ fn explicit_path_overrides_platform_default_resolution() {
     assert_eq!(source.kind().as_str(), "explicit");
     assert_eq!(source.kind().to_string(), "explicit");
 
+    let encoded = serde_json::to_string(&fixture_path).expect("fixture path serializes");
     let decoded: ConfigPathDto =
-        serde_json::from_str(r#""/tmp/override.toml""#).expect("absolute wire path is valid");
-    assert_eq!(decoded.as_str(), "/tmp/override.toml");
+        serde_json::from_str(&encoded).expect("absolute wire path is valid");
+    assert_eq!(decoded.as_str(), fixture_path);
     assert!(serde_json::from_str::<ConfigPathDto>(r#""relative.toml""#).is_err());
 }
