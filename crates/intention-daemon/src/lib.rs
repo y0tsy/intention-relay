@@ -1,8 +1,8 @@
-//! Thin daemon process host for the M2 local protocol fixture.
+//! Thin daemon process host for the local protocol facade.
 //!
 //! The daemon owns the local listener and typed connection hosting. It delegates
-//! health, query, command, and subscription meaning to the composition facade;
-//! the facade remains intentionally non-durable until M3.
+//! health, query, command, and replay-only subscription meaning to the durable
+//! composition facade.
 
 use std::thread;
 
@@ -18,13 +18,19 @@ use intention_types::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
 
 /// Runs the local daemon host until its process is terminated.
 ///
+/// Production startup loads and validates the platform-standard TOML configuration,
+/// creates a new credential-free snapshot for this daemon epoch, opens AppData
+/// SQLite storage, and completes recovery before the host begins accepting peers.
+///
 /// # Errors
 ///
-/// Returns a typed error if the endpoint cannot bind. Per-connection failures are
-/// isolated to that connection so a malformed or disconnected client cannot stop
-/// the shared daemon host.
+/// Returns a safe typed error if configuration, durable startup, or endpoint
+/// binding cannot complete. Per-connection failures are isolated to that
+/// connection so a malformed or disconnected client cannot stop the host.
 pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
-    run_with_facade(endpoint, DaemonApplicationFacade::new_fixture())
+    let listener = LocalListener::bind(endpoint)?;
+    let facade = DaemonApplicationFacade::open_platform()?;
+    serve_listener(listener, facade)
 }
 
 /// Runs a daemon host with an explicit deterministic fixture session identity.
@@ -64,7 +70,10 @@ pub fn serve_fixture_connections(
 }
 
 fn run_with_facade(endpoint: LocalEndpoint, facade: DaemonApplicationFacade) -> DtoResult<()> {
-    let listener = LocalListener::bind(endpoint)?;
+    serve_listener(LocalListener::bind(endpoint)?, facade)
+}
+
+fn serve_listener(listener: LocalListener, facade: DaemonApplicationFacade) -> DtoResult<()> {
     loop {
         match listener.accept() {
             Ok(connection) => {
@@ -84,6 +93,7 @@ fn run_with_facade(endpoint: LocalEndpoint, facade: DaemonApplicationFacade) -> 
 }
 
 fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFacade) {
+    // @todo(m4-streaming)
     let hello = match ProtocolHelloDto::new(
         local_protocol_version(),
         vec![
@@ -136,10 +146,11 @@ mod tests {
 
     use intention_protocol::{
         ProtocolHelloDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
-        ProtocolRequestPayloadDto,
+        ProtocolRequestPayloadDto, SessionResyncReasonDto, SessionSubscriptionResponseDto,
+        SubscribeSessionCommandDto,
     };
     use intention_transport::{LocalConnection, local_protocol_version, negotiate_client};
-    use intention_types::CorrelationIdDto;
+    use intention_types::{CorrelationIdDto, RunId, SessionEventSequenceDto};
 
     fn endpoint() -> LocalEndpoint {
         let nanos = SystemTime::now()
@@ -253,6 +264,73 @@ mod tests {
                 .payload(),
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::SessionSnapshot(snapshot))
                 if snapshot.session_id() == session_id
+        ));
+        host.join().expect("fixture host completes");
+    }
+
+    #[test]
+    fn daemon_dispatches_run_scoped_subscription_as_typed_resync() {
+        let endpoint = endpoint();
+        let session_id = SessionId::new();
+        let server_endpoint = endpoint.clone();
+        let host = thread::spawn(move || {
+            serve_fixture_connections(server_endpoint, session_id, 1)
+                .expect("fixture host serves one connection");
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let mut connection = loop {
+            match LocalConnection::connect(&endpoint) {
+                Ok(connection) => break connection,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("fixture client connects: {error}"),
+            }
+        };
+        negotiate_client(
+            &mut connection,
+            ProtocolHelloDto::new(
+                local_protocol_version(),
+                vec![
+                    ProtocolCapabilityDto::SessionSubscriptions,
+                    ProtocolCapabilityDto::CorrelatedRequests,
+                    ProtocolCapabilityDto::DaemonHealth,
+                ],
+                "daemon-unit-client",
+            )
+            .expect("fixture hello is valid"),
+        )
+        .expect("fixture hello negotiates");
+        connection
+            .send_request(&ProtocolRequestEnvelopeDto::new(
+                local_protocol_version(),
+                CorrelationIdDto::new(),
+                ProtocolMessageDto::new(
+                    SchemaVersionDto::new(1, 0),
+                    ProtocolRequestPayloadDto::Command(
+                        intention_protocol::ProtocolCommandDto::SubscribeSession(
+                            SubscribeSessionCommandDto::with_run_id(
+                                SchemaVersionDto::new(1, 0),
+                                session_id,
+                                Some(RunId::new()),
+                                Some(SessionEventSequenceDto::new(0)),
+                                intention_domain::RunModeDto::Build,
+                            ),
+                        ),
+                    ),
+                ),
+            ))
+            .expect("scoped subscription sends");
+        assert!(matches!(
+            connection
+                .receive_response()
+                .expect("scoped subscription response arrives")
+                .message()
+                .payload(),
+            ProtocolResponsePayloadDto::Subscription(
+                SessionSubscriptionResponseDto::ResyncRequired(resync)
+            ) if resync.session_id() == session_id
+                && resync.reason() == SessionResyncReasonDto::HistoryUnavailable
         ));
         host.join().expect("fixture host completes");
     }

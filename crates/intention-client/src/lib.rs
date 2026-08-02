@@ -307,11 +307,12 @@ impl IntentionClient {
     }
 }
 
-/// Stateful recovery for one M2 snapshot-and-tail subscription.
+/// Stateful recovery for one replay-only snapshot-and-tail subscription.
 ///
 /// The local transport deliberately closes every request connection. This handle
 /// therefore records the latest accepted sequence and creates a fresh negotiated
 /// subscription request after a disconnect. It does not imply a live stream.
+// @todo(m4-streaming)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionSubscriptionRecovery {
     schema_version: SchemaVersionDto,
@@ -355,8 +356,9 @@ impl SessionSubscriptionRecovery {
     }
 
     /// Returns the accepted daemon checkpoint, if recovery has succeeded.
+    // @todo(m4-streaming)
     #[must_use]
-    pub const fn snapshot(&self) -> Option<SessionSnapshotDto> {
+    pub fn snapshot(&self) -> Option<SessionSnapshotDto> {
         self.reducer.snapshot()
     }
 
@@ -417,8 +419,9 @@ impl SessionSubscriptionReducer {
                         "subscription response belongs to another session",
                     ));
                 }
+                let snapshot_sequence = snapshot.at_sequence();
                 self.snapshot = Some(snapshot);
-                self.last_sequence = Some(snapshot.at_sequence());
+                self.last_sequence = Some(snapshot_sequence);
                 self.seen_events.clear();
                 for event in tail.events() {
                     self.apply_event(event)?;
@@ -470,8 +473,8 @@ impl SessionSubscriptionReducer {
 
     /// Returns the current accepted snapshot checkpoint.
     #[must_use]
-    pub const fn snapshot(&self) -> Option<SessionSnapshotDto> {
-        self.snapshot
+    pub fn snapshot(&self) -> Option<SessionSnapshotDto> {
+        self.snapshot.clone()
     }
 }
 

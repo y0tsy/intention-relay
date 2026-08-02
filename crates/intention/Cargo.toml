@@ -10,6 +10,16 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+intention-application = { path = "../intention-application", version = "=0.0.0" }
+intention-client = { path = "../intention-client", version = "=0.0.0" }
+intention-config = { path = "../intention-config", version = "=0.0.0" }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
 intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
+intention-runtime = { path = "../intention-runtime", version = "=0.0.0" }
+intention-storage = { path = "../intention-storage", version = "=0.0.0" }
+intention-storage-sqlite = { path = "../intention-storage-sqlite", version = "=0.0.0" }
 intention-types = { path = "../intention-types", version = "=0.0.0" }
+
+[dev-dependencies]
+serde_json = "1.0.149"
+tempfile = "3.24.0"
