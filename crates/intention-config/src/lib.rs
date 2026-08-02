@@ -636,9 +636,16 @@ mod tests {
 
     const CREDENTIAL: &str = "fixture-credential-not-real-12345";
 
+    fn fixture_path(filename: &str) -> String {
+        std::env::temp_dir()
+            .join(filename)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     fn explicit_source() -> ConfigSourceDto {
         ConfigSourceDto::Explicit(
-            ConfigPathDto::parse("/tmp/intention-relay-test.toml")
+            ConfigPathDto::parse(fixture_path("intention-relay-test.toml"))
                 .expect("fixture path is absolute"),
         )
     }
@@ -662,8 +669,9 @@ credential = \"{credential}\"
 
     #[test]
     fn paths_and_sources_preserve_semantic_configuration_intent() {
-        let path = ConfigPathDto::parse("/tmp/intention.toml").expect("absolute path is valid");
-        assert_eq!(path.as_str(), "/tmp/intention.toml");
+        let fixture_path = fixture_path("intention.toml");
+        let path = ConfigPathDto::parse(fixture_path.as_str()).expect("absolute path is valid");
+        assert_eq!(path.as_str(), fixture_path);
         for invalid in ["", "relative.toml"] {
             assert_eq!(
                 ConfigPathDto::parse(invalid)
