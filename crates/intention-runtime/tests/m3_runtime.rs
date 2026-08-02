@@ -28,7 +28,13 @@ fn time(value: i64) -> TimestampDto {
 
 fn snapshot() -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse("/tmp/intention-runtime-test.toml").expect("fixture path is absolute"),
+        ConfigPathDto::parse(
+            std::env::temp_dir()
+                .join("intention-runtime-test.toml")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture path is absolute"),
     );
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-secret\"",
