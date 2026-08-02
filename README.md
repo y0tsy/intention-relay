@@ -98,10 +98,12 @@ typed and tested live transition is introduced.
 Use the root Makefile for all quality work:
 
 ```text
-make quick   # fast format, lint, and default test loop
-make check   # all profiles, docs, and architecture checks
-make verify  # check plus coverage, dependencies, and self-tests
-make ci      # CI alias for verify
+make quick          # fast format, lint, and default test loop
+make notices        # regenerate THIRD_PARTY_NOTICES.md intentionally
+make notices-check  # verify notices match the locked dependency graph
+make check          # all profiles, docs, and architecture checks
+make verify         # check plus coverage, dependencies, and self-tests
+make ci             # CI alias for verify
 ```
 
 `make verify` is non-mutating. It requires pinned tools, a committed lockfile,
@@ -109,6 +111,8 @@ and no hidden dependency or tool installation.
 
 ## Documentation
 
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md): generated license notices
+  for registry dependencies in the committed Cargo lockfile.
 - [`docs/intention-relay/`](docs/intention-relay/README.md): authoritative
   product baseline and target architecture.
 - [`docs/intention-relay/architecture/`](docs/intention-relay/architecture/README.md):

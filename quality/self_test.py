@@ -100,6 +100,33 @@ def test_tool_version_mismatch(root: Path) -> None:
             cwd=root,
             expect_success=False,
         )
+    with modified(tools):
+        replace_once(tools, 'version = "0.9.1"', 'version = "0.0.0"')
+        run(
+            [sys.executable, "quality/check_tools.py", "--policy", str(tools)],
+            cwd=root,
+            expect_success=False,
+        )
+
+
+def test_third_party_notices_drift(root: Path) -> None:
+    notices = root / "THIRD_PARTY_NOTICES.md"
+    with modified(notices):
+        notices.write_text("stale notices\n", encoding="utf-8")
+        run(
+            [sys.executable, "quality/generate_third_party_notices.py", "--check"],
+            cwd=root,
+            expect_success=False,
+            expected_output="THIRD_PARTY_NOTICES.md is stale",
+        )
+    with modified(notices):
+        notices.unlink()
+        run(
+            [sys.executable, "quality/generate_third_party_notices.py", "--check"],
+            cwd=root,
+            expect_success=False,
+            expected_output="generated notice file is missing",
+        )
 
 
 def test_missing_crate_metadata(root: Path) -> None:
@@ -508,6 +535,7 @@ def main() -> None:
         test_lint_warning,
         test_unreasoned_suppression,
         test_tool_version_mismatch,
+        test_third_party_notices_drift,
         test_missing_crate_metadata,
         test_m2_dependency_boundary,
         test_workspace_dependency_cycle,

@@ -1,0 +1,16 @@
+# cargo-about policy for the committed third-party notices.
+# Local workspace packages are private project code and are not third-party.
+accepted = [
+  "Apache-2.0",
+  "MIT",
+  "Unicode-3.0",
+  "0BSD",
+  "Apache-2.0 WITH LLVM-exception",
+  "LGPL-2.1-or-later",
+  "Unlicense",
+]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+ignore-build-dependencies = false
+ignore-dev-dependencies = false
+ignore-transitive-dependencies = false
+private = { ignore = true }

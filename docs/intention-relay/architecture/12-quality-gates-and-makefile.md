@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
+`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -65,6 +65,7 @@ The pinned manifest records exact versions and invocation policy for:
 | --- | --- |
 | `cargo-nextest` | Reproducible, parallel Rust test execution. |
 | `cargo-llvm-cov` | Line/branch coverage collection, report generation, and threshold enforcement. |
+| `cargo-about` | Deterministic third-party license-notice generation from the locked dependency graph. |
 | `cargo-deny` | License, bans, sources, advisory, and duplicate-version policy. |
 | `cargo-audit` | Independent RustSec advisory audit. |
 | `cargo-udeps` | Unused-dependency detection. It uses the pinned auxiliary nightly toolchain. |
@@ -75,7 +76,7 @@ A subsequent milestone may add a tool only through a documented quality-policy u
 
 ### Tool management targets
 
-- `make bootstrap-tools` is the sole installer for external quality tools. It is explicitly mutating and networked. Its pinned `cargo install --force` invocations make an already-restored matching tool cache idempotent; they never select an unpinned version.
+- `make bootstrap-tools` is the sole installer for external quality tools. It is explicitly mutating and networked. It retains a matching restored tool binary and reinstalls an absent or version-mismatched one with an exact pinned version, never selecting an unpinned version.
 - `make tools-check` validates the pinned Rust version, required components, external tool availability, and exact versions. It is non-mutating.
 - `make check`, `make verify`, and `make ci` call `tools-check` but never call `bootstrap-tools`.
 
@@ -171,13 +172,15 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make tools-check` | No | Validate Rust/tool versions and required components. |
 | `make fmt` | Yes | Apply formatting deliberately. |
 | `make fmt-check` | No | Verify formatting without changing files. |
+| `make notices` | Yes | Regenerate `THIRD_PARTY_NOTICES.md` from the locked dependency graph and committed notice policy/template. |
+| `make notices-check` | No | Regenerate notices in a temporary file and fail if committed notices are missing or stale. |
 | `make features` | No | Check default, no-default, all-features, and critical combinations. |
 | `make lint` | No | Run strict lint policy with warnings denied for all feature profiles. |
 | `make test` | No | Run nextest suites and doctests for all feature profiles. |
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
 | `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and public-API boundary checks. |
 | `make coverage` | No | Collect coverage and apply the tier policy. |
-| `make deps` | No | Run lockfile, deny, audit, unused, manifest, stale direct-dependency, and duplicate-version checks. |
+| `make deps` | No | Run locked metadata, third-party-notice freshness, deny, audit, unused-dependency, manifest, stale-direct-dependency, and duplicate-version checks. |
 | `make quick` | No | Run tools-check, fmt-check, lint, and focused/default tests for fast iteration. |
 | `make check` | No | Run complete source-quality checks: tools, formatting, features, lint, all tests, doctests, docs, and architecture. |
 | `make verify` | No | Run `check` plus coverage and dependency/supply-chain checks. |
@@ -204,12 +207,15 @@ An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an i
 `make deps` and blocking CI run:
 
 - `cargo metadata --locked` as the authoritative lockfile check;
+- `make notices-check`, which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and `quality/third_party_notices.hbs` through pinned `cargo-about` and fails on drift;
 - `cargo deny check` for advisories, licenses, banned crates, allowed sources, and duplicate-version policy, using the supported syntax of the pinned cargo-deny version;
 - `cargo audit` as an independent advisory source;
 - `cargo udeps` for unused dependencies;
 - `cargo machete` for manifest hygiene;
 - `cargo outdated` for stale direct dependencies;
 - committed-lockfile validation using `--locked`.
+
+`THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory. It contains license texts and registry dependency attribution for the locked graph; private `publish = false` workspace packages remain project-owned code and are excluded. `cargo-about` selects a valid license branch for multi-licensed crates using `quality/about.toml`, while `cargo deny` independently enforces the complete policy expression and source allowlist. A failed or stale notice generation is a blocking supply-chain failure, not an inferred pass.
 
 Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. The approved `0BSD` entry is required transitively by `interprocess`'s local-IPC support (`doctest-file` and `recvmsg`) and is an OSI-approved permissive license. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
 
@@ -237,6 +243,7 @@ M0 proves that the quality system fails correctly for controlled fixtures:
 | Compiler or Clippy warning | `make lint`. |
 | Unreasoned or broad lint suppression | `make lint` or `make architecture`. |
 | Missing/mismatched pinned tool | `make tools-check`. |
+| Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
 | Missing required crate/test-target policy metadata | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
 | DTO/SDK implementation leak | `make architecture`. |
