@@ -398,12 +398,12 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     let valid_snapshot_endpoint = endpoint(&directory);
     let server = start_fixture_server(
         valid_snapshot_endpoint.clone(),
-        FixtureResponse::Snapshot(snapshot),
+        FixtureResponse::Snapshot(snapshot.clone()),
     );
     assert_eq!(
         client(
             valid_snapshot_endpoint,
-            FixtureResponse::Snapshot(snapshot),
+            FixtureResponse::Snapshot(snapshot.clone()),
             Arc::new(AtomicUsize::new(0)),
         )
         .session_snapshot(session_id)
@@ -455,7 +455,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
         Vec::new(),
     )
     .expect("empty fixture tail is valid");
-    let response = SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail)
+    let response = SessionSubscriptionResponseDto::snapshot_and_tail(snapshot.clone(), tail)
         .expect("matching snapshot and tail are valid");
     let valid_subscription_endpoint = endpoint(&directory);
     let server = start_fixture_server(
@@ -472,7 +472,7 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     assert_eq!(
         received,
         SessionSubscriptionResponseDto::snapshot_and_tail(
-            snapshot,
+            snapshot.clone(),
             SessionEventTailBatchDto::new(
                 SCHEMA_VERSION,
                 session_id,
@@ -552,7 +552,7 @@ fn stateful_recovery_reuses_the_last_sequence_or_clears_on_resync() {
     let snapshot =
         SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
     let first = SessionSubscriptionResponseDto::snapshot_and_tail(
-        snapshot,
+        snapshot.clone(),
         SessionEventTailBatchDto::new(
             SCHEMA_VERSION,
             session_id,
@@ -618,7 +618,7 @@ fn subscription_reducer_accepts_ordered_state_and_requires_resync_for_bad_state(
     assert!(
         !reducer
             .apply(
-                SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail)
+                SessionSubscriptionResponseDto::snapshot_and_tail(snapshot.clone(), tail)
                     .expect("fixture subscription is valid"),
             )
             .expect("ordered snapshot and tail are accepted")
