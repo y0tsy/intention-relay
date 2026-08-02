@@ -117,6 +117,33 @@ M1+ strengthens the executable quality policy without adding M2 product behavior
 
 The M1+ baseline and criterion-to-fixture evidence are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md).
 
+## M3 required test and evidence matrix
+
+M3 activates Tier B `intention-application`, `intention-runtime`,
+`intention-storage`, and `intention-storage-sqlite`; each must meet the 90%
+line-coverage threshold defined in [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md). The threshold is necessary but
+never substitutes for the following required semantic evidence.
+
+| M3 concern | Required test/evidence target | Required observable result |
+| --- | --- | --- |
+| DTO and event evolution | `m3_contracts`, event-fixture, and protocol-fixture suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while documented compatible fixtures remain decodable. |
+| SQLite durability and migration | `sqlite_contracts` plus migration fixtures. | Bundled SQLite applies supported `rusqlite_migration` versions, rejects a future on-disk schema, and persists only credential-free config snapshots. |
+| Semantic atomicity | SQLite fault-injection outcome fixture at event, projection, and snapshot boundaries. | Each injected write-stage failure rolls back completely: no new projection, event envelope, or per-state snapshot persists. |
+| Canonical config revisions | SQLite config-revision contract fixture. | Reaccepting an equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID returns a typed conflict without sensitive details. |
+| Queue and idempotency | Storage/application contracts. | Repeated identical turn acceptance is stable, conflicting identity reuse fails typed, tickets are never reused, and no parallel active run exists. |
+| Lifecycle and cancellation | `m3_runtime` state-machine fixture. | `Starting -> Cancelling -> Cancelled` is required; a direct `Starting -> Cancelled` transition fails. |
+| Terminal promotion | Runtime/storage integration fixture. | A terminal state and the next queued turn's `RunStarted` fact commit atomically with the queued turn's original proposed `RunId`, immutable snapshot, and revision, even after a daemon config change. |
+| Recovery-before-ready | Durable composition restart fixture. | Every unfinished run is durably interrupted before ready and no external work resumes automatically. |
+| Replay-only subscription | Durable facade/client contract fixture, including matching, nonexistent, and cross-session run-scoped requests. | An unscoped one-shot request yields durable snapshot plus contiguous tail or typed resync; every `run_id: Some` request yields `HistoryUnavailable` resync without unfiltered session state. This is not a persistent stream; safely represented scoped replay remains M4 hardening. |
+| Storage location | Platform-state location fixture. | Database state resolves under platform AppData/state, and missing an absolute platform directory fails typed without CWD fallback. |
+| Quality evidence | `make quick`, narrow M3 suites, then `make verify`. | All active Tier B crates meet 90%; failure/recovery branches and feature profiles remain covered. |
+
+The M3 closure record must distinguish listed tests from actually executed
+commands and results. Until those commands are captured, the baseline SHA,
+coverage values, and gate results remain pending; see [M3 Closure
+Evidence](../closeout/m3-closure-evidence.md).
+
 ## Result-oriented acceptance scenarios
 
 The following scenarios must become executable before the corresponding capability is accepted:

@@ -122,8 +122,31 @@ a forward sequence gap. Because M2 closes every request connection, its stateful
 recovery handle opens a new negotiated request, reuses the last accepted event
 sequence, and applies only a snapshot/tail or typed resync response. It does
 not claim a persistent live-event stream. The M2 composition fixture supplies
-this protocol shape in memory only; durable snapshot/tail storage and replay
-retention are M3 work.
+this protocol shape in memory only.
+
+### M3 durable replay-only subscriptions
+
+M3 replaces the in-memory session fixture with durable SQLite projections and
+append-only event envelopes. A subscription is still a one-shot, negotiated
+request: it returns the current durable projection snapshot and the contiguous
+stored tail after that snapshot's included sequence, or a typed resync when the
+session/history cannot be supplied. It is **replay-only**, not a retained
+connection and not a live event feed. The post-commit publication seam is
+intentionally a no-op in M3.
+
+`@todo(m4-streaming)` marks exactly the deferred work to introduce persistent
+live event streaming, post-commit fan-out/buffering, slow-peer lifecycle policy,
+and a representation capable of safely replaying a run-filtered view. It does
+not mean that M3 durability, unscoped snapshot/tail replay, ordering, or resync
+is deferred.
+
+M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely
+express filtered run state. Therefore every subscription with `run_id: Some`
+returns typed `HistoryUnavailable` resync, whether the run matches, does not
+exist, or belongs to another session. It must never fall back to an unfiltered
+session snapshot or tail. Correctly scoped replay remains deferred with the M4
+persistent-streaming/representation hardening; this safe resync is not a live
+stream.
 
 ## Subscription and reconnect
 
@@ -154,15 +177,21 @@ sequenceDiagram
 - A stale live event may not mutate a projection if its sequence is already applied.
 - The daemon has authoritative ordering; adapters do not synthesize a server sequence.
 
-## M2 fixture boundary
+## M2 fixture boundary and M3 durable authority
 
-M2's daemon composition is an in-memory, non-durable health/session fixture.
-It proves local transport, bootstrap, negotiation, correlation, and
-snapshot-tail/resync wiring without claiming persistence or workflow execution.
-M3 owns SQLite-backed sessions, append-only events, durable snapshots and tails,
-queues, and restart recovery. M4 owns model/provider runtime behavior and live
-run execution. Consequently, M2 does not implement idle shutdown, an explicit
-daemon-stop command, or upgrade coordination.
+M2's daemon composition was an in-memory, non-durable health/session fixture.
+M3 makes the composition facade daemon-owned durable state: it opens the
+platform state database, records a safe configuration snapshot, completes
+recovery before reporting ready, and serves the existing typed command/query
+contract from SQLite. The facade uses the platform application-state location
+(`XDG_STATE_HOME` or `~/.local/state` on Linux, Application Support on macOS,
+and `LOCALAPPDATA` on Windows); it returns a typed unavailable error when no
+absolute platform location is available and never falls back to process CWD.
+
+M3 does not implement idle shutdown, an explicit daemon-stop command, model or
+provider execution, or persistent live streaming. M4 owns model/provider
+runtime behavior and live run execution; its streaming work also owns the
+persistent subscription semantics marked by `@todo(m4-streaming)`.
 
 ## Tauri bridge
 
@@ -196,15 +225,17 @@ They must use the same command, query, snapshot, and event DTOs as the Tauri bri
 
 ## Daemon restart semantics
 
-On daemon startup:
+On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
-1. load current projections and durable records;
-2. locate runs with an unfinished persisted status;
-3. transition each to `interrupted` with a durable event;
-4. do not automatically retry model calls, tool calls, or shell processes;
-5. publish resulting state when an adapter subscribes.
+1. resolve and open the platform state database, applying supported SQLite migrations;
+2. record the credential-free startup `ConfigSnapshotDto` revision;
+3. load durable projections and locate every run with an unfinished persisted status;
+4. transition each unfinished run to `interrupted` with a durable state-change event and snapshot;
+5. do not automatically retry or resume model calls, tool calls, shell processes, or other external work; and
+6. make the recovered state available through later one-shot snapshot/tail replay.
 
-This policy is honest about unknown external side effects. A user may initiate a new retry or a manually reconciled follow-up run.
+This policy is honest about unknown external side effects. A user may initiate a
+new retry or manually reconciled follow-up run.
 
 ## Required tests and observable outcomes
 
@@ -214,8 +245,9 @@ This policy is honest about unknown external side effects. A user may initiate a
 | Startup race | Multi-client bootstrap integration test. | Exactly one daemon host is created. |
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Protocol mismatch | Client/server compatibility test. | Connection fails with typed incompatibility error. |
-| Reconnect | Stateful recovery-handle disconnect/reconnect sequence test. | A fresh one-shot request reuses the last sequence and applies a consistent snapshot/tail or explicit resync. |
-| Restart | Persisted active-run recovery test. | Run becomes `interrupted`; no provider/tool call resumes. |
+| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot plus a contiguous stored tail, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` resync without unfiltered session state, and no request claims live delivery. |
+| Restart | Persisted active-run recovery test. | Recovery completes before ready; every unfinished run becomes `interrupted` and no provider/tool call resumes. |
+| State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
 
 ## Quality-gate integration

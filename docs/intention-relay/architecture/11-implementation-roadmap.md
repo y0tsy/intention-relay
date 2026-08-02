@@ -229,27 +229,65 @@ transport and adapter constraints are in [Daemon, Transport, and Adapters](03-da
 
 ### Deliver
 
-- repository DTO contracts and SQLite implementation;
-- session/project/workspace state;
-- append-only event envelopes, current projections, snapshots;
-- one-active-run invariant and durable queued input;
-- daemon restart marks active work interrupted.
+- repository DTO contracts and bundled-SQLite implementation using `rusqlite_migration`;
+- activated `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite` ownership, including the required storage/application/runtime-to-config snapshot edges;
+- session/project/workspace-root state with stable `WorkspaceId` association;
+- canonical credential-free `ConfigSnapshotDto` revision persistence: an equal snapshot for the same `ConfigRevisionId` is idempotent, while a different snapshot for that ID fails with a typed conflict; and immutable per-started/promoted-run attachment;
+- append-only explicit event taxonomy, current projections, and a session/run snapshot on every committed state change;
+- one-active-run invariant, durable queued input with never-reused queue tickets, and atomic terminal promotion;
+- required `Starting -> Cancelling -> Cancelled` cancellation lifecycle; and
+- recovery-before-ready that marks unfinished work interrupted without automatic external-work resumption.
+
+M3 uses the platform AppData/state location for production SQLite state and
+never falls back to process CWD. TOML is applied once per daemon startup;
+editing TOML requires restart and does not live-reload a running daemon.
+Subscriptions are durable one-shot snapshot/tail replay or typed resync only.
+`@todo(m4-streaming)` explicitly defers persistent live subscriptions,
+post-commit fan-out, slow-peer stream policy, and safely represented run-scoped
+replay to M4. A M3 request with `run_id: Some` always returns typed
+`HistoryUnavailable` resync rather than unfiltered session state, because its
+session-contiguous snapshot/tail DTOs cannot safely express filtered run state.
 
 ### Tests first
 
-- transaction fault injection;
-- run state machine tests;
-- durable queue promotion/removal tests;
-- restart/recovery fixtures;
-- snapshot plus event-tail equivalence tests;
-- Tier B coverage fixtures for storage/application/runtime paths.
+- DTO/event and compatible persisted-fixture tests for `WorkspaceId`, projections, queue tickets, and explicit event taxonomy;
+- supported/future-schema SQLite migration fixtures; safe canonical config-snapshot persistence; and same-revision equal-snapshot idempotency versus typed different-snapshot conflict;
+- transaction fault-injection outcome tests after event, projection, and snapshot writes, proving rollback at each stage;
+- run state-machine tests, including mandatory `Starting -> Cancelling -> Cancelled` behavior;
+- durable queue acceptance/idempotency/removal and atomic terminal-promotion tests that retain the queued turn's proposed `RunId`, snapshot, and revision after a daemon config change;
+- recovery-before-ready fixture proving no automatic external-work resumption;
+- durable one-shot snapshot/tail replay-or-resync tests: unscoped requests replay safely, while matching, nonexistent, and cross-session `run_id: Some` requests return `HistoryUnavailable` without unfiltered session state; persistent live streams and safely represented scoped replay remain excluded; and
+- Tier B coverage fixtures for storage/application/runtime paths and feature-profile checks.
 
 ### Acceptance outcomes
 
-- session state survives daemon restart;
-- a second turn is durably queued, never starts a parallel run;
-- an adapter never receives a committed-state event that is absent from SQLite;
+- session state survives daemon restart, and recovery completes before the facade reports ready;
+- a second turn is durably queued with a stable never-reused ticket and never starts a parallel run;
+- projection, append-only events, and per-state-change snapshots are atomic; fault injection at the event, projection, and snapshot stages rolls each failed transaction back completely;
+- a same-ID equal config snapshot is idempotent while a same-ID different snapshot returns typed conflict; cancellation follows `Starting -> Cancelling -> Cancelled`, and terminal promotion atomically starts the oldest eligible queued turn with its original proposed `RunId`, snapshot, and revision;
+- an unscoped one-shot adapter subscription receives a durable snapshot plus contiguous tail or typed resync; every matching, nonexistent, or cross-session `run_id: Some` request receives `HistoryUnavailable` resync rather than unfiltered session state, and no request claims a persistent stream;
+- the database uses AppData/platform state and fails safely rather than using CWD; and
 - applicable Tier B crates meet 90% line coverage, including failure and recovery paths.
+
+### M3 implementation decisions and boundaries
+
+M3 makes `ConfigSnapshotDto` the canonical credential-free configuration
+selection. The composition root records one selected snapshot on each daemon
+startup; accepted and promoted runs retain their own immutable snapshot/revision.
+M3 applies TOML at startup only. A TOML edit becomes effective on restart and
+cannot mutate a running daemon or an existing run.
+
+The SQLite backend owns bundled SQLite migrations through `rusqlite_migration`,
+semantic transactional repository methods, normalized current projections,
+append-only events, and per-state-change session/run snapshots. Its public
+storage contract remains DTO-only: it does not expose a SQL connection,
+transaction closure, path, or SQLite row.
+
+M3 is intentionally not M4 streaming/model runtime. A post-commit publisher
+seam exists but is a no-op; `@todo(m4-streaming)` means M4 must add persistent
+live event streaming, fan-out/buffering, and slow-peer policy. Durable one-shot
+replay, ordering, resync, and restart recovery are M3 behavior, not a streaming
+deferral.
 
 ## Milestone 4: Model contract, providers, and one streaming run
 
