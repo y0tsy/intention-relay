@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the M1 workspace map and executable crate-boundary policy."""
+"""Validate the phase-aware workspace map and executable crate-boundary policy."""
 
 from __future__ import annotations
 
@@ -279,7 +279,7 @@ def check_phase_policy(
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase not in {"m1", "m2"} or state.get("active_milestone") != phase:
+    if phase not in {"m1", "m2", "m3"} or state.get("active_milestone") != phase:
         fail("policy phase and active_milestone must be matching supported milestones")
 
     declared = policy_crates(policy)
@@ -299,6 +299,11 @@ def check_phase_policy(
             "intention-types", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
         },
+        "m3": {
+            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-transport", "intention-client", "intention", "intention-daemon",
+            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+        },
     }[phase]
     if active_set != expected_active:
         fail(f"{phase.upper()} active production crates must equal the roadmap crate set")
@@ -316,9 +321,9 @@ def check_phase_policy(
             fail("M1 active and skeleton crate sets must partition the declared v1 crates")
     else:
         if active_set & adapter_set:
-            fail("M2 adapters cannot be active production crates")
+            fail(f"{phase.upper()} adapters cannot be active production crates")
         if active_set | skeleton_set | adapter_set != expected_names:
-            fail("M2 active, skeleton, and adapter crate sets must cover the declared v1 crates")
+            fail(f"{phase.upper()} active, skeleton, and adapter crate sets must cover the declared v1 crates")
     if state.get("quality_harness") not in actual_names:
         fail("quality harness must remain a workspace member")
 

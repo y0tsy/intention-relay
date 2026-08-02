@@ -8,7 +8,7 @@ ignore = []
 
 [licenses]
 version = 2
-allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD"]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib"]
 confidence-threshold = 0.8
 exceptions = []
 
@@ -17,7 +17,10 @@ multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 deny = []
-skip = []
+skip = [
+  { crate = "hashbrown@0.16.1", reason = "M3 reviewed target-specific duplicate: required only by rusqlite 0.40.1 -> sqlite-wasm-rs -> rsqlite-vfs on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires hashbrown 0.16." },
+  { crate = "syn@2.0.119", reason = "M3 reviewed target-specific duplicate: required only by rusqlite 0.40.1 -> sqlite-wasm-rs -> wasm-bindgen on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires syn 2." },
+]
 skip-tree = []
 
 [sources]

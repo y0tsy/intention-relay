@@ -180,7 +180,7 @@ def test_workspace_dependency_cycle(root: Path) -> None:
 def test_executable_test_target_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts"]', 'test_targets = ["does-not-exist"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["does-not-exist"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -188,7 +188,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="intention-types: declared integration test targets",
         )
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts"]', 'test_targets = ["contracts", "contracts"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["contracts", "contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -196,28 +196,52 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = []', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="intention-application: M2 skeleton must not declare integration test targets",
+            expected_output="intention-application: declared integration test targets must equal Cargo targets",
         )
 
 
-def test_m2_skeleton_api_boundary(root: Path) -> None:
+def test_m3_active_test_target_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = []',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="intention-application: M2 skeleton must not declare integration test targets",
+            expected_output="intention-application: declared integration test targets must equal Cargo targets",
+        )
+
+
+def test_m3_phase_partition_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, 'active_milestone = "m3"', 'active_milestone = "m2"')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="policy phase and active_milestone must be matching supported milestones",
+        )
+    with modified(policy):
+        replace_once(
+            policy,
+            '  "intention-storage",\n  "intention-storage-sqlite",\n]',
+            '  "intention-storage",\n]',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="M3 active production crates must equal the roadmap crate set",
         )
 
 
@@ -404,6 +428,10 @@ def test_coverage_exclusion_semantics(root: Path) -> None:
                     ("crates/intention/src/lib.rs", 100, 100),
                     ("crates/intention-daemon/src/lib.rs", 100, 100),
                     ("crates/intention-daemon/src/main.rs", 100, 0),
+                    ("crates/intention-application/src/lib.rs", 100, 100),
+                    ("crates/intention-runtime/src/lib.rs", 100, 100),
+                    ("crates/intention-storage/src/lib.rs", 100, 100),
+                    ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -435,7 +463,7 @@ enabled = true
             ),
             ("traversal", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', 'path = "crates/intention-types/src/../src/excluded_fixture.rs"'), "workspace-relative without traversal"),
             ("other-owner", valid.replace('owner = "intention-types"', 'owner = "intention-domain"'), "must be under intention-domain source root"),
-            ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-application"'), "owner must be an active production crate"),
+            ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-model"'), "owner must be an active production crate"),
             ("unreported", valid.replace('excluded_fixture.rs', 'unreported_fixture.rs'), "must appear exactly once in coverage report"),
             ("outside-source", valid.replace('crates/intention-types/src/excluded_fixture.rs', 'crates/intention-types/outside_fixture.rs'), "must be under intention-types source root"),
             ("duplicate", valid + valid, "duplicate enabled exclusion path"),
@@ -462,6 +490,10 @@ enabled = true
                     ("crates/intention/src/lib.rs", 100, 100),
                     ("crates/intention-daemon/src/lib.rs", 100, 100),
                     ("crates/intention-daemon/src/main.rs", 100, 0),
+                    ("crates/intention-application/src/lib.rs", 100, 100),
+                    ("crates/intention-runtime/src/lib.rs", 100, 100),
+                    ("crates/intention-storage/src/lib.rs", 100, 100),
+                    ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -488,7 +520,7 @@ def test_missing_feature_profile(root: Path) -> None:
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
-        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD"]', 'allow = ["Apache-2.0"]'),
+        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib"]', 'allow = ["Apache-2.0"]'),
         ('multiple-versions = "deny"', 'multiple-versions = "allow"'),
         ("version = 2", "version = 1"),
     ]
@@ -549,7 +581,8 @@ def main() -> None:
         test_m2_dependency_boundary,
         test_workspace_dependency_cycle,
         test_executable_test_target_policy,
-        test_m2_skeleton_api_boundary,
+        test_m3_active_test_target_policy,
+        test_m3_phase_partition_policy,
         test_signature_aware_public_api_leaks,
         test_m2_public_resource_leak,
         test_m2_secret_projection,

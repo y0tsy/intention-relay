@@ -8,6 +8,8 @@ accepted = [
   "Apache-2.0 WITH LLVM-exception",
   "LGPL-2.1-or-later",
   "Unlicense",
+  # foldhash 0.2.0, brought in by the SQLite graph, is Zlib-licensed.
+  "Zlib",
 ]
 targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 ignore-build-dependencies = false
