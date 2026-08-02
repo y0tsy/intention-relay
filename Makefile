@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .NOTPARALLEL:
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap-tools tools-check fmt fmt-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
-	  'Mutating/networked: bootstrap-tools fmt' \
+	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
+	  'Mutating/networked: bootstrap-tools fmt notices' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
 
@@ -27,6 +27,12 @@ fmt: ## MUTATING: format all Rust code.
 
 fmt-check: ## Verify formatting without changing files.
 	$(CARGO) fmt --all --check
+
+notices: tools-check ## MUTATING: regenerate committed third-party notices from the locked graph.
+	$(PYTHON) quality/generate_third_party_notices.py
+
+notices-check: tools-check ## Verify committed third-party notices match the locked graph.
+	$(PYTHON) quality/generate_third_party_notices.py --check
 
 features: ## Verify machine-readable required feature profiles.
 	$(PYTHON) quality/check_features.py --print
@@ -52,7 +58,7 @@ architecture: tools-check ## Verify workspace membership and architectural polic
 coverage: tools-check ## Collect branch-aware coverage and enforce declared tiers.
 	$(PYTHON) quality/run_coverage.py
 
-deps: tools-check ## Run online dependency, license, advisory, and hygiene gates.
+deps: tools-check notices-check ## Run online dependency, license, advisory, notices, and hygiene gates.
 	$(CARGO) metadata --locked --format-version 1 > /dev/null
 	$(PYTHON) quality/check_deny_policy.py
 	$(CARGO) deny check
