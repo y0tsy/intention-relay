@@ -75,7 +75,7 @@ A subsequent milestone may add a tool only through a documented quality-policy u
 
 ### Tool management targets
 
-- `make bootstrap-tools` is the sole installer for external quality tools. It is explicitly mutating and networked.
+- `make bootstrap-tools` is the sole installer for external quality tools. It is explicitly mutating and networked. Its pinned `cargo install --force` invocations make an already-restored matching tool cache idempotent; they never select an unpinned version.
 - `make tools-check` validates the pinned Rust version, required components, external tool availability, and exact versions. It is non-mutating.
 - `make check`, `make verify`, and `make ci` call `tools-check` but never call `bootstrap-tools`.
 
