@@ -139,7 +139,7 @@ def enabled_exclusion_paths(
         if occurrences != 1:
             fail(f"enabled exclusion path must appear exactly once in coverage report: {relative}, got {occurrences}")
         excluded.add(path)
-        print(f"coverage-check: excluding {relative} from {owner} denominator")
+        print(f"coverage-check: excluding {relative.as_posix()} from {owner} denominator")
     return excluded
 
 
