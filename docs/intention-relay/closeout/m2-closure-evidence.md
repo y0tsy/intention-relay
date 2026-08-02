@@ -2,12 +2,12 @@
 
 ## Status and purpose
 
-**Pending immutable implementation baseline and required CI evidence.**
+**Closed at immutable implementation baseline `4f90e5e67178228d849b3f44239d58968d571c21`.**
 M2 adds private local transport, a shared client, daemon bootstrap, an
 in-memory fixture composition, protocol extensions, a stateful one-shot
-recovery handle, and a TUI proof adapter. This document is deliberately not a
-closure claim until the implementation commit identified below has passed
-`make verify` and the Linux and Windows `make ci` matrix on that same SHA.
+recovery handle, and a TUI proof adapter. The baseline passed local
+`make verify` and the required Linux and Windows `make ci` matrix before this
+separate closeout documentation commit.
 
 M2 follows the completed [M1+ Quality Hardening Evidence](m1-plus-quality-hardening-evidence.md)
 baseline. Its intended architecture and implementation decisions are described
@@ -16,12 +16,12 @@ and [Implementation Roadmap](../architecture/11-implementation-roadmap.md).
 
 | Item | Value |
 | --- | --- |
-| M2 implementation baseline SHA | Pending implementation commit |
-| Local verification command | Pending `make verify` at the implementation SHA |
-| Required CI command | `make ci` on `ubuntu-24.04` and `windows-2025` at the same SHA |
-| Linux CI result | Pending |
-| Windows CI result | Pending |
-| Closure documentation commit | Pending, created only after implementation verification and CI complete |
+| M2 implementation baseline SHA | [`4f90e5e67178228d849b3f44239d58968d571c21`](https://github.com/y0tsy/intention-relay/commit/4f90e5e67178228d849b3f44239d58968d571c21) |
+| Local verification command | `make verify` passed on 2026-08-02 at the implementation SHA |
+| Required CI command | `make ci` on `ubuntu-24.04` and `windows-2025` at the implementation SHA |
+| Linux CI result | Passed, [`ubuntu-24.04 make ci`](https://github.com/y0tsy/intention-relay/actions/runs/30748331908/job/91497744209) |
+| Windows CI result | Passed, [`windows-2025 make ci`](https://github.com/y0tsy/intention-relay/actions/runs/30748331908/job/91497744154) |
+| Closure documentation commit | This separate documentation commit, created after baseline verification and CI completion |
 
 ## Implemented scope to verify
 
@@ -60,7 +60,7 @@ and [Implementation Roadmap](../architecture/11-implementation-roadmap.md).
 | Shared daemon state | `daemon_bootstrap` concurrently bootstraps two clients, then compares typed health, snapshot, and subscription tail for one explicit fixture SessionId. | Pass. |
 | Recovery | `SessionSubscriptionRecovery` uses its recorded last sequence on a fresh request connection and clears state on typed resync. | Pass. |
 | TUI adapter proof | `tui_contract` reaches ready health and the fixture subscription only through `TuiProofClient` → `IntentionClient`; architecture policy rejects a daemon production dependency. | Pass. |
-| Tier C coverage | `quality/reports/coverage-{default,no_default,all}.json` meet every active M2 Tier C threshold. | Reported actual values, all ≥85%. |
+| Tier C coverage | `quality/reports/coverage-{default,no_default,all}.json` meet every active M2 Tier C threshold. | Local default: transport 87.06%, client 89.39%, composition 94.07%, daemon library 89.60%; thin daemon `main.rs` is the sole reviewed exclusion because Windows `llvm-cov` does not merge child-process instrumentation, while `daemon_bootstrap` exercises the real binary. All ≥85%. |
 | Supply chain | `cargo deny`, audit, udeps, machete, outdated and locked metadata run under `make verify`. | Pass. |
 
 ## Scope boundaries and deferred work
@@ -80,10 +80,6 @@ behavior.
 
 ## Final baseline recording rule
 
-Before calling M2 immutable, commit the reviewed implementation change set,
-record the exact SHA, rerun `make verify` from that commit, and wait for both
-required `make ci` jobs to succeed on that same SHA. Only then replace every
-pending value above with observed evidence and create a separate closeout
-documentation commit, modeled after M0/M1 closeout practice. No dirty-worktree
-result, unavailable platform, cross-compile-only check, or inferred pass may
-be recorded as acceptance evidence.
+The immutable baseline above was committed, verified locally with `make verify`,
+and accepted by the completed Linux/Windows CI matrix. This closeout commit is
+documentation only; later changes must establish their own baseline and evidence.
