@@ -325,23 +325,23 @@ fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> 
     }
 }
 
+#[cfg(unix)]
 fn prepare_parent_directory(endpoint: &LocalEndpoint) -> DtoResult<()> {
-    #[cfg(not(unix))]
-    let _ = endpoint;
-    #[cfg(unix)]
-    {
-        let parent = endpoint.path.parent().ok_or_else(|| {
-            ErrorDto::validation(
-                "invalid_local_endpoint",
-                "local daemon endpoint must have a parent directory",
-            )
-        })?;
-        fs::create_dir_all(parent)
-            .map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
-    }
+    let parent = endpoint.path.parent().ok_or_else(|| {
+        ErrorDto::validation(
+            "invalid_local_endpoint",
+            "local daemon endpoint must have a parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+        .map_err(|_| unavailable("local_runtime_directory_unavailable"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+const fn prepare_parent_directory(_endpoint: &LocalEndpoint) -> DtoResult<()> {
     Ok(())
 }
 
