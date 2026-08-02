@@ -32,17 +32,30 @@ flowchart LR
   RS --> RT[Run actor]
 ```
 
-### M1 contract foundation and later lifecycle
+### M1 contract foundation and M3 startup lifecycle
 
-M1 parses, migrates, validates, and projects configuration. It defines the immutable, serializable `ConfigSnapshotDto` shape but does **not** persist a config revision, apply a daemon reload, or attach a snapshot to a run. Those workflows belong to M3/M4 and require their own transaction and integration evidence.
+M1 parses, migrates, validates, and projects configuration. It defines the
+immutable, serializable `ConfigSnapshotDto` shape. M3 makes that DTO the
+canonical credential-free configuration selection for durable storage and runs:
+the daemon composition receives one validated startup snapshot, records it by
+`ConfigRevisionId`, and every accepted or terminally promoted run persists its
+own immutable selected snapshot/revision.
 
-### Later lifecycle rules
+M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies
+an edit to an already-running daemon. A changed TOML file therefore takes effect
+only after a restart; the new startup snapshot applies to new runs, while
+existing persisted runs retain their recorded revision. Live reload is future
+work and must be introduced by an explicit contract, transaction, and outcome
+test.
 
-- A valid persisted configuration revision is recorded automatically when configuration changes are accepted.
-- A new run receives an immutable config snapshot.
+### M3 lifecycle rules
+
+- `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do not enter storage, events, snapshots, or protocol DTOs.
+- The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
+- An accepted or promoted run receives an immutable copy of its selected snapshot/revision.
 - Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due to a configuration edit.
-- Configuration behavior is documented as either **new-run**, **daemon-restart**, or **future live-reload**. It must never be implied.
-- The exact TOML path and platform migration rules are implementation-required before implementation.
+- TOML application is **daemon-restart-only** in M3. The precise user experience for detecting or requesting the restart remains open; future live reload must never be implied.
+- Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls back to process CWD.
 
 ## Open-text provider credentials
 
@@ -116,17 +129,23 @@ Adapters render observations. They do not infer daemon health from presentation 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
 | TOML validation | Parser/migration fixture tests. | Invalid config returns typed errors without partial state replacement. |
-| M1 snapshot contract | Versioned snapshot fixture and invalid-wire tests. | Snapshot projection is serializable and omits credentials and config paths. |
-| Snapshot immutability | Run/config integration test in M3/M4. | Active run behavior remains on its starting config revision. |
-| New-run configuration | Config update then run test. | Next run receives updated immutable snapshot. |
+| M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and stored by revision. |
+| Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
+| Run snapshot immutability | Accepted-turn and terminal-promotion integration fixtures. | Started and promoted runs retain their selected immutable config revision. |
+| Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
 | Redaction | Table-driven secret injection tests. | Secret is absent from every event, snapshot, error, log, and presentation DTO. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
-| Persistence | Config revision transaction test. | Accepted TOML revision and event/projection are consistent. |
 
 ## Quality-gate integration
 
-`intention-config` is a Tier A coverage target. TOML parsing, migrations, M1 snapshot serialization, permissions, redaction, and safe observability tests are blocking `make verify` inputs. M3/M4 add revision-persistence and run-snapshot integration coverage. A recognizable fake secret is a mandatory regression fixture across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+`intention-config` remains a Tier A coverage target. TOML parsing, migrations,
+M1 snapshot serialization, permissions, redaction, and safe observability tests
+are blocking `make verify` inputs. M3 adds canonical snapshot-persistence,
+restart-only application, and per-run snapshot integration coverage. A
+recognizable fake secret is a mandatory regression fixture across logs, errors,
+snapshots, events, and adapter DTOs. See [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
 

@@ -11,8 +11,8 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - An adapter may depend on `intention-client` and presentation-only crates, never on application, runtime, storage implementation, tools, or provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
-- M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation only. Revision persistence, daemon reload, and attaching a snapshot to a run remain later ownership.
-- `quality/architecture.toml` is the machine-readable source for active-crate external dependencies, executable integration test targets, adapter and protocol allowlists, composition-only implementations, and forbidden public-contract type prefixes.
+- M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one startup snapshot, storage records it by revision, and each accepted or promoted run retains its immutable revision. TOML is applied only at daemon startup; live reload remains deferred.
+- M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime -> config` edges required to persist and attach canonical snapshots without exposing credentials or filesystem paths.
 
 ## Planned crates
 
@@ -20,10 +20,10 @@ This document assigns ownership within the Rust workspace and defines allowed de
 | --- | --- | --- |
 | `intention-types` | ID newtypes, schema versions, common errors, time, pagination, envelopes. | Minimal shared dependencies only. |
 | `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
-| `intention-application` | Commands, queries, use-case workflows, transaction orchestration. | Domain, storage contracts, runtime contracts. |
-| `intention-runtime` | Session/run actors, model loop coordination, cancellation, lifecycle. | Domain, model contracts, tool contracts, storage contracts, hook contracts. |
-| `intention-storage` | Repository and unit-of-work DTO traits, snapshots, event-log contracts. | Domain, types. |
-| `intention-storage-sqlite` | SQLite schema, migrations, repository implementation, projections. | Storage, domain, types. |
+| `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
+| `intention-runtime` | Deterministic session/run lifecycle decisions, cancellation, terminal promotion, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
+| `intention-storage` | DTO-only semantic repository methods, atomic committed-change evidence, snapshots, event-log contracts, and persisted config-snapshot inputs. | Config, domain, types. |
+| `intention-storage-sqlite` | Bundled SQLite schema, `rusqlite_migration` migrations, semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, migrations, resolved config/snapshot DTOs. | Types, domain as needed. |
 | `intention-model` | Provider-neutral model DTOs and driver trait. | Types, domain DTOs where required. |
 | `intention-provider-openrouter` | OpenRouter SDK translation. | Model, config, types. |
@@ -47,16 +47,24 @@ This document assigns ownership within the Rust workspace and defines allowed de
 ```mermaid
 flowchart BT
   TY[types] --> DO[domain]
+  TY --> CF[config]
   DO --> ST[storage contracts]
+  CF --> ST
   DO --> MO[model contracts]
   DO --> TL[tool contracts]
   DO --> PR[protocol]
-  ST --> AP[application]
-  MO --> RT[runtime]
-  TL --> RT
+  CF --> AP[application]
+  CF --> RT[runtime]
+  ST --> AP
   ST --> RT
+  MO --> RT
+  TL --> RT
+  ST --> SQ[SQLite storage]
+  CF --> SQ
+  DO --> SQ
   AP --> IN[intention composition]
   RT --> IN
+  SQ --> IN
   IN --> DH[daemon host]
   PR --> TR[transport]
   TR --> DH
@@ -66,6 +74,13 @@ flowchart BT
 ```
 
 <!-- Arrows show permitted lower-level dependencies toward a consumer. Composition is the sole wiring location. -->
+
+## M3 ownership decisions
+
+- `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn, transition a run with an optional promoted turn, recovery, snapshot/tail reads, and configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend resource.
+- `intention-storage-sqlite` owns bundled SQLite opening, schema migration through `rusqlite_migration`, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists `WorkspaceId` separately from the declared `WorkspaceRootDto`; workspace containment remains M5 policy ownership.
+- `intention-runtime` decides valid state edges, performs the required `Starting -> Cancelling -> Cancelled` cancellation path, and supplies terminal promotion as one repository operation. It has no provider, tool, timer, stream, or scheduler dependency in M3.
+- `intention-application` maps committed semantic outcomes to protocol DTOs. The repository, not application retries, remains the idempotency authority for accepted user turns.
 
 ## Composition rules
 
