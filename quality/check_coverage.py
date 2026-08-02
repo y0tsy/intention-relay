@@ -83,6 +83,15 @@ def is_under(path: Path, parent: Path) -> bool:
     return True
 
 
+def coverage_path(root: Path, filename: str) -> Path:
+    normalized = filename.replace("\\", "/")
+    marker = "/crates/"
+    if marker in normalized:
+        return (root / "crates" / normalized.split(marker, 1)[1]).resolve()
+    path = Path(filename)
+    return path.resolve() if path.is_absolute() else (root / path).resolve()
+
+
 def enabled_exclusion_paths(
     root: Path,
     exclusions: object,
@@ -96,7 +105,7 @@ def enabled_exclusion_paths(
     for item in files:
         filename = item.get("filename")
         if isinstance(filename, str):
-            path = Path(filename).resolve()
+            path = coverage_path(root, filename)
             report_paths[path] = report_paths.get(path, 0) + 1
 
     excluded: set[Path] = set()
@@ -177,8 +186,8 @@ def main() -> None:
             item
             for item in files
             if isinstance(item.get("filename"), str)
-            and is_under(Path(item["filename"]), source_root)
-            and Path(item["filename"]).resolve() not in excluded_paths
+            and is_under(coverage_path(root, item["filename"]), source_root)
+            and coverage_path(root, item["filename"]) not in excluded_paths
         ]
         covered, count = line_totals(crate_files)
         if count == 0:
