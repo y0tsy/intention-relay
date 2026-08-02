@@ -25,11 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore quality caches
+      - name: Restore Cargo registries and build artifacts
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/advisory-db
             ~/.cargo/git
@@ -54,7 +53,18 @@ jobs:
           rustup component add rustfmt clippy llvm-tools-preview --toolchain nightly-2026-07-31
 
       - name: Install pinned quality tools
-        run: make bootstrap-tools
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        with:
+          tool: |
+            cargo-nextest@0.9.140
+            cargo-llvm-cov@0.8.7
+            cargo-deny@0.20.2
+            cargo-audit@0.22.2
+            cargo-udeps@0.1.61
+            cargo-machete@0.9.2
+            cargo-about@0.9.1
+            cargo-outdated@0.19.0
+          fallback: cargo-binstall
 
       - name: Run repository quality gate
         run: make ci
