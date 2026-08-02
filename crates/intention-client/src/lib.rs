@@ -553,11 +553,11 @@ fn platform_state_directory() -> DtoResult<PathBuf> {
     }
     #[cfg(windows)]
     {
-        return std::env::var_os("APPDATA")
+        std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .filter(|candidate| candidate.is_absolute())
             .map(|candidate| candidate.join("intention-relay"))
-            .ok_or_else(|| unavailable("startup_lock_unavailable"));
+            .ok_or_else(|| unavailable("startup_lock_unavailable"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
