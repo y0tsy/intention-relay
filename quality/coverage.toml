@@ -26,3 +26,10 @@ adapter_crates = ["intention-tauri", "intention-tui"]
 "intention-client" = "C"
 "intention" = "C"
 "intention-daemon" = "C"
+
+[[exclusions]]
+enabled = true
+path = "crates/intention-daemon/src/main.rs"
+rationale = "The thin process adapter runs only in child daemon processes, whose Windows llvm-cov instrumentation is not merged into the parent nextest report."
+owner = "intention-daemon"
+equivalent_test_evidence = "crates/intention-daemon/tests/daemon_bootstrap.rs starts the real binary for unsafe-argument rejection and concurrent shared-session bootstrap."
