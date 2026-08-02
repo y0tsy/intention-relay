@@ -158,10 +158,10 @@ fn platform_config_path() -> Option<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        return std::env::var("APPDATA")
+        std::env::var("APPDATA")
             .ok()
             .filter(|value| Path::new(value).is_absolute())
-            .map(|directory| format!("{directory}\\\\intention-relay\\\\config.toml"));
+            .map(|directory| format!("{directory}\\\\intention-relay\\\\config.toml"))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
