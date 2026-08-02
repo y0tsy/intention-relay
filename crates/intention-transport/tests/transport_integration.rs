@@ -138,3 +138,115 @@ fn unavailable_endpoint_is_a_typed_error() {
     };
     assert_eq!(error.code(), "local_daemon_unavailable");
 }
+
+#[test]
+fn endpoint_identifiers_validate_and_listener_binding_does_not_reclaim_active_names() {
+    let long_instance_id = "x".repeat(101);
+    for instance_id in [
+        "",
+        "has space",
+        "../escape",
+        "slash/name",
+        long_instance_id.as_str(),
+    ] {
+        let error = LocalEndpoint::from_instance_id(instance_id)
+            .expect_err("unsafe logical endpoint identifier must be rejected");
+        assert_eq!(error.code(), "invalid_local_endpoint_instance");
+    }
+
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    assert!(endpoint.instance_id().starts_with("transport-fixture-"));
+    let listener = LocalListener::bind(endpoint.clone()).expect("initial listener binds");
+    let second_listener = LocalListener::bind(endpoint);
+    assert!(
+        second_listener.is_err(),
+        "active endpoint must not be reclaimed"
+    );
+    let error = match second_listener {
+        Ok(_) => panic!("active endpoint must not be reclaimed"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code(), "local_daemon_endpoint_in_use");
+    drop(listener);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_named_pipe_fixture_binds_negotiates_frames_and_cleans_up() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("named-pipe listener binds");
+    let client_endpoint = endpoint;
+    let server = thread::spawn(move || {
+        let mut connection = listener
+            .accept()
+            .expect("named-pipe listener accepts client");
+        negotiate_daemon(
+            &mut connection,
+            hello("windows-fixture-daemon", local_protocol_version()),
+        )
+        .expect("named-pipe hello negotiates");
+        let request = connection
+            .receive_request()
+            .expect("named-pipe request arrives");
+        connection
+            .send_response(&ProtocolResponseEnvelopeDto::new(
+                local_protocol_version(),
+                request.correlation_id(),
+                ProtocolMessageDto::new(
+                    SchemaVersionDto::new(1, 0),
+                    ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
+                        intention_types::ErrorDto::unavailable("fixture", "fixture unavailable"),
+                    )),
+                ),
+            ))
+            .expect("named-pipe response sends");
+    });
+    let mut client =
+        LocalConnection::connect(&client_endpoint).expect("named-pipe client connects");
+    negotiate_client(
+        &mut client,
+        hello("windows-fixture-client", local_protocol_version()),
+    )
+    .expect("named-pipe hello negotiates");
+    let request = health_request();
+    client
+        .send_request(&request)
+        .expect("named-pipe request sends");
+    assert_eq!(
+        client
+            .receive_response()
+            .expect("named-pipe response arrives")
+            .correlation_id(),
+        request.correlation_id()
+    );
+    server.join().expect("named-pipe server completes");
+}
+
+#[test]
+fn client_negotiation_rejects_an_incompatible_daemon_response() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
+
+    let server = thread::spawn(move || {
+        let mut connection = listener.accept().expect("server accepts client");
+        let remote = connection.receive_hello().expect("server receives hello");
+        assert_eq!(remote.adapter_name(), "fixture-client");
+        connection
+            .send_hello(&hello("fixture-daemon", ProtocolVersionDto::new(2, 0)))
+            .expect("server sends incompatible hello");
+    });
+
+    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
+    let error = negotiate_client(
+        &mut client,
+        hello("fixture-client", local_protocol_version()),
+    )
+    .expect_err("client must reject incompatible daemon version");
+    assert_eq!(error.code(), "incompatible_protocol_version");
+
+    server.join().expect("server thread completes");
+}

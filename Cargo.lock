@@ -154,7 +154,6 @@ dependencies = [
  "intention-protocol",
  "intention-transport",
  "intention-types",
- "tempfile",
 ]
 
 [[package]]
@@ -237,6 +236,8 @@ name = "intention-tui"
 version = "0.0.0"
 dependencies = [
  "intention-client",
+ "intention-daemon",
+ "intention-domain",
  "intention-protocol",
  "intention-transport",
  "intention-types",

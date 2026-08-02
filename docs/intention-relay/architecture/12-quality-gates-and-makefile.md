@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci`.
+`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -131,7 +131,7 @@ M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov`
 | A | `types`, `domain`, `config`, `protocol` | 95% |
 | B | `application`, `runtime`, `storage`, `storage-sqlite`, `tools`, `workspace`, `hooks`, `plans`, `vfr`, `headroom` | 90% |
 | C | `model`, provider adapters, `transport`, `client`, `daemon` | 85% |
-| Adapter exception | Tauri and TUI presentation crates | No aggregate UI line threshold. Require complete command/event mapping contracts and all mandatory fixture-daemon smoke/outcome scenarios. |
+| Adapter exception | Tauri and TUI presentation crates | No aggregate UI line threshold. Require complete command/event mapping contracts, all mandatory fixture-daemon smoke/outcome scenarios, and required platform CI evidence. |
 
 Branch coverage is reported. Critical safety and recovery branches are not excused by a passing line threshold. Those branches remain independently mandatory in the scenario tests defined by [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md).
 
@@ -211,7 +211,7 @@ An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an i
 - `cargo outdated` for stale direct dependencies;
 - committed-lockfile validation using `--locked`.
 
-Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
+Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. The approved `0BSD` entry is required transitively by `interprocess`'s local-IPC support (`doctest-file` and `recvmsg`) and is an OSI-approved permissive license. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
 
 ## Test-first, architectural, and outcome integration
 

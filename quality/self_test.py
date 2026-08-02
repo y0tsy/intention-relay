@@ -256,6 +256,25 @@ def test_adapter_isolation_boundary(root: Path) -> None:
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
 
 
+def test_adapter_production_dependency_boundary(root: Path) -> None:
+    manifest = root / "crates/intention-tui/Cargo.toml"
+    with modified(manifest):
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "[dependencies]\n",
+                "[dependencies]\nintention-daemon = { path = \"../intention-daemon\", version = \"=0.0.0\" }\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-tui: adapter production workspace dependencies",
+        )
+
+
 def test_protocol_isolation_boundary(root: Path) -> None:
     source = root / "crates/intention-protocol/src/lib.rs"
     with modified(source):
@@ -433,7 +452,7 @@ def test_missing_feature_profile(root: Path) -> None:
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
-        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0"]', 'allow = ["Apache-2.0"]'),
+        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD"]', 'allow = ["Apache-2.0"]'),
         ('multiple-versions = "deny"', 'multiple-versions = "allow"'),
         ("version = 2", "version = 1"),
     ]
@@ -499,6 +518,7 @@ def main() -> None:
         test_m2_secret_projection,
         test_forbidden_source_boundary,
         test_adapter_isolation_boundary,
+        test_adapter_production_dependency_boundary,
         test_protocol_isolation_boundary,
         test_composition_ownership_boundary,
         test_provider_sdk_public_contract_boundary,

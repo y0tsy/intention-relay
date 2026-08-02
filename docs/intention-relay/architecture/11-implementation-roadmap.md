@@ -4,7 +4,7 @@
 
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make verify` evidence passes.
 
-The required quality commands, pinned tools, coverage tiers, lint policy, feature profiles, architecture checks, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md). Test-first and outcome-verification rules are defined in [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The immutable M0/M1 phase-closure baseline and verification matrix are recorded in [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md).
+The required quality commands, pinned tools, coverage tiers, lint policy, feature profiles, architecture checks, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md). Test-first and outcome-verification rules are defined in [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The immutable M0/M1 phase-closure baseline and verification matrix are recorded in [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md). M2 closeout evidence is tracked separately in [M2 Closure Evidence](../closeout/m2-closure-evidence.md); its full `make verify` result passed on the recorded M2 worktree, while its immutable commit baseline remains pending.
 
 ## Dependency graph
 
@@ -184,25 +184,46 @@ are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-har
 
 ### Deliver
 
-- `intention-transport`, `intention-client`, `intention-daemon`, and composition wiring sufficient for a health/session fixture;
-- Unix socket/named-pipe abstraction;
-- bootstrap locking, readiness, protocol negotiation, typed errors, and typed subscription skeleton;
-- minimal TUI proof client, no Tauri UI required yet.
+- `intention-transport`, `intention-client`, `intention-daemon`, composition wiring, and `intention-tui` proof sufficient for an in-memory health/session fixture;
+- cross-platform local IPC using Unix domain sockets and Windows named pipes, with logical endpoint identifiers under per-user runtime/app-config locations;
+- private length-prefixed UTF-8 JSON framing with a 1 MiB maximum frame payload, one synchronous correlated request per connection, and bounded per-connection serving;
+- Unix `0700` endpoint-parent and `0600` listener-socket policy, plus a cross-platform `fs4` advisory startup lock;
+- first-connect, lock/recheck, daemon-process launch, capability/version-validated `Ready` health, typed errors, and snapshot-tail/resync subscription wiring with optional run scope;
+- explicit M2 deferral of idle shutdown, daemon stop, upgrade coordination, durable sessions/events/snapshots, and model/provider execution.
 
 ### Tests first
 
 - one-daemon startup-race test;
-- protocol mismatch test;
-- permission/path integration fixture;
-- client reconnect and snapshot/tail contract test;
+- protocol mismatch, hello, correlation, and health-readiness tests;
+- endpoint permission/path and 1 MiB frame-bound integration fixtures, including
+  a Windows named-pipe bind, hello, framed request/response, and cleanup fixture;
+- client stateful recovery plus snapshot/tail/resync and optional-run-scope contract tests over new one-shot IPC connections;
+- TUI proof-adapter contract test using production `intention-client` only and a dev-only fixture daemon host;
 - Tier C coverage fixtures and feature-profile checks.
 
 ### Acceptance outcomes
 
-- two Rust clients connect to one daemon and observe the same typed health/session state;
-- a stale/unavailable daemon produces a typed error rather than a hang;
-- a reconnect obtains a consistent snapshot/event position;
+- two Rust clients connect to one daemon, complete negotiated health checks, and observe the same typed in-memory health/session fixture;
+- an unavailable daemon produces a typed error rather than a hang, while bootstrap rechecks under the startup lock before launching one process;
+- a reconnect recovery handle obtains a consistent snapshot/event position or an explicit resync instruction through a new one-shot connection; duplicate or stale events do not mutate the reducer;
+- local endpoints and frames remain private and bounded; Unix parent/socket modes enforce the documented `0700`/`0600` policy, while required Windows CI exercises the named-pipe fixture;
+- the TUI proof reaches daemon state exclusively through the shared client;
 - Tier C crates meet 85% line coverage and all relevant feature profiles pass.
+
+### M2 implementation decisions and boundaries
+
+M2 uses Unix domain sockets on Unix and Windows named pipes on Windows. It keeps
+the length-prefixed UTF-8 JSON codec private to `intention-transport`, limits
+payloads to 1 MiB, and serves one request per connection synchronously. A slow
+client can block only its dedicated connection thread; subscription buffering,
+streaming, deadlines, and eviction remain later hardening work.
+
+The protocol now provides health/readiness, hello capability negotiation,
+correlated envelopes, snapshot-and-tail or resync subscription results, and an
+optional run scope. The composition facade is intentionally in-memory and
+non-durable: M3 owns durable storage/recovery and M4 owns model/provider runs.
+Idle shutdown, explicit stop, and daemon upgrades are deferred. Detailed
+transport and adapter constraints are in [Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md).
 
 ## Milestone 3: SQLite sessions, events, snapshots, and queue
 

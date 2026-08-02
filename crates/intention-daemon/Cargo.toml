@@ -18,4 +18,3 @@ intention-types = { path = "../intention-types", version = "=0.0.0" }
 [dev-dependencies]
 intention-client = { path = "../intention-client", version = "=0.0.0" }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
-tempfile = "3.24.0"

@@ -36,9 +36,9 @@ def main() -> None:
     if advisories.get("version") != 2 or not isinstance(advisories.get("ignore"), list):
         fail("advisories must use version 2 with an explicit ignore list")
     allowed = licenses.get("allow")
-    required_licenses = {"Apache-2.0", "MIT", "Unicode-3.0"}
+    required_licenses = {"Apache-2.0", "MIT", "Unicode-3.0", "0BSD"}
     if not isinstance(allowed, list) or not required_licenses.issubset(allowed):
-        fail("licenses.allow must explicitly permit all approved direct dependency licenses")
+        fail("licenses.allow must explicitly permit all approved dependency licenses")
     if bans.get("multiple-versions") != "deny" or bans.get("wildcards") != "deny":
         fail("bans must deny multiple versions and wildcards")
     if sources.get("unknown-registry") != "deny" or sources.get("unknown-git") != "deny":

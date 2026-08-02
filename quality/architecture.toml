@@ -67,11 +67,12 @@ public_resource_patterns = [
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile"]
 "intention-client" = ["fs4", "tempfile"]
 "intention" = []
-"intention-daemon" = ["tempfile"]
+"intention-daemon" = []
 
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-types"]
+allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain"]
 allowed_external_dependencies = []
 forbidden_source_patterns = [
   "intention_application::",
@@ -246,7 +247,7 @@ coverage_tier = "B"
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
 test_target = "protocol compatibility fixtures"
-test_targets = ["contracts", "protocol_fixtures"]
+test_targets = ["contracts", "protocol_fixtures", "accessors"]
 coverage_tier = "A"
 
 [[future_crates]]
@@ -267,7 +268,7 @@ coverage_tier = "C"
 name = "intention"
 responsibility = "Composition root, factories, and daemon application facade."
 test_target = "composition wiring smoke tests"
-test_targets = []
+test_targets = ["composition_contract"]
 coverage_tier = "C"
 
 [[future_crates]]

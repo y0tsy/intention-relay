@@ -23,12 +23,29 @@ Tauri, TUI, and REPL own only presentation, user input adaptation, local display
 
 v1 uses:
 
-- Unix domain sockets on supported Unix platforms;
-- named pipes on Windows;
+- Unix domain sockets on supported Unix platforms and named pipes on Windows;
+- logical safe endpoint identifiers resolved under the current user's platform
+  runtime or application-configuration location, never exposed in public DTOs
+  or safe errors;
+- Unix endpoint-parent mode `0700` and listener-socket mode `0600`; Windows
+  relies on named-pipe local-user access semantics and is verified by the
+  required Windows CI named-pipe fixture;
+- a private, bounded length-prefixed UTF-8 JSON codec with a maximum 1 MiB
+  frame payload;
 - a framed, versioned protocol carrying only `intention-protocol` DTOs;
 - OS-user filesystem permissions as the local access boundary.
 
 No TCP listener is opened in v1. This avoids treating localhost as an authentication boundary and keeps remote API design out of the initial product.
+
+### M2 serving and backpressure
+
+M2 accepts each local connection in the daemon host, completes protocol hello,
+reads one request, writes its correlated response, and closes the connection.
+The request is served synchronously by its dedicated connection thread. A slow
+client therefore blocks only that thread during its blocking I/O operation; the
+1 MiB frame bound prevents unbounded message allocation. M2 does not yet define
+subscription buffering, read/write deadlines beyond the bounded connect wait,
+or eviction of slow peers. Those are later transport-hardening decisions.
 
 ## Shared client
 
@@ -76,12 +93,13 @@ sequenceDiagram
 ### Bootstrap requirements
 
 1. The adapter first attempts a connection without spawning anything.
-2. A process-wide startup lock prevents duplicate daemons.
+2. A cross-platform `fs4` advisory startup lock prevents duplicate daemon launches.
 3. The lock holder rechecks availability before creating a daemon.
-4. Readiness includes successful protocol negotiation, not merely process existence.
-5. Startup errors are typed and safe to render.
-6. Closing one adapter never terminates a healthy shared daemon.
-7. The exact idle-shutdown policy is deferred. The default assumption is daemon persistence until explicit stop or OS shutdown.
+4. It launches the daemon process only when the recheck still finds no daemon.
+5. Readiness requires successful protocol hello negotiation, all required M2 peer capabilities, a correlated health query with the negotiated version, and `DaemonReadinessDto::Ready`, not merely process existence.
+6. Startup errors are typed and safe to render.
+7. Closing one adapter never terminates a healthy shared daemon.
+8. Idle shutdown, explicit stop, and connected-adapter upgrade coordination are deferred. The M2 default is daemon persistence until process termination or OS shutdown.
 
 ## Protocol lifecycle
 
@@ -90,9 +108,22 @@ At connection time, client and daemon exchange:
 - protocol major/minor version;
 - supported feature/capability DTOs;
 - client identity limited to local adapter metadata, not an application account;
-- last observed session event sequence for subscriptions, when available.
+- versioned, correlated request/response envelopes after hello;
+- daemon health/readiness through `GetDaemonHealth` during bootstrap; and
+- last observed session event sequence plus optional run scope for subscriptions,
+  when available.
 
 An incompatible major protocol version fails closed with `ErrorDto { category: unavailable }`. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads.
+
+M2 subscriptions return either a consistent session snapshot with a contiguous
+event tail or a typed resync instruction. The client reducer accepts ordered
+events, ignores duplicate or stale delivery, and requires snapshot recovery for
+a forward sequence gap. Because M2 closes every request connection, its stateful
+recovery handle opens a new negotiated request, reuses the last accepted event
+sequence, and applies only a snapshot/tail or typed resync response. It does
+not claim a persistent live-event stream. The M2 composition fixture supplies
+this protocol shape in memory only; durable snapshot/tail storage and replay
+retention are M3 work.
 
 ## Subscription and reconnect
 
@@ -103,22 +134,16 @@ sequenceDiagram
   participant AD as Adapter
   participant CL as Client
   participant DM as Daemon
-  participant ST as Storage
 
   AD->>CL: Subscribe from sequence N
-  CL->>DM: Subscription DTO
-  DM->>ST: Load snapshot and event tail
-  ST-->>DM: Snapshot plus events
-  DM-->>CL: Snapshot DTO
-  DM-->>CL: Events after N
+  CL->>DM: New negotiated subscription DTO
+  DM-->>CL: Snapshot plus event tail, or resync
   CL-->>AD: Reconcile view
-  Note over AD,DM: Connection is lost
-  AD->>CL: Reconnect
-  CL->>DM: Subscribe from last sequence M
-  DM->>ST: Load events after M
-  ST-->>DM: Tail or resync required
-  DM-->>CL: Event tail or snapshot
-  CL-->>AD: Consistent state
+  Note over AD,DM: Request connection is closed
+  AD->>CL: Recover after disconnect
+  CL->>DM: New subscription from last sequence M
+  DM-->>CL: Event tail or typed resync
+  CL-->>AD: Consistent state or cleared projection
 ```
 
 ### Reconciliation rules
@@ -128,6 +153,16 @@ sequenceDiagram
 - Duplicate delivery is tolerated through `event_id` and sequence-aware reducers.
 - A stale live event may not mutate a projection if its sequence is already applied.
 - The daemon has authoritative ordering; adapters do not synthesize a server sequence.
+
+## M2 fixture boundary
+
+M2's daemon composition is an in-memory, non-durable health/session fixture.
+It proves local transport, bootstrap, negotiation, correlation, and
+snapshot-tail/resync wiring without claiming persistence or workflow execution.
+M3 owns SQLite-backed sessions, append-only events, durable snapshots and tails,
+queues, and restart recovery. M4 owns model/provider runtime behavior and live
+run execution. Consequently, M2 does not implement idle shutdown, an explicit
+daemon-stop command, or upgrade coordination.
 
 ## Tauri bridge
 
@@ -175,11 +210,11 @@ This policy is honest about unknown external side effects. A user may initiate a
 
 | Requirement | Test evidence | Observable result |
 | --- | --- | --- |
-| Shared daemon | Tauri bridge test and TUI client test connect to one fixture daemon. | Both observe the same session snapshot and event sequence. |
+| Shared daemon | Multi-client bootstrap test and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health, snapshot, and event-tail DTOs for the same session. |
 | Startup race | Multi-client bootstrap integration test. | Exactly one daemon host is created. |
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Protocol mismatch | Client/server compatibility test. | Connection fails with typed incompatibility error. |
-| Reconnect | Disconnect/reconnect sequence test. | Adapter recovers identical state via snapshot plus tail. |
+| Reconnect | Stateful recovery-handle disconnect/reconnect sequence test. | A fresh one-shot request reuses the last sequence and applies a consistent snapshot/tail or explicit resync. |
 | Restart | Persisted active-run recovery test. | Run becomes `interrupted`; no provider/tool call resumes. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
 
@@ -189,8 +224,9 @@ The daemon, transport, client, and adapter tests in this document are blocking `
 
 ## Open implementation decisions
 
-- exact framing codec and backpressure behavior;
-- maximum subscription buffer and slow-client policy;
-- local socket path conventions per platform;
-- how daemon upgrades coordinate with a connected adapter;
+- maximum subscription buffer, streaming shape, read/write deadline, and
+  slow-client eviction policy;
+- durable endpoint cleanup and stale-listener recovery policy beyond listener
+  ownership safeguards;
+- daemon upgrades with connected adapters;
 - explicit daemon stop command and future idle shutdown policy.
