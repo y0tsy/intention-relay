@@ -37,8 +37,13 @@ fn snapshot_with_revision_and_model(
     model: &str,
 ) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse("/tmp/intention-storage-sqlite-test.toml")
-            .expect("fixture path is absolute"),
+        ConfigPathDto::parse(
+            std::env::temp_dir()
+                .join("intention-storage-sqlite-test.toml")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture path is absolute"),
     );
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         format!(

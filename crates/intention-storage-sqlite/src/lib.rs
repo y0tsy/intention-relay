@@ -965,8 +965,13 @@ mod tests {
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
         let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse("/tmp/intention-storage-sqlite-unit.toml")
-                .expect("fixture path is absolute"),
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-storage-sqlite-unit.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture path is absolute"),
         );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-secret\"",

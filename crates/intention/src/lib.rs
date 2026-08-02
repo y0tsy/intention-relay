@@ -533,8 +533,13 @@ fn unavailable_storage() -> ErrorDto {
 
 fn fixture_config_snapshot() -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse("/tmp/intention-relay-fixture.toml")
-            .unwrap_or_else(|_| unreachable!("fixture config path must be absolute")),
+        ConfigPathDto::parse(
+            std::env::temp_dir()
+                .join("intention-relay-fixture.toml")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .unwrap_or_else(|_| unreachable!("fixture config path must be absolute")),
     );
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
