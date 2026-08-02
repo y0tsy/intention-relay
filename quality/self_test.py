@@ -425,7 +425,14 @@ enabled = true
         )
         invalid_cases = [
             ("missing-metadata", valid.replace('rationale = "Synthetic denominator fixture."', 'rationale = ""'), "enabled exclusion requires rationale"),
-            ("absolute-path", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', f'path = "{target}"'), "workspace-relative without traversal"),
+            (
+                "absolute-path",
+                valid.replace(
+                    'path = "crates/intention-types/src/excluded_fixture.rs"',
+                    f"path = '''{target}'''",
+                ),
+                "workspace-relative without traversal",
+            ),
             ("traversal", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', 'path = "crates/intention-types/src/../src/excluded_fixture.rs"'), "workspace-relative without traversal"),
             ("other-owner", valid.replace('owner = "intention-types"', 'owner = "intention-domain"'), "must be under intention-domain source root"),
             ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-application"'), "owner must be an active production crate"),
