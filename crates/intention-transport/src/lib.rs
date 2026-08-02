@@ -386,3 +386,130 @@ fn oversized_frame() -> ErrorDto {
 fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        clippy::panic,
+        reason = "Transport unit fixtures use direct assertions for diagnostics."
+    )]
+
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
+
+    fn endpoint() -> LocalEndpoint {
+        let sequence = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is after Unix epoch")
+            .as_nanos();
+        LocalEndpoint::from_instance_id(format!("transport-unit-{nanos}-{sequence}"))
+            .expect("fixture endpoint is valid")
+    }
+
+    #[test]
+    fn platform_default_uses_a_safe_logical_instance_identifier() {
+        let endpoint = LocalEndpoint::platform_default().expect("platform default is available");
+        assert_eq!(endpoint.instance_id(), "intention-relay");
+        assert!(endpoint.path.is_absolute());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listener_enforces_private_permissions_and_removes_owned_socket() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let endpoint = endpoint();
+        let socket_path = endpoint.path.clone();
+        let parent = socket_path
+            .parent()
+            .expect("socket has a parent")
+            .to_owned();
+        let listener = LocalListener::bind(endpoint).expect("listener binds");
+        assert_eq!(
+            fs::metadata(parent)
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&socket_path)
+                .expect("socket metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(listener);
+        assert!(
+            !socket_path.exists(),
+            "listener removes only its owned socket"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_endpoints_resolve_to_local_named_pipes() {
+        let endpoint = endpoint();
+        assert_eq!(
+            endpoint.path,
+            PathBuf::from(format!(r"\\.\pipe\{}", endpoint.instance_id()))
+        );
+    }
+
+    #[test]
+    fn receive_request_rejects_oversized_malformed_and_incomplete_frames() {
+        for frame in [
+            (
+                u32::try_from(MAX_FRAME_BYTES + 1).expect("frame length fits"),
+                Vec::new(),
+            ),
+            (3, b"{".to_vec()),
+            (8, b"{}".to_vec()),
+        ] {
+            let endpoint = endpoint();
+            let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+            let server = thread::spawn(move || {
+                let mut connection = listener.accept().expect("server accepts");
+                connection
+                    .receive_request()
+                    .expect_err("invalid frame is rejected")
+            });
+            let mut client = LocalConnection::connect(&endpoint).expect("client connects");
+            client
+                .stream
+                .write_all(&frame.0.to_be_bytes())
+                .and_then(|_| client.stream.write_all(&frame.1))
+                .expect("raw fixture frame writes");
+            drop(client);
+            let error = server.join().expect("server completes");
+            assert!(matches!(
+                error.code(),
+                "local_protocol_frame_too_large"
+                    | "invalid_local_protocol_frame"
+                    | "local_daemon_connection_unavailable"
+            ));
+        }
+    }
+
+    #[test]
+    fn receive_hello_reports_a_typed_error_when_peer_disconnects() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = thread::spawn(move || {
+            let connection = listener.accept().expect("server accepts");
+            drop(connection);
+        });
+        let mut client = LocalConnection::connect(&endpoint).expect("client connects");
+        server.join().expect("server completes");
+        let error = client.receive_hello().expect_err("closed peer is typed");
+        assert_eq!(error.code(), "local_daemon_connection_unavailable");
+    }
+}

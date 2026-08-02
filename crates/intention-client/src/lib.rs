@@ -13,10 +13,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use intention_protocol::{
-    DaemonHealthDto, ProtocolCapabilityDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolHelloDto,
+    ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_transport::{
     LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
@@ -29,6 +29,11 @@ use intention_types::{
 const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
+const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 3] = [
+    ProtocolCapabilityDto::SessionSubscriptions,
+    ProtocolCapabilityDto::CorrelatedRequests,
+    ProtocolCapabilityDto::DaemonHealth,
+];
 
 /// Launches a daemon process after bootstrap has acquired the startup lock.
 pub trait DaemonLauncher: Send + Sync {
@@ -84,6 +89,11 @@ impl DaemonLauncher for ProcessDaemonLauncher {
     }
 }
 
+struct NegotiatedConnection {
+    connection: LocalConnection,
+    daemon_version: ProtocolVersionDto,
+}
+
 /// The connected shared-client facade exposed to presentation adapters.
 pub struct IntentionClient {
     endpoint: LocalEndpoint,
@@ -104,11 +114,7 @@ impl IntentionClient {
     ) -> DtoResult<Self> {
         let hello = ProtocolHelloDto::new(
             local_protocol_version(),
-            vec![
-                ProtocolCapabilityDto::SessionSubscriptions,
-                ProtocolCapabilityDto::CorrelatedRequests,
-                ProtocolCapabilityDto::DaemonHealth,
-            ],
+            REQUIRED_CAPABILITIES.to_vec(),
             adapter_name,
         )?;
         Ok(Self {
@@ -120,9 +126,10 @@ impl IntentionClient {
 
     /// Connects to a ready daemon or serializes exactly one local process launch.
     ///
-    /// The client attempts IPC before spawning, retries after acquiring the
-    /// process-wide advisory lock, and treats a successful hello plus health
-    /// response as readiness. The client does not stop a shared daemon on drop.
+    /// The client attempts IPC before spawning, retries an already-starting
+    /// daemon without spawning, then uses a process-wide advisory lock only when
+    /// the endpoint is unavailable. Readiness requires compatible hello,
+    /// capabilities, a correlated health query, and `Ready` state.
     ///
     /// # Errors
     ///
@@ -131,6 +138,7 @@ impl IntentionClient {
     pub fn connect_or_bootstrap(&self) -> DtoResult<DaemonHealthDto> {
         match self.connect_ready() {
             Ok(health) => return Ok(health),
+            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready(),
             Err(error) if !is_daemon_unavailable(&error) => return Err(error),
             Err(_) => {}
         }
@@ -138,6 +146,7 @@ impl IntentionClient {
         let _lock = StartupLock::acquire(&self.endpoint)?;
         match self.connect_ready() {
             Ok(health) => return Ok(health),
+            Err(error) if is_daemon_starting(&error) => return self.wait_for_ready(),
             Err(error) if !is_daemon_unavailable(&error) => return Err(error),
             Err(_) => {}
         }
@@ -149,8 +158,7 @@ impl IntentionClient {
     ///
     /// # Errors
     ///
-    /// Returns a safe typed transport or protocol error if the daemon cannot
-    /// produce a correlated health response.
+    /// Returns a safe typed transport, protocol, or non-ready daemon error.
     pub fn health(&self) -> DtoResult<DaemonHealthDto> {
         self.connect_ready()
     }
@@ -205,7 +213,32 @@ impl IntentionClient {
         match health {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
                 health,
-            )) => Ok(health),
+            )) => {
+                if health.protocol_version() != connection.daemon_version {
+                    return Err(invalid_response());
+                }
+                match health.readiness() {
+                    DaemonReadinessDto::Ready => Ok(health),
+                    DaemonReadinessDto::Starting => Err(ErrorDto::new(
+                        "local_daemon_starting",
+                        ErrorCategoryDto::Unavailable,
+                        "the local daemon is starting",
+                        intention_types::ErrorRetryDto::Delayed,
+                        None,
+                    )
+                    .unwrap_or_else(|_| unavailable("local_daemon_starting"))),
+                    DaemonReadinessDto::Draining | DaemonReadinessDto::Unavailable => {
+                        Err(ErrorDto::new(
+                            "local_daemon_not_ready",
+                            ErrorCategoryDto::Unavailable,
+                            "the local daemon is not ready to serve requests",
+                            intention_types::ErrorRetryDto::Delayed,
+                            None,
+                        )
+                        .unwrap_or_else(|_| unavailable("local_daemon_not_ready")))
+                    }
+                }
+            }
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
                 Err(error)
             }
@@ -218,15 +251,27 @@ impl IntentionClient {
         self.request_on(&mut connection, payload)
     }
 
-    fn connect(&self) -> DtoResult<LocalConnection> {
+    fn connect(&self) -> DtoResult<NegotiatedConnection> {
         let mut connection = LocalConnection::connect(&self.endpoint)?;
-        negotiate_client(&mut connection, self.hello.clone())?;
-        Ok(connection)
+        let remote = negotiate_client(&mut connection, self.hello.clone())?;
+        if !REQUIRED_CAPABILITIES
+            .iter()
+            .all(|capability| remote.capabilities().contains(capability))
+        {
+            return Err(ErrorDto::unavailable(
+                "incompatible_protocol_capabilities",
+                "the local daemon lacks a required protocol capability",
+            ));
+        }
+        Ok(NegotiatedConnection {
+            connection,
+            daemon_version: remote.version(),
+        })
     }
 
     fn request_on(
         &self,
-        connection: &mut LocalConnection,
+        connection: &mut NegotiatedConnection,
         payload: ProtocolRequestPayloadDto,
     ) -> DtoResult<ProtocolResponsePayloadDto> {
         let correlation_id = CorrelationIdDto::new();
@@ -235,9 +280,11 @@ impl IntentionClient {
             correlation_id,
             ProtocolMessageDto::new(SCHEMA_VERSION, payload),
         );
-        connection.send_request(&request)?;
-        let response = connection.receive_response()?;
-        if response.correlation_id() != correlation_id {
+        connection.connection.send_request(&request)?;
+        let response = connection.connection.receive_response()?;
+        if response.correlation_id() != correlation_id
+            || response.protocol_version() != connection.daemon_version
+        {
             return Err(invalid_response());
         }
         Ok(response.message().payload().clone())
@@ -248,12 +295,75 @@ impl IntentionClient {
         loop {
             match self.connect_ready() {
                 Ok(health) => return Ok(health),
-                Err(error) if is_daemon_unavailable(&error) && Instant::now() < deadline => {
+                Err(error)
+                    if (is_daemon_unavailable(&error) || is_daemon_starting(&error))
+                        && Instant::now() < deadline =>
+                {
                     thread::sleep(STARTUP_RETRY);
                 }
                 Err(error) => return Err(error),
             }
         }
+    }
+}
+
+/// Stateful recovery for one M2 snapshot-and-tail subscription.
+///
+/// The local transport deliberately closes every request connection. This handle
+/// therefore records the latest accepted sequence and creates a fresh negotiated
+/// subscription request after a disconnect. It does not imply a live stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionSubscriptionRecovery {
+    schema_version: SchemaVersionDto,
+    session_id: SessionId,
+    run_id: Option<intention_types::RunId>,
+    requested_mode: intention_domain::RunModeDto,
+    reducer: SessionSubscriptionReducer,
+}
+
+impl SessionSubscriptionRecovery {
+    /// Creates recovery state for one typed subscription.
+    #[must_use]
+    pub const fn new(subscription: SubscribeSessionCommandDto) -> Self {
+        let session_id = subscription.session_id();
+        Self {
+            schema_version: subscription.schema_version(),
+            session_id,
+            run_id: subscription.run_id(),
+            requested_mode: subscription.requested_mode(),
+            reducer: SessionSubscriptionReducer::new(session_id),
+        }
+    }
+
+    /// Requests a fresh snapshot/tail from the last accepted sequence.
+    ///
+    /// `Ok(false)` means a consistent state was applied. `Ok(true)` means the
+    /// daemon required resynchronization and the local projection was cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, protocol, or continuity error.
+    pub fn recover(&mut self, client: &IntentionClient) -> DtoResult<bool> {
+        let subscription = SubscribeSessionCommandDto::with_run_id(
+            self.schema_version,
+            self.session_id,
+            self.run_id,
+            self.reducer.last_sequence(),
+            self.requested_mode,
+        );
+        self.reducer.apply(client.subscribe(subscription)?)
+    }
+
+    /// Returns the accepted daemon checkpoint, if recovery has succeeded.
+    #[must_use]
+    pub const fn snapshot(&self) -> Option<SessionSnapshotDto> {
+        self.reducer.snapshot()
+    }
+
+    /// Returns the latest locally accepted daemon event sequence.
+    #[must_use]
+    pub const fn last_sequence(&self) -> Option<SessionEventSequenceDto> {
+        self.reducer.last_sequence()
     }
 }
 
@@ -460,6 +570,10 @@ fn is_daemon_unavailable(error: &ErrorDto) -> bool {
         error.code(),
         "local_daemon_unavailable" | "local_daemon_connection_unavailable"
     )
+}
+
+fn is_daemon_starting(error: &ErrorDto) -> bool {
+    error.code() == "local_daemon_starting"
 }
 
 fn invalid_response() -> ErrorDto {

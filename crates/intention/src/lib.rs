@@ -35,10 +35,12 @@ pub struct DaemonApplicationFacade {
 }
 
 impl DaemonApplicationFacade {
-    /// Creates an in-memory health/session fixture for a single daemon process.
+    /// Creates an in-memory health/session fixture for a caller-selected test session.
+    ///
+    /// This is intended for explicit integration fixtures only. Regular daemon
+    /// startup uses [`Self::new_fixture`] and does not expose its generated ID.
     #[must_use]
-    pub fn new_fixture() -> Self {
-        let session_id = SessionId::new();
+    pub fn new_fixture_with_session_id(session_id: SessionId) -> Self {
         let snapshot =
             SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
         let occurred_at = TimestampDto::from_unix_seconds(0)
@@ -72,6 +74,12 @@ impl DaemonApplicationFacade {
             snapshot,
             tail,
         }
+    }
+
+    /// Creates an in-memory health/session fixture for a normal daemon process.
+    #[must_use]
+    pub fn new_fixture() -> Self {
+        Self::new_fixture_with_session_id(SessionId::new())
     }
 
     /// Returns a credential-free ready health projection.

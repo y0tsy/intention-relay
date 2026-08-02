@@ -83,6 +83,7 @@ flowchart TD
 3. [Implementation roadmap](11-implementation-roadmap.md)
 4. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
 5. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
+6. [M2 closure evidence](../closeout/m2-closure-evidence.md)
 
 ## Document map
 

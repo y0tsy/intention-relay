@@ -145,6 +145,45 @@ def workspace_dependencies(package: dict[str, object], workspace_names: set[str]
     return package_dependencies(package) & workspace_names
 
 
+def dependency_kind(dependency: dict[str, object]) -> str | None:
+    kind = dependency.get("kind")
+    if kind is None or isinstance(kind, str):
+        return kind
+    fail(f"package dependency {dependency.get('name')} has an invalid kind")
+
+
+def production_workspace_dependencies(
+    package: dict[str, object], workspace_names: set[str]
+) -> set[str]:
+    dependencies = package.get("dependencies")
+    if not isinstance(dependencies, list):
+        fail(f"package {package.get('name')} has no dependency list")
+    return {
+        dependency["name"]
+        for dependency in dependencies
+        if isinstance(dependency, dict)
+        and isinstance(dependency.get("name"), str)
+        and dependency_kind(dependency) != "dev"
+        and dependency["name"] in workspace_names
+    }
+
+
+def development_workspace_dependencies(
+    package: dict[str, object], workspace_names: set[str]
+) -> set[str]:
+    dependencies = package.get("dependencies")
+    if not isinstance(dependencies, list):
+        fail(f"package {package.get('name')} has no dependency list")
+    return {
+        dependency["name"]
+        for dependency in dependencies
+        if isinstance(dependency, dict)
+        and isinstance(dependency.get("name"), str)
+        and dependency_kind(dependency) == "dev"
+        and dependency["name"] in workspace_names
+    }
+
+
 def integration_test_targets(package: dict[str, object]) -> set[str]:
     targets = package.get("targets")
     if not isinstance(targets, list):
@@ -358,6 +397,7 @@ def check_declared_boundaries(
 
     adapter_packages = string_list(adapters, "packages")
     adapter_workspace = set(string_list(adapters, "allowed_workspace_dependencies"))
+    adapter_test_workspace = set(string_list(adapters, "allowed_test_workspace_dependencies"))
     adapter_external = set(string_list(adapters, "allowed_external_dependencies"))
     adapter_sources = string_list(adapters, "forbidden_source_patterns")
     for package_name in adapter_packages:
@@ -366,9 +406,15 @@ def check_declared_boundaries(
         package = packages[package_name]
         failures.extend(check_dependency_subset(
             package_name,
-            workspace_dependencies(package, workspace_names),
+            production_workspace_dependencies(package, workspace_names),
             adapter_workspace,
-            "adapter workspace",
+            "adapter production workspace",
+        ))
+        failures.extend(check_dependency_subset(
+            package_name,
+            development_workspace_dependencies(package, workspace_names) - adapter_workspace,
+            adapter_test_workspace,
+            "adapter test workspace",
         ))
         failures.extend(check_dependency_subset(
             package_name,
