@@ -4,6 +4,7 @@
 //! length-prefixed JSON codec remains private to this crate, and the underlying
 //! Unix-domain socket or Windows named pipe never crosses its crate boundary.
 
+#[cfg(unix)]
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -213,6 +214,7 @@ impl LocalConnection {
 /// A local listener that accepts framed, typed client connections.
 pub struct LocalListener {
     listener: LocalSocketListener,
+    #[cfg(unix)]
     endpoint: LocalEndpoint,
 }
 
@@ -236,7 +238,11 @@ impl LocalListener {
             )
             .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
         })?;
-        Ok(Self { listener, endpoint })
+        Ok(Self {
+            listener,
+            #[cfg(unix)]
+            endpoint,
+        })
     }
 
     /// Accepts one client connection.
@@ -320,6 +326,8 @@ fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> 
 }
 
 fn prepare_parent_directory(endpoint: &LocalEndpoint) -> DtoResult<()> {
+    #[cfg(not(unix))]
+    let _ = endpoint;
     #[cfg(unix)]
     {
         let parent = endpoint.path.parent().ok_or_else(|| {
