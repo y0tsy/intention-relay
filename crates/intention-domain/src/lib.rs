@@ -6,8 +6,8 @@
 use std::fmt::{Display, Formatter};
 
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, RunId, SessionId, TimestampDto,
-    TurnId,
+    ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, QueuePositionDto, RunId,
+    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -45,6 +45,61 @@ pub enum RunStatusDto {
     Failed,
     /// Daemon recovery ended an unfinished run without retrying it.
     Interrupted,
+}
+
+impl RunStatusDto {
+    /// Returns whether no future status transition is valid from this status.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Cancelled | Self::Failed | Self::Interrupted
+        )
+    }
+}
+
+/// Validates one durable run lifecycle transition without accessing runtime or storage state.
+///
+/// # Errors
+///
+/// Returns a conflict error when `to` is not a declared successor of `from`.
+pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> DtoResult<()> {
+    let allowed = matches!(
+        (from, to),
+        (RunStatusDto::Queued, RunStatusDto::Starting)
+            | (RunStatusDto::Queued, RunStatusDto::Cancelled)
+            | (RunStatusDto::Queued, RunStatusDto::Interrupted)
+            | (RunStatusDto::Starting, RunStatusDto::Running)
+            | (RunStatusDto::Starting, RunStatusDto::Cancelling)
+            | (RunStatusDto::Starting, RunStatusDto::Failed)
+            | (RunStatusDto::Starting, RunStatusDto::Interrupted)
+            | (RunStatusDto::Running, RunStatusDto::WaitingInput)
+            | (RunStatusDto::Running, RunStatusDto::Completing)
+            | (RunStatusDto::Running, RunStatusDto::Cancelling)
+            | (RunStatusDto::Running, RunStatusDto::Failed)
+            | (RunStatusDto::Running, RunStatusDto::Interrupted)
+            | (RunStatusDto::WaitingInput, RunStatusDto::Running)
+            | (RunStatusDto::WaitingInput, RunStatusDto::Cancelling)
+            | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
+            | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
+            | (RunStatusDto::Completing, RunStatusDto::Completed)
+            | (RunStatusDto::Completing, RunStatusDto::Failed)
+            | (RunStatusDto::Completing, RunStatusDto::Interrupted)
+            | (RunStatusDto::Cancelling, RunStatusDto::Cancelled)
+            | (RunStatusDto::Cancelling, RunStatusDto::Failed)
+            | (RunStatusDto::Cancelling, RunStatusDto::Interrupted)
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(ErrorDto::new(
+            "invalid_run_status_transition",
+            intention_types::ErrorCategoryDto::Conflict,
+            "run status transition is not permitted",
+            intention_types::ErrorRetryDto::Never,
+            None,
+        )?)
+    }
 }
 
 /// The durable lifecycle status for a physical plan.
@@ -111,6 +166,388 @@ impl WorkspaceRootDto {
 impl Display for WorkspaceRootDto {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0)
+    }
+}
+
+/// A command requesting a new durable session.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateSessionCommandDto {
+    project_id: ProjectId,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    workspace_root: WorkspaceRootDto,
+    mode: RunModeDto,
+}
+
+impl CreateSessionCommandDto {
+    /// Creates a typed durable session request with daemon-owned stable identities.
+    #[must_use]
+    pub const fn new(
+        project_id: ProjectId,
+        session_id: SessionId,
+        workspace_id: WorkspaceId,
+        workspace_root: WorkspaceRootDto,
+        mode: RunModeDto,
+    ) -> Self {
+        Self {
+            project_id,
+            session_id,
+            workspace_id,
+            workspace_root,
+            mode,
+        }
+    }
+
+    /// Returns the session's owning project identity.
+    #[must_use]
+    pub const fn project_id(&self) -> ProjectId {
+        self.project_id
+    }
+
+    /// Returns the requested durable session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the daemon-owned stable workspace identity.
+    #[must_use]
+    pub const fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+
+    /// Returns the declared workspace boundary.
+    #[must_use]
+    pub const fn workspace_root(&self) -> &WorkspaceRootDto {
+        &self.workspace_root
+    }
+
+    /// Returns the initial run policy mode.
+    #[must_use]
+    pub const fn mode(&self) -> RunModeDto {
+        self.mode
+    }
+}
+
+/// A command requesting removal of one not-yet-started queued turn.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoveQueuedTurnCommandDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+}
+
+impl RemoveQueuedTurnCommandDto {
+    /// Creates a typed queued-turn removal request.
+    #[must_use]
+    pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
+        Self {
+            session_id,
+            turn_id,
+        }
+    }
+
+    /// Returns the owning durable session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the queued user turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+}
+
+/// A safe current projection of one durable run.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunProjectionDto {
+    session_id: SessionId,
+    run_id: RunId,
+    turn_id: TurnId,
+    status: RunStatusDto,
+    config_revision_id: ConfigRevisionId,
+}
+
+impl RunProjectionDto {
+    /// Creates the safe public projection of one M3 run lifecycle.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        turn_id: TurnId,
+        status: RunStatusDto,
+        config_revision_id: ConfigRevisionId,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            turn_id,
+            status,
+            config_revision_id,
+        }
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the durable run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the causal user turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+
+    /// Returns the durable lifecycle status.
+    #[must_use]
+    pub const fn status(self) -> RunStatusDto {
+        self.status
+    }
+
+    /// Returns the immutable configuration revision selected by this run.
+    #[must_use]
+    pub const fn config_revision_id(self) -> ConfigRevisionId {
+        self.config_revision_id
+    }
+}
+
+/// A safe current projection of one queued user turn.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct QueuedTurnProjectionDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    content: String,
+    position: QueuePositionDto,
+}
+
+impl<'de> Deserialize<'de> for QueuedTurnProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawQueuedTurnProjectionDto {
+            session_id: SessionId,
+            turn_id: TurnId,
+            content: String,
+            position: QueuePositionDto,
+        }
+
+        let raw = RawQueuedTurnProjectionDto::deserialize(deserializer)?;
+        Self::new(raw.session_id, raw.turn_id, raw.content, raw.position).map_err(de::Error::custom)
+    }
+}
+
+impl QueuedTurnProjectionDto {
+    /// Creates one queued turn projection with non-empty user content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the queued content is blank.
+    pub fn new(
+        session_id: SessionId,
+        turn_id: TurnId,
+        content: impl Into<String>,
+        position: QueuePositionDto,
+    ) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_turn_content",
+                "user turn content must not be empty",
+            ))
+        } else {
+            Ok(Self {
+                session_id,
+                turn_id,
+                content,
+                position,
+            })
+        }
+    }
+
+    /// Returns the owning durable session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the queued user turn identity.
+    #[must_use]
+    pub const fn turn_id(&self) -> TurnId {
+        self.turn_id
+    }
+
+    /// Returns the user-authored content that remains queued.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Returns the durable zero-based queue position.
+    #[must_use]
+    pub const fn position(&self) -> QueuePositionDto {
+        self.position
+    }
+}
+
+/// A safe complete public session state projection at one durable event position.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionProjectionDto {
+    project_id: ProjectId,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
+    workspace_root: WorkspaceRootDto,
+    mode: RunModeDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config_revision_id: Option<ConfigRevisionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_run: Option<RunProjectionDto>,
+    queued_turns: Vec<QueuedTurnProjectionDto>,
+    at_sequence: SessionEventSequenceDto,
+}
+
+impl<'de> Deserialize<'de> for SessionProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionProjectionDto {
+            project_id: ProjectId,
+            session_id: SessionId,
+            workspace_id: WorkspaceId,
+            workspace_root: WorkspaceRootDto,
+            mode: RunModeDto,
+            #[serde(default)]
+            config_revision_id: Option<ConfigRevisionId>,
+            #[serde(default)]
+            active_run: Option<RunProjectionDto>,
+            queued_turns: Vec<QueuedTurnProjectionDto>,
+            at_sequence: SessionEventSequenceDto,
+        }
+
+        let raw = RawSessionProjectionDto::deserialize(deserializer)?;
+        Self::new(
+            raw.project_id,
+            raw.session_id,
+            raw.workspace_id,
+            raw.workspace_root,
+            raw.mode,
+            raw.config_revision_id,
+            raw.active_run,
+            raw.queued_turns,
+            raw.at_sequence,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+impl SessionProjectionDto {
+    /// Creates a coherent safe public session projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a nested run or queued turn belongs to a
+    /// different session, or queue tickets are not strictly ascending and unique.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This public M3 wire constructor preserves the established nine-field session projection contract."
+    )]
+    pub fn new(
+        project_id: ProjectId,
+        session_id: SessionId,
+        workspace_id: WorkspaceId,
+        workspace_root: WorkspaceRootDto,
+        mode: RunModeDto,
+        config_revision_id: Option<ConfigRevisionId>,
+        active_run: Option<RunProjectionDto>,
+        queued_turns: Vec<QueuedTurnProjectionDto>,
+        at_sequence: SessionEventSequenceDto,
+    ) -> DtoResult<Self> {
+        if active_run.is_some_and(|run| run.session_id() != session_id)
+            || queued_turns
+                .iter()
+                .zip(queued_turns.iter().skip(1))
+                .any(|(previous, next)| {
+                    previous.session_id() != session_id
+                        || next.session_id() != session_id
+                        || previous.position() >= next.position()
+                })
+            || queued_turns
+                .first()
+                .is_some_and(|turn| turn.session_id() != session_id)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_session_projection",
+                "nested session state must belong to its session with strictly ascending queue tickets",
+            ));
+        }
+        Ok(Self {
+            project_id,
+            session_id,
+            workspace_id,
+            workspace_root,
+            mode,
+            config_revision_id,
+            active_run,
+            queued_turns,
+            at_sequence,
+        })
+    }
+
+    /// Returns the owning project identity.
+    #[must_use]
+    pub const fn project_id(&self) -> ProjectId {
+        self.project_id
+    }
+    /// Returns the durable session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the daemon-owned stable workspace identity.
+    #[must_use]
+    pub const fn workspace_id(&self) -> WorkspaceId {
+        self.workspace_id
+    }
+    /// Returns the declared workspace boundary.
+    #[must_use]
+    pub const fn workspace_root(&self) -> &WorkspaceRootDto {
+        &self.workspace_root
+    }
+    /// Returns the session run policy mode.
+    #[must_use]
+    pub const fn mode(&self) -> RunModeDto {
+        self.mode
+    }
+    /// Returns the latest accepted configuration revision, if one exists.
+    #[must_use]
+    pub const fn config_revision_id(&self) -> Option<ConfigRevisionId> {
+        self.config_revision_id
+    }
+    /// Returns the sole active run, if one exists.
+    #[must_use]
+    pub const fn active_run(&self) -> Option<RunProjectionDto> {
+        self.active_run
+    }
+    /// Returns queued turns in durable queue order.
+    #[must_use]
+    pub fn queued_turns(&self) -> &[QueuedTurnProjectionDto] {
+        &self.queued_turns
+    }
+    /// Returns the event position included by the projection.
+    #[must_use]
+    pub const fn at_sequence(&self) -> SessionEventSequenceDto {
+        self.at_sequence
     }
 }
 
@@ -267,6 +704,14 @@ impl CreatePlanCommandDto {
 pub enum DomainEventDto {
     /// A new session became durable with its declared workspace and policy mode.
     SessionCreated(SessionCreatedEventDto),
+    /// A user turn was accepted by the durable session authority.
+    UserTurnAccepted(UserTurnAcceptedEventDto),
+    /// An accepted user turn was retained behind an active run.
+    UserTurnQueued(UserTurnQueuedEventDto),
+    /// A queued user turn was removed before it began a run.
+    QueuedTurnRemoved(QueuedTurnRemovedEventDto),
+    /// A durable run began from an accepted user turn.
+    RunStarted(RunStartedEventDto),
     /// A run state changed through a later application/runtime workflow.
     RunStatusChanged(RunStatusChangedEventDto),
     /// A configuration revision was accepted by a later persistence workflow.
@@ -275,22 +720,262 @@ pub enum DomainEventDto {
     PlanStatusChanged(PlanStatusChangedEventDto),
 }
 
-/// The fact that a session was created with a mandatory workspace boundary.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// The fact that one user turn was durably accepted.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UserTurnAcceptedEventDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    content: String,
+    occurred_at: TimestampDto,
+}
+
+impl<'de> Deserialize<'de> for UserTurnAcceptedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawUserTurnAcceptedEventDto {
+            session_id: SessionId,
+            turn_id: TurnId,
+            content: String,
+            occurred_at: TimestampDto,
+        }
+        let raw = RawUserTurnAcceptedEventDto::deserialize(deserializer)?;
+        Self::new(raw.session_id, raw.turn_id, raw.content, raw.occurred_at)
+            .map_err(de::Error::custom)
+    }
+}
+
+impl UserTurnAcceptedEventDto {
+    /// Creates a user-turn acceptance fact with non-empty content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the user-authored content is blank.
+    pub fn new(
+        session_id: SessionId,
+        turn_id: TurnId,
+        content: impl Into<String>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_turn_content",
+                "user turn content must not be empty",
+            ))
+        } else {
+            Ok(Self {
+                session_id,
+                turn_id,
+                content,
+                occurred_at,
+            })
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the accepted turn identity.
+    #[must_use]
+    pub const fn turn_id(&self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the user-authored content.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+    /// Returns the occurrence time.
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The fact that an accepted turn became durably queued.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UserTurnQueuedEventDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    position: QueuePositionDto,
+    occurred_at: TimestampDto,
+}
+impl UserTurnQueuedEventDto {
+    /// Creates a queued-turn fact.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        turn_id: TurnId,
+        position: QueuePositionDto,
+        occurred_at: TimestampDto,
+    ) -> Self {
+        Self {
+            session_id,
+            turn_id,
+            position,
+            occurred_at,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the queued turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the durable queue position.
+    #[must_use]
+    pub const fn position(self) -> QueuePositionDto {
+        self.position
+    }
+    /// Returns the occurrence time.
+    #[must_use]
+    pub const fn occurred_at(self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The fact that a queued turn was removed before a run began.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct QueuedTurnRemovedEventDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    occurred_at: TimestampDto,
+}
+impl QueuedTurnRemovedEventDto {
+    /// Creates a queued-turn removal fact.
+    #[must_use]
+    pub const fn new(session_id: SessionId, turn_id: TurnId, occurred_at: TimestampDto) -> Self {
+        Self {
+            session_id,
+            turn_id,
+            occurred_at,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the removed queued turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the occurrence time.
+    #[must_use]
+    pub const fn occurred_at(self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The fact that an accepted user turn started one durable M3 run.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunStartedEventDto {
+    session_id: SessionId,
+    run_id: RunId,
+    turn_id: TurnId,
+    config_revision_id: ConfigRevisionId,
+    occurred_at: TimestampDto,
+}
+impl RunStartedEventDto {
+    /// Creates a run-start fact with its immutable configuration revision.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        turn_id: TurnId,
+        config_revision_id: ConfigRevisionId,
+        occurred_at: TimestampDto,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            turn_id,
+            config_revision_id,
+            occurred_at,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the started run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+    /// Returns the causal turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the selected mandatory configuration revision.
+    #[must_use]
+    pub const fn config_revision_id(self) -> ConfigRevisionId {
+        self.config_revision_id
+    }
+    /// Returns the occurrence time.
+    #[must_use]
+    pub const fn occurred_at(self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The fact that a session was created with a mandatory stable workspace identity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionCreatedEventDto {
     project_id: ProjectId,
     session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_id: Option<WorkspaceId>,
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     occurred_at: TimestampDto,
 }
 
+impl<'de> Deserialize<'de> for SessionCreatedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionCreatedEventDto {
+            project_id: ProjectId,
+            session_id: SessionId,
+            #[serde(default)]
+            workspace_id: Option<WorkspaceId>,
+            workspace_root: WorkspaceRootDto,
+            mode: RunModeDto,
+            occurred_at: TimestampDto,
+        }
+        let raw = RawSessionCreatedEventDto::deserialize(deserializer)?;
+        Ok(Self {
+            project_id: raw.project_id,
+            session_id: raw.session_id,
+            workspace_id: raw.workspace_id,
+            workspace_root: raw.workspace_root,
+            mode: raw.mode,
+            occurred_at: raw.occurred_at,
+        })
+    }
+}
+
 impl SessionCreatedEventDto {
-    /// Creates the session-creation event payload.
+    /// Creates an M3 session-creation event payload with a stable workspace identity.
     #[must_use]
     pub const fn new(
         project_id: ProjectId,
         session_id: SessionId,
+        workspace_id: WorkspaceId,
         workspace_root: WorkspaceRootDto,
         mode: RunModeDto,
         occurred_at: TimestampDto,
@@ -298,6 +983,7 @@ impl SessionCreatedEventDto {
         Self {
             project_id,
             session_id,
+            workspace_id: Some(workspace_id),
             workspace_root,
             mode,
             occurred_at,
@@ -314,6 +1000,12 @@ impl SessionCreatedEventDto {
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    /// Returns the M3 workspace identity, or `None` for a decoded M1/M2 event.
+    #[must_use]
+    pub const fn workspace_id(&self) -> Option<WorkspaceId> {
+        self.workspace_id
     }
 
     /// Returns the declared workspace boundary.
@@ -421,7 +1113,7 @@ mod tests {
     )]
 
     use super::*;
-    use intention_types::{EventId, SchemaVersionDto, SessionEventSequenceDto};
+    use intention_types::{EventId, SchemaVersionDto, SessionEventSequenceDto, WorkspaceId};
 
     fn fixture_time() -> TimestampDto {
         TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
@@ -490,6 +1182,7 @@ mod tests {
         let created = SessionCreatedEventDto::new(
             project_id,
             session_id,
+            WorkspaceId::new(),
             workspace.clone(),
             RunModeDto::Build,
             fixture_time(),
