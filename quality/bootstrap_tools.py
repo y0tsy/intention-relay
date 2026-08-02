@@ -31,7 +31,7 @@ def main() -> None:
     for tool in policy["tools"]:
         name = tool["name"]
         version = tool["version"]
-        command = ["cargo", "install", "--locked", "--version", version, name]
+        command = ["cargo", "install", "--locked", "--force", "--version", version, name]
         if name == "cargo-udeps":
             command.insert(1, f"+{nightly}")
         run(command)
