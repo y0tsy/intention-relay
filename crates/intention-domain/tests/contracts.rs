@@ -39,9 +39,9 @@ fn workspace_root_and_turn_wire_values_enforce_validation() {
     assert!(WorkspaceRootDto::parse("/workspace/project").is_ok());
     #[cfg(windows)]
     {
-        assert!(WorkspaceRootDto::parse(r"C:\\workspace\\project").is_ok());
-        assert!(WorkspaceRootDto::parse(r"\\\\server\\share\\project").is_ok());
-        assert!(WorkspaceRootDto::parse(r"C:workspace\\project").is_err());
+        assert!(WorkspaceRootDto::parse(r"C:\workspace\project").is_ok());
+        assert!(WorkspaceRootDto::parse(r"\\server\share\project").is_ok());
+        assert!(WorkspaceRootDto::parse(r"C:workspace\project").is_err());
     }
     assert!(WorkspaceRootDto::parse("").is_err());
     assert!(WorkspaceRootDto::parse("relative/project").is_err());
