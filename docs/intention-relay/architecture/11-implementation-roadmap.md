@@ -291,6 +291,10 @@ deferral.
 
 ## Milestone 4: Model contract, providers, and one streaming run
 
+### Package 1 foundation
+
+Package 1 activates the Tier C model and provider crates before runtime streaming work. It establishes validated provider-neutral DTOs and stream ordering, safe per-run execution policy in snapshots, opaque startup-only provider material, and private SDK-backed request/mapping boundaries. It selects `openrouter-rs` 0.14.0 for OpenRouter and `async-openai` 0.29.3 for configured-base-URL Generic Chat Completions, without custom HTTP/SSE parsing. The generic subset is text, usage, finish, and function-style tool calls; reasoning, multimodal, and vendor extensions reject preflight. Runtime-owned Tokio lifecycle, retry delay, durable stream publication, tool execution, and one streaming run are later M4 packages.
+
 ### Deliver
 
 - model DTOs and runtime model loop skeleton;

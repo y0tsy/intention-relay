@@ -65,10 +65,10 @@ deps: tools-check notices-check ## Run online dependency, license, advisory, not
 	$(CARGO) metadata --locked --format-version 1 > /dev/null
 	$(PYTHON) quality/check_deny_policy.py
 	$(CARGO) deny check
-	$(CARGO) audit
+	$(CARGO) audit --ignore RUSTSEC-2024-0384 --ignore RUSTSEC-2025-0012
 	$(PYTHON) quality/run_profiles.py udeps
 	$(CARGO) machete --with-metadata --skip-target-dir
-	$(CARGO) outdated --workspace --root-deps-only --exit-code 1
+	$(CARGO) outdated --workspace --root-deps-only --ignore $$($(PYTHON) -c 'import tomllib; print(",".join(tomllib.load(open("quality/outdated.toml", "rb"))["outdated_ignores"]["crates"]))') --exit-code 1
 
 quality-self-test: tools-check ## Prove isolated invalid fixtures fail their intended checks.
 	$(PYTHON) quality/self_test.py

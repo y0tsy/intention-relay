@@ -96,7 +96,7 @@ The following must not cross a boundary as public inputs or outputs:
 - bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
 - implementation error types that reveal secrets or topology.
 
-`serde_json::Value` may exist inside a tightly bounded provider or protocol codec implementation, but it must be decoded into a DTO before leaving that implementation boundary.
+Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
 
 ## Validation ownership
 

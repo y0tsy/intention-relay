@@ -224,7 +224,19 @@ def test_m3_active_test_target_policy(root: Path) -> None:
 def test_m3_phase_partition_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'active_milestone = "m3"', 'active_milestone = "m2"')
+        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m2"')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="policy phase and active_milestone must be matching supported milestones",
+        )
+
+
+def test_m4_phase_activation_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m3"')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -234,14 +246,72 @@ def test_m3_phase_partition_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '  "intention-storage",\n  "intention-storage-sqlite",\n]',
-            '  "intention-storage",\n]',
+            '  "intention-provider-generic-chat",\n]',
+            ']',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="M3 active production crates must equal the roadmap crate set",
+            expected_output="M4 active production crates must equal the roadmap crate set",
+        )
+
+
+def test_m4_active_test_target_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-model: declared integration test targets",
+        )
+
+
+def test_m4_sdk_ownership_and_public_contract_boundaries(root: Path) -> None:
+    forbidden_owner = root / "crates/intention-model/src/lib.rs"
+    with modified(forbidden_owner):
+        forbidden_owner.write_text(
+            forbidden_owner.read_text(encoding="utf-8")
+            + "\nuse async_openai::Client as LeakedSdk;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="allowed only in intention-provider-generic-chat private implementation",
+        )
+    public_provider = root / "crates/intention-provider-generic-chat/src/lib.rs"
+    with modified(public_provider):
+        public_provider.write_text(
+            public_provider.read_text(encoding="utf-8")
+            + "\npub type LeakedGenericSdk = async_openai::Client<async_openai::config::OpenAIConfig>;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_public_api.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="LeakedGenericSdk",
+        )
+    non_composition = root / "crates/intention-daemon/src/lib.rs"
+    with modified(non_composition):
+        non_composition.write_text(
+            non_composition.read_text(encoding="utf-8")
+            + "\nuse intention_provider_openrouter::OpenRouterDriver;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="composition ownership outside intention forbids",
         )
 
 
@@ -508,6 +578,9 @@ def test_coverage_exclusion_semantics(root: Path) -> None:
                     ("crates/intention-runtime/src/lib.rs", 100, 100),
                     ("crates/intention-storage/src/lib.rs", 100, 100),
                     ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
+                    ("crates/intention-model/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -539,7 +612,7 @@ enabled = true
             ),
             ("traversal", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', 'path = "crates/intention-types/src/../src/excluded_fixture.rs"'), "workspace-relative without traversal"),
             ("other-owner", valid.replace('owner = "intention-types"', 'owner = "intention-domain"'), "must be under intention-domain source root"),
-            ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-model"'), "owner must be an active production crate"),
+            ("unknown-owner", valid.replace('owner = "intention-types"', 'owner = "missing-owner"'), "owner must be an active production crate"),
             ("unreported", valid.replace('excluded_fixture.rs', 'unreported_fixture.rs'), "must appear exactly once in coverage report"),
             ("outside-source", valid.replace('crates/intention-types/src/excluded_fixture.rs', 'crates/intention-types/outside_fixture.rs'), "must be under intention-types source root"),
             ("duplicate", valid + valid, "duplicate enabled exclusion path"),
@@ -570,6 +643,9 @@ enabled = true
                     ("crates/intention-runtime/src/lib.rs", 100, 100),
                     ("crates/intention-storage/src/lib.rs", 100, 100),
                     ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
+                    ("crates/intention-model/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -647,11 +723,26 @@ def test_invalid_isolated_release_package_and_target(root: Path) -> None:
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
-        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib"]', 'allow = ["Apache-2.0"]'),
+        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib", "BSD-3-Clause", "ISC", "CDLA-Permissive-2.0"]', 'allow = ["Apache-2.0"]'),
         ('multiple-versions = "deny"', 'multiple-versions = "allow"'),
+        ('"RUSTSEC-2024-0384",', '"RUSTSEC-2024-0000",'),
+        ('"RUSTSEC-2025-0012",', ''),
         ("version = 2", "version = 1"),
     ]
     policy = root / "deny.toml"
+    outdated_policy = root / "quality/outdated.toml"
+    with modified(policy), modified(outdated_policy):
+        outdated_policy.write_text(
+            outdated_policy.read_text(encoding="utf-8").replace(
+                'crates = ["async-openai"]', 'crates = []', 1
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_deny_policy.py", "--policy", str(policy), "--outdated-policy", str(outdated_policy)],
+            cwd=root,
+            expect_success=False,
+        )
     for old, new in invalid_replacements:
         with modified(policy):
             replace_once(policy, old, new)
@@ -710,6 +801,9 @@ def main() -> None:
         test_executable_test_target_policy,
         test_m3_active_test_target_policy,
         test_m3_phase_partition_policy,
+        test_m4_phase_activation_policy,
+        test_m4_active_test_target_policy,
+        test_m4_sdk_ownership_and_public_contract_boundaries,
         test_m3_daemon_test_dependency_policy,
         test_m3_non_production_test_target_policy,
         test_m3_non_production_dependency_policy,
