@@ -8,11 +8,24 @@
 use intention_domain::DomainEventDto;
 use intention_types::EventEnvelopeDto;
 
+fn native_event_fixture() -> String {
+    let workspace_root = serde_json::to_string(
+        &std::env::temp_dir()
+            .join("intention-domain-event-fixture-workspace")
+            .to_string_lossy(),
+    )
+    .expect("native fixture workspace serializes");
+    include_str!("fixtures/event-envelope-v1.json").replace(
+        "\"workspace_root\": \"/workspace/project\"",
+        &format!("\"workspace_root\": {workspace_root}"),
+    )
+}
+
 #[test]
 fn persisted_event_fixture_decodes_and_round_trips() {
-    let fixture = include_str!("fixtures/event-envelope-v1.json");
+    let fixture = native_event_fixture();
     let envelope: EventEnvelopeDto<DomainEventDto> =
-        serde_json::from_str(fixture).expect("persisted event fixture must decode");
+        serde_json::from_str(&fixture).expect("persisted event fixture must decode");
 
     assert_eq!(envelope.schema_version().major(), 1);
     assert_eq!(envelope.sequence().value(), 1);
@@ -37,10 +50,6 @@ fn domain_event_wire_contract_rejects_invalid_shapes_and_accepts_additive_fields
         assert!(serde_json::from_str::<EventEnvelopeDto<DomainEventDto>>(wire).is_err());
     }
 
-    let compatible = include_str!("fixtures/event-envelope-v1.json").replacen(
-        "\n}",
-        ",\n  \"future_additive\": true\n}",
-        1,
-    );
+    let compatible = native_event_fixture().replacen("\n}", ",\n  \"future_additive\": true\n}", 1);
     assert!(serde_json::from_str::<EventEnvelopeDto<DomainEventDto>>(&compatible).is_ok());
 }
