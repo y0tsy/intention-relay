@@ -10,6 +10,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "deny.toml"
+OUTDATED_POLICY = ROOT / "quality" / "outdated.toml"
 
 
 def fail(message: str) -> None:
@@ -20,9 +21,12 @@ def fail(message: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument("--outdated-policy", type=Path, default=OUTDATED_POLICY)
     arguments = parser.parse_args()
     with arguments.policy.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
+    with arguments.outdated_policy.open("rb") as outdated_policy_file:
+        outdated_policy = tomllib.load(outdated_policy_file)
 
     graph = policy.get("graph")
     advisories = policy.get("advisories")
@@ -35,6 +39,12 @@ def main() -> None:
         fail("graph.all-features must be true")
     if advisories.get("version") != 2 or not isinstance(advisories.get("ignore"), list):
         fail("advisories must use version 2 with an explicit ignore list")
+    expected_advisory_ignores = {"RUSTSEC-2024-0384", "RUSTSEC-2025-0012"}
+    if set(advisories["ignore"]) != expected_advisory_ignores:
+        fail("advisories.ignore must equal the reviewed M4 transitive advisory acknowledgements")
+    outdated_ignores = outdated_policy.get("outdated_ignores")
+    if not isinstance(outdated_ignores, dict) or outdated_ignores.get("crates") != ["async-openai"]:
+        fail("outdated_ignores.crates must equal the reviewed M4 async-openai compatibility hold")
     allowed = licenses.get("allow")
     required_licenses = {"Apache-2.0", "MIT", "Unicode-3.0", "0BSD"}
     if not isinstance(allowed, list) or not required_licenses.issubset(allowed):

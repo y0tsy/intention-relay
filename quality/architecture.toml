@@ -1,6 +1,6 @@
 [policy]
-phase = "m3"
-active_milestone = "m3"
+phase = "m4"
+active_milestone = "m4"
 quality_harness = "quality-harness"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
@@ -16,11 +16,11 @@ active_production_crates = [
   "intention-runtime",
   "intention-storage",
   "intention-storage-sqlite",
-]
-skeleton_crates = [
   "intention-model",
   "intention-provider-openrouter",
   "intention-provider-generic-chat",
+]
+skeleton_crates = [
   "intention-tools",
   "intention-workspace",
   "intention-hooks",
@@ -77,6 +77,9 @@ public_resource_patterns = [
 "intention-application" = ["intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-types"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
+"intention-model" = ["intention-types"]
+"intention-provider-openrouter" = ["intention-config", "intention-model", "intention-types"]
+"intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-types"]
 
 [external_dependencies]
 "intention-types" = ["serde", "serde_json", "uuid"]
@@ -91,6 +94,9 @@ public_resource_patterns = [
 "intention-runtime" = []
 "intention-storage" = ["serde_json"]
 "intention-storage-sqlite" = ["rusqlite", "rusqlite_migration", "serde_json", "tempfile"]
+"intention-model" = ["serde", "serde_json"]
+"intention-provider-openrouter" = ["openrouter-rs", "serde_json"]
+"intention-provider-generic-chat" = ["async-openai", "serde_json"]
 
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
@@ -143,14 +149,15 @@ forbidden_type_prefixes = [
   "tauri::",
   "serde_json::Value",
   "async_openai::",
+  "openrouter_rs::",
   "openrouter_sdk::",
   "openrouter::",
   "reqwest::",
 ]
 provider_sdk_resource_patterns = [
   "async_openai::",
+  "openrouter_rs::",
   "openrouter_sdk::",
-  "openrouter::",
   "reqwest::",
 ]
 
@@ -201,28 +208,28 @@ coverage_tier = "B"
 name = "intention-config"
 responsibility = "TOML parsing, validation, migrations, and resolved configuration DTOs."
 test_target = "configuration fixture tests"
-test_targets = ["contracts", "snapshot_fixtures", "m3_contracts"]
+test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts"]
 coverage_tier = "A"
 
 [[future_crates]]
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = []
+test_targets = ["model_contracts"]
 coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-provider-openrouter"
 responsibility = "OpenRouter SDK translation."
 test_target = "provider stream and error fixtures"
-test_targets = []
+test_targets = ["openrouter_contracts"]
 coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-provider-generic-chat"
 responsibility = "Generic Chat Completion translation."
 test_target = "provider stream and capability fixtures"
-test_targets = []
+test_targets = ["generic_chat_contracts"]
 coverage_tier = "C"
 
 [[future_crates]]

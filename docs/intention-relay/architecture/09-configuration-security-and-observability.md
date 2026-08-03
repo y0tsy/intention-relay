@@ -57,6 +57,12 @@ test.
 - TOML application is **daemon-restart-only** in M3. The precise user experience for detecting or requesting the restart remains open; future live reload must never be implied.
 - Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls back to process CWD.
 
+### M4 provider execution policy and startup material
+
+The optional TOML table `[provider.execution]` resolves into the credential-free `ProviderExecutionPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. `attempt_timeout_seconds` defaults to `30` and must be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=3`. Missing policy fields and M3 snapshots lacking the additive policy field decode to those defaults. Runtime owns the fixed 250 ms retry delay, not TOML.
+
+`parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`, `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor. Safe resolved/snapshot DTOs, persistence, events, protocol, diagnostics, logs, and adapter projections remain credential-free.
+
 ## Open-text provider credentials
 
 Provider credentials may be stored in TOML in open text by explicit product decision. This is not equivalent to allowing them to leak through the system.

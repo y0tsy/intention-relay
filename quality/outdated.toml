@@ -1,0 +1,6 @@
+# Reviewed direct-dependency compatibility holds for cargo-outdated.
+# Reassess this hold together with the async-openai 0.29.3 API contract and
+# its transitive RUSTSEC acknowledgements before allowing a newer SDK line.
+
+[outdated_ignores]
+crates = ["async-openai"]

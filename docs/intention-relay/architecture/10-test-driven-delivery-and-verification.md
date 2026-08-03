@@ -144,6 +144,10 @@ commands and results. Until those commands are captured, the baseline SHA,
 coverage values, and gate results remain pending; see [M3 Closure
 Evidence](../closeout/m3-closure-evidence.md).
 
+## M4 model/provider foundation evidence
+
+M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their exact Cargo integration targets are policy-declared and must prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. Copied-repository architecture fixtures must reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. No test needs live credentials or provider network access.
+
 ## Result-oriented acceptance scenarios
 
 The following scenarios must become executable before the corresponding capability is accepted:

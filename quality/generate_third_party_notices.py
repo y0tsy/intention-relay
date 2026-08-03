@@ -45,7 +45,7 @@ def render(output: Path, config: Path, template: Path) -> None:
     if completed.returncode != 0:
         fail("cargo-about could not generate complete third-party notices")
     text = output.read_text(encoding="utf-8")
-    output.write_text(text.rstrip() + "\n", encoding="utf-8")
+    output.write_text("\n".join(line.rstrip() for line in text.splitlines()).rstrip() + "\n", encoding="utf-8")
 
 
 def main() -> None:

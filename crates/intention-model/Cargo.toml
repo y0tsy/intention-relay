@@ -8,3 +8,8 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+intention-types = { path = "../intention-types", version = "=0.0.0" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"

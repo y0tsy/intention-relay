@@ -279,7 +279,7 @@ def check_phase_policy(
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase not in {"m1", "m2", "m3"} or state.get("active_milestone") != phase:
+    if phase not in {"m1", "m2", "m3", "m4"} or state.get("active_milestone") != phase:
         fail("policy phase and active_milestone must be matching supported milestones")
 
     declared = policy_crates(policy)
@@ -303,6 +303,12 @@ def check_phase_policy(
             "intention-types", "intention-domain", "intention-protocol", "intention-config",
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+        },
+        "m4": {
+            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-transport", "intention-client", "intention", "intention-daemon",
+            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
         },
     }[phase]
     if active_set != expected_active:
@@ -523,16 +529,46 @@ def check_declared_boundaries(
                 f"composition ownership outside {root_package}",
             ))
 
-    active = policy["policy"]["active_production_crates"]
     sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
+    active = string_list(policy["policy"], "active_production_crates")
+    provider_owners = {
+        "intention-provider-openrouter": {"openrouter_rs::"},
+        "intention-provider-generic-chat": {"async_openai::"},
+    }
     for package_name in active:
+        allowed_private_sdk = provider_owners.get(package_name, set())
         failures.extend(check_source_patterns(
             package_name,
             packages[package_name],
             texts,
-            sdk_patterns,
-            "public contract provider SDK/resource boundary",
+            [pattern for pattern in sdk_patterns if pattern not in allowed_private_sdk],
+            "provider SDK/resource boundary",
         ))
+    return failures
+
+
+def check_provider_sdk_ownership(
+    policy: dict[str, object],
+    packages: dict[str, dict[str, object]],
+    texts: dict[Path, str],
+) -> list[str]:
+    public_contracts = policy.get("public_contracts")
+    if not isinstance(public_contracts, dict):
+        fail("public contract boundary table is required")
+    sdk_patterns = set(string_list(public_contracts, "provider_sdk_resource_patterns"))
+    owners = {
+        "async_openai::": "intention-provider-generic-chat",
+        "openrouter_rs::": "intention-provider-openrouter",
+    }
+    failures: list[str] = []
+    for path, text in texts.items():
+        package_name = path.parts[path.parts.index("crates") + 1] if "crates" in path.parts else None
+        for pattern in sdk_patterns:
+            if pattern not in text:
+                continue
+            owner = owners.get(pattern)
+            if owner is None or package_name != owner:
+                failures.append(f"{path}: provider SDK namespace {pattern!r} is allowed only in {owner or 'no crate'} private implementation")
     return failures
 
 
@@ -577,6 +613,7 @@ def main() -> None:
     failures = check_phase_policy(policy, packages, texts)
     failures.extend(check_workspace_dependency_cycles(packages))
     failures.extend(check_declared_boundaries(policy, packages, texts))
+    failures.extend(check_provider_sdk_ownership(policy, packages, texts))
     failures.extend(check_coverage_policy(root, policy))
 
     forbidden = policy.get("forbidden")
