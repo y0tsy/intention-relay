@@ -50,6 +50,16 @@ fn snapshot() -> ConfigSnapshotDto {
     .expect("fixture snapshot is valid")
 }
 
+fn workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-runtime-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("native fixture workspace is valid")
+}
+
 fn projection_with_position(
     session_id: SessionId,
     active: Option<RunProjectionDto>,
@@ -60,7 +70,7 @@ fn projection_with_position(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace").expect("workspace is valid"),
+        workspace_root(),
         RunModeDto::Build,
         active.map(RunProjectionDto::config_revision_id),
         active,
@@ -207,9 +217,13 @@ impl StorageRepositoryDto for DurablePromotionRepository {
     }
 
     fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto> {
-        let promoted_turn = input
-            .promoted_turn()
-            .expect("terminal fixture must promote queued turn");
+        let queued_turn = self
+            .snapshot
+            .borrow()
+            .queued_turns()
+            .first()
+            .expect("terminal fixture has queued turn")
+            .turn_id();
         let active = self
             .snapshot
             .borrow()
@@ -220,7 +234,7 @@ impl StorageRepositoryDto for DurablePromotionRepository {
             Some(RunProjectionDto::new(
                 input.session_id(),
                 self.queued_run_id,
-                promoted_turn.turn_id(),
+                queued_turn,
                 RunStatusDto::Starting,
                 self.queued_revision_id,
             )),
@@ -330,10 +344,6 @@ fn stopping_starting_run_cancels_then_atomically_promotes_next_turn() {
     assert_eq!(transitions.len(), 2);
     assert_eq!(transitions[0].status(), RunStatusDto::Cancelling);
     assert_eq!(transitions[1].status(), RunStatusDto::Cancelled);
-    let promoted = transitions[1]
-        .promoted_turn()
-        .expect("terminal transition supplies promotion");
-    assert_eq!(promoted.turn_id(), next_turn);
 }
 
 #[test]

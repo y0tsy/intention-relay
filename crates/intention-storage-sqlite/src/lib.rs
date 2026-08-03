@@ -297,6 +297,8 @@ impl SqliteStorageRepository {
             position = position
                 .checked_add(1)
                 .ok_or_else(|| codec_error("event sequence overflow"))?;
+            let position_sql =
+                sqlite_integer(position, "event sequence is outside the SQLite range")?;
             let event = EventEnvelopeDto::new(
                 EventMetadataDto::new(
                     SchemaVersionDto::new(1, 0),
@@ -312,13 +314,16 @@ impl SqliteStorageRepository {
             let encoded = serde_json::to_string(&event).map_err(codec_error)?;
             tx.execute(
                 "INSERT INTO domain_events(event_id, session_id, sequence, envelope_json) VALUES (?1, ?2, ?3, ?4)",
-                sqlite::params![event.event_id().to_string(), session_id.to_string(), position as i64, encoded],
+                sqlite::params![event.event_id().to_string(), session_id.to_string(), position_sql, encoded],
             ).map_err(storage_error)?;
             events.push(event);
         }
         tx.execute(
             "UPDATE sessions SET last_sequence=?2 WHERE session_id=?1",
-            sqlite::params![session_id.to_string(), position as i64],
+            sqlite::params![
+                session_id.to_string(),
+                sqlite_integer(position, "event sequence is outside the SQLite range")?
+            ],
         )
         .map_err(storage_error)?;
         Ok(events)
@@ -326,16 +331,47 @@ impl SqliteStorageRepository {
 
     fn snapshot(tx: &sqlite::Transaction<'_>, projection: &SessionProjectionDto) -> DtoResult<()> {
         let encoded = serde_json::to_string(projection).map_err(codec_error)?;
+        let sequence = sqlite_integer(
+            projection.at_sequence().value(),
+            "snapshot sequence is outside the SQLite range",
+        )?;
         tx.execute(
             "INSERT INTO session_snapshots(session_id, sequence, projection_json) VALUES (?1, ?2, ?3) ON CONFLICT(session_id) DO UPDATE SET sequence=excluded.sequence, projection_json=excluded.projection_json",
-            sqlite::params![projection.session_id().to_string(), projection.at_sequence().value() as i64, encoded],
+            sqlite::params![projection.session_id().to_string(), sequence, encoded],
         ).map_err(storage_error)?;
-        if let Some(run) = projection.active_run() {
+        let runs = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT run_id, turn_id, status, config_revision_id FROM runs WHERE session_id=?1",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map([projection.session_id().to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(storage_error)?;
+            rows.map(|row| row.map_err(storage_error))
+                .collect::<DtoResult<Vec<_>>>()?
+        };
+        for (run_id, turn_id, status, revision) in runs {
+            let run = run_projection(
+                projection.session_id(),
+                &run_id,
+                &turn_id,
+                &status,
+                &revision,
+            )?;
             let encoded = serde_json::to_string(&run).map_err(codec_error)?;
             tx.execute(
                 "INSERT INTO run_snapshots(run_id, session_id, sequence, projection_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(run_id) DO UPDATE SET sequence=excluded.sequence, projection_json=excluded.projection_json",
-                sqlite::params![run.run_id().to_string(), projection.session_id().to_string(), projection.at_sequence().value() as i64, encoded],
-            ).map_err(storage_error)?;
+                sqlite::params![run.run_id().to_string(), projection.session_id().to_string(), sequence, encoded],
+            )
+            .map_err(storage_error)?;
         }
         Ok(())
     }
@@ -397,7 +433,20 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             )
             .map_err(storage_error)?;
             tx.execute("INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2) ON CONFLICT(workspace_id) DO NOTHING", sqlite::params![command.workspace_id().to_string(), command.workspace_root().as_str()]).map_err(storage_error)?;
-            tx.execute("INSERT INTO sessions(session_id,project_id,workspace_id,workspace_root,mode,config_revision_id,last_sequence,next_queue_ticket) VALUES (?1,?2,?3,?4,?5,NULL,0,0)", sqlite::params![session_id.to_string(), command.project_id().to_string(), command.workspace_id().to_string(), command.workspace_root().as_str(), mode_name(command.mode())]).map_err(storage_error)?;
+            let stored_workspace_root: String = tx
+                .query_row(
+                    "SELECT workspace_root FROM workspace_roots WHERE workspace_id=?1",
+                    [command.workspace_id().to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(not_found_or_storage)?;
+            if stored_workspace_root != command.workspace_root().as_str() {
+                return Err(conflict(
+                    "workspace_root_conflict",
+                    "the workspace identity is already bound to a different root",
+                ));
+            }
+            tx.execute("INSERT INTO sessions(session_id,project_id,workspace_id,workspace_root,mode,config_revision_id,last_sequence,next_queue_ticket) VALUES (?1,?2,?3,?4,?5,NULL,0,0)", sqlite::params![session_id.to_string(), command.project_id().to_string(), command.workspace_id().to_string(), stored_workspace_root, mode_name(command.mode())]).map_err(storage_error)?;
             let events = Self::append(
                 &tx,
                 session_id,
@@ -474,6 +523,21 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             )
             .optional()
             .map_err(storage_error)?;
+            let queued_exists = tx
+                .query_row(
+                    "SELECT 1 FROM queued_turns WHERE session_id=?1 LIMIT 1",
+                    [session_id.to_string()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if active.is_none() && queued_exists {
+                return Err(conflict(
+                    "queue_promotion_required",
+                    "durable queued turns must promote before a new run can start",
+                ));
+            }
             let (outcome, drafts) = if active.is_none() {
                 tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'started',NULL)", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
                 tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)", sqlite::params![input.proposed_run_id().to_string(),session_id.to_string(),input.turn_id().to_string(),input.config_revision_id().to_string()]).map_err(storage_error)?;
@@ -635,50 +699,40 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     input.occurred_at(),
                 )),
             )];
-            if let Some(promoted) = input.promoted_turn() {
-                if !input.status().is_terminal() {
-                    return Err(conflict(
-                        "invalid_queue_promotion",
-                        "a queued turn may only be promoted with a terminal run transition",
-                    ));
-                }
-                let promoted_turn_id = promoted.turn_id();
+            if input.status().is_terminal() {
                 let queued_selection = tx
                     .query_row(
-                        "SELECT turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 AND queued_turns.turn_id=?2",
-                        sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
+                        [session_id.to_string()],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
                     )
                     .optional()
-                    .map_err(storage_error)?
-                    .ok_or_else(|| {
-                        not_found(
-                            "queued_turn_not_found",
-                            "the promoted queued turn does not exist",
-                        )
-                    })?;
-                let promoted_run_id = RunId::parse(&queued_selection.0).map_err(codec_error)?;
-                let config_revision_id =
-                    ConfigRevisionId::parse(&queued_selection.1).map_err(codec_error)?;
-                tx.execute(
-                    "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
-                    sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
-                )
-                .map_err(storage_error)?;
-                tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
-                tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
-                drafts.push(EventDraft::new(
-                    Some(promoted_run_id),
-                    Some(promoted_turn_id),
-                    input.occurred_at(),
-                    DomainEventDto::RunStarted(RunStartedEventDto::new(
-                        session_id,
-                        promoted_run_id,
-                        promoted_turn_id,
-                        config_revision_id,
+                    .map_err(storage_error)?;
+                if let Some((turn_id, run_id, revision_id)) = queued_selection {
+                    let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
+                    let promoted_run_id = RunId::parse(&run_id).map_err(codec_error)?;
+                    let config_revision_id =
+                        ConfigRevisionId::parse(&revision_id).map_err(codec_error)?;
+                    tx.execute(
+                        "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
+                        sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
+                    )
+                    .map_err(storage_error)?;
+                    tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
+                    tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
+                    drafts.push(EventDraft::new(
+                        Some(promoted_run_id),
+                        Some(promoted_turn_id),
                         input.occurred_at(),
-                    )),
-                ));
+                        DomainEventDto::RunStarted(RunStartedEventDto::new(
+                            session_id,
+                            promoted_run_id,
+                            promoted_turn_id,
+                            config_revision_id,
+                            input.occurred_at(),
+                        )),
+                    ));
+                }
             }
             let events = Self::append(&tx, session_id, position, drafts)?;
             self.finish(tx, session_id, events, None)
@@ -711,32 +765,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         for (session, run) in unfinished {
             let session_id = SessionId::parse(&session).map_err(codec_error)?;
             let run_id = RunId::parse(&run).map_err(codec_error)?;
-            let change = immediate_transaction!(self, |tx| {
-                let position = sequence(&tx, session_id)?;
-                tx.execute(
-                    "UPDATE runs SET status='interrupted' WHERE session_id=?1 AND run_id=?2",
-                    sqlite::params![session, run],
-                )
-                .map_err(storage_error)?;
-                let events = Self::append(
-                    &tx,
-                    session_id,
-                    position,
-                    vec![EventDraft::new(
-                        Some(run_id),
-                        None,
-                        input.recovered_at(),
-                        DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
-                            session_id,
-                            run_id,
-                            RunStatusDto::Interrupted,
-                            input.recovered_at(),
-                        )),
-                    )],
-                )?;
-                self.finish(tx, session_id, events, None)
-            })?;
-            changes.push(change);
+            changes.push(self.transition_run(TransitionRunInputDto::new(
+                session_id,
+                run_id,
+                RunStatusDto::Interrupted,
+                input.recovered_at(),
+            ))?);
         }
         Ok(changes)
     }
@@ -763,14 +797,48 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     ) -> DtoResult<Vec<EventEnvelopeDto<DomainEventDto>>> {
         let events = {
             let connection = self.connection()?;
+            let known_session = connection
+                .query_row(
+                    "SELECT 1 FROM sessions WHERE session_id=?1",
+                    [session_id.to_string()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            if known_session.is_none() {
+                return Err(not_found(
+                    "storage_record_not_found",
+                    "the requested durable record does not exist",
+                ));
+            }
+            let last_sequence: i64 = connection
+                .query_row(
+                    "SELECT last_sequence FROM sessions WHERE session_id=?1",
+                    [session_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let last_sequence = u64::try_from(last_sequence)
+                .map_err(|_| codec_error("invalid durable event sequence"))?;
+            if after.value() > last_sequence {
+                return Err(ErrorDto::validation(
+                    "invalid_event_tail_position",
+                    "event tail position is beyond the durable session sequence",
+                ));
+            }
+            let after = i64::try_from(after.value()).map_err(|_| {
+                ErrorDto::validation(
+                    "invalid_event_tail_position",
+                    "event tail position is outside the supported durable range",
+                )
+            })?;
             let mut statement = connection
                 .prepare("SELECT envelope_json FROM domain_events WHERE session_id=?1 AND sequence>?2 ORDER BY sequence")
                 .map_err(storage_error)?;
             let events = statement
-                .query_map(
-                    sqlite::params![session_id.to_string(), after.value() as i64],
-                    |row| row.get::<_, String>(0),
-                )
+                .query_map(sqlite::params![session_id.to_string(), after], |row| {
+                    row.get::<_, String>(0)
+                })
                 .map_err(storage_error)?
                 .map(|row| {
                     let encoded = row.map_err(storage_error)?;
@@ -803,6 +871,7 @@ enum FaultPoint {
     Projection,
     Snapshot,
 }
+
 struct EventDraft {
     run_id: Option<RunId>,
     turn_id: Option<TurnId>,
@@ -834,6 +903,10 @@ fn sequence(tx: &sqlite::Transaction<'_>, session: SessionId) -> DtoResult<u64> 
         .map_err(not_found_or_storage)?;
     u64::try_from(value).map_err(|_| codec_error("invalid event sequence"))
 }
+fn sqlite_integer(value: u64, message: &'static str) -> DtoResult<i64> {
+    i64::try_from(value).map_err(|_| codec_error(message))
+}
+
 fn run_projection(
     session: SessionId,
     run: &str,
@@ -951,8 +1024,7 @@ mod tests {
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
     use intention_storage::{
-        AcceptUserTurnInputDto, CreateSessionInputDto, PromotedQueuedTurnInputDto,
-        StorageRepositoryDto, TransitionRunInputDto,
+        AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto, TransitionRunInputDto,
     };
     use intention_types::{
         ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
@@ -996,6 +1068,52 @@ mod tests {
         .expect("temporary location is absolute")
     }
 
+    fn raw_snapshot_rows(location: &SqliteDatabaseLocationDto) -> Vec<(String, i64, String)> {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let mut statement = connection
+            .prepare("SELECT run_id, sequence, projection_json FROM run_snapshots ORDER BY run_id")
+            .expect("run snapshot query prepares");
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("run snapshot query executes")
+            .map(|row| row.expect("run snapshot row reads"))
+            .collect()
+    }
+
+    fn raw_json_columns(location: &SqliteDatabaseLocationDto) -> Vec<String> {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        [
+            "SELECT snapshot_json FROM configuration_revisions",
+            "SELECT projection_json FROM session_snapshots",
+            "SELECT projection_json FROM run_snapshots",
+            "SELECT envelope_json FROM domain_events",
+        ]
+        .into_iter()
+        .flat_map(|query| {
+            let mut statement = connection
+                .prepare(query)
+                .expect("JSON inspection query prepares");
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("JSON inspection query executes")
+                .map(|row| row.expect("JSON inspection row reads"))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+    }
+
+    fn fixture_workspace_root() -> WorkspaceRootDto {
+        WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-storage-sqlite-unit-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("native fixture workspace is absolute")
+    }
+
     fn create_fixture_session(repository: &SqliteStorageRepository) -> SessionId {
         let session_id = SessionId::new();
         repository
@@ -1004,8 +1122,7 @@ mod tests {
                     ProjectId::new(),
                     session_id,
                     WorkspaceId::new(),
-                    WorkspaceRootDto::parse("/workspace/storage-sqlite-unit")
-                        .expect("fixture workspace is absolute"),
+                    fixture_workspace_root(),
                     RunModeDto::Build,
                 ),
                 fixture_time(1),
@@ -1095,6 +1212,99 @@ mod tests {
     }
 
     #[test]
+    fn terminal_and_recovery_snapshots_record_every_affected_run() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let active_run = RunId::new();
+        accept_fixture_turn(&repository, session_id, TurnId::new(), active_run, "active");
+        let queued_run = RunId::new();
+        accept_fixture_turn(&repository, session_id, TurnId::new(), queued_run, "queued");
+        let terminal = repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                active_run,
+                RunStatusDto::Failed,
+                fixture_time(3),
+            ))
+            .expect("terminal transition commits");
+        let rows = raw_snapshot_rows(&location);
+        assert_eq!(rows.len(), 2);
+        let terminal_sequence =
+            i64::try_from(terminal.position().value()).expect("terminal sequence fits SQLite");
+        assert!(
+            rows.iter()
+                .all(|(_, sequence, _)| *sequence == terminal_sequence)
+        );
+        assert!(rows.iter().any(|(run_id, _, projection)| {
+            run_id == &active_run.to_string() && projection.contains("failed")
+        }));
+        assert!(rows.iter().any(|(run_id, _, projection)| {
+            run_id == &queued_run.to_string() && projection.contains("starting")
+        }));
+
+        let recovery = repository
+            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(fixture_time(4)))
+            .expect("recovery commits");
+        assert_eq!(recovery.len(), 1);
+        let recovery_active = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            recovery_active,
+            "active after terminal promotion",
+        );
+        let recovery_successor = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            recovery_successor,
+            "queued after terminal promotion",
+        );
+        let recovery = repository
+            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(fixture_time(5)))
+            .expect("recovery promotes queued successor");
+        assert_eq!(recovery.len(), 1);
+        let rows = raw_snapshot_rows(&location);
+        assert_eq!(rows.len(), 4);
+        let recovery_sequence =
+            i64::try_from(recovery[0].position().value()).expect("recovery sequence fits SQLite");
+        assert!(
+            rows.iter()
+                .all(|(_, sequence, _)| { *sequence == recovery_sequence })
+        );
+        assert!(rows.iter().any(|(run_id, _, projection)| {
+            run_id == &recovery_active.to_string() && projection.contains("interrupted")
+        }));
+        assert!(rows.iter().any(|(run_id, _, projection)| {
+            run_id == &recovery_successor.to_string() && projection.contains("starting")
+        }));
+    }
+
+    #[test]
+    fn persisted_m3_json_never_contains_the_fixture_credential() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            RunId::new(),
+            "active",
+        );
+        let columns = raw_json_columns(&location);
+        assert!(!columns.is_empty());
+        assert!(
+            columns
+                .iter()
+                .all(|value| !value.contains("fixture-secret"))
+        );
+    }
+
+    #[test]
     fn every_fault_phase_rolls_back_turn_acceptance_durably() {
         for point in [
             FaultPoint::Events,
@@ -1124,7 +1334,8 @@ mod tests {
                 .expect_err("injected mutation fault aborts transaction");
             assert_eq!(error.code(), "injected_storage_fault");
             drop(repository);
-            let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
             assert_eq!(
                 reopened
                     .load_session_snapshot(session_id)
@@ -1163,6 +1374,7 @@ mod tests {
             let baseline_tail = repository
                 .load_tail(session_id, SessionEventSequenceDto::new(0))
                 .expect("baseline tail loads");
+            let baseline_rows = raw_snapshot_rows(&location);
             repository.arm_fault(point);
             let error = repository
                 .transition_run(TransitionRunInputDto::new(
@@ -1170,18 +1382,19 @@ mod tests {
                     active_run,
                     RunStatusDto::Failed,
                     fixture_time(3),
-                    Some(PromotedQueuedTurnInputDto::new(queued_turn)),
                 ))
                 .expect_err("injected promotion fault aborts transaction");
             assert_eq!(error.code(), "injected_storage_fault");
             drop(repository);
-            let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
             assert_eq!(
                 reopened
                     .load_session_snapshot(session_id)
                     .expect("reopened baseline snapshot loads"),
                 baseline
             );
+            assert_eq!(raw_snapshot_rows(&location), baseline_rows);
             assert_eq!(
                 reopened
                     .load_tail(session_id, SessionEventSequenceDto::new(0))

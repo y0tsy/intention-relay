@@ -245,6 +245,82 @@ def test_m3_phase_partition_policy(root: Path) -> None:
         )
 
 
+def test_m3_daemon_test_dependency_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            '"intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]',
+            '"intention-daemon" = ["intention", "intention-protocol", "intention-transport", "intention-types"]',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-daemon: workspace dependencies must equal",
+        )
+    with modified(policy):
+        replace_once(
+            policy,
+            '"intention-daemon" = ["tempfile"]',
+            '"intention-daemon" = []',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-daemon: external dependencies must equal",
+        )
+
+
+def test_m3_non_production_test_target_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'test_targets = ["composition_contract", "fixture_host"]',
+            'test_targets = ["composition_contract"]',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-test-support: declared integration test targets",
+        )
+
+
+def test_m3_non_production_dependency_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            '  "intention-types",\n]',
+            '  "intention-types",\n  "intention-client",\n]',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="test-support workspace dependencies must equal",
+        )
+
+
+def test_m3_non_production_external_dependency_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            '"intention-test-support" = ["serde_json", "tempfile"]',
+            '"intention-test-support" = ["serde_json"]',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="test-support external dependencies must equal",
+        )
+
+
 def test_signature_aware_public_api_leaks(root: Path) -> None:
     source = root / "crates/intention-types/src/lib.rs"
     with modified(source):
@@ -517,6 +593,57 @@ def test_missing_feature_profile(root: Path) -> None:
         )
 
 
+def test_isolated_release_profile(root: Path) -> None:
+    source = root / "crates/intention-daemon/src/lib.rs"
+    with modified(source):
+        source.write_text(
+            source.read_text(encoding="utf-8") + "\nuse intention_types::SessionId;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/run_profiles.py", "isolated-release"],
+            cwd=root,
+            expect_success=False,
+            expected_output="could not compile `intention-daemon`",
+        )
+
+
+def test_missing_isolated_release_profile(root: Path) -> None:
+    policy = root / "quality/features.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'profiles = ["default", "no_default"]',
+            'profiles = ["missing"]',
+        )
+        run(
+            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
+            cwd=root,
+            expect_success=False,
+            expected_output="requires known profile names",
+        )
+
+
+def test_invalid_isolated_release_package_and_target(root: Path) -> None:
+    policy = root / "quality/features.toml"
+    with modified(policy):
+        replace_once(policy, '"intention-daemon"', '"missing-production-package"')
+        run(
+            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
+            cwd=root,
+            expect_success=False,
+            expected_output="is not a workspace package",
+        )
+    with modified(policy):
+        replace_once(policy, 'targets = ["lib", "bins"]', 'targets = ["tests"]')
+        run(
+            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
+            cwd=root,
+            expect_success=False,
+            expected_output="requires known release targets",
+        )
+
+
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
@@ -583,6 +710,10 @@ def main() -> None:
         test_executable_test_target_policy,
         test_m3_active_test_target_policy,
         test_m3_phase_partition_policy,
+        test_m3_daemon_test_dependency_policy,
+        test_m3_non_production_test_target_policy,
+        test_m3_non_production_dependency_policy,
+        test_m3_non_production_external_dependency_policy,
         test_signature_aware_public_api_leaks,
         test_m2_public_resource_leak,
         test_m2_secret_projection,
@@ -596,6 +727,9 @@ def main() -> None:
         test_coverage_failures,
         test_coverage_exclusion_semantics,
         test_missing_feature_profile,
+        test_isolated_release_profile,
+        test_missing_isolated_release_profile,
+        test_invalid_isolated_release_package_and_target,
         test_supply_chain_policy_failures,
         test_secret_fixture,
     ]

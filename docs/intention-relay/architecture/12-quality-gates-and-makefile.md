@@ -161,6 +161,13 @@ This is intentionally not an exhaustive combinatorial matrix. M1 has no enabled 
 
 The feature-profile policy is machine-readable and verified by `make features`.
 
+Some production packages additionally declare isolated release profiles in the
+same policy. `make isolated-release` checks each declared package's explicit
+release targets, currently the daemon library and binary, once per declared
+profile without `--workspace` or test targets. This prevents workspace feature
+unification from hiding a standalone default or `--no-default-features` release
+build failure. `make check`, `make verify`, and CI require this gate.
+
 ## Makefile contract
 
 The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict shell behavior and label each command as mutating or non-mutating.
@@ -174,7 +181,8 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make fmt-check` | No | Verify formatting without changing files. |
 | `make notices` | Yes | Regenerate `THIRD_PARTY_NOTICES.md` from the locked dependency graph and committed notice policy/template. |
 | `make notices-check` | No | Regenerate notices in a temporary file and fail if committed notices are missing or stale. |
-| `make features` | No | Check default, no-default, all-features, and critical combinations. |
+| `make features` | No | Check default, no-default, all-features, critical combinations, and the machine-readable isolated-release declaration. |
+| `make isolated-release` | No | Check each declared production package's declared library/binary release targets per isolated feature profile, without workspace feature unification. |
 | `make lint` | No | Run strict lint policy with warnings denied for all feature profiles. |
 | `make test` | No | Run nextest suites and doctests for all feature profiles. |
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |

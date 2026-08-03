@@ -31,7 +31,7 @@ erDiagram
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and event carries stable typed identity.
 4. Every semantic state-changing repository method commits the current-state projection, append-only event envelope(s), and updated session/run snapshot in one SQLite transaction, or changes nothing.
-5. M3 writes a fresh durable session snapshot after every committed state change; an active run also receives a run snapshot at that same durable sequence.
+5. M3 writes a fresh durable session snapshot after every committed state change; **every affected run, including terminal and recovered runs**, receives a run snapshot at that same durable sequence.
 6. Live events publish only after commit; M3 has no live publisher, so durable replay is the only delivered subscription behavior.
 7. A queued user turn never becomes model input until it is explicitly promoted to a new run.
 8. An interrupted run is terminal. It cannot silently resume after daemon recovery.
@@ -72,10 +72,11 @@ stateDiagram
 Cancellation is deliberately two-step. A stop request commits `Starting` (or
 another cancellable active state) to `Cancelling`; only a subsequent terminal
 commit may transition it to `Cancelled`. Thus `Starting -> Cancelling ->
-Cancelled` is required, never collapsed. A terminal transition may atomically
-remove and promote the oldest queued turn, create its new `RunId` with its
-selected immutable snapshot, append both state facts, and snapshot the resulting
-projection.
+Cancelled` is required, never collapsed. **Every terminal repository
+transition** atomically attempts to remove and promote the oldest queued turn.
+When one exists, the repository creates that turn's already-selected `RunId`
+with its immutable snapshot, appends `RunStatusChanged` before `RunStarted`, and
+snapshots the final projection; callers cannot opt out of this behavior.
 
 The exact policy for a question or permission after restart is M4 work. M3 marks
 the unfinished run interrupted and does not resume it.
@@ -88,7 +89,7 @@ When a session has an active run, `SendUserTurnCommandDto` creates a durable que
 
 - queued turns receive a durable, zero-based, monotonic, never-reused queue ticket; removal does not renumber remaining tickets;
 - a user can inspect and remove an unstarted queued turn;
-- after the active run reaches a terminal state, the next eligible queued turn may be promoted only as part of that terminal transition;
+- after the active run reaches a terminal state, the repository atomically selects and promotes the oldest eligible queued turn, if any, as part of that terminal transition;
 - promotion preserves the queued turn's original durable proposed `RunId`, selected
   immutable config snapshot, and `ConfigRevisionId`; a daemon configuration
   change before the predecessor reaches its terminal transition cannot replace
@@ -104,7 +105,7 @@ newer on-disk schema. Storage combines:
 
 - normalized current-state tables for project, workspace-root, session, run, and queue queries;
 - append-only domain-event envelopes for auditability and event-tail recovery;
-- per-state-change session snapshots and active-run snapshots for restoration; and
+- per-state-change session snapshots and snapshots for every affected run, including terminal and recovered runs; and
 - credential-free canonical `ConfigSnapshotDto` revisions keyed by `ConfigRevisionId`; the same revision ID with an equal snapshot is idempotent, while the same ID with a different snapshot fails with a typed conflict.
 
 The M3 schema contains `projects`, `workspace_roots`, `sessions`, `turns`,
@@ -146,18 +147,20 @@ emitted by an accepted configuration edit or plan action.
 - Domain events are ordered per session with `SessionEventSequenceDto`.
 - Event IDs provide deduplication; sequence provides ordering.
 - Every state-changing commit persists a snapshot whose `at_sequence` includes its final event.
-- A replay-only subscriber without a run scope receives that current snapshot and a contiguous stored tail after its included sequence, or a typed resync response.
-- Every request with `run_id: Some` receives typed `HistoryUnavailable` resync for M3, including matching, nonexistent, and cross-session run IDs; it never receives unfiltered session state because the session-contiguous snapshot/tail DTOs cannot safely represent a filtered run view.
+- A replay-only subscriber without a run scope receives the current durable projection snapshot and an empty contiguous tail at that snapshot's sequence, or a typed resync response. A known-session tail position beyond the durable final sequence, including one outside SQLite's integer range, fails typed `invalid_event_tail_position` before a history query; an unknown session remains typed not-found.
+- Every request with `run_id: Some` receives typed `HistoryUnavailable` resync for M3, including matching, nonexistent, cross-session, unknown-session, and future-cursor run IDs; it never receives unfiltered session state because the session-contiguous snapshot/tail DTOs cannot safely represent a filtered run view.
 - Correct run-scoped replay is deferred to the persistent streaming and representation hardening marked `@todo(m4-streaming)`; M3 does not claim that resync is a full stream.
 - Events are immutable. Corrections are new events and projection/snapshot updates, not history rewrites.
 - M3 retains complete stored history for its delivered replay behavior; compaction/retention policy remains future work.
 
 ## Recovery
 
-Daemon startup completes recovery before it can report ready. It loads durable
-projections, transitions every unfinished run to `interrupted` in a durable
-state-change commit, and writes the resulting snapshot. No model, tool, shell,
-or other external work is resumed automatically.
+Daemon startup completes recovery before it can report ready. It snapshots the
+pre-existing unfinished runs, transitions each one to `interrupted` through the
+same mandatory terminal-transition transaction used during normal operation,
+and writes the resulting snapshots. A newly promoted `starting` run represents
+already durable queued input only: recovery does not include it in that initial
+set or resume model, tool, shell, or other external work automatically.
 
 Recovery must not assert whether an interrupted `execute` or external tool had
 already caused a side effect. The stored tool/run audit is evidence of intent
@@ -167,7 +170,7 @@ and observed state, not proof of external atomicity.
 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
-| One active run and stable tickets | SQLite contract test for concurrent logical acceptance, idempotency, queue removal, and ticket ordering. | A second turn is durably queued with a never-reused ticket; no second active run exists. |
+| One active run and stable tickets | SQLite contract test for concurrent logical acceptance, idempotency, queue removal, ticket non-reuse, and oldest-ticket promotion. | A second turn is durably queued with a never-reused ticket; no second active run exists, and only the oldest queued turn can promote. |
 | Atomic state, events, and snapshots | SQLite fault-injection outcome test after event, projection, and snapshot stages. | Each injected failure rolls back: no new projection, event envelope, or snapshot persists. |
 | Canonical config revision IDs | SQLite config-revision contract test. | An equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID fails with a typed conflict. |
 | Explicit event taxonomy | Domain/protocol event fixture tests. | M3 facts serialize as the closed documented event variants with stable identity and sequence. |

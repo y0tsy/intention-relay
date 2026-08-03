@@ -128,10 +128,11 @@ this protocol shape in memory only.
 
 M3 replaces the in-memory session fixture with durable SQLite projections and
 append-only event envelopes. A subscription is still a one-shot, negotiated
-request: it returns the current durable projection snapshot and the contiguous
-stored tail after that snapshot's included sequence, or a typed resync when the
-session/history cannot be supplied. It is **replay-only**, not a retained
-connection and not a live event feed. The post-commit publication seam is
+request. For an unscoped request it returns the **current durable projection
+snapshot** and an empty contiguous tail at that snapshot's included sequence,
+or a typed resync when the session cannot be supplied. It is **replay-only**,
+not a retained connection and not a live event feed. Historical projection
+reconstruction is not represented in M3. The post-commit publication seam is
 intentionally a no-op in M3.
 
 `@todo(m4-streaming)` marks exactly the deferred work to introduce persistent
@@ -142,8 +143,9 @@ is deferred.
 
 M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely
 express filtered run state. Therefore every subscription with `run_id: Some`
-returns typed `HistoryUnavailable` resync, whether the run matches, does not
-exist, or belongs to another session. It must never fall back to an unfiltered
+returns typed `HistoryUnavailable` resync **before any session or cursor
+validation**, whether the run matches, does not exist, belongs to another
+session, or has an invalid cursor. It must never fall back to an unfiltered
 session snapshot or tail. Correctly scoped replay remains deferred with the M4
 persistent-streaming/representation hardening; this safe resync is not a live
 stream.
@@ -188,6 +190,13 @@ contract from SQLite. The facade uses the platform application-state location
 and `LOCALAPPDATA` on Windows); it returns a typed unavailable error when no
 absolute platform location is available and never falls back to process CWD.
 
+`intention-test-support` owns durable fixture construction and bounded listener
+orchestration. It constructs credential-free snapshots, platform-native temporary
+workspace roots, `TempDir`-backed databases, and known sessions, then calls only
+the hidden facade injection seam and the daemon's hidden one-connection dispatch
+seam. TUI and daemon binary tests do not own a parallel fixture protocol or a
+fixture startup CLI mode.
+
 M3 does not implement idle shutdown, an explicit daemon-stop command, model or
 provider execution, or persistent live streaming. M4 owns model/provider
 runtime behavior and live run execution; its streaming work also owns the
@@ -229,10 +238,9 @@ On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
 1. resolve and open the platform state database, applying supported SQLite migrations;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
-3. load durable projections and locate every run with an unfinished persisted status;
-4. transition each unfinished run to `interrupted` with a durable state-change event and snapshot;
-5. do not automatically retry or resume model calls, tool calls, shell processes, or other external work; and
-6. make the recovered state available through later one-shot snapshot/tail replay.
+3. snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's mandatory terminal-promotion transaction, with durable state-change event and snapshots;
+4. do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass; and
+5. make the recovered state available through later one-shot snapshot/tail replay.
 
 This policy is honest about unknown external side effects. A user may initiate a
 new retry or manually reconciled follow-up run.
@@ -241,12 +249,12 @@ new retry or manually reconciled follow-up run.
 
 | Requirement | Test evidence | Observable result |
 | --- | --- | --- |
-| Shared daemon | Multi-client bootstrap test and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health, snapshot, and event-tail DTOs for the same session. |
+| Shared daemon | `intention-test-support` fixture-host integration and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health, snapshot, and event-tail DTOs for the same session. |
 | Startup race | Multi-client bootstrap integration test. | Exactly one daemon host is created. |
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Protocol mismatch | Client/server compatibility test. | Connection fails with typed incompatibility error. |
-| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot plus a contiguous stored tail, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` resync without unfiltered session state, and no request claims live delivery. |
-| Restart | Persisted active-run recovery test. | Recovery completes before ready; every unfinished run becomes `interrupted` and no provider/tool call resumes. |
+| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot plus an empty contiguous tail, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` before cursor/session validation without unfiltered session state, and no request claims live delivery. |
+| Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, promotes the oldest queued turn in the same transaction when present, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
 

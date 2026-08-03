@@ -151,36 +151,13 @@ impl RemoveQueuedTurnInputDto {
     }
 }
 
-/// A queued turn that must start as part of a terminal-run transition.
-///
-/// The queued turn's proposed run identity and immutable configuration snapshot
-/// were durably recorded when it was accepted. Promotion therefore supplies no
-/// configuration or replacement run identity.
+/// Inputs required to commit one run-status transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PromotedQueuedTurnInputDto {
-    turn_id: TurnId,
-}
-impl PromotedQueuedTurnInputDto {
-    /// Identifies the already-accepted queued turn to promote.
-    #[must_use]
-    pub const fn new(turn_id: TurnId) -> Self {
-        Self { turn_id }
-    }
-    /// Returns the promoted turn identity.
-    #[must_use]
-    pub const fn turn_id(&self) -> TurnId {
-        self.turn_id
-    }
-}
-
-/// Inputs required to commit one run-status transition and optional queue promotion.
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransitionRunInputDto {
     session_id: SessionId,
     run_id: RunId,
     status: RunStatusDto,
     occurred_at: TimestampDto,
-    promoted_turn: Option<PromotedQueuedTurnInputDto>,
 }
 impl TransitionRunInputDto {
     /// Creates typed run-transition storage input.
@@ -190,14 +167,12 @@ impl TransitionRunInputDto {
         run_id: RunId,
         status: RunStatusDto,
         occurred_at: TimestampDto,
-        promoted_turn: Option<PromotedQueuedTurnInputDto>,
     ) -> Self {
         Self {
             session_id,
             run_id,
             status,
             occurred_at,
-            promoted_turn,
         }
     }
     /// Returns the owning session.
@@ -219,11 +194,6 @@ impl TransitionRunInputDto {
     #[must_use]
     pub const fn occurred_at(&self) -> TimestampDto {
         self.occurred_at
-    }
-    /// Returns complete input for a queue promotion committed with this transition.
-    #[must_use]
-    pub const fn promoted_turn(&self) -> Option<&PromotedQueuedTurnInputDto> {
-        self.promoted_turn.as_ref()
     }
 }
 
@@ -352,7 +322,7 @@ pub trait StorageRepositoryDto {
     /// removed, or an unavailable error when durable storage fails.
     fn remove_queued_turn(&self, input: RemoveQueuedTurnInputDto) -> DtoResult<CommittedChangeDto>;
 
-    /// Transitions a run and atomically promotes the specified accepted queued turn when present.
+    /// Transitions a run and atomically promotes the oldest queued turn after every terminal transition.
     ///
     /// # Errors
     ///

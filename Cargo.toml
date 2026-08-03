@@ -21,6 +21,7 @@ members = [
   "crates/intention-client",
   "crates/intention",
   "crates/intention-daemon",
+  "crates/intention-test-support",
   "crates/intention-tauri",
   "crates/intention-tui",
   "quality/harness",

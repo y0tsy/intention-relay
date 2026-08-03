@@ -7,11 +7,11 @@ SHELL := /bin/bash
 .NOTPARALLEL:
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
+	  'Non-mutating: tools-check fmt-check notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
 	  'Mutating/networked: bootstrap-tools fmt notices' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -36,6 +36,9 @@ notices-check: tools-check ## Verify committed third-party notices match the loc
 
 features: ## Verify machine-readable required feature profiles.
 	$(PYTHON) quality/check_features.py --print
+
+isolated-release: tools-check features ## Verify standalone production packages without workspace feature unification.
+	$(PYTHON) quality/run_profiles.py isolated-release
 
 lint: tools-check ## Run strict Rust and Clippy linting for all feature profiles.
 	$(PYTHON) quality/run_profiles.py lint
@@ -73,7 +76,7 @@ quality-self-test: tools-check ## Prove isolated invalid fixtures fail their int
 quick: tools-check fmt-check lint ## Fast default local quality loop.
 	$(CARGO) nextest run --workspace --all-targets --locked
 
-check: tools-check fmt-check features check-cargo lint test docs-check architecture ## Complete non-mutating source-quality gate.
+check: tools-check fmt-check features isolated-release check-cargo lint test docs-check architecture ## Complete non-mutating source-quality gate.
 	@true
 
 verify: check coverage deps quality-self-test ## Full reproducible merge and release gate.

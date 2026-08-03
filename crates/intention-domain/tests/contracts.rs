@@ -10,6 +10,16 @@ use intention_domain::{
 };
 use intention_types::{ProjectId, SessionId, TimestampDto, TurnId, WorkspaceId};
 
+fn workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-domain-contracts-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("native fixture workspace is valid")
+}
+
 #[test]
 fn send_turn_requires_a_non_empty_message_and_typed_session_identity() {
     let session_id = SessionId::new();
@@ -25,7 +35,14 @@ fn send_turn_requires_a_non_empty_message_and_typed_session_identity() {
 
 #[test]
 fn workspace_root_and_turn_wire_values_enforce_validation() {
+    #[cfg(unix)]
     assert!(WorkspaceRootDto::parse("/workspace/project").is_ok());
+    #[cfg(windows)]
+    {
+        assert!(WorkspaceRootDto::parse(r"C:\\workspace\\project").is_ok());
+        assert!(WorkspaceRootDto::parse(r"\\\\server\\share\\project").is_ok());
+        assert!(WorkspaceRootDto::parse(r"C:workspace\\project").is_err());
+    }
     assert!(WorkspaceRootDto::parse("").is_err());
     assert!(WorkspaceRootDto::parse("relative/project").is_err());
     assert!(serde_json::from_str::<WorkspaceRootDto>(r#""relative/project""#).is_err());
@@ -42,7 +59,7 @@ fn domain_events_round_trip_with_typed_identity_and_mode() {
         ProjectId::new(),
         SessionId::new(),
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace/project").expect("fixture root is absolute"),
+        workspace_root(),
         RunModeDto::Plan,
         TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
     ));

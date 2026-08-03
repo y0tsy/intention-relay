@@ -12,26 +12,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, SendUserTurnWorkflowInputDto,
 };
+#[cfg(test)]
+use intention_config::ConfigPathDto;
 use intention_config::{
-    ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto,
-    ResolvedConfigDto,
+    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
-use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, RunModeDto, WorkspaceRootDto,
-};
+use intention_domain::GetSessionSnapshotQueryDto;
+#[cfg(test)]
+use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto, SessionSnapshotDto,
+    SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto,
     SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_runtime::{RuntimeService, RuntimeValuesDto};
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, WorkspaceId,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TimestampDto,
 };
+#[cfg(test)]
+use intention_types::{ProjectId, WorkspaceId};
 
 const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
@@ -49,7 +52,6 @@ struct FacadeInner {
     config_snapshot: ConfigSnapshotDto,
     publisher: Box<dyn PostCommitPublisher>,
     command_gate: Mutex<()>,
-    fixture_session_id: Option<SessionId>,
 }
 
 trait PostCommitPublisher: Send + Sync {
@@ -91,7 +93,21 @@ impl DaemonApplicationFacade {
     ///
     /// Returns a safe typed storage or recovery error. The supplied local path is
     /// never retained in a public DTO or error.
-    pub fn open_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn open_for_test_support(
+        database_location: impl AsRef<Path>,
+        config_snapshot: ConfigSnapshotDto,
+    ) -> DtoResult<Self> {
+        Self::open_with_publisher(
+            database_location,
+            config_snapshot,
+            Box::new(NoopPostCommitPublisher),
+        )
+    }
+
+    #[cfg(test)]
+    fn open_for_test(
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
     ) -> DtoResult<Self> {
@@ -118,54 +134,16 @@ impl DaemonApplicationFacade {
                 config_snapshot,
                 publisher,
                 command_gate: Mutex::new(()),
-                fixture_session_id: None,
             }),
         };
         facade.recover_before_ready()?;
         Ok(facade)
     }
 
-    /// Creates a durable fixture database and initial session for M2 transport tests.
-    #[must_use]
-    pub fn new_fixture_with_session_id(session_id: SessionId) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("intention-relay-fixture-{}", RunId::new()));
-        fs::create_dir_all(&directory)
-            .unwrap_or_else(|_| unreachable!("fixture durable storage directory must open"));
-        let mut facade =
-            Self::open_for_test(directory.join(DATABASE_FILENAME), fixture_config_snapshot())
-                .unwrap_or_else(|_| unreachable!("fixture durable storage must open"));
-        let command = CreateSessionCommandDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            WorkspaceRootDto::parse("/m2-fixture-workspace")
-                .unwrap_or_else(|_| unreachable!("fixture workspace must be valid")),
-            RunModeDto::Build,
-        );
-        let _ = facade.command(ProtocolCommandDto::CreateSession(command));
-        Arc::get_mut(&mut facade.inner)
-            .unwrap_or_else(|| unreachable!("fixture facade is not shared during initialization"))
-            .fixture_session_id = Some(session_id);
-        facade
-    }
-
-    /// Creates a durable fixture session for existing M2 transport tests.
-    #[must_use]
-    pub fn new_fixture() -> Self {
-        Self::new_fixture_with_session_id(SessionId::new())
-    }
-
     /// Returns a credential-free ready health projection.
     #[must_use]
     pub const fn health(&self) -> DaemonHealthDto {
         DaemonHealthDto::new(SCHEMA_VERSION, PROTOCOL_VERSION, DaemonReadinessDto::Ready)
-    }
-
-    /// Returns an explicit M2 fixture identity for compatibility-only tests.
-    #[must_use]
-    pub fn fixture_session_id(&self) -> SessionId {
-        self.inner.fixture_session_id.unwrap_or_else(SessionId::new)
     }
 
     /// Dispatches a typed durable M3 query.
@@ -190,6 +168,12 @@ impl DaemonApplicationFacade {
     // @todo(m4-streaming)
     #[must_use]
     pub fn subscribe(&self, command: SubscribeSessionCommandDto) -> SessionSubscriptionResponseDto {
+        if command.run_id().is_some() {
+            return resync(
+                command.session_id(),
+                SessionResyncReasonDto::HistoryUnavailable,
+            );
+        }
         let requested_after = command
             .after_sequence()
             .unwrap_or(SessionEventSequenceDto::new(0));
@@ -210,70 +194,28 @@ impl DaemonApplicationFacade {
                 SessionResyncReasonDto::InvalidPosition,
             );
         }
-        if let Some(run_id) = command.run_id() {
-            let run_belongs_to_session = self
-                .inner
-                .repository
-                .load_tail(command.session_id(), SessionEventSequenceDto::new(0))
-                .is_ok_and(|events| events.iter().any(|event| event.run_id() == Some(run_id)));
-            if !run_belongs_to_session {
-                return resync(
+        if requested_after != current.at_sequence() {
+            return SessionSubscriptionResponseDto::snapshot_and_tail(
+                current.clone(),
+                SessionEventTailBatchDto::new(
+                    SCHEMA_VERSION,
                     command.session_id(),
-                    SessionResyncReasonDto::HistoryUnavailable,
-                );
-            }
-
-            // A session projection includes unrelated active and queued state, and a
-            // run-filtered tail cannot remain contiguous in session sequence order.
-            // The current protocol has no run-scoped snapshot/tail representation.
-            return resync(
-                command.session_id(),
-                SessionResyncReasonDto::HistoryUnavailable,
-            );
-        }
-        if requested_after == current.at_sequence() {
-            let tail = SessionEventTailBatchDto::new(
-                SCHEMA_VERSION,
-                command.session_id(),
-                requested_after,
-                Vec::new(),
+                    current.at_sequence(),
+                    Vec::new(),
+                )
+                .unwrap_or_else(|_| unreachable!("empty durable tail must be valid")),
             )
-            .unwrap_or_else(|_| unreachable!("empty durable tail must be valid"));
-            return SessionSubscriptionResponseDto::snapshot_and_tail(current, tail)
-                .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"));
+            .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"));
         }
-        let events = match self
-            .inner
-            .repository
-            .load_tail(command.session_id(), requested_after)
-        {
-            Ok(events) => events,
-            Err(_) => {
-                return resync(
-                    command.session_id(),
-                    SessionResyncReasonDto::HistoryUnavailable,
-                );
-            }
-        };
-        let snapshot =
-            SessionSnapshotDto::new(SCHEMA_VERSION, command.session_id(), requested_after);
-        let tail = match SessionEventTailBatchDto::new(
+        let tail = SessionEventTailBatchDto::new(
             SCHEMA_VERSION,
             command.session_id(),
             requested_after,
-            events,
-        ) {
-            Ok(tail) => tail,
-            Err(_) => {
-                return resync(
-                    command.session_id(),
-                    SessionResyncReasonDto::HistoryUnavailable,
-                );
-            }
-        };
-        SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail).unwrap_or_else(|_| {
-            unreachable!("durable replay snapshot and tail share session and checkpoint")
-        })
+            Vec::new(),
+        )
+        .unwrap_or_else(|_| unreachable!("empty durable tail must be valid"));
+        SessionSubscriptionResponseDto::snapshot_and_tail(current, tail)
+            .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"))
     }
 
     /// Dispatches a durable M3 command and invokes the publisher only after commit.
@@ -290,25 +232,15 @@ impl DaemonApplicationFacade {
         }
     }
 
-    /// Returns the fixed fixture workspace without a production-path claim.
-    ///
-    /// # Errors
-    ///
-    /// Returns only a DTO validation error if the fixed fixture value changes.
-    pub fn fixture_workspace(&self) -> DtoResult<WorkspaceRootDto> {
-        WorkspaceRootDto::parse("/m2-fixture-workspace")
-    }
-
-    /// Returns the fixed fixture mode without a production-state claim.
-    #[must_use]
-    pub const fn fixture_mode(&self) -> RunModeDto {
-        RunModeDto::Build
-    }
-
-    /// Generates a fixture-only project identity.
-    #[must_use]
-    pub fn fixture_project_id(&self) -> ProjectId {
-        ProjectId::new()
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn durable_events_for_test_support(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
+        self.inner
+            .repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
     }
 
     fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
@@ -353,15 +285,26 @@ impl DaemonApplicationFacade {
                 ApplicationService::new(&self.inner.repository)
                     .remove_queued_turn(command, timestamp)?
             }
-            ProtocolCommandDto::StopRun(command) => ApplicationService::new(&self.inner.repository)
-                .stop_run(
+            ProtocolCommandDto::StopRun(command) => {
+                let result = ApplicationService::new(&self.inner.repository).stop_run(
                     command,
                     RuntimeValuesDto::new(
                         RunId::new(),
                         self.inner.config_snapshot.clone(),
                         timestamp,
                     ),
-                )?,
+                )?;
+                RuntimeService::new(
+                    &self.inner.repository,
+                    RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+                )
+                .complete_terminal(
+                    command.session_id(),
+                    command.run_id(),
+                    intention_domain::RunStatusDto::Cancelled,
+                )?;
+                result
+            }
             ProtocolCommandDto::SubscribeSession(_) => {
                 return Err(ErrorDto::validation(
                     "invalid_subscription_dispatch",
@@ -531,31 +474,6 @@ fn unavailable_storage() -> ErrorDto {
     )
 }
 
-fn fixture_config_snapshot() -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-relay-fixture.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .unwrap_or_else(|_| unreachable!("fixture config path must be absolute")),
-    );
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
-        source,
-    ))
-    .unwrap_or_else(|_| unreachable!("fixture config must resolve"));
-    ConfigSnapshotDto::new(
-        SCHEMA_VERSION,
-        ConfigRevisionId::new(),
-        TimestampDto::from_unix_seconds(1)
-            .unwrap_or_else(|_| unreachable!("fixture timestamp must be valid")),
-        resolved,
-    )
-    .unwrap_or_else(|_| unreachable!("fixture snapshot must be valid"))
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -624,14 +542,47 @@ mod tests {
         (directory, facade)
     }
 
+    fn fixture_workspace_root() -> WorkspaceRootDto {
+        WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-composition-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("native fixture workspace is absolute")
+    }
+
+    fn fixture_config_snapshot() -> ConfigSnapshotDto {
+        let source = ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-composition-fixture.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture configuration source is absolute"),
+        );
+        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+            source,
+        ))
+        .expect("fixture configuration resolves");
+        ConfigSnapshotDto::new(
+            SCHEMA_VERSION,
+            ConfigRevisionId::new(),
+            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
+            resolved,
+        )
+        .expect("fixture snapshot is credential-free")
+    }
+
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
         let accepted = facade.command(ProtocolCommandDto::CreateSession(
             CreateSessionCommandDto::new(
                 ProjectId::new(),
                 session_id,
                 WorkspaceId::new(),
-                WorkspaceRootDto::parse("/workspace/intention-composition")
-                    .expect("fixture workspace is absolute"),
+                fixture_workspace_root(),
                 RunModeDto::Build,
             ),
         ));
@@ -693,40 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn fixture_helpers_expose_durable_m2_compatibility_values() {
-        let facade = DaemonApplicationFacade::new_fixture();
-        let session_id = facade.fixture_session_id();
-        assert_eq!(facade.health().readiness(), DaemonReadinessDto::Ready);
-        assert_eq!(
-            facade
-                .fixture_workspace()
-                .expect("fixture workspace resolves")
-                .as_str(),
-            "/m2-fixture-workspace"
-        );
-        assert_eq!(facade.fixture_mode(), RunModeDto::Build);
-        let _ = facade.fixture_project_id();
-        assert!(matches!(
-            facade.query(ProtocolQueryDto::GetSessionSnapshot(
-                GetSessionSnapshotQueryDto::new(session_id)
-            )),
-            ProtocolQueryResultDto::SessionSnapshot(_)
-        ));
-        assert!(matches!(
-            facade.command(ProtocolCommandDto::SubscribeSession(
-                SubscribeSessionCommandDto::new(
-                    SCHEMA_VERSION,
-                    session_id,
-                    None,
-                    RunModeDto::Build,
-                )
-            )),
-            ProtocolCommandResultDto::Rejected(error)
-                if error.code() == "invalid_subscription_dispatch"
-        ));
-    }
-
-    #[test]
     fn subscriptions_handle_current_and_unknown_durable_sessions() {
         let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
         let session_id = SessionId::new();
@@ -776,8 +693,7 @@ mod tests {
                 ProjectId::new(),
                 session_id,
                 WorkspaceId::new(),
-                WorkspaceRootDto::parse("/workspace/intention-composition")
-                    .expect("fixture workspace is absolute"),
+                fixture_workspace_root(),
                 RunModeDto::Build,
             ),
         ));

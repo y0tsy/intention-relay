@@ -316,14 +316,17 @@ def check_phase_policy(
     if not isinstance(adapters, dict):
         fail("adapter boundary table is required")
     adapter_set = set(string_list(adapters, "packages"))
+    non_production_test = set(string_list(state, "non_production_test_crates"))
+    if non_production_test & (active_set | skeleton_set | adapter_set):
+        fail("non-production test crates cannot be active, skeleton, or adapters")
     if phase == "m1":
-        if active_set | skeleton_set != expected_names:
-            fail("M1 active and skeleton crate sets must partition the declared v1 crates")
+        if active_set | skeleton_set | non_production_test != expected_names:
+            fail("M1 active, skeleton, and test-support crate sets must partition the declared workspace")
     else:
         if active_set & adapter_set:
             fail(f"{phase.upper()} adapters cannot be active production crates")
-        if active_set | skeleton_set | adapter_set != expected_names:
-            fail(f"{phase.upper()} active, skeleton, and adapter crate sets must cover the declared v1 crates")
+        if active_set | skeleton_set | adapter_set | non_production_test != expected_names:
+            fail(f"{phase.upper()} active, skeleton, adapter, and test-support crates must cover the declared workspace")
     if state.get("quality_harness") not in actual_names:
         fail("quality harness must remain a workspace member")
 
@@ -378,6 +381,50 @@ def check_phase_policy(
             failures.append(
                 f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
                 f"got {sorted(declared_targets)}"
+            )
+    non_production_dependencies = policy.get("non_production_test_dependencies")
+    if not isinstance(non_production_dependencies, dict):
+        fail("non-production test crate dependency policy is required")
+    if set(non_production_dependencies) != non_production_test:
+        fail("non-production test dependency policy must declare exactly the test-support crates")
+    non_production_external_dependencies = policy.get("non_production_test_external_dependencies")
+    if not isinstance(non_production_external_dependencies, dict):
+        fail("non-production test crate external dependency policy is required")
+    if set(non_production_external_dependencies) != non_production_test:
+        fail("non-production test external dependency policy must declare exactly the test-support crates")
+    for package_name in non_production_test:
+        package = packages.get(package_name)
+        declaration = declared.get(package_name)
+        if package is None or declaration is None:
+            fail(f"non-production test crate {package_name} is missing from metadata or policy")
+        allowed_dependencies = non_production_dependencies.get(package_name)
+        allowed_external_dependencies = non_production_external_dependencies.get(package_name)
+        if not isinstance(allowed_dependencies, list) or not all(
+            isinstance(name, str) for name in allowed_dependencies
+        ):
+            fail(f"non-production test crate {package_name} requires workspace dependency policy")
+        if not isinstance(allowed_external_dependencies, list) or not all(
+            isinstance(name, str) for name in allowed_external_dependencies
+        ):
+            fail(f"non-production test crate {package_name} requires external dependency policy")
+        actual_dependencies = workspace_dependencies(package, actual_names)
+        if actual_dependencies != set(allowed_dependencies):
+            failures.append(
+                f"{package_name}: test-support workspace dependencies must equal "
+                f"{sorted(set(allowed_dependencies))}, got {sorted(actual_dependencies)}"
+            )
+        actual_external_dependencies = external_dependencies(package, actual_names)
+        if actual_external_dependencies != set(allowed_external_dependencies):
+            failures.append(
+                f"{package_name}: test-support external dependencies must equal "
+                f"{sorted(set(allowed_external_dependencies))}, got {sorted(actual_external_dependencies)}"
+            )
+        actual_targets = integration_test_targets(package)
+        declared_targets = set(declaration["test_targets"])
+        if actual_targets != declared_targets:
+            failures.append(
+                f"{package_name}: declared integration test targets must equal Cargo targets "
+                f"{sorted(actual_targets)}, got {sorted(declared_targets)}"
             )
     return failures
 

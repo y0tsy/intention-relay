@@ -134,7 +134,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 | Run snapshot immutability | Accepted-turn and terminal-promotion integration fixtures. | Started and promoted runs retain their selected immutable config revision. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
-| Redaction | Table-driven secret injection tests. | Secret is absent from every event, snapshot, error, log, and presentation DTO. |
+| Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, session/run snapshot JSON, event envelopes, errors, logs, and presentation DTOs. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration
