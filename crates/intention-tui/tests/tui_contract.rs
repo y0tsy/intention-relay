@@ -3,12 +3,11 @@
     reason = "TUI proof tests use controlled fixture-daemon diagnostics."
 )]
 
-use std::thread;
-
 use intention_client::{DaemonLauncher, IntentionClient};
 use intention_protocol::{
     DaemonReadinessDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
+use intention_test_support::FixtureHost;
 use intention_transport::LocalEndpoint;
 use intention_tui::TuiProofClient;
 use intention_types::{DtoResult, ErrorDto, SchemaVersionDto, SessionEventSequenceDto, SessionId};
@@ -38,10 +37,8 @@ fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
         .expect("fixture instance name is valid");
     let session_id = SessionId::new();
     let daemon_endpoint = endpoint.clone();
-    let daemon = thread::spawn(move || {
-        intention_daemon::serve_fixture_connections(daemon_endpoint, session_id, 2)
-            .expect("fixture daemon serves TUI health and subscription requests");
-    });
+    let fixture = FixtureHost::open(session_id).expect("fixture host opens");
+    let daemon = fixture.spawn(daemon_endpoint, 2);
     let client = IntentionClient::new(endpoint, "fixture-tui", Box::new(ExistingDaemonLauncher))
         .expect("fixture client is valid");
     let tui = TuiProofClient::new(client);
@@ -60,7 +57,10 @@ fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
         SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
             if snapshot.session_id() == session_id && tail.session_id() == session_id
     ));
-    daemon.join().expect("fixture daemon completes");
+    daemon
+        .join()
+        .expect("fixture daemon thread completes")
+        .expect("fixture daemon serves the TUI requests");
 }
 
 #[test]

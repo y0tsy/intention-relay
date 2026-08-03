@@ -3,6 +3,9 @@ default = []
 no_default = ["--no-default-features"]
 all = ["--all-features"]
 
+[isolated_production_packages]
+"intention-daemon" = { profiles = ["default", "no_default"], targets = ["lib", "bins"] }
+
 [[critical_combinations]]
 name = "none"
 features = []

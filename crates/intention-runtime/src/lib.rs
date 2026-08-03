@@ -7,8 +7,7 @@
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{RunProjectionDto, RunStatusDto, validate_run_status_transition};
 use intention_storage::{
-    CommittedChangeDto, PromotedQueuedTurnInputDto, RecoverUnfinishedRunsInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
+    CommittedChangeDto, RecoverUnfinishedRunsInputDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{DtoResult, RunId, SessionId, TimestampDto};
 
@@ -94,7 +93,6 @@ where
             run_id,
             active.status(),
             RunStatusDto::Cancelling,
-            None,
         )
     }
 
@@ -118,17 +116,7 @@ where
         }
         let projection = self.repository.load_session_snapshot(session_id)?;
         let active = self.active_run_from_projection(&projection, run_id)?;
-        let promoted_turn = projection
-            .queued_turns()
-            .first()
-            .map(|turn| PromotedQueuedTurnInputDto::new(turn.turn_id()));
-        self.transition(
-            session_id,
-            run_id,
-            active.status(),
-            terminal_status,
-            promoted_turn,
-        )
+        self.transition(session_id, run_id, active.status(), terminal_status)
     }
 
     /// Marks all unfinished durable runs interrupted before an owning facade is ready.
@@ -170,7 +158,6 @@ where
         run_id: RunId,
         from: RunStatusDto,
         to: RunStatusDto,
-        promoted_turn: Option<PromotedQueuedTurnInputDto>,
     ) -> DtoResult<CommittedChangeDto> {
         validate_run_status_transition(from, to)?;
         self.repository.transition_run(TransitionRunInputDto::new(
@@ -178,7 +165,6 @@ where
             run_id,
             to,
             self.values.occurred_at,
-            promoted_turn,
         ))
     }
 }

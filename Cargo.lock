@@ -177,7 +177,6 @@ dependencies = [
  "intention-storage",
  "intention-storage-sqlite",
  "intention-types",
- "serde_json",
  "tempfile",
 ]
 
@@ -220,11 +219,11 @@ name = "intention-daemon"
 version = "0.0.0"
 dependencies = [
  "intention",
- "intention-client",
- "intention-domain",
+ "intention-config",
  "intention-protocol",
  "intention-transport",
  "intention-types",
+ "tempfile",
 ]
 
 [[package]]
@@ -309,6 +308,21 @@ name = "intention-tauri"
 version = "0.0.0"
 
 [[package]]
+name = "intention-test-support"
+version = "0.0.0"
+dependencies = [
+ "intention",
+ "intention-config",
+ "intention-daemon",
+ "intention-domain",
+ "intention-protocol",
+ "intention-transport",
+ "intention-types",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "intention-tools"
 version = "0.0.0"
 
@@ -329,9 +343,9 @@ name = "intention-tui"
 version = "0.0.0"
 dependencies = [
  "intention-client",
- "intention-daemon",
  "intention-domain",
  "intention-protocol",
+ "intention-test-support",
  "intention-transport",
  "intention-types",
 ]

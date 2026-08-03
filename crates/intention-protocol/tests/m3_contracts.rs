@@ -14,6 +14,16 @@ use intention_types::{
     SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
 };
 
+fn workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-protocol-m3-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("native fixture workspace is valid")
+}
+
 #[test]
 fn typed_acceptance_results_carry_required_durable_evidence_and_legacy_acceptance_remains_compatible()
  {
@@ -73,7 +83,7 @@ fn snapshots_validate_optional_m3_projection_but_accept_legacy_shape() {
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace/project").expect("fixture root is valid"),
+        workspace_root(),
         RunModeDto::Build,
         None,
         None,
@@ -130,7 +140,7 @@ fn acceptance_accessors_and_snapshot_validation_cover_m3_failure_boundaries() {
         ProjectId::new(),
         SessionId::new(),
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace/project").expect("fixture root is valid"),
+        workspace_root(),
         RunModeDto::Build,
         None,
         None,

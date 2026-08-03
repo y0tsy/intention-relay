@@ -6,12 +6,22 @@
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{CreateSessionCommandDto, RunModeDto, RunStatusDto, WorkspaceRootDto};
 use intention_storage::{
-    AcceptUserTurnInputDto, CreateSessionInputDto, PromotedQueuedTurnInputDto,
-    RecoverUnfinishedRunsInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    AcceptUserTurnInputDto, CreateSessionInputDto, RecoverUnfinishedRunsInputDto,
+    StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
+
+fn workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-storage-contracts-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("native fixture workspace is valid")
+}
 
 #[test]
 fn storage_input_and_commit_evidence_reject_invalid_boundaries() {
@@ -30,7 +40,7 @@ fn storage_input_and_commit_evidence_reject_invalid_boundaries() {
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace/project").expect("fixture root is valid"),
+        workspace_root(),
         RunModeDto::Build,
         None,
         None,
@@ -78,7 +88,7 @@ fn repository_contracts_supply_ids_timestamps_and_config_revisions_for_all_mutat
             ProjectId::new(),
             session_id,
             WorkspaceId::new(),
-            WorkspaceRootDto::parse("/workspace/project").expect("fixture root is valid"),
+            workspace_root(),
             RunModeDto::Build,
         ),
         time,
@@ -103,15 +113,9 @@ fn repository_contracts_supply_ids_timestamps_and_config_revisions_for_all_mutat
         ConfigRevisionId::parse("44444444-4444-4444-8444-444444444444")
             .expect("fixture id is valid")
     );
-    let promoted = PromotedQueuedTurnInputDto::new(TurnId::new());
-    let transition = TransitionRunInputDto::new(
-        session_id,
-        RunId::new(),
-        RunStatusDto::Completed,
-        time,
-        Some(promoted),
-    );
-    assert!(transition.promoted_turn().is_some());
+    let transition =
+        TransitionRunInputDto::new(session_id, RunId::new(), RunStatusDto::Completed, time);
+    assert_eq!(transition.occurred_at(), time);
     assert_eq!(
         RecoverUnfinishedRunsInputDto::new(time).recovered_at(),
         time

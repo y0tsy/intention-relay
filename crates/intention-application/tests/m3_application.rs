@@ -55,6 +55,16 @@ fn snapshot() -> ConfigSnapshotDto {
     .expect("fixture snapshot is valid")
 }
 
+fn workspace_root() -> WorkspaceRootDto {
+    WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-application-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("native fixture workspace is valid")
+}
+
 fn projection(
     session_id: SessionId,
     active_run: Option<RunProjectionDto>,
@@ -65,7 +75,7 @@ fn projection(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace").expect("workspace is valid"),
+        workspace_root(),
         RunModeDto::Build,
         active_run.map(RunProjectionDto::config_revision_id),
         active_run,
@@ -251,7 +261,7 @@ fn workflows_expose_their_explicit_durable_inputs() {
         ProjectId::new(),
         SessionId::new(),
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace").expect("workspace is valid"),
+        workspace_root(),
         RunModeDto::Build,
     );
     let create = CreateSessionWorkflowInputDto::new(command.clone(), fixture_time());
@@ -344,7 +354,7 @@ fn create_and_remove_workflows_map_committed_queue_results() {
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        WorkspaceRootDto::parse("/workspace").expect("workspace is valid"),
+        workspace_root(),
         RunModeDto::Build,
     );
 

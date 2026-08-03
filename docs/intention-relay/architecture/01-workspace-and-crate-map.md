@@ -77,10 +77,10 @@ flowchart BT
 
 ## M3 ownership decisions
 
-- `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn, transition a run with an optional promoted turn, recovery, snapshot/tail reads, and configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend resource.
-- `intention-storage-sqlite` owns bundled SQLite opening, schema migration through `rusqlite_migration`, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists `WorkspaceId` separately from the declared `WorkspaceRootDto`; workspace containment remains M5 policy ownership.
-- `intention-runtime` decides valid state edges, performs the required `Starting -> Cancelling -> Cancelled` cancellation path, and supplies terminal promotion as one repository operation. It has no provider, tool, timer, stream, or scheduler dependency in M3.
-- `intention-application` maps committed semantic outcomes to protocol DTOs. The repository, not application retries, remains the idempotency authority for accepted user turns.
+- `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn, transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot/tail reads, and configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend resource.
+- `intention-storage-sqlite` owns bundled SQLite opening, schema migration through `rusqlite_migration`, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId -> WorkspaceRootDto` association; workspace containment remains M5 policy ownership.
+- `intention-runtime` decides valid state edges and performs the required `Starting -> Cancelling -> Cancelled` cancellation path. The repository, not runtime or callers, atomically chooses the lowest queue ticket after every terminal transition, including recovery. It has no provider, tool, timer, stream, or scheduler dependency in M3.
+- `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected database/snapshot and durable-event inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam. Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
 

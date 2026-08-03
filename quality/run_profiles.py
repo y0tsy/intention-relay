@@ -30,12 +30,48 @@ def profile_arguments(policy: dict[str, object]) -> list[tuple[str, list[str]]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["check", "lint", "test", "doctest", "doc", "udeps"])
+    parser.add_argument(
+        "command",
+        choices=["check", "isolated-release", "lint", "test", "doctest", "doc", "udeps"],
+    )
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     arguments = parser.parse_args()
 
     with arguments.policy.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
+
+    if arguments.command == "isolated-release":
+        profiles = policy.get("profiles")
+        isolated_packages = policy.get("isolated_production_packages")
+        target_flags = {"lib": ["--lib"], "bins": ["--bins"]}
+        if not isinstance(profiles, dict) or not isinstance(isolated_packages, dict):
+            raise RuntimeError("feature policy is missing isolated production package configuration")
+        for package, configuration in isolated_packages.items():
+            if not isinstance(package, str) or not isinstance(configuration, dict):
+                raise RuntimeError("isolated production package configuration is invalid")
+            profile_names = configuration.get("profiles")
+            targets = configuration.get("targets")
+            if not isinstance(profile_names, list) or not isinstance(targets, list):
+                raise RuntimeError("isolated production package configuration is invalid")
+            try:
+                selected_target_flags = [flag for target in targets for flag in target_flags[target]]
+            except (KeyError, TypeError) as error:
+                raise RuntimeError("isolated production package target is invalid") from error
+            for profile_name in profile_names:
+                flags = profiles.get(profile_name)
+                if not isinstance(profile_name, str) or not isinstance(flags, list):
+                    raise RuntimeError("isolated production package profile is invalid")
+                print(f"isolated release: {package} ({profile_name})", flush=True)
+                run([
+                    "cargo",
+                    "check",
+                    "--package",
+                    package,
+                    *selected_target_flags,
+                    "--locked",
+                    *flags,
+                ])
+        return
 
     commands: dict[str, list[str]] = {
         "check": ["cargo", "check", "--workspace", "--all-targets", "--locked"],

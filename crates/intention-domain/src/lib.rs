@@ -136,7 +136,7 @@ impl<'de> Deserialize<'de> for WorkspaceRootDto {
 }
 
 impl WorkspaceRootDto {
-    /// Parses an absolute, non-empty workspace path without resolving it.
+    /// Parses an absolute, non-empty native workspace path without resolving it.
     ///
     /// Resolution, symlink policy, and filesystem containment checks belong to
     /// `intention-workspace` in M5.
@@ -146,10 +146,10 @@ impl WorkspaceRootDto {
     /// Returns a validation error if `value` is empty or not absolute.
     pub fn parse(value: impl Into<String>) -> DtoResult<Self> {
         let value = value.into();
-        if value.trim().is_empty() || !value.starts_with('/') {
+        if value.trim().is_empty() || !std::path::Path::new(&value).is_absolute() {
             Err(ErrorDto::validation(
                 "invalid_workspace_root",
-                "workspace root must be a non-empty absolute path",
+                "workspace root must be a non-empty absolute native path",
             ))
         } else {
             Ok(Self(value))
@@ -1051,6 +1051,12 @@ impl RunStatusChangedEventDto {
             status,
             occurred_at,
         }
+    }
+
+    /// Returns the committed successor status.
+    #[must_use]
+    pub const fn status(&self) -> RunStatusDto {
+        self.status
     }
 }
 

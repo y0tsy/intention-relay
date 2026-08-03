@@ -15,6 +15,6 @@ intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
 intention-types = { path = "../intention-types", version = "=0.0.0" }
 
 [dev-dependencies]
-intention-daemon = { path = "../intention-daemon", version = "=0.0.0" }
 intention-domain = { path = "../intention-domain", version = "=0.0.0" }
+intention-test-support = { path = "../intention-test-support", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }

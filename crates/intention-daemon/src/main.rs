@@ -9,7 +9,6 @@
 use std::env;
 
 use intention_transport::LocalEndpoint;
-use intention_types::SessionId;
 
 fn main() {
     let mut arguments = env::args().skip(1);
@@ -18,15 +17,11 @@ fn main() {
         .map(LocalEndpoint::from_instance_id)
         .transpose()
         .and_then(|configured| configured.map_or_else(LocalEndpoint::platform_default, Ok));
-    let fixture_session = arguments
-        .next()
-        .map(|value| SessionId::parse(&value))
-        .transpose();
-    let result = match (endpoint, fixture_session) {
-        (Ok(endpoint), Ok(Some(session_id))) => intention_daemon::run_fixture(endpoint, session_id),
-        (Ok(endpoint), Ok(None)) => intention_daemon::run(endpoint),
-        (Err(error), _) | (_, Err(error)) => Err(error),
-    };
+    if arguments.next().is_some() {
+        eprintln!("invalid_daemon_arguments");
+        std::process::exit(1);
+    }
+    let result = endpoint.and_then(intention_daemon::run);
     match result {
         Ok(()) => {}
         Err(error) => {

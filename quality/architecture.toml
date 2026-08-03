@@ -2,6 +2,7 @@
 phase = "m3"
 active_milestone = "m3"
 quality_harness = "quality-harness"
+non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
   "intention-types",
   "intention-domain",
@@ -28,6 +29,20 @@ skeleton_crates = [
   "intention-plans",
   "intention-tauri",
 ]
+
+[non_production_test_dependencies]
+"intention-test-support" = [
+  "intention",
+  "intention-config",
+  "intention-daemon",
+  "intention-domain",
+  "intention-protocol",
+  "intention-transport",
+  "intention-types",
+]
+
+[non_production_test_external_dependencies]
+"intention-test-support" = ["serde_json", "tempfile"]
 
 [forbidden]
 source_patterns = [
@@ -58,7 +73,7 @@ public_resource_patterns = [
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
 "intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-types"]
-"intention-daemon" = ["intention", "intention-client", "intention-domain", "intention-protocol", "intention-transport", "intention-types"]
+"intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-types"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
@@ -70,8 +85,8 @@ public_resource_patterns = [
 "intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile"]
 "intention-client" = ["fs4", "tempfile"]
-"intention" = ["serde_json", "tempfile"]
-"intention-daemon" = []
+"intention" = ["tempfile"]
+"intention-daemon" = ["tempfile"]
 "intention-application" = []
 "intention-runtime" = []
 "intention-storage" = ["serde_json"]
@@ -80,7 +95,7 @@ public_resource_patterns = [
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-types"]
-allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain"]
+allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain", "intention-test-support"]
 allowed_external_dependencies = []
 forbidden_source_patterns = [
   "intention_application::",
@@ -277,8 +292,15 @@ coverage_tier = "C"
 name = "intention"
 responsibility = "Composition root, factories, and daemon application facade."
 test_target = "composition wiring smoke tests"
-test_targets = ["composition_contract"]
+test_targets = []
 coverage_tier = "C"
+
+[[future_crates]]
+name = "intention-test-support"
+responsibility = "Non-production durable integration fixtures and contract scenarios."
+test_target = "fixture and composition contract tests"
+test_targets = ["composition_contract", "fixture_host"]
+coverage_tier = "adapter"
 
 [[future_crates]]
 name = "intention-daemon"
