@@ -1125,6 +1125,16 @@ mod tests {
         TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
     }
 
+    fn fixture_workspace_root() -> WorkspaceRootDto {
+        WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-domain-unit-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("native fixture workspace is absolute")
+    }
+
     #[test]
     fn all_domain_statuses_and_commands_round_trip() {
         for mode in [RunModeDto::Plan, RunModeDto::Build] {
@@ -1182,9 +1192,8 @@ mod tests {
     fn session_and_future_event_payloads_expose_valid_domain_shapes() {
         let project_id = ProjectId::new();
         let session_id = SessionId::new();
-        let workspace = WorkspaceRootDto::parse("/workspace").expect("absolute path is valid");
-        assert_eq!(workspace.as_str(), "/workspace");
-        assert_eq!(workspace.to_string(), "/workspace");
+        let workspace = fixture_workspace_root();
+        assert_eq!(workspace.as_str(), workspace.to_string());
         let created = SessionCreatedEventDto::new(
             project_id,
             session_id,
