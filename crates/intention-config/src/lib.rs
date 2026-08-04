@@ -634,10 +634,10 @@ impl ProviderExecutionPolicyDto {
                 "provider attempt timeout seconds must be between 1 and 60",
             ));
         }
-        if !(1..=3).contains(&max_attempts) {
+        if !(1..=2).contains(&max_attempts) {
             return Err(ErrorDto::validation(
                 "invalid_provider_max_attempts",
-                "provider max attempts must be between 1 and 3",
+                "provider max attempts must be between 1 and 2",
             ));
         }
         Ok(Self {

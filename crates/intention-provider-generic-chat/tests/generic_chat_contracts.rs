@@ -1,14 +1,21 @@
 #![allow(
     clippy::expect_used,
-    reason = "Provider contract fixtures use expect to provide precise test failure messages."
+    clippy::panic,
+    reason = "Provider contract fixtures use explicit failure messages for impossible pending local streams."
 )]
 
 use intention_config::{
     ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial,
 };
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+use futures_util::{Stream, task::noop_waker_ref};
 use intention_model::{
-    FinishReasonDto, ModelDriver, ModelMessageDto, ModelRequestDto, ModelRequestedCapabilitiesDto,
-    ModelRoleDto,
+    FinishReasonDto, ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelMessageDto,
+    ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
 };
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_types::RunId;
@@ -145,6 +152,48 @@ fn generic_driver_translates_all_text_roles_without_network_work() {
 
     driver.prepare_request(&request).expect("request prepares");
     assert_eq!(driver.prepared_request_count(), 1);
+}
+
+fn collect_ready(
+    mut stream: intention_model::ModelEventStream,
+) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {
+    let waker = noop_waker_ref();
+    let mut context = Context::from_waker(waker);
+    let mut events = Vec::new();
+    loop {
+        match Pin::new(&mut stream).poll_next(&mut context) {
+            Poll::Ready(Some(event)) => events.push(event),
+            Poll::Ready(None) => return events,
+            Poll::Pending => panic!("fixture stream must resolve without a network request"),
+        }
+    }
+}
+
+#[test]
+fn generic_execution_cancels_before_stream_creation_without_network_work() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
+    let cancellation = ModelCancellationSignal::new();
+    cancellation.cancel();
+    let events = collect_ready(driver.execute(
+        request(ModelRequestedCapabilitiesDto::default()),
+        cancellation,
+    ));
+    assert!(events.is_empty());
+}
+
+#[test]
+fn generic_execution_rejects_preflight_before_stream_creation_without_network_work() {
+    let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
+    let events = collect_ready(driver.execute(
+        request(ModelRequestedCapabilitiesDto::new(
+            true, false, false, false,
+        )),
+        ModelCancellationSignal::new(),
+    ));
+    assert!(matches!(
+        events.as_slice(),
+        [Err(error)] if error.code() == "generic_chat_request_rejected"
+    ));
 }
 
 #[test]

@@ -166,9 +166,33 @@ accepted configuration edit or plan action.
   `run_history_unavailable`. An append above the 512 KiB individual fact limit
   returns `run_fact_too_large`; a stale expected cursor returns
   `run_event_cursor_conflict` with immediate retry guidance.
+- A runtime configuration lookup for a matching `(SessionId, RunId)` returns
+  only its immutable credential-free `ConfigSnapshotDto`, selected by the
+  run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
+  cross-session runs all return `run_configuration_not_found`; unavailable or
+  malformed persisted selection returns `run_configuration_unavailable`. Raw
+  TOML, configuration paths, credentials, and SQLite resources never cross
+  this DTO-only read boundary.
 - M3 public subscription behavior remains unchanged: every request with
   `run_id: Some` receives typed `HistoryUnavailable` resync and never receives
   unfiltered session state.
+- The M4 runtime executor loads the exact current run replay before it
+  starts, then compares the caller-supplied safe provider kind, model, endpoint,
+  attempt timeout, and max-attempt selection exactly against the persisted
+  credential-free snapshot. A mismatch makes no provider call and appends the
+  safe terminal `provider_configuration_unavailable` failure. The executor
+  appends every model fact with the returned cursor only and delegates each
+  fact/status batch to the repository's atomic append contract. It records
+  `Starting -> Running` attempt facts, batches one assistant turn into non-blank
+  UTF-8-safe 4 KiB content facts, retains reasoning only in the tail, records
+  usage once through stream lifecycle validation, denies tool calls durably, and
+  commits `Running -> Completing` before the separate `Completing -> Completed`
+  transition. A provider-neutral runtime time port supplies durable timestamps,
+  attempt deadlines, and the cancellation-aware fixed 250 ms retry wait.
+  Retryable provider/deadline failures can make only one retry, only before any
+  durable text, reasoning, usage, or tool fact; `ProviderAttemptFailed` then
+  `RetryScheduled` precede the next attempt. Cancellation suppresses later
+  stream activity and never resumes after recovery.
 - Events are immutable. Corrections are new events and projection/snapshot updates, not history rewrites.
 - M3 retains complete stored history for its delivered replay behavior; compaction/retention policy remains future work.
 

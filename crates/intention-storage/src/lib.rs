@@ -493,6 +493,25 @@ pub trait StorageRepositoryDto {
         ))
     }
 
+    /// Loads the persisted credential-free configuration selected for a matching run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_configuration_not_found` for unknown or cross-session run
+    /// identity, or `run_configuration_unavailable` when the persisted safe
+    /// selection cannot be loaded. Credentials, raw TOML, configuration paths,
+    /// and backend resources never cross this boundary.
+    fn load_run_config_snapshot(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<ConfigSnapshotDto> {
+        Err(ErrorDto::unavailable(
+            "run_configuration_unavailable",
+            "the durable run configuration is unavailable",
+        ))
+    }
+
     /// Loads the current matching run snapshot at its cursor and an empty tail after it.
     ///
     /// # Errors
