@@ -47,6 +47,39 @@ client therefore blocks only that thread during its blocking I/O operation; the
 subscription buffering, read/write deadlines beyond the bounded connect wait,
 or eviction of slow peers. Those are later transport-hardening decisions.
 
+### M4 asynchronous transport foundation
+
+M4 adds an **additive transport foundation only** alongside the retained M3
+synchronous host contract. `AsyncLocalListener` binds the same private
+`LocalEndpoint` mapping and endpoint ownership policy, while
+`AsyncLocalClientConnection` connects with the existing 500 ms bounded wait.
+After the existing typed `ProtocolHelloDto` negotiation succeeds, each
+connection is consumed into direction-specific opaque roles:
+`AsyncRequestSender` / `AsyncResponseReceiver` on the client and
+`AsyncRequestReceiver` / `AsyncResponseSender` on the daemon. Those roles
+exchange only the existing correlated request/response DTOs; Tokio,
+interprocess, socket, endpoint-path, and I/O-half resources remain private to
+`intention-transport`.
+
+The foundation preserves the 4-byte big-endian JSON frame format and its 1 MiB
+payload cap. Oversize frames are rejected before payload allocation or write as
+`local_protocol_frame_too_large`; malformed JSON is
+`invalid_local_protocol_frame`; incomplete headers, incomplete payloads, and
+closed peers are `local_daemon_connection_unavailable`. It introduces no
+read/write deadline, runtime owner, daemon/client host loop, protocol live-batch
+DTO, persistent subscription semantics, fan-out, queue capacity, slow-peer
+policy, or resync behavior. M3 consumers continue to use their synchronous
+one-request connection behavior unchanged.
+
+The asynchronous implementation uses the locked `interprocess` Tokio feature
+with its private local Unix-socket / Windows-named-pipe mapping. It preserves
+Unix parent mode `0700`, socket mode `0600`, listener-owned cleanup, and refusal
+to reclaim active endpoint names. Its required transport test target exercises
+real endpoint hello negotiation, ordered correlated multi-frame exchanges,
+concurrent split reader/writer roles, all framing safety outcomes, retained M3
+synchronous behavior, and Windows named-pipe multi-frame fixtures under
+`cfg(windows)`.
+
 ## Shared client
 
 `intention-client` is the only supported client-side integration path for local adapters. It owns:
