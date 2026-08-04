@@ -12,14 +12,18 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use intention_domain::{ModelRunFactDto, ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolHelloDto,
-    ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
-    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolDaemonFrameDto,
+    ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto,
+    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    ProtocolVersionDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunStreamFrameDto,
+    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
 };
 use intention_transport::{
-    LocalConnection, LocalEndpoint, local_protocol_version, negotiate_client,
+    AsyncDaemonFrameReceiver, AsyncLocalClientConnection, AsyncRequestSender, LocalConnection,
+    LocalEndpoint, local_protocol_version, negotiate_client,
 };
 use intention_types::{
     CorrelationIdDto, DtoResult, ErrorCategoryDto, ErrorDto, EventEnvelopeDto, EventId,
@@ -34,6 +38,8 @@ const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 3] = [
     ProtocolCapabilityDto::CorrelatedRequests,
     ProtocolCapabilityDto::DaemonHealth,
 ];
+const RUN_STREAM_CAPABILITIES: [ProtocolCapabilityDto; 1] =
+    [ProtocolCapabilityDto::RunStreamSubscriptions];
 
 /// Launches a daemon process after bootstrap has acquired the startup lock.
 pub trait DaemonLauncher: Send + Sync {
@@ -304,6 +310,397 @@ impl IntentionClient {
                 Err(error) => return Err(error),
             }
         }
+    }
+}
+
+/// An opt-in asynchronous facade for dedicated run-stream subscriptions.
+///
+/// It negotiates only the run-stream capability and never changes the M3
+/// synchronous [`IntentionClient`] connection or capability requirements.
+pub struct RunStreamClient {
+    endpoint: LocalEndpoint,
+    hello: ProtocolHelloDto,
+}
+
+impl RunStreamClient {
+    /// Creates an async run-stream client with safe adapter metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the adapter metadata is blank.
+    pub fn new(endpoint: LocalEndpoint, adapter_name: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self {
+            endpoint,
+            hello: ProtocolHelloDto::new(
+                local_protocol_version(),
+                RUN_STREAM_CAPABILITIES.to_vec(),
+                adapter_name,
+            )?,
+        })
+    }
+
+    /// Connects, subscribes, and applies the correlated authoritative first reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed protocol, transport, or scoped-response error.
+    pub async fn subscribe(
+        &self,
+        subscription: SubscribeRunCommandDto,
+    ) -> DtoResult<RunStreamSubscription> {
+        let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
+        let (remote, mut requests, mut frames) = connection
+            .negotiate_daemon_frames(self.hello.clone())
+            .await?;
+        if !RUN_STREAM_CAPABILITIES
+            .iter()
+            .all(|capability| remote.capabilities().contains(capability))
+        {
+            return Err(ErrorDto::unavailable(
+                "incompatible_protocol_capabilities",
+                "the local daemon lacks a required protocol capability",
+            ));
+        }
+        let correlation_id = CorrelationIdDto::new();
+        let request = RunSubscriptionRequestEnvelopeDto::new(
+            local_protocol_version(),
+            correlation_id,
+            ProtocolMessageDto::new(SCHEMA_VERSION, subscription),
+        );
+        requests.send_run_subscription(&request).await?;
+        let initial = frames.receive().await?;
+        let response = match initial {
+            ProtocolDaemonFrameDto::Response(response)
+                if response.correlation_id() == correlation_id
+                    && response.protocol_version() == remote.version()
+                    && response
+                        .message()
+                        .schema_version()
+                        .ensure_compatible_with(subscription.schema_version())
+                        .is_ok() =>
+            {
+                response
+            }
+            _ => return Err(invalid_response()),
+        };
+        let initial = match response.message().payload() {
+            ProtocolResponsePayloadDto::RunSubscription(response) => response.clone(),
+            _ => return Err(invalid_response()),
+        };
+        let mut reducer =
+            RunSubscriptionReducer::new(subscription.session_id(), subscription.run_id());
+        reducer.apply_initial(initial)?;
+        Ok(RunStreamSubscription {
+            requests,
+            frames,
+            daemon_version: remote.version(),
+            schema_version: subscription.schema_version(),
+            reducer,
+        })
+    }
+}
+
+/// An established run-stream subscription with opaque transport resources.
+pub struct RunStreamSubscription {
+    requests: AsyncRequestSender,
+    frames: AsyncDaemonFrameReceiver,
+    daemon_version: ProtocolVersionDto,
+    schema_version: SchemaVersionDto,
+    reducer: RunSubscriptionReducer,
+}
+
+impl RunStreamSubscription {
+    /// Receives and applies one uncorrelated daemon run-stream frame.
+    ///
+    /// A returned resync is locally generated for a detected cursor gap. A
+    /// daemon-originated matching resync clears the reducer and returns `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed framing, protocol, or scope-validation error.
+    pub async fn receive(&mut self) -> DtoResult<Option<RunResyncDto>> {
+        match self.frames.receive().await? {
+            ProtocolDaemonFrameDto::RunStream(frame) => self.reducer.apply_frame(frame),
+            ProtocolDaemonFrameDto::Response(_) => Err(invalid_response()),
+        }
+    }
+
+    /// Sends a new subscription request from the last valid cursor and applies
+    /// its immediate correlated replay, resync, or error response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed transport, protocol, or scoped-response error. The
+    /// current reducer state is retained if the reply is invalid or rejected.
+    pub async fn request_replay(&mut self) -> DtoResult<()> {
+        let subscription = SubscribeRunCommandDto::new(
+            self.schema_version,
+            self.reducer.session_id(),
+            self.reducer.run_id(),
+            self.reducer.last_cursor(),
+        );
+        let correlation_id = CorrelationIdDto::new();
+        let request = RunSubscriptionRequestEnvelopeDto::new(
+            local_protocol_version(),
+            correlation_id,
+            ProtocolMessageDto::new(self.schema_version, subscription),
+        );
+        self.requests.send_run_subscription(&request).await?;
+        let response = match self.frames.receive().await? {
+            ProtocolDaemonFrameDto::Response(response)
+                if response.correlation_id() == correlation_id
+                    && response.protocol_version() == self.daemon_version
+                    && response
+                        .message()
+                        .schema_version()
+                        .ensure_compatible_with(self.schema_version)
+                        .is_ok() =>
+            {
+                response
+            }
+            _ => return Err(invalid_response()),
+        };
+        let response = match response.message().payload() {
+            ProtocolResponsePayloadDto::RunSubscription(response) => response.clone(),
+            _ => return Err(invalid_response()),
+        };
+        self.reducer.apply_initial(response)
+    }
+
+    /// Returns the state reducer for this fixed run scope.
+    #[must_use]
+    pub const fn reducer(&self) -> &RunSubscriptionReducer {
+        &self.reducer
+    }
+
+    /// Returns mutable reducer state for adapter-directed recovery.
+    #[must_use]
+    pub const fn reducer_mut(&mut self) -> &mut RunSubscriptionReducer {
+        &mut self.reducer
+    }
+}
+
+/// A run-scoped reducer preserving daemon-authoritative snapshots and cursor order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunSubscriptionReducer {
+    session_id: intention_types::SessionId,
+    run_id: intention_types::RunId,
+    snapshot: Option<RunSnapshotDto>,
+    last_cursor: Option<RunEventCursorDto>,
+    reasoning_content: String,
+    historical_reasoning_cursors: BTreeSet<RunEventCursorDto>,
+    history_unavailable: bool,
+}
+
+impl RunSubscriptionReducer {
+    /// Creates empty local state fixed to one session and run.
+    #[must_use]
+    pub const fn new(
+        session_id: intention_types::SessionId,
+        run_id: intention_types::RunId,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            snapshot: None,
+            last_cursor: None,
+            reasoning_content: String::new(),
+            historical_reasoning_cursors: BTreeSet::new(),
+            history_unavailable: false,
+        }
+    }
+
+    /// Applies the correlated first reply for this subscription.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed scoped-response error without mutation for wrong scope or
+    /// an incomplete replay tail.
+    pub fn apply_initial(&mut self, response: RunSubscriptionResponseDto) -> DtoResult<()> {
+        match response {
+            RunSubscriptionResponseDto::Replay(replay) => {
+                self.ensure_scope(replay.snapshot().session_id(), replay.snapshot().run_id())?;
+                let tail = replay.tail();
+                if tail.session_id() != self.session_id
+                    || tail.run_id() != self.run_id
+                    || tail.after_cursor() != replay.snapshot().cursor()
+                    || tail.has_more()
+                {
+                    return Err(ErrorDto::validation(
+                        "invalid_run_subscription",
+                        "run replay must contain one complete matching tail",
+                    ));
+                }
+                let mut next = Self::new(self.session_id, self.run_id);
+                next.snapshot = Some(replay.snapshot().clone());
+                next.last_cursor = Some(replay.snapshot().cursor());
+                next.apply_replay_tail(tail.facts())?;
+                *self = next;
+                Ok(())
+            }
+            RunSubscriptionResponseDto::Resync(resync) => self.apply_resync(resync),
+            RunSubscriptionResponseDto::Error(error) => Err(error),
+        }
+    }
+
+    /// Applies one uncorrelated run-stream frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed scoped-response error without mutation for wrong scope or
+    /// frames sent after an initial unavailable-history response.
+    pub fn apply_frame(&mut self, frame: RunStreamFrameDto) -> DtoResult<Option<RunResyncDto>> {
+        if self.history_unavailable {
+            return Err(invalid_response());
+        }
+        match frame {
+            RunStreamFrameDto::LiveBatch(batch) => self.apply_live_batch(batch),
+            RunStreamFrameDto::Snapshot(frame) => {
+                self.ensure_scope(frame.session_id(), frame.run_id())?;
+                self.snapshot = Some(frame.snapshot().clone());
+                self.last_cursor = Some(frame.snapshot().cursor());
+                self.historical_reasoning_cursors.clear();
+                Ok(None)
+            }
+            RunStreamFrameDto::Resync(resync) => {
+                self.apply_resync(resync)?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Applies a live batch, returning a local cursor-gap resync without mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed scope-validation error without mutation for another run.
+    pub fn apply_live_batch(&mut self, batch: RunLiveBatchDto) -> DtoResult<Option<RunResyncDto>> {
+        self.ensure_scope(batch.session_id(), batch.run_id())?;
+        let last = self.last_cursor.map_or(0, RunEventCursorDto::value);
+        if let Some(first_new) = batch
+            .facts()
+            .iter()
+            .find(|fact| fact.cursor().value() > last)
+            && first_new.cursor().value() != last.saturating_add(1)
+        {
+            return Ok(Some(RunResyncDto::new(
+                self.session_id,
+                self.run_id,
+                RunResyncReasonDto::CursorGap,
+            )));
+        }
+        let snapshot_cursor = self
+            .snapshot
+            .as_ref()
+            .map_or(RunEventCursorDto::new(0), RunSnapshotDto::cursor);
+        let mut next_cursor = self.last_cursor;
+        let mut appended_reasoning = String::new();
+        let mut historical_cursors = self.historical_reasoning_cursors.clone();
+        for fact in batch.facts() {
+            if fact.cursor().value() <= snapshot_cursor.value() {
+                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+                    && historical_cursors.insert(fact.cursor())
+                {
+                    appended_reasoning.push_str(content);
+                }
+                continue;
+            }
+            if fact.cursor().value() <= last {
+                continue;
+            }
+            next_cursor = Some(fact.cursor());
+        }
+        self.reasoning_content.push_str(&appended_reasoning);
+        self.historical_reasoning_cursors = historical_cursors;
+        self.last_cursor = next_cursor;
+        Ok(None)
+    }
+
+    fn apply_replay_tail(&mut self, facts: &[ModelRunFactDto]) -> DtoResult<()> {
+        let snapshot_cursor = self
+            .snapshot
+            .as_ref()
+            .map_or(RunEventCursorDto::new(0), RunSnapshotDto::cursor);
+        let mut next_cursor = snapshot_cursor;
+        let mut reasoning_content = String::new();
+        let mut reasoning_cursors = BTreeSet::new();
+        for fact in facts {
+            let expected_cursor = next_cursor.value().checked_add(1).ok_or_else(|| {
+                ErrorDto::validation("invalid_run_subscription", "run replay cursor overflow")
+            })?;
+            if fact.cursor().value() != expected_cursor {
+                return Err(ErrorDto::validation(
+                    "invalid_run_subscription",
+                    "run replay tail requires contiguous facts",
+                ));
+            }
+            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+                && reasoning_cursors.insert(fact.cursor())
+            {
+                reasoning_content.push_str(content);
+            }
+            next_cursor = fact.cursor();
+        }
+        self.reasoning_content = reasoning_content;
+        self.historical_reasoning_cursors = reasoning_cursors;
+        self.last_cursor = Some(next_cursor);
+        Ok(())
+    }
+
+    fn apply_resync(&mut self, resync: RunResyncDto) -> DtoResult<()> {
+        self.ensure_scope(resync.session_id(), resync.run_id())?;
+        self.snapshot = None;
+        self.last_cursor = None;
+        self.reasoning_content.clear();
+        self.historical_reasoning_cursors.clear();
+        self.history_unavailable = resync.reason() == RunResyncReasonDto::HistoryUnavailable;
+        Ok(())
+    }
+
+    fn ensure_scope(
+        &self,
+        session_id: intention_types::SessionId,
+        run_id: intention_types::RunId,
+    ) -> DtoResult<()> {
+        if session_id == self.session_id && run_id == self.run_id {
+            Ok(())
+        } else {
+            Err(ErrorDto::validation(
+                "invalid_run_subscription",
+                "run subscription data belongs to another run scope",
+            ))
+        }
+    }
+
+    /// Returns the fixed session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> intention_types::SessionId {
+        self.session_id
+    }
+    /// Returns the fixed run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> intention_types::RunId {
+        self.run_id
+    }
+    /// Returns the authoritative daemon snapshot, if one has been accepted.
+    #[must_use]
+    pub fn snapshot(&self) -> Option<RunSnapshotDto> {
+        self.snapshot.clone()
+    }
+    /// Returns the last accepted durable run cursor.
+    #[must_use]
+    pub const fn last_cursor(&self) -> Option<RunEventCursorDto> {
+        self.last_cursor
+    }
+    /// Returns tail-only historical reasoning accepted after an authoritative snapshot.
+    #[must_use]
+    pub fn reasoning_content(&self) -> &str {
+        &self.reasoning_content
+    }
+    /// Reports whether the initial reply failed closed for unavailable history.
+    #[must_use]
+    pub const fn history_unavailable(&self) -> bool {
+        self.history_unavailable
     }
 }
 

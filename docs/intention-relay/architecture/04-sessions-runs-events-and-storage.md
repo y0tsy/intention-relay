@@ -173,6 +173,15 @@ accepted configuration edit or plan action.
   malformed persisted selection returns `run_configuration_unavailable`. Raw
   TOML, configuration paths, credentials, and SQLite resources never cross
   this DTO-only read boundary.
+- M4 wire run subscriptions are separate from M3 session subscriptions. Their
+  correlated first reply is an authoritative `RunReplayDto`, a typed
+  `RunResyncDto`, or a safe `ErrorDto`; later historical/live batches use the
+  dedicated run cursor and status-only commits use authoritative
+  `RunSnapshotFrameDto` values. A client ignores snapshot-subsumed text, usage,
+  finish, and failure facts during historical catch-up, accepts tail-only
+  reasoning once, and requires resync without guessing after a cursor gap.
+  Unavailable contiguous history fails closed as `HistoryUnavailable` with no
+  accepted snapshot or frames.
 - M3 public subscription behavior remains unchanged: every request with
   `run_id: Some` receives typed `HistoryUnavailable` resync and never receives
   unfiltered session state.

@@ -9,9 +9,10 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_protocol::{
-    ProtocolCapabilityDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
-    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, ProtocolVersionDto,
+    ProtocolCapabilityDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
+    ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto,
+    ProtocolVersionDto, RunResyncDto, RunResyncReasonDto, RunStreamFrameDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncLocalListener, LocalConnection, LocalEndpoint, LocalListener,
@@ -67,6 +68,58 @@ fn unavailable_response(correlation_id: CorrelationIdDto) -> ProtocolResponseEnv
             )),
         ),
     )
+}
+
+#[tokio::test]
+async fn async_daemon_frame_roles_preserve_correlated_replies_then_uncorrelated_stream_frames() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let session_id = intention_types::SessionId::new();
+    let run_id = intention_types::RunId::new();
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("server accepts client");
+        let (_, mut requests, mut frames) = connection
+            .negotiate_daemon_frames(hello("daemon-frame-daemon", local_protocol_version()))
+            .await
+            .expect("daemon hello negotiates");
+        let request = requests.receive().await.expect("server receives request");
+        frames
+            .send(&ProtocolDaemonFrameDto::Response(unavailable_response(
+                request.correlation_id(),
+            )))
+            .await
+            .expect("server sends correlated response");
+        frames
+            .send(&ProtocolDaemonFrameDto::RunStream(
+                RunStreamFrameDto::Resync(RunResyncDto::new(
+                    session_id,
+                    run_id,
+                    RunResyncReasonDto::SubscriberTooSlow,
+                )),
+            ))
+            .await
+            .expect("server sends stream frame");
+    });
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("client connects");
+    let (_, mut requests, mut frames) = connection
+        .negotiate_daemon_frames(hello("daemon-frame-client", local_protocol_version()))
+        .await
+        .expect("client hello negotiates");
+    let request = health_request();
+    requests.send(&request).await.expect("request sends");
+    assert!(matches!(
+        frames.receive().await.expect("response arrives"),
+        ProtocolDaemonFrameDto::Response(response) if response.correlation_id() == request.correlation_id()
+    ));
+    assert!(matches!(
+        frames.receive().await.expect("stream frame arrives"),
+        ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Resync(resync))
+            if resync.session_id() == session_id && resync.run_id() == run_id
+    ));
+    server.await.expect("server task completes");
 }
 
 #[tokio::test]

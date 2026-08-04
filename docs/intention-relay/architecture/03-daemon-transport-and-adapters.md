@@ -65,11 +65,11 @@ The foundation preserves the 4-byte big-endian JSON frame format and its 1 MiB
 payload cap. Oversize frames are rejected before payload allocation or write as
 `local_protocol_frame_too_large`; malformed JSON is
 `invalid_local_protocol_frame`; incomplete headers, incomplete payloads, and
-closed peers are `local_daemon_connection_unavailable`. It introduces no
-read/write deadline, runtime owner, daemon/client host loop, protocol live-batch
-DTO, persistent subscription semantics, fan-out, queue capacity, slow-peer
-policy, or resync behavior. M3 consumers continue to use their synchronous
-one-request connection behavior unchanged.
+closed peers are `local_daemon_connection_unavailable`. The foundation itself introduces no
+read/write deadline, runtime owner, daemon/client host loop, persistent
+subscription semantics, fan-out, queue capacity, slow-peer policy, or resync
+behavior. M3 consumers continue to use their synchronous one-request connection
+behavior unchanged.
 
 The asynchronous implementation uses the locked `interprocess` Tokio feature
 with its private local Unix-socket / Windows-named-pipe mapping. It preserves
@@ -79,6 +79,10 @@ real endpoint hello negotiation, ordered correlated multi-frame exchanges,
 concurrent split reader/writer roles, all framing safety outcomes, retained M3
 synchronous behavior, and Windows named-pipe multi-frame fixtures under
 `cfg(windows)`.
+
+### M4 run-stream frame extension
+
+The run-stream protocol adds an additive daemon-frame role without changing `AsyncResponseSender` or `AsyncResponseReceiver`: `ProtocolDaemonFrameDto::Response(ProtocolResponseEnvelopeDto)` carries correlated initial replies, and `ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto)` carries later uncorrelated live, snapshot, or resync frames. Dedicated opaque async daemon-frame sender/receiver roles keep Tokio and IPC types private. The opt-in `RunStreamClient` negotiates `RunStreamSubscriptions` on its own connection; global M3 client capabilities and synchronous one-shot session behavior remain unchanged. This boundary defines framing and reducer/reconnect semantics only. Daemon accept loops, publishers, subscriber queues, write deadlines, slow-peer enforcement, and fan-out remain deferred to the daemon-host lane.
 
 ## Shared client
 
