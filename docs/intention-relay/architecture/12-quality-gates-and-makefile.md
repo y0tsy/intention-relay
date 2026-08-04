@@ -242,7 +242,33 @@ Every implementation slice must:
 6. run `make verify` before the slice is accepted;
 7. record every policy exception, test exclusion, and known risk explicitly.
 
+For an explicitly authorized M4 lane, the controller-owned
+[`M4 execution charter`](../m4.md) additionally requires package-level
+code-first batching: agents write the complete bounded fixture portfolio, then
+finish the bounded production change before entering a grouped Makefile
+validation/repair phase. It remains test-first and does not replace steps 5–7
+or authorize an unimplemented focused gate.
+
 A high coverage percentage, passing lint, or successful compilation never replaces a required end-to-end outcome scenario.
+
+### M4 controller charter and future lane validation
+
+[`docs/intention-relay/m4.md`](../m4.md) records the controller-owned M4
+execution charter. It is read-only for sub-agents and does not override this
+quality policy or authorize worktrees, lane execution, or any Makefile change.
+It records package-level code-first delivery: a future authorized lane writes
+its full bounded fixture portfolio before production behavior, finishes the
+bounded implementation, then validates related failures in batches rather than
+compiling after every function.
+
+The active Makefile contract remains unchanged: every implementation handoff
+runs `make quick` while iterating and `make verify` before acceptance. The
+charter's planned package-scoped `make focus PACKAGES=...` candidate gate is not
+yet implemented. Until a separately reviewed policy and Makefile change adds
+it, no lane may use it or weaken the full-gate requirement. No simultaneous
+full `make verify` executions may claim independent acceptance on the same
+host; coverage, dependency, documentation, and Cargo resource contention would
+make their results impractical to interpret.
 
 ## Required quality-gate failure tests
 

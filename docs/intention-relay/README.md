@@ -5,6 +5,7 @@ This directory contains the active legacy-derived reference material for rebuild
 ## Contents
 
 - [`architecture/`](architecture/README.md): the approved target architecture, crate boundaries, quality gates, Makefile contract, TDD/verification policy, and implementation roadmap for the new Intention Relay implementation.
+- [`m4.md`](m4.md): controller-owned M4 execution charter, including Package 1 baseline, accepted decisions, remaining contracts, and read-only sub-agent guidance. It records a future lane structure but does not authorize execution.
 - [`legacy-baseline/`](legacy-baseline/00-manifest.md): the selected product baseline. Use it to identify user-visible capabilities and known limitations that the rewrite must deliberately accept, change, or reject.
 - [`legacy-antibusy-prompts/`](legacy-antibusy-prompts/README.md): a read-only source copy of the static prompts injected into every legacy Antibusy session. Adapt these prompts for Intention Relay, do not consume them as production prompts unchanged.
 
