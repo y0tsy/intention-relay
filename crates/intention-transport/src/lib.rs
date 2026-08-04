@@ -12,7 +12,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_protocol::{
-    ProtocolHelloDto, ProtocolRequestEnvelopeDto, ProtocolResponseEnvelopeDto, ProtocolVersionDto,
+    ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolRequestEnvelopeDto,
+    ProtocolResponseEnvelopeDto, ProtocolVersionDto, RunSubscriptionRequestEnvelopeDto,
 };
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 use interprocess::ConnectWaitMode;
@@ -381,6 +382,31 @@ impl AsyncLocalClientConnection {
             AsyncResponseReceiver { receiver },
         ))
     }
+
+    /// Exchanges hello and consumes the connection into a daemon-frame receiver.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed incompatibility or safe framing/connection error when the
+    /// hello exchange cannot complete.
+    pub async fn negotiate_daemon_frames(
+        mut self,
+        local: ProtocolHelloDto,
+    ) -> DtoResult<(
+        ProtocolHelloDto,
+        AsyncRequestSender,
+        AsyncDaemonFrameReceiver,
+    )> {
+        write_async_frame(&mut self.stream, &local).await?;
+        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
+        local.version().ensure_compatible_with(remote.version())?;
+        let (receiver, sender) = self.stream.split();
+        Ok((
+            remote,
+            AsyncRequestSender { sender },
+            AsyncDaemonFrameReceiver { receiver },
+        ))
+    }
 }
 
 /// An opaque asynchronous daemon connection before hello negotiation.
@@ -412,6 +438,31 @@ impl AsyncLocalDaemonConnection {
             AsyncResponseSender { sender },
         ))
     }
+
+    /// Exchanges hello and consumes the connection into a daemon-frame sender.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed incompatibility or safe framing/connection error when the
+    /// hello exchange cannot complete.
+    pub async fn negotiate_daemon_frames(
+        mut self,
+        local: ProtocolHelloDto,
+    ) -> DtoResult<(
+        ProtocolHelloDto,
+        AsyncRequestReceiver,
+        AsyncDaemonFrameSender,
+    )> {
+        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
+        local.version().ensure_compatible_with(remote.version())?;
+        write_async_frame(&mut self.stream, &local).await?;
+        let (receiver, sender) = self.stream.split();
+        Ok((
+            remote,
+            AsyncRequestReceiver { receiver },
+            AsyncDaemonFrameSender { sender },
+        ))
+    }
 }
 
 /// The client-to-daemon half of an established asynchronous connection.
@@ -426,6 +477,18 @@ impl AsyncRequestSender {
     ///
     /// Returns a safe framing or connection error when the request cannot be sent.
     pub async fn send(&mut self, request: &ProtocolRequestEnvelopeDto) -> DtoResult<()> {
+        write_async_frame(&mut self.sender, request).await
+    }
+
+    /// Sends a correlated run subscription request on this established connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the request cannot be sent.
+    pub async fn send_run_subscription(
+        &mut self,
+        request: &RunSubscriptionRequestEnvelopeDto,
+    ) -> DtoResult<()> {
         write_async_frame(&mut self.sender, request).await
     }
 }
@@ -460,6 +523,17 @@ impl AsyncRequestReceiver {
     pub async fn receive(&mut self) -> DtoResult<ProtocolRequestEnvelopeDto> {
         read_async_frame(&mut self.receiver).await
     }
+
+    /// Receives a correlated run subscription request on this established connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the request cannot be read.
+    pub async fn receive_run_subscription(
+        &mut self,
+    ) -> DtoResult<RunSubscriptionRequestEnvelopeDto> {
+        read_async_frame(&mut self.receiver).await
+    }
 }
 
 /// The daemon-to-client half that sends established responses.
@@ -475,6 +549,38 @@ impl AsyncResponseSender {
     /// Returns a safe framing or connection error when the response cannot be sent.
     pub async fn send(&mut self, response: &ProtocolResponseEnvelopeDto) -> DtoResult<()> {
         write_async_frame(&mut self.sender, response).await
+    }
+}
+
+/// The client-side receive role for correlated responses and uncorrelated stream frames.
+pub struct AsyncDaemonFrameReceiver {
+    receiver: TokioRecvHalf,
+}
+
+impl AsyncDaemonFrameReceiver {
+    /// Receives one bounded daemon-originated frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the frame cannot be read.
+    pub async fn receive(&mut self) -> DtoResult<ProtocolDaemonFrameDto> {
+        read_async_frame(&mut self.receiver).await
+    }
+}
+
+/// The daemon-side send role for correlated responses and uncorrelated stream frames.
+pub struct AsyncDaemonFrameSender {
+    sender: TokioSendHalf,
+}
+
+impl AsyncDaemonFrameSender {
+    /// Sends one bounded daemon-originated frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the frame cannot be sent.
+    pub async fn send(&mut self, frame: &ProtocolDaemonFrameDto) -> DtoResult<()> {
+        write_async_frame(&mut self.sender, frame).await
     }
 }
 

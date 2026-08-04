@@ -4,9 +4,9 @@
 //! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
-    RemoveQueuedTurnCommandDto, RunModeDto, SendUserTurnCommandDto, SessionProjectionDto,
-    StopRunCommandDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, ModelRunFactDto,
+    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunReplayDto, RunSnapshotDto,
+    SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
 };
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, ProjectId,
@@ -68,6 +68,8 @@ pub enum ProtocolCapabilityDto {
     CorrelatedRequests,
     /// The peer can obtain daemon health and readiness projections.
     DaemonHealth,
+    /// The peer can subscribe to dedicated persistent run streams.
+    RunStreamSubscriptions,
 }
 
 /// A safe metadata handshake exchanged before any protocol command.
@@ -274,6 +276,336 @@ impl SubscribeSessionCommandDto {
     #[must_use]
     pub const fn requested_mode(self) -> RunModeDto {
         self.requested_mode
+    }
+}
+
+/// A dedicated run-stream subscription request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SubscribeRunCommandDto {
+    schema_version: SchemaVersionDto,
+    session_id: SessionId,
+    run_id: RunId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after_cursor: Option<RunEventCursorDto>,
+}
+
+impl SubscribeRunCommandDto {
+    /// Creates a run-scoped subscription request from an optional known cursor.
+    #[must_use]
+    pub const fn new(
+        schema_version: SchemaVersionDto,
+        session_id: SessionId,
+        run_id: RunId,
+        after_cursor: Option<RunEventCursorDto>,
+    ) -> Self {
+        Self {
+            schema_version,
+            session_id,
+            run_id,
+            after_cursor,
+        }
+    }
+
+    /// Returns the request schema version.
+    #[must_use]
+    pub const fn schema_version(self) -> SchemaVersionDto {
+        self.schema_version
+    }
+
+    /// Returns the scoped session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the scoped run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the last accepted run-fact cursor, if any.
+    #[must_use]
+    pub const fn after_cursor(self) -> Option<RunEventCursorDto> {
+        self.after_cursor
+    }
+}
+
+/// The closed reason a run subscriber must discard its current run state.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunResyncReasonDto {
+    /// The requested run history is unavailable for a contiguous replay.
+    HistoryUnavailable,
+    /// The requested run cursor is invalid.
+    InvalidCursor,
+    /// The receiver observed a non-contiguous fact range.
+    CursorGap,
+    /// The daemon could not retain this subscriber safely.
+    SubscriberTooSlow,
+}
+
+/// A typed run-scoped resynchronization instruction.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunResyncDto {
+    session_id: SessionId,
+    run_id: RunId,
+    reason: RunResyncReasonDto,
+}
+
+impl RunResyncDto {
+    /// Creates a typed run resynchronization instruction.
+    #[must_use]
+    pub const fn new(session_id: SessionId, run_id: RunId, reason: RunResyncReasonDto) -> Self {
+        Self {
+            session_id,
+            run_id,
+            reason,
+        }
+    }
+
+    /// Returns the scoped session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the scoped run identity.
+    #[must_use]
+    pub const fn run_id(self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the closed resynchronization reason.
+    #[must_use]
+    pub const fn reason(self) -> RunResyncReasonDto {
+        self.reason
+    }
+}
+
+/// A non-empty, contiguous run-fact range emitted after durable commit.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunLiveBatchDto {
+    session_id: SessionId,
+    run_id: RunId,
+    after_cursor: RunEventCursorDto,
+    facts: Vec<ModelRunFactDto>,
+    next_after_cursor: RunEventCursorDto,
+}
+
+impl<'de> Deserialize<'de> for RunLiveBatchDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRunLiveBatchDto {
+            session_id: SessionId,
+            run_id: RunId,
+            after_cursor: RunEventCursorDto,
+            facts: Vec<ModelRunFactDto>,
+            next_after_cursor: RunEventCursorDto,
+        }
+        let raw = RawRunLiveBatchDto::deserialize(deserializer)?;
+        Self::new(
+            raw.session_id,
+            raw.run_id,
+            raw.after_cursor,
+            raw.facts,
+            raw.next_after_cursor,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+impl RunLiveBatchDto {
+    /// Creates a non-empty contiguous range of positive run facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when facts are empty, non-contiguous, or the
+    /// continuation does not equal the final fact cursor.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        after_cursor: RunEventCursorDto,
+        facts: Vec<ModelRunFactDto>,
+        next_after_cursor: RunEventCursorDto,
+    ) -> DtoResult<Self> {
+        if facts.is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_run_live_batch",
+                "run live batches must contain at least one fact",
+            ));
+        }
+        let mut expected = after_cursor.value();
+        for fact in &facts {
+            expected = expected.checked_add(1).ok_or_else(|| {
+                ErrorDto::validation("invalid_run_live_batch", "run fact cursor overflow")
+            })?;
+            if fact.cursor().value() != expected {
+                return Err(ErrorDto::validation(
+                    "invalid_run_live_batch",
+                    "run live batch facts must be contiguous after the cursor",
+                ));
+            }
+        }
+        if next_after_cursor.value() != expected {
+            return Err(ErrorDto::validation(
+                "invalid_run_live_batch",
+                "run live batch continuation must equal its final fact cursor",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            after_cursor,
+            facts,
+            next_after_cursor,
+        })
+    }
+
+    /// Returns the scoped session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the scoped run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    /// Returns the cursor preceding this range.
+    #[must_use]
+    pub const fn after_cursor(&self) -> RunEventCursorDto {
+        self.after_cursor
+    }
+    /// Returns the contiguous durable facts.
+    #[must_use]
+    pub fn facts(&self) -> &[ModelRunFactDto] {
+        &self.facts
+    }
+    /// Returns the cursor after the range.
+    #[must_use]
+    pub const fn next_after_cursor(&self) -> RunEventCursorDto {
+        self.next_after_cursor
+    }
+}
+
+/// A daemon-authoritative run snapshot emitted for status-only durable commits.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunSnapshotFrameDto {
+    snapshot: RunSnapshotDto,
+}
+
+impl<'de> Deserialize<'de> for RunSnapshotFrameDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRunSnapshotFrameDto {
+            snapshot: RunSnapshotDto,
+        }
+        let raw = RawRunSnapshotFrameDto::deserialize(deserializer)?;
+        Ok(Self::new(raw.snapshot))
+    }
+}
+
+impl RunSnapshotFrameDto {
+    /// Creates an authoritative status snapshot frame.
+    #[must_use]
+    pub const fn new(snapshot: RunSnapshotDto) -> Self {
+        Self { snapshot }
+    }
+    /// Returns the authoritative daemon snapshot.
+    #[must_use]
+    pub const fn snapshot(&self) -> &RunSnapshotDto {
+        &self.snapshot
+    }
+    /// Returns the scoped session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.snapshot.session_id()
+    }
+    /// Returns the scoped run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.snapshot.run_id()
+    }
+}
+
+/// A server-originated, uncorrelated run-stream frame.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum RunStreamFrameDto {
+    /// A contiguous range of committed run facts.
+    LiveBatch(RunLiveBatchDto),
+    /// An authoritative run status snapshot.
+    Snapshot(RunSnapshotFrameDto),
+    /// An instruction to clear local run state.
+    Resync(RunResyncDto),
+}
+
+impl<'de> Deserialize<'de> for RunStreamFrameDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        enum RawRunStreamFrameDto {
+            LiveBatch(RunLiveBatchDto),
+            Snapshot(RunSnapshotFrameDto),
+            Resync(RunResyncDto),
+        }
+        Ok(match RawRunStreamFrameDto::deserialize(deserializer)? {
+            RawRunStreamFrameDto::LiveBatch(batch) => Self::LiveBatch(batch),
+            RawRunStreamFrameDto::Snapshot(snapshot) => Self::Snapshot(snapshot),
+            RawRunStreamFrameDto::Resync(resync) => Self::Resync(resync),
+        })
+    }
+}
+
+/// The correlated first reply to a dedicated run subscription request.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The replay is a stable public wire DTO and must remain unboxed for the same Rust and JSON shape."
+)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum RunSubscriptionResponseDto {
+    /// The authoritative current run snapshot and strict-after tail.
+    Replay(RunReplayDto),
+    /// A typed initial resynchronization requirement.
+    Resync(RunResyncDto),
+    /// A safe scoped request error, including `run_replay_not_found`.
+    Error(ErrorDto),
+}
+
+impl<'de> Deserialize<'de> for RunSubscriptionResponseDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        #[expect(
+            clippy::large_enum_variant,
+            reason = "The private intermediary mirrors the public unboxed replay DTO for validated wire decoding."
+        )]
+        enum RawRunSubscriptionResponseDto {
+            Replay(RunReplayDto),
+            Resync(RunResyncDto),
+            Error(ErrorDto),
+        }
+        Ok(
+            match RawRunSubscriptionResponseDto::deserialize(deserializer)? {
+                RawRunSubscriptionResponseDto::Replay(replay) => Self::Replay(replay),
+                RawRunSubscriptionResponseDto::Resync(resync) => Self::Resync(resync),
+                RawRunSubscriptionResponseDto::Error(error) => Self::Error(error),
+            },
+        )
     }
 }
 
@@ -947,6 +1279,58 @@ pub enum ProtocolResponsePayloadDto {
     QueryResult(ProtocolQueryResultDto),
     /// A response to a session subscription request.
     Subscription(SessionSubscriptionResponseDto),
+    /// A correlated first reply to a run-stream subscription request.
+    RunSubscription(RunSubscriptionResponseDto),
+}
+
+/// A correlated initial run-stream subscription request envelope.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RunSubscriptionRequestEnvelopeDto {
+    protocol_version: ProtocolVersionDto,
+    correlation_id: CorrelationIdDto,
+    message: ProtocolMessageDto<SubscribeRunCommandDto>,
+}
+
+impl RunSubscriptionRequestEnvelopeDto {
+    /// Creates a correlated, schema-versioned run subscription request.
+    #[must_use]
+    pub const fn new(
+        protocol_version: ProtocolVersionDto,
+        correlation_id: CorrelationIdDto,
+        message: ProtocolMessageDto<SubscribeRunCommandDto>,
+    ) -> Self {
+        Self {
+            protocol_version,
+            correlation_id,
+            message,
+        }
+    }
+
+    /// Returns the negotiated protocol version.
+    #[must_use]
+    pub const fn protocol_version(&self) -> ProtocolVersionDto {
+        self.protocol_version
+    }
+    /// Returns the request correlation identity.
+    #[must_use]
+    pub const fn correlation_id(&self) -> CorrelationIdDto {
+        self.correlation_id
+    }
+    /// Returns the versioned subscription command.
+    #[must_use]
+    pub const fn message(&self) -> &ProtocolMessageDto<SubscribeRunCommandDto> {
+        &self.message
+    }
+}
+
+/// A daemon-to-client frame that distinguishes correlated replies from stream frames.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum ProtocolDaemonFrameDto {
+    /// A correlation-bound response envelope.
+    Response(ProtocolResponseEnvelopeDto),
+    /// An uncorrelated run-stream frame.
+    RunStream(RunStreamFrameDto),
 }
 
 /// A schema-versioned typed message payload suitable for a local wire codec.

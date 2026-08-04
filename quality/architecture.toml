@@ -91,7 +91,7 @@ public_resource_patterns = [
 "intention-config" = ["serde", "serde_json", "toml"]
 "intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
-"intention-client" = ["fs4", "tempfile"]
+"intention-client" = ["fs4", "tempfile", "tokio"]
 "intention" = ["tempfile"]
 "intention-daemon" = ["tempfile"]
 "intention-application" = []
@@ -283,7 +283,7 @@ coverage_tier = "B"
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
 test_target = "protocol compatibility fixtures"
-test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts"]
+test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts", "m4_run_stream_contracts"]
 coverage_tier = "A"
 
 [[future_crates]]
@@ -297,7 +297,7 @@ coverage_tier = "C"
 name = "intention-client"
 responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
 test_target = "client contract and reconnect tests"
-test_targets = ["client_contract"]
+test_targets = ["client_contract", "run_stream_contract"]
 coverage_tier = "C"
 
 [[future_crates]]
