@@ -165,14 +165,14 @@ provider_sdk_resource_patterns = [
 name = "intention-types"
 responsibility = "Identifiers, schema versions, common errors, time, pagination, and envelopes."
 test_target = "dto and validation tests"
-test_targets = ["contracts", "error_contracts", "m3_contracts"]
+test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]
 coverage_tier = "A"
 
 [[future_crates]]
 name = "intention-domain"
 responsibility = "Domain DTOs, value validation, domain events, and invariants."
 test_target = "domain state and invariant tests"
-test_targets = ["contracts", "event_fixtures", "m3_contracts"]
+test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires"]
 coverage_tier = "A"
 
 # M3 application lifecycle targets are checked against Cargo metadata.
@@ -194,14 +194,14 @@ coverage_tier = "B"
 name = "intention-storage"
 responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
 test_target = "repository contract tests"
-test_targets = ["contracts"]
+test_targets = ["contracts", "m4_run_replay_contracts"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage-sqlite"
 responsibility = "SQLite schema, migrations, projections, and repository implementation."
 test_target = "migration and transaction fault-injection tests"
-test_targets = ["sqlite_contracts"]
+test_targets = ["sqlite_contracts", "m4_durable_facts"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -215,7 +215,7 @@ coverage_tier = "A"
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = ["model_contracts"]
+test_targets = ["model_contracts", "m4_reexports"]
 coverage_tier = "C"
 
 [[future_crates]]

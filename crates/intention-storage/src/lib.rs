@@ -5,7 +5,8 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, RemoveQueuedTurnCommandDto, RunProjectionDto,
+    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto, RemoveQueuedTurnCommandDto,
+    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
     RunStatusDto, SessionProjectionDto,
 };
 use intention_types::{
@@ -197,6 +198,152 @@ impl TransitionRunInputDto {
     }
 }
 
+/// Inputs required to atomically append one non-empty batch of durable model facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendModelRunFactsInputDto {
+    session_id: SessionId,
+    run_id: RunId,
+    expected_cursor: RunEventCursorDto,
+    facts: Vec<ModelRunFactInputDto>,
+    status: Option<RunStatusDto>,
+    occurred_at: TimestampDto,
+}
+
+impl AppendModelRunFactsInputDto {
+    /// Creates an explicit durable model-fact append request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the batch is empty.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        expected_cursor: RunEventCursorDto,
+        facts: Vec<ModelRunFactInputDto>,
+        status: Option<RunStatusDto>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Self> {
+        if facts.is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_run_event_cursor",
+                "model fact append batch must not be empty",
+            ));
+        }
+        if facts.iter().enumerate().any(|(index, fact)| {
+            index + 1 < facts.len()
+                && matches!(
+                    fact,
+                    ModelRunFactInputDto::Finished { .. } | ModelRunFactInputDto::Failed { .. }
+                )
+        }) {
+            return Err(ErrorDto::validation(
+                "invalid_run_event_cursor",
+                "terminal model facts must be last in an append batch",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            expected_cursor,
+            facts,
+            status,
+            occurred_at,
+        })
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the target run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the required current cursor before appending.
+    #[must_use]
+    pub const fn expected_cursor(&self) -> RunEventCursorDto {
+        self.expected_cursor
+    }
+
+    /// Returns the non-empty input facts in their requested order.
+    #[must_use]
+    pub fn facts(&self) -> &[ModelRunFactInputDto] {
+        &self.facts
+    }
+
+    /// Returns an optional status transition committed in the same transaction.
+    #[must_use]
+    pub const fn status(&self) -> Option<RunStatusDto> {
+        self.status
+    }
+
+    /// Returns the selected durable fact timestamp.
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// Evidence that a model-fact batch, run projection, and snapshots committed together.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendModelRunFactsOutcomeDto {
+    cursor: RunEventCursorDto,
+    snapshot: RunSnapshotDto,
+    facts: Vec<intention_domain::ModelRunFactDto>,
+}
+
+impl AppendModelRunFactsOutcomeDto {
+    /// Creates coherent atomic model-fact append evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the facts do not end at the snapshot cursor.
+    pub fn new(
+        cursor: RunEventCursorDto,
+        snapshot: RunSnapshotDto,
+        facts: Vec<intention_domain::ModelRunFactDto>,
+    ) -> DtoResult<Self> {
+        if snapshot.cursor() != cursor
+            || facts
+                .last()
+                .map_or_else(|| cursor.value(), |fact| fact.cursor().value())
+                != cursor.value()
+        {
+            return Err(ErrorDto::validation(
+                "invalid_run_event_cursor",
+                "model fact append outcome must end at its snapshot cursor",
+            ));
+        }
+        Ok(Self {
+            cursor,
+            snapshot,
+            facts,
+        })
+    }
+
+    /// Returns the resulting current run cursor.
+    #[must_use]
+    pub const fn cursor(&self) -> RunEventCursorDto {
+        self.cursor
+    }
+
+    /// Returns the committed current run snapshot.
+    #[must_use]
+    pub const fn snapshot(&self) -> &RunSnapshotDto {
+        &self.snapshot
+    }
+
+    /// Returns the appended typed durable facts.
+    #[must_use]
+    pub fn facts(&self) -> &[intention_domain::ModelRunFactDto] {
+        &self.facts
+    }
+}
+
 /// Inputs required to mark all persisted unfinished runs interrupted at recovery time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoverUnfinishedRunsInputDto {
@@ -329,6 +476,58 @@ pub trait StorageRepositoryDto {
     /// Returns a validation, not-found, or conflict error when the transition
     /// or promotion is invalid, or an unavailable error when storage fails.
     fn transition_run(&self, input: TransitionRunInputDto) -> DtoResult<CommittedChangeDto>;
+
+    /// Appends typed durable model facts using an exact expected run cursor and optional status transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable M4 validation, conflict, not-found, or unavailable errors
+    /// when the scoped run cannot append atomically.
+    fn append_model_run_facts(
+        &self,
+        _input: AppendModelRunFactsInputDto,
+    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
+        Err(ErrorDto::unavailable(
+            "run_history_unavailable",
+            "the durable run history is unavailable",
+        ))
+    }
+
+    /// Loads the current matching run snapshot at its cursor and an empty tail after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_replay_not_found` for unknown or cross-session run identity,
+    /// or `run_history_unavailable` when durable M4 replay cannot be loaded.
+    fn load_current_run_replay(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<RunReplayDto> {
+        Err(ErrorDto::unavailable(
+            "run_history_unavailable",
+            "the durable run history is unavailable",
+        ))
+    }
+
+    /// Loads a bounded contiguous run-fact page strictly after a matching cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_run_event_cursor` for an unusable cursor,
+    /// `run_replay_not_found` for unknown or cross-session identity, or
+    /// `run_history_unavailable` when durable M4 history cannot be loaded.
+    fn load_run_tail(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _after_cursor: RunEventCursorDto,
+    ) -> DtoResult<RunEventTailPageDto> {
+        Err(ErrorDto::unavailable(
+            "run_history_unavailable",
+            "the durable run history is unavailable",
+        ))
+    }
 
     /// Marks persisted unfinished runs interrupted at the supplied durable time.
     ///

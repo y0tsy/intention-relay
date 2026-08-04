@@ -6,7 +6,12 @@ This document defines the provider-neutral model contract and the first provider
 
 ## Canonical model contract
 
-`intention-model` owns typed requests, stream events, capabilities, usage, finish reasons, and normalized provider errors.
+`intention-model` owns typed requests, stream events, capabilities, and the
+provider-driver trait. `intention-types` owns provider-neutral `UsageDto`,
+`FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto`, which
+`intention-model` re-exports for source compatibility. `intention-domain` owns
+the durable fact, projection, and replay representation. Domain, storage, and
+protocol retain no dependency on `intention-model`.
 
 ```text
 ModelDriver
@@ -30,7 +35,30 @@ Core DTO families:
 
 Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use only in `intention-provider-openrouter` private implementation and `async_openai` only in `intention-provider-generic-chat`; rustdoc JSON rejects either SDK plus HTTP/runtime resources in every active public API.
 
-## Provider normalization
+## Durable model facts
+
+The model stream remains provider-neutral; durable model evidence is a separate
+domain/storage concern. Each atomic M4 batch assigns a dedicated,
+monotonically-increasing `RunEventCursorDto` and appends typed domain events for
+attempt start/failure, retry, assistant content, tail-only reasoning, usage,
+tool call, finish, or safe failure. Attempts are positive; retry next attempt
+is exactly failed attempt plus one; assistant batches are non-blank and at most
+4 KiB; and a terminal run accepts no new facts. Individual canonical facts are
+limited to 512 KiB. The safe run snapshot includes compatible M3 projection
+identity/status/revision, accumulated assistant content for the active
+assistant turn, usage, finish reason, and safe failure; it never accumulates
+reasoning content.
+
+Storage appends a non-empty fact batch only when its expected cursor matches,
+optionally changing status in the same transaction with domain-event envelope,
+index, run cursor/projection, session snapshot, and M4 run snapshot. Stable
+errors are `run_fact_too_large` (validation/never),
+`run_event_cursor_conflict` (conflict/immediate), `run_replay_not_found`
+(not-found/never), `invalid_run_event_cursor` (validation/never), and
+`run_history_unavailable` (unavailable/manual). Internal replay reads are
+run-scoped and bounded; M3 public protocol subscription behavior remains
+unchanged.
+
 
 ```mermaid
 sequenceDiagram

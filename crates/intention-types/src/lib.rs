@@ -9,6 +9,10 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use uuid::Uuid;
 
+mod model;
+
+pub use model::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
+
 /// A safe result whose failure can cross a crate or process boundary.
 pub type DtoResult<T> = Result<T, ErrorDto>;
 

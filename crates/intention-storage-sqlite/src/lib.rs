@@ -8,13 +8,15 @@ use std::sync::{LazyLock, Mutex};
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    DomainEventDto, QueuedTurnProjectionDto, QueuedTurnRemovedEventDto, RunProjectionDto,
-    RunStartedEventDto, RunStatusChangedEventDto, RunStatusDto, SessionCreatedEventDto,
-    SessionProjectionDto, UserTurnAcceptedEventDto, UserTurnQueuedEventDto,
-    validate_run_status_transition,
+    DomainEventDto, ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto,
+    ModelRunProjectionDto, QueuedTurnProjectionDto, QueuedTurnRemovedEventDto, RunEventCursorDto,
+    RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStartedEventDto,
+    RunStatusChangedEventDto, RunStatusDto, SessionCreatedEventDto, SessionProjectionDto,
+    UserTurnAcceptedEventDto, UserTurnQueuedEventDto, validate_run_status_transition,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
+    AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
     RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
     TransitionRunInputDto,
 };
@@ -26,7 +28,10 @@ use intention_types::{
 use rusqlite_migration::{M, Migrations};
 use sqlite::OptionalExtension;
 
-const CURRENT_STORAGE_SCHEMA: i64 = 1;
+const CURRENT_STORAGE_SCHEMA: i64 = 2;
+const MAX_CANONICAL_FACT_BYTES: usize = 512 * 1024;
+const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
+const MAX_TAIL_FACTS: usize = 256;
 const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
 
 static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -76,7 +81,24 @@ CREATE TABLE run_snapshots (
   sequence INTEGER NOT NULL, projection_json TEXT NOT NULL
 );
 ",
-)])
+), M::up(
+    "
+CREATE TABLE run_cursors (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
+  cursor INTEGER NOT NULL CHECK(cursor >= 0)
+);
+CREATE TABLE model_run_facts (
+  run_id TEXT NOT NULL REFERENCES runs(run_id), cursor INTEGER NOT NULL CHECK(cursor > 0),
+  event_id TEXT NOT NULL REFERENCES domain_events(event_id),
+  PRIMARY KEY(run_id, cursor), UNIQUE(event_id)
+);
+CREATE TABLE model_run_snapshots (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
+  sequence INTEGER NOT NULL, cursor INTEGER NOT NULL CHECK(cursor >= 0), snapshot_json TEXT NOT NULL
+);
+INSERT INTO run_cursors(run_id, session_id, cursor)
+  SELECT run_id, session_id, 0 FROM runs;
+", )])
 });
 
 /// A local absolute SQLite database location whose string is never exposed again.
@@ -131,11 +153,35 @@ impl SqliteStorageRepository {
         MIGRATIONS
             .to_latest(&mut connection)
             .map_err(|_| unavailable())?;
+        Self::hydrate_model_run_snapshots(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             #[cfg(test)]
             fault: Mutex::new(None),
         })
+    }
+
+    fn hydrate_model_run_snapshots(connection: &mut sqlite::Connection) -> DtoResult<()> {
+        let tx = connection
+            .transaction_with_behavior(sqlite::TransactionBehavior::Immediate)
+            .map_err(storage_error)?;
+        let session_ids = {
+            let mut statement = tx
+                .prepare("SELECT session_id FROM sessions ORDER BY session_id")
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(storage_error)?;
+            rows.map(|row| row.map_err(storage_error))
+                .collect::<DtoResult<Vec<_>>>()?
+        };
+        for encoded_session in session_ids {
+            let session_id = SessionId::parse(&encoded_session).map_err(codec_error)?;
+            let projection = Self::project(&tx, session_id)?;
+            Self::ensure_run_cursors(&tx, session_id)?;
+            Self::snapshot_model_runs(&tx, &projection)?;
+        }
+        tx.commit().map_err(storage_error)
     }
 
     fn connection(&self) -> DtoResult<std::sync::MutexGuard<'_, sqlite::Connection>> {
@@ -373,6 +419,111 @@ impl SqliteStorageRepository {
             )
             .map_err(storage_error)?;
         }
+        Self::snapshot_model_runs(tx, projection)?;
+        Ok(())
+    }
+
+    fn snapshot_model_runs(
+        tx: &sqlite::Transaction<'_>,
+        projection: &SessionProjectionDto,
+    ) -> DtoResult<()> {
+        let runs = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT run_id, turn_id, status, config_revision_id FROM runs WHERE session_id=?1",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map([projection.session_id().to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(storage_error)?;
+            rows.map(|row| row.map_err(storage_error))
+                .collect::<DtoResult<Vec<_>>>()?
+        };
+        for (run_id, turn_id, status, revision) in runs {
+            let run = run_projection(
+                projection.session_id(),
+                &run_id,
+                &turn_id,
+                &status,
+                &revision,
+            )?;
+            let cursor = current_run_cursor(tx, run.run_id())?;
+            let model = model_projection(tx, run, cursor)?;
+            let snapshot = RunSnapshotDto::new(
+                projection.session_id(),
+                run.run_id(),
+                projection.at_sequence(),
+                model,
+            )?;
+            let encoded = serde_json::to_string(&snapshot).map_err(codec_error)?;
+            tx.execute(
+                "INSERT INTO model_run_snapshots(run_id, session_id, sequence, cursor, snapshot_json) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(run_id) DO UPDATE SET sequence=excluded.sequence, cursor=excluded.cursor, snapshot_json=excluded.snapshot_json",
+                sqlite::params![
+                    run.run_id().to_string(),
+                    projection.session_id().to_string(),
+                    sqlite_integer(projection.at_sequence().value(), "snapshot sequence is outside the SQLite range")?,
+                    sqlite_integer(cursor.value(), "run event cursor is outside the SQLite range")?,
+                    encoded,
+                ],
+            )
+            .map_err(storage_error)?;
+        }
+        Ok(())
+    }
+
+    fn promote_oldest_queued_turn(
+        tx: &sqlite::Transaction<'_>,
+        session_id: SessionId,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Vec<EventDraft>> {
+        let queued_selection = tx
+            .query_row(
+                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
+                [session_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some((turn_id, run_id, revision_id)) = queued_selection else {
+            return Ok(Vec::new());
+        };
+        let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
+        let promoted_run_id = RunId::parse(&run_id).map_err(codec_error)?;
+        let config_revision_id = ConfigRevisionId::parse(&revision_id).map_err(codec_error)?;
+        tx.execute(
+            "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
+            sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
+        )
+        .map_err(storage_error)?;
+        tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
+        tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
+        Ok(vec![EventDraft::new(
+            Some(promoted_run_id),
+            Some(promoted_turn_id),
+            occurred_at,
+            DomainEventDto::RunStarted(RunStartedEventDto::new(
+                session_id,
+                promoted_run_id,
+                promoted_turn_id,
+                config_revision_id,
+                occurred_at,
+            )),
+        )])
+    }
+
+    fn ensure_run_cursors(tx: &sqlite::Transaction<'_>, session_id: SessionId) -> DtoResult<()> {
+        tx.execute(
+            "INSERT INTO run_cursors(run_id, session_id, cursor) SELECT run_id, session_id, 0 FROM runs WHERE session_id=?1 ON CONFLICT(run_id) DO NOTHING",
+            [session_id.to_string()],
+        )
+        .map_err(storage_error)?;
         Ok(())
     }
 
@@ -465,6 +616,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )),
                 )],
             )?;
+            Self::ensure_run_cursors(&tx, session_id)?;
             self.finish(tx, session_id, events, None)
         })
     }
@@ -626,6 +778,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
             };
             let events = Self::append(&tx, session_id, sequence, drafts)?;
+            Self::ensure_run_cursors(&tx, session_id)?;
             self.finish(tx, session_id, events, Some(outcome))
         })
     }
@@ -700,43 +853,201 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )),
             )];
             if input.status().is_terminal() {
-                let queued_selection = tx
-                    .query_row(
-                        "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
-                        [session_id.to_string()],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
-                    )
-                    .optional()
-                    .map_err(storage_error)?;
-                if let Some((turn_id, run_id, revision_id)) = queued_selection {
-                    let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
-                    let promoted_run_id = RunId::parse(&run_id).map_err(codec_error)?;
-                    let config_revision_id =
-                        ConfigRevisionId::parse(&revision_id).map_err(codec_error)?;
-                    tx.execute(
-                        "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
-                        sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
-                    )
-                    .map_err(storage_error)?;
-                    tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
-                    tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
-                    drafts.push(EventDraft::new(
-                        Some(promoted_run_id),
-                        Some(promoted_turn_id),
-                        input.occurred_at(),
-                        DomainEventDto::RunStarted(RunStartedEventDto::new(
-                            session_id,
-                            promoted_run_id,
-                            promoted_turn_id,
-                            config_revision_id,
-                            input.occurred_at(),
-                        )),
-                    ));
-                }
+                drafts.extend(Self::promote_oldest_queued_turn(
+                    &tx,
+                    session_id,
+                    input.occurred_at(),
+                )?);
             }
             let events = Self::append(&tx, session_id, position, drafts)?;
+            Self::ensure_run_cursors(&tx, session_id)?;
             self.finish(tx, session_id, events, None)
         })
+    }
+
+    fn append_model_run_facts(
+        &self,
+        input: AppendModelRunFactsInputDto,
+    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
+        let session_id = input.session_id();
+        let run_id = input.run_id();
+        immediate_transaction!(self, |tx| {
+            let run = load_scoped_run(&tx, session_id, run_id)?;
+            if run.status().is_terminal() {
+                return Err(invalid_run_cursor());
+            }
+            let cursor = current_run_cursor(&tx, run_id)?;
+            if cursor != input.expected_cursor() {
+                return Err(cursor_conflict());
+            }
+            let mut next_cursor = cursor.value();
+            let mut drafts = Vec::with_capacity(input.facts().len());
+            let mut facts = Vec::with_capacity(input.facts().len());
+            for input_fact in input.facts() {
+                next_cursor = next_cursor.checked_add(1).ok_or_else(invalid_run_cursor)?;
+                let fact =
+                    ModelRunFactDto::new(RunEventCursorDto::new(next_cursor), input_fact.clone())?;
+                let encoded = serde_json::to_vec(&fact).map_err(codec_error)?;
+                if encoded.len() > MAX_CANONICAL_FACT_BYTES {
+                    return Err(fact_too_large());
+                }
+                let payload =
+                    model_fact_event(session_id, run_id, fact.clone(), input.occurred_at());
+                drafts.push(EventDraft::new(
+                    Some(run_id),
+                    Some(run.turn_id()),
+                    input.occurred_at(),
+                    payload,
+                ));
+                facts.push(fact);
+            }
+            if let Some(status) = input.status() {
+                validate_run_status_transition(run.status(), status)?;
+                tx.execute(
+                    "UPDATE runs SET status=?3 WHERE session_id=?1 AND run_id=?2",
+                    sqlite::params![
+                        session_id.to_string(),
+                        run_id.to_string(),
+                        status_name(status),
+                    ],
+                )
+                .map_err(storage_error)?;
+                drafts.push(EventDraft::new(
+                    Some(run_id),
+                    Some(run.turn_id()),
+                    input.occurred_at(),
+                    DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
+                        session_id,
+                        run_id,
+                        status,
+                        input.occurred_at(),
+                    )),
+                ));
+                if status.is_terminal() {
+                    drafts.extend(Self::promote_oldest_queued_turn(
+                        &tx,
+                        session_id,
+                        input.occurred_at(),
+                    )?);
+                }
+            }
+            let position = sequence(&tx, session_id)?;
+            let events = Self::append(&tx, session_id, position, drafts)?;
+            Self::ensure_run_cursors(&tx, session_id)?;
+            for (fact, event) in facts.iter().zip(events.iter()) {
+                tx.execute(
+                    "INSERT INTO model_run_facts(run_id, cursor, event_id) VALUES (?1, ?2, ?3)",
+                    sqlite::params![
+                        run_id.to_string(),
+                        sqlite_integer(
+                            fact.cursor().value(),
+                            "run event cursor is outside the SQLite range"
+                        )?,
+                        event.event_id().to_string(),
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+            tx.execute(
+                "UPDATE run_cursors SET cursor=?2 WHERE run_id=?1 AND session_id=?3",
+                sqlite::params![
+                    run_id.to_string(),
+                    sqlite_integer(next_cursor, "run event cursor is outside the SQLite range")?,
+                    session_id.to_string(),
+                ],
+            )
+            .map_err(storage_error)?;
+            self.fault(FaultPoint::ModelFacts)?;
+            let projection = Self::project(&tx, session_id)?;
+            self.fault(FaultPoint::Projection)?;
+            Self::snapshot(&tx, &projection)?;
+            self.fault(FaultPoint::Snapshot)?;
+            let snapshot = load_model_run_snapshot(&tx, session_id, run_id)?;
+            let outcome = AppendModelRunFactsOutcomeDto::new(
+                RunEventCursorDto::new(next_cursor),
+                snapshot,
+                facts,
+            )?;
+            tx.commit().map_err(storage_error)?;
+            Ok(outcome)
+        })
+    }
+
+    fn load_current_run_replay(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunReplayDto> {
+        let connection = self.connection()?;
+        let snapshot = load_model_run_snapshot(&connection, session_id, run_id)?;
+        drop(connection);
+        RunReplayDto::new(
+            snapshot.clone(),
+            RunEventTailPageDto::empty(session_id, run_id, snapshot.cursor()),
+        )
+    }
+
+    fn load_run_tail(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        after_cursor: RunEventCursorDto,
+    ) -> DtoResult<RunEventTailPageDto> {
+        let connection = self.connection()?;
+        let _run = load_scoped_run(&connection, session_id, run_id)?;
+        let current_cursor = current_run_cursor(&connection, run_id)?;
+        if after_cursor > current_cursor {
+            return Err(invalid_run_cursor());
+        }
+        let after = sqlite_integer(
+            after_cursor.value(),
+            "run event cursor is outside the SQLite range",
+        )
+        .map_err(|_| invalid_run_cursor())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT domain_events.envelope_json FROM model_run_facts JOIN domain_events ON domain_events.event_id=model_run_facts.event_id WHERE model_run_facts.run_id=?1 AND model_run_facts.cursor>?2 ORDER BY model_run_facts.cursor LIMIT ?3",
+            )
+            .map_err(|_| run_history_unavailable())?;
+        let rows = statement
+            .query_map(
+                sqlite::params![
+                    run_id.to_string(),
+                    after,
+                    i64::try_from(MAX_TAIL_FACTS + 1).map_err(|_| invalid_run_cursor())?
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|_| run_history_unavailable())?;
+        let mut facts = Vec::new();
+        let mut byte_count = 0_usize;
+        let mut has_more = false;
+        for row in rows {
+            let encoded = row.map_err(|_| run_history_unavailable())?;
+            let event: EventEnvelopeDto<DomainEventDto> =
+                serde_json::from_str(&encoded).map_err(|_| run_history_unavailable())?;
+            let fact = domain_model_fact(event.payload()).ok_or_else(run_history_unavailable)?;
+            if event.session_id() != session_id
+                || event.run_id() != Some(run_id)
+                || fact.fact().cursor().value() <= after_cursor.value()
+            {
+                return Err(run_history_unavailable());
+            }
+            let canonical =
+                serde_json::to_vec(fact.fact()).map_err(|_| run_history_unavailable())?;
+            if facts.len() == MAX_TAIL_FACTS
+                || byte_count.saturating_add(canonical.len()) > MAX_TAIL_CANONICAL_BYTES
+            {
+                has_more = true;
+                break;
+            }
+            byte_count += canonical.len();
+            facts.push(fact.fact().clone());
+        }
+        let next = facts.last().map_or(after_cursor, ModelRunFactDto::cursor);
+        drop(statement);
+        drop(connection);
+        RunEventTailPageDto::new(session_id, run_id, after_cursor, facts, next, has_more)
     }
 
     fn recover_unfinished_runs(
@@ -868,6 +1179,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FaultPoint {
     Events,
+    ModelFacts,
     Projection,
     Snapshot,
 }
@@ -893,6 +1205,162 @@ impl EventDraft {
         }
     }
 }
+fn current_run_cursor(
+    connection: &sqlite::Connection,
+    run_id: RunId,
+) -> DtoResult<RunEventCursorDto> {
+    let cursor: i64 = connection
+        .query_row(
+            "SELECT cursor FROM run_cursors WHERE run_id=?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| run_history_unavailable())?;
+    Ok(RunEventCursorDto::new(
+        u64::try_from(cursor).map_err(|_| run_history_unavailable())?,
+    ))
+}
+
+fn load_scoped_run(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<RunProjectionDto> {
+    let row = connection
+        .query_row(
+            "SELECT turn_id, status, config_revision_id FROM runs WHERE session_id=?1 AND run_id=?2",
+            sqlite::params![session_id.to_string(), run_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| run_replay_not_found())?;
+    run_projection(session_id, &run_id.to_string(), &row.0, &row.1, &row.2)
+        .map_err(|_| run_history_unavailable())
+}
+
+const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventDto> {
+    match event {
+        DomainEventDto::ProviderAttemptStarted(value)
+        | DomainEventDto::ProviderAttemptFailed(value)
+        | DomainEventDto::RetryScheduled(value)
+        | DomainEventDto::AssistantContentAppended(value)
+        | DomainEventDto::ReasoningDeltaRecorded(value)
+        | DomainEventDto::UsageRecorded(value)
+        | DomainEventDto::ToolCallRecorded(value)
+        | DomainEventDto::Finished(value)
+        | DomainEventDto::Failed(value) => Some(value),
+        _ => None,
+    }
+}
+
+const fn model_fact_event(
+    session_id: SessionId,
+    run_id: RunId,
+    fact: ModelRunFactDto,
+    occurred_at: TimestampDto,
+) -> DomainEventDto {
+    let event = ModelRunFactEventDto::new(session_id, run_id, fact, occurred_at);
+    match event.fact().kind() {
+        intention_domain::ModelRunFactKindDto::ProviderAttemptStarted => {
+            DomainEventDto::ProviderAttemptStarted(event)
+        }
+        intention_domain::ModelRunFactKindDto::ProviderAttemptFailed => {
+            DomainEventDto::ProviderAttemptFailed(event)
+        }
+        intention_domain::ModelRunFactKindDto::RetryScheduled => {
+            DomainEventDto::RetryScheduled(event)
+        }
+        intention_domain::ModelRunFactKindDto::AssistantContentAppended => {
+            DomainEventDto::AssistantContentAppended(event)
+        }
+        intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded => {
+            DomainEventDto::ReasoningDeltaRecorded(event)
+        }
+        intention_domain::ModelRunFactKindDto::UsageRecorded => {
+            DomainEventDto::UsageRecorded(event)
+        }
+        intention_domain::ModelRunFactKindDto::ToolCallRecorded => {
+            DomainEventDto::ToolCallRecorded(event)
+        }
+        intention_domain::ModelRunFactKindDto::Finished => DomainEventDto::Finished(event),
+        intention_domain::ModelRunFactKindDto::Failed => DomainEventDto::Failed(event),
+    }
+}
+
+fn model_projection(
+    connection: &sqlite::Connection,
+    run: RunProjectionDto,
+    cursor: RunEventCursorDto,
+) -> DtoResult<ModelRunProjectionDto> {
+    let mut statement = connection
+        .prepare(
+            "SELECT domain_events.envelope_json FROM model_run_facts JOIN domain_events ON domain_events.event_id=model_run_facts.event_id WHERE model_run_facts.run_id=?1 ORDER BY model_run_facts.cursor",
+        )
+        .map_err(|_| run_history_unavailable())?;
+    let rows = statement
+        .query_map([run.run_id().to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_history_unavailable())?;
+    let mut assistant_turn_id = None;
+    let mut assistant_content = String::new();
+    let mut last_assistant_turn = None;
+    let mut usage = None;
+    let mut finish_reason = None;
+    let mut failure = None;
+    for row in rows {
+        let encoded = row.map_err(|_| run_history_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_history_unavailable())?;
+        let fact = domain_model_fact(event.payload()).ok_or_else(run_history_unavailable)?;
+        match fact.fact().input() {
+            ModelRunFactInputDto::AssistantContentAppended {
+                assistant_turn_id: turn,
+                content,
+            } => {
+                if last_assistant_turn != Some(*turn) {
+                    assistant_content.clear();
+                    last_assistant_turn = Some(*turn);
+                }
+                assistant_turn_id = Some(*turn);
+                assistant_content.push_str(content);
+            }
+            ModelRunFactInputDto::UsageRecorded { usage: value } => usage = Some(*value),
+            ModelRunFactInputDto::Finished { reason } => finish_reason = Some(*reason),
+            ModelRunFactInputDto::Failed { failure: value } => failure = Some(value.clone()),
+            _ => {}
+        }
+    }
+    ModelRunProjectionDto::new(
+        run,
+        cursor,
+        assistant_turn_id,
+        assistant_content,
+        usage,
+        finish_reason,
+        failure,
+    )
+    .map_err(|_| run_history_unavailable())
+}
+
+fn load_model_run_snapshot(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<RunSnapshotDto> {
+    let encoded: String = connection
+        .query_row(
+            "SELECT snapshot_json FROM model_run_snapshots WHERE session_id=?1 AND run_id=?2",
+            sqlite::params![session_id.to_string(), run_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| run_replay_not_found())?;
+    serde_json::from_str(&encoded).map_err(|_| run_history_unavailable())
+}
+
 fn sequence(tx: &sqlite::Transaction<'_>, session: SessionId) -> DtoResult<u64> {
     let value: i64 = tx
         .query_row(
@@ -964,6 +1432,61 @@ fn parse_status(value: &str) -> DtoResult<RunStatusDto> {
         _ => Err(codec_error("invalid durable status")),
     }
 }
+fn run_history_unavailable() -> ErrorDto {
+    ErrorDto::new(
+        "run_history_unavailable",
+        ErrorCategoryDto::Unavailable,
+        "the durable run history is unavailable",
+        ErrorRetryDto::Manual,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn run_replay_not_found() -> ErrorDto {
+    ErrorDto::new(
+        "run_replay_not_found",
+        ErrorCategoryDto::NotFound,
+        "the requested durable run replay does not exist",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn invalid_run_cursor() -> ErrorDto {
+    ErrorDto::new(
+        "invalid_run_event_cursor",
+        ErrorCategoryDto::Validation,
+        "run event cursor is not valid for the requested durable history",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn cursor_conflict() -> ErrorDto {
+    ErrorDto::new(
+        "run_event_cursor_conflict",
+        ErrorCategoryDto::Conflict,
+        "run event cursor no longer matches durable history",
+        ErrorRetryDto::Immediate,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn fact_too_large() -> ErrorDto {
+    ErrorDto::new(
+        "run_fact_too_large",
+        ErrorCategoryDto::Validation,
+        "individual durable model fact exceeds the canonical size limit",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
 fn unavailable() -> ErrorDto {
     ErrorDto::unavailable(
         "storage_unavailable",
@@ -1022,13 +1545,16 @@ mod tests {
     )]
     use super::*;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
-    use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+    use intention_domain::{
+        CreateSessionCommandDto, RunEventCursorDto, RunModeDto, WorkspaceRootDto,
+    };
     use intention_storage::{
-        AcceptUserTurnInputDto, CreateSessionInputDto, StorageRepositoryDto, TransitionRunInputDto,
+        AcceptUserTurnInputDto, AppendModelRunFactsInputDto, CreateSessionInputDto,
+        StorageRepositoryDto, TransitionRunInputDto,
     };
     use intention_types::{
         ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-        TimestampDto, TurnId, WorkspaceId,
+        TimestampDto, TurnId, UsageDto, WorkspaceId,
     };
 
     fn fixture_time(value: i64) -> TimestampDto {
@@ -1102,6 +1628,25 @@ mod tests {
                 .collect::<Vec<_>>()
         })
         .collect()
+    }
+
+    fn raw_model_snapshot_rows(
+        location: &SqliteDatabaseLocationDto,
+    ) -> Vec<(String, i64, i64, String)> {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let mut statement = connection
+            .prepare(
+                "SELECT run_id, sequence, cursor, snapshot_json FROM model_run_snapshots ORDER BY run_id",
+            )
+            .expect("model snapshot query prepares");
+        statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("model snapshot query executes")
+            .map(|row| row.expect("model snapshot row reads"))
+            .collect()
     }
 
     fn fixture_workspace_root() -> WorkspaceRootDto {
@@ -1403,6 +1948,101 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn model_fact_fault_stages_roll_back_envelope_index_projection_and_snapshots() {
+        for point in [
+            FaultPoint::ModelFacts,
+            FaultPoint::Projection,
+            FaultPoint::Snapshot,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            let session_id = create_fixture_session(&repository);
+            let run_id = RunId::new();
+            accept_fixture_turn(&repository, session_id, TurnId::new(), run_id, "active");
+            repository
+                .append_model_run_facts(
+                    AppendModelRunFactsInputDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(0),
+                        vec![
+                            ModelRunFactInputDto::provider_attempt_started(1)
+                                .expect("attempt is valid"),
+                        ],
+                        None,
+                        fixture_time(3),
+                    )
+                    .expect("initial fact input is valid"),
+                )
+                .expect("initial fact appends");
+            let baseline_replay = repository
+                .load_current_run_replay(session_id, run_id)
+                .expect("baseline replay loads");
+            let baseline_model_snapshots = raw_model_snapshot_rows(&location);
+            let baseline_facts: i64 = {
+                let connection =
+                    sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM model_run_facts WHERE run_id=?1",
+                        [run_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .expect("fact count loads")
+            };
+            repository.arm_fault(point);
+            assert_eq!(
+                repository
+                    .append_model_run_facts(
+                        AppendModelRunFactsInputDto::new(
+                            session_id,
+                            run_id,
+                            RunEventCursorDto::new(1),
+                            vec![ModelRunFactInputDto::usage_recorded(UsageDto::NotReported)],
+                            Some(RunStatusDto::Failed),
+                            fixture_time(4),
+                        )
+                        .expect("fault append input is valid"),
+                    )
+                    .expect_err("injected model fact stage rolls back")
+                    .code(),
+                "injected_storage_fault"
+            );
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                reopened
+                    .load_current_run_replay(session_id, run_id)
+                    .expect("reopened replay loads"),
+                baseline_replay
+            );
+            assert_eq!(
+                reopened
+                    .load_session_snapshot(session_id)
+                    .expect("reopened session snapshot loads")
+                    .active_run()
+                    .expect("run remains active after rollback")
+                    .status(),
+                RunStatusDto::Starting
+            );
+            drop(reopened);
+            assert_eq!(raw_model_snapshot_rows(&location), baseline_model_snapshots);
+            let connection =
+                sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+            let fact_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM model_run_facts WHERE run_id=?1",
+                    [run_id.to_string()],
+                    |row| row.get(0),
+                )
+                .expect("fact count reloads");
+            assert_eq!(fact_count, baseline_facts);
+        }
+    }
+
     #[test]
     fn location_is_absolute_and_faults_are_single_use() {
         assert!(SqliteDatabaseLocationDto::new("relative.db").is_err());

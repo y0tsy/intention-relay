@@ -110,8 +110,11 @@ newer on-disk schema. Storage combines:
 
 The M3 schema contains `projects`, `workspace_roots`, `sessions`, `turns`,
 `runs`, `queued_turns`, `configuration_revisions`, `domain_events`,
-`session_snapshots`, and `run_snapshots`. Tool, message, plan, todo, permission,
-and question persistence belongs to later owning milestones.
+`session_snapshots`, and `run_snapshots`. M4 schema v2 retains those tables and
+adds `run_cursors`, `model_run_facts`, and `model_run_snapshots`. The fact index
+references the canonical typed `domain_events` envelope; it stores no duplicate
+payload. Migration creates cursor-zero M4 snapshots for every M3 run using its
+original run projection, status, sequence, and revision with no synthetic facts.
 
 ## Transaction and publication order
 
@@ -140,16 +143,32 @@ no live fan-out; a later one-shot replay reads the committed durable state.
 
 M3 event payloads are closed, explicit facts: `SessionCreated`,
 `UserTurnAccepted`, `UserTurnQueued`, `QueuedTurnRemoved`, `RunStarted`, and
-`RunStatusChanged`. `ConfigurationRevisionAccepted` and `PlanStatusChanged` are
-reserved typed taxonomy for their later workflows; M3 does not claim they are
-emitted by an accepted configuration edit or plan action.
+`RunStatusChanged`. M4 adds typed durable model facts: `ProviderAttemptStarted`,
+`ProviderAttemptFailed`, `RetryScheduled`, `AssistantContentAppended`,
+`ReasoningDeltaRecorded`, `UsageRecorded`, `ToolCallRecorded`, `Finished`, and
+`Failed`. Every M4 fact is a typed `DomainEventDto` payload with its dedicated
+per-run cursor; no raw JSON payload is an event boundary.
+`ConfigurationRevisionAccepted` and `PlanStatusChanged` are reserved typed
+taxonomy for their later workflows; M3 does not claim they are emitted by an
+accepted configuration edit or plan action.
 
 - Domain events are ordered per session with `SessionEventSequenceDto`.
 - Event IDs provide deduplication; sequence provides ordering.
 - Every state-changing commit persists a snapshot whose `at_sequence` includes its final event.
 - A replay-only subscriber without a run scope receives the current durable projection snapshot and an empty contiguous tail at that snapshot's sequence, or a typed resync response. A known-session tail position beyond the durable final sequence, including one outside SQLite's integer range, fails typed `invalid_event_tail_position` before a history query; an unknown session remains typed not-found.
-- Every request with `run_id: Some` receives typed `HistoryUnavailable` resync for M3, including matching, nonexistent, cross-session, unknown-session, and future-cursor run IDs; it never receives unfiltered session state because the session-contiguous snapshot/tail DTOs cannot safely represent a filtered run view.
-- Correct run-scoped replay is deferred to the persistent streaming and representation hardening marked `@todo(m4-streaming)`; M3 does not claim that resync is a full stream.
+- Correct run-scoped replay uses a dedicated `RunSnapshotDto` and
+  `RunEventTailPageDto`; it never filters a session snapshot. A current replay
+  returns the snapshot at cursor C and an empty tail after C. Tail reads are
+  strict `> after_cursor`, contiguous, at most 256 facts and 512 KiB canonical
+  fact data, and return `next_after_cursor` plus `has_more`. Unknown or
+  cross-session runs return `run_replay_not_found`; bad cursors return
+  `invalid_run_event_cursor`; unavailable history returns
+  `run_history_unavailable`. An append above the 512 KiB individual fact limit
+  returns `run_fact_too_large`; a stale expected cursor returns
+  `run_event_cursor_conflict` with immediate retry guidance.
+- M3 public subscription behavior remains unchanged: every request with
+  `run_id: Some` receives typed `HistoryUnavailable` resync and never receives
+  unfiltered session state.
 - Events are immutable. Corrections are new events and projection/snapshot updates, not history rewrites.
 - M3 retains complete stored history for its delivered replay behavior; compaction/retention policy remains future work.
 
@@ -179,6 +198,7 @@ and observed state, not proof of external atomicity.
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `interrupted` before readiness; no external work resumes. |
 | Replay-only consistency | Durable facade snapshot/tail/resync contract test. | One-shot subscription returns a current projection plus stored contiguous tail or typed resync, never a live stream. |
 | SQLite migration and config persistence | SQLite migration/future-schema and safe snapshot persistence fixtures. | Supported migrations apply, a future schema fails safely, and only credential-free snapshot data persists. |
+| M4 durable model facts and replay | Domain/storage/SQLite contract fixtures, M3-v1 migration fixture, and fault injection after fact envelope/index, projection, and snapshot stages. | Typed fact batches use exact cursors, bounded scoped replay never leaks a run, legacy M3 runs receive cursor-zero M4 snapshots with no synthetic facts, and every injected stage rolls back fact/index/cursor/projection/session/M4 snapshot state. |
 
 ## Quality-gate integration
 

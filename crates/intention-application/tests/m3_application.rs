@@ -12,13 +12,15 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
-    RemoveQueuedTurnCommandDto, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, ModelRunProjectionDto,
+    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto,
+    RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto,
     SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
+    AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
     RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
     TransitionRunInputDto,
 };
@@ -98,6 +100,31 @@ fn change(
     .expect("fixture change is valid")
 }
 
+fn current_run_replay(session_id: SessionId, run_id: RunId) -> RunReplayDto {
+    let run = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        ConfigRevisionId::new(),
+    );
+    let projection =
+        ModelRunProjectionDto::new(run, RunEventCursorDto::new(0), None, "", None, None, None)
+            .expect("model projection is valid");
+    let snapshot = RunSnapshotDto::new(
+        session_id,
+        run_id,
+        SessionEventSequenceDto::new(0),
+        projection,
+    )
+    .expect("run snapshot is valid");
+    RunReplayDto::new(
+        snapshot,
+        RunEventTailPageDto::empty(session_id, run_id, RunEventCursorDto::new(0)),
+    )
+    .expect("run replay is valid")
+}
+
 struct FakeRepository {
     accepted: RefCell<DtoResult<CommittedChangeDto>>,
     accepted_inputs: RefCell<Vec<AcceptUserTurnInputDto>>,
@@ -105,6 +132,7 @@ struct FakeRepository {
     removed: RefCell<Option<CommittedChangeDto>>,
     transitioned: RefCell<Option<CommittedChangeDto>>,
     loaded_snapshot: RefCell<Option<SessionProjectionDto>>,
+    loaded_replay: RefCell<Option<RunReplayDto>>,
 }
 
 impl FakeRepository {
@@ -116,6 +144,7 @@ impl FakeRepository {
             removed: RefCell::new(None),
             transitioned: RefCell::new(None),
             loaded_snapshot: RefCell::new(None),
+            loaded_replay: RefCell::new(None),
         }
     }
 }
@@ -145,6 +174,38 @@ impl StorageRepositoryDto for FakeRepository {
         self.transitioned.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
         })
+    }
+
+    fn append_model_run_facts(
+        &self,
+        _input: AppendModelRunFactsInputDto,
+    ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "model facts are not used by this fixture",
+        ))
+    }
+
+    fn load_current_run_replay(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<RunReplayDto> {
+        self.loaded_replay.borrow().clone().ok_or_else(|| {
+            ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
+        })
+    }
+
+    fn load_run_tail(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _after_cursor: RunEventCursorDto,
+    ) -> DtoResult<RunEventTailPageDto> {
+        Err(ErrorDto::unavailable(
+            "fixture_unused",
+            "model tail is not used by this fixture",
+        ))
     }
 
     fn recover_unfinished_runs(
@@ -335,6 +396,23 @@ fn stop_and_snapshot_workflows_map_durable_results() {
         .expect("snapshot maps");
     assert_eq!(snapshot.session_id(), session_id);
     assert_eq!(snapshot.projection(), Some(&state));
+}
+
+#[test]
+fn application_exposes_internal_run_replay_without_changing_protocol_results() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "fixture_unused",
+        "accept is not used by this fixture",
+    )));
+    *repository.loaded_replay.borrow_mut() = Some(current_run_replay(session_id, run_id));
+    let application = ApplicationService::new(&repository);
+    let replay = application
+        .load_current_run_replay(session_id, run_id)
+        .expect("internal replay maps from storage");
+    assert_eq!(replay.snapshot().run_id(), run_id);
+    assert!(replay.tail().facts().is_empty());
 }
 
 #[test]
