@@ -76,11 +76,14 @@ public_resource_patterns = [
 "intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-types"]
 "intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-types"]
-"intention-runtime" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
+"intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
 "intention-model" = ["intention-types"]
 "intention-provider-openrouter" = ["intention-config", "intention-model", "intention-types"]
 "intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-types"]
+
+[future_dependencies]
+"intention-runtime" = ["intention-model"]
 
 [external_dependencies]
 "intention-types" = ["serde", "serde_json", "uuid"]
@@ -92,12 +95,12 @@ public_resource_patterns = [
 "intention" = ["tempfile"]
 "intention-daemon" = ["tempfile"]
 "intention-application" = []
-"intention-runtime" = []
+"intention-runtime" = ["futures-executor", "futures-util"]
 "intention-storage" = ["serde_json"]
 "intention-storage-sqlite" = ["rusqlite", "rusqlite_migration", "serde_json", "tempfile"]
-"intention-model" = ["serde", "serde_json"]
-"intention-provider-openrouter" = ["openrouter-rs", "serde_json"]
-"intention-provider-generic-chat" = ["async-openai", "serde_json"]
+"intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
+"intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
+"intention-provider-generic-chat" = ["async-openai", "futures-util", "serde_json"]
 
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
@@ -189,21 +192,21 @@ coverage_tier = "B"
 name = "intention-runtime"
 responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
 test_target = "deterministic actor integration tests"
-test_targets = ["m3_runtime"]
+test_targets = ["m3_runtime", "m4_model_execution"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage"
 responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
 test_target = "repository contract tests"
-test_targets = ["contracts", "m4_run_replay_contracts"]
+test_targets = ["contracts", "m4_run_replay_contracts", "m4_run_safe_config"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage-sqlite"
 responsibility = "SQLite schema, migrations, projections, and repository implementation."
 test_target = "migration and transaction fault-injection tests"
-test_targets = ["sqlite_contracts", "m4_durable_facts"]
+test_targets = ["sqlite_contracts", "m4_durable_facts", "m4_run_safe_config"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -217,7 +220,7 @@ coverage_tier = "A"
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = ["model_contracts", "m4_reexports"]
+test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]
 coverage_tier = "C"
 
 [[future_crates]]

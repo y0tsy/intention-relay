@@ -19,7 +19,7 @@ ModelDriver
   preflight(ModelRequestDto) -> DtoResult<()>
 ```
 
-M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and `ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage facts, followed by exactly one terminal `Finished` fact. A second start, a fact before start or after finish, duplicate usage, or a second finish fails validation. Runtime-owned execution and delivery of a native stream remain deferred from this foundation. `prepare_request` validates and privately translates a request only; it never performs an outbound provider action in Package 1.
+M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and `ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage facts, followed by exactly one terminal `Finished` fact. A second start, a fact before start or after finish, duplicate usage, or a second finish fails validation. `ModelRunExecutionService` consumes this injected stream, performs preflight only after exact persisted/current safe-selection equality, owns cancellation late-event suppression, deadlines, and retries, and persists only validated facts through the DTO-only storage contract. Its `ModelTimePort` exposes fresh provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio runtime. `prepare_request` validates and privately translates a request only; it never performs an outbound provider action in Package 1.
 
 Core DTO families:
 
@@ -127,7 +127,13 @@ Provider drivers do not invoke local tools directly.
 - A retry must produce explicit events and preserve causal relation to the originating model turn.
 - A daemon restart does not retry an in-flight provider request.
 
-Exact backoff values and retryable status mapping are implementation-required before production use.
+The runtime uses the immutable persisted attempt timeout and at most two total
+attempts. A deadline is a retryable `provider_attempt_timed_out` failure. Before
+any durable text, reasoning, usage, or tool fact, only a delayed/retryable
+provider failure may produce one retry; it appends `ProviderAttemptFailed(1)`,
+then `RetryScheduled(1, 2)`, waits exactly 250 ms through `ModelTimePort`, and
+starts attempt two. Cancellation races the stream, deadline, and wait; once
+cancelling is durable it suppresses later provider events/errors and retries.
 
 ## Required tests and outcomes
 

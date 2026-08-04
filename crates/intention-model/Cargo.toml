@@ -10,8 +10,11 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+futures-core = "0.3.31"
+futures-util = "0.3.31"
 intention-types = { path = "../intention-types", version = "=0.0.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
+futures-executor = "0.3.31"
 serde_json = "1.0.149"

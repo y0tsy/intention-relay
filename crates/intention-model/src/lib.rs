@@ -4,6 +4,17 @@
 //! resources. Provider crates translate their native responses into these
 //! validated DTOs before crossing the provider boundary.
 
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, Waker},
+};
+
+use futures_core::Stream;
 use intention_types::{DtoResult, ErrorDto, ErrorRetryDto, RunId};
 pub use intention_types::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -525,4 +536,126 @@ pub trait ModelDriver {
         self.capabilities()
             .ensure_supports(request.requested_capabilities())
     }
+}
+
+/// Provider-neutral cancellation state shared with a model execution stream.
+#[derive(Clone, Default)]
+pub struct ModelCancellationSignal {
+    state: Arc<CancellationState>,
+}
+
+#[derive(Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    next_waiter_id: AtomicUsize,
+    waiters: Mutex<Vec<(usize, Waker)>>,
+}
+
+impl ModelCancellationSignal {
+    /// Creates a cancellation signal in its active state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Requests cancellation and wakes every current waiter.
+    pub fn cancel(&self) {
+        if !self.state.cancelled.swap(true, Ordering::AcqRel) {
+            let waiters = match self.state.waiters.lock() {
+                Ok(mut waiters) => std::mem::take(&mut *waiters),
+                Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+            };
+            for (_, waiter) in waiters {
+                waiter.wake();
+            }
+        }
+    }
+
+    /// Returns a fresh independently awaitable future that completes on cancellation.
+    #[must_use]
+    pub fn cancelled(&self) -> ModelCancelledFuture {
+        ModelCancelledFuture {
+            state: self.state.clone(),
+            waiter_id: None,
+        }
+    }
+}
+
+/// Provider-neutral future returned by [`ModelCancellationSignal::cancelled`].
+pub struct ModelCancelledFuture {
+    state: Arc<CancellationState>,
+    waiter_id: Option<usize>,
+}
+
+impl Future for ModelCancelledFuture {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.state.cancelled.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        let waiter_id = self.waiter_id.unwrap_or_else(|| {
+            let waiter_id = self.state.next_waiter_id.fetch_add(1, Ordering::Relaxed);
+            self.waiter_id = Some(waiter_id);
+            waiter_id
+        });
+        match self.state.waiters.lock() {
+            Ok(mut waiters) => replace_waiter(&mut waiters, waiter_id, context.waker()),
+            Err(poisoned) => {
+                let mut waiters = poisoned.into_inner();
+                replace_waiter(&mut waiters, waiter_id, context.waker());
+            }
+        }
+        if self.state.cancelled.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl Drop for ModelCancelledFuture {
+    fn drop(&mut self) {
+        let Some(waiter_id) = self.waiter_id else {
+            return;
+        };
+        match self.state.waiters.lock() {
+            Ok(mut waiters) => remove_waiter(&mut waiters, waiter_id),
+            Err(poisoned) => remove_waiter(&mut poisoned.into_inner(), waiter_id),
+        }
+    }
+}
+
+fn replace_waiter(waiters: &mut Vec<(usize, Waker)>, waiter_id: usize, waker: &Waker) {
+    if let Some((_, current)) = waiters.iter_mut().find(|(id, _)| *id == waiter_id) {
+        if !current.will_wake(waker) {
+            *current = waker.clone();
+        }
+    } else {
+        waiters.push((waiter_id, waker.clone()));
+    }
+}
+
+fn remove_waiter(waiters: &mut Vec<(usize, Waker)>, waiter_id: usize) {
+    waiters.retain(|(id, _)| *id != waiter_id);
+}
+
+/// Ordered provider-neutral execution stream.
+pub type ModelEventStream =
+    Pin<Box<dyn Stream<Item = Result<ModelEventDto, ProviderErrorDto>> + Send>>;
+
+/// Provider-neutral asynchronous execution boundary.
+pub trait ModelExecutionDriver: ModelDriver {
+    /// Starts a validated model request and returns ordered normalized provider events.
+    fn execute(
+        &self,
+        request: ModelRequestDto,
+        cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream;
 }

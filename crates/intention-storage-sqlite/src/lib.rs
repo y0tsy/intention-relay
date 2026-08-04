@@ -973,6 +973,30 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
+    fn load_run_config_snapshot(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ConfigSnapshotDto> {
+        let connection = self.connection()?;
+        let revision_id: String = connection
+            .query_row(
+                "SELECT config_revision_id FROM runs WHERE session_id=?1 AND run_id=?2",
+                sqlite::params![session_id.to_string(), run_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|_| run_configuration_not_found())?;
+        let snapshot: String = connection
+            .query_row(
+                "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
+                [revision_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| run_configuration_unavailable())?;
+        drop(connection);
+        serde_json::from_str(&snapshot).map_err(|_| run_configuration_unavailable())
+    }
+
     fn load_current_run_replay(
         &self,
         session_id: SessionId,
@@ -1432,6 +1456,28 @@ fn parse_status(value: &str) -> DtoResult<RunStatusDto> {
         _ => Err(codec_error("invalid durable status")),
     }
 }
+fn run_configuration_unavailable() -> ErrorDto {
+    ErrorDto::new(
+        "run_configuration_unavailable",
+        ErrorCategoryDto::Unavailable,
+        "the durable run configuration is unavailable",
+        ErrorRetryDto::Manual,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn run_configuration_not_found() -> ErrorDto {
+    ErrorDto::new(
+        "run_configuration_not_found",
+        ErrorCategoryDto::NotFound,
+        "the requested durable run configuration does not exist",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
 fn run_history_unavailable() -> ErrorDto {
     ErrorDto::new(
         "run_history_unavailable",

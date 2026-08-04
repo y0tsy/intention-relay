@@ -36,12 +36,12 @@ fn execution_policy_defaults_and_overrides_are_safe_snapshot_data() {
     assert_eq!(defaulted.provider_execution().max_attempts(), 2);
 
     let overridden =
-        resolve("[provider.execution]\nattempt_timeout_seconds = 60\nmax_attempts = 3\n");
+        resolve("[provider.execution]\nattempt_timeout_seconds = 60\nmax_attempts = 2\n");
     assert_eq!(
         overridden.provider_execution().attempt_timeout_seconds(),
         60
     );
-    assert_eq!(overridden.provider_execution().max_attempts(), 3);
+    assert_eq!(overridden.provider_execution().max_attempts(), 2);
 
     let encoded = serde_json::to_string(&overridden).expect("safe projection serializes");
     assert!(!encoded.contains(FAKE_CREDENTIAL));
@@ -63,7 +63,7 @@ fn execution_policy_rejects_out_of_range_values_without_redacting_errors() {
             "invalid_provider_max_attempts",
         ),
         (
-            "[provider.execution]\nmax_attempts = 4\n",
+            "[provider.execution]\nmax_attempts = 3\n",
             "invalid_provider_max_attempts",
         ),
     ] {
