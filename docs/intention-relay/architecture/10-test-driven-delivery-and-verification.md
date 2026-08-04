@@ -53,6 +53,17 @@ For each implementation slice:
 6. run `make verify` before accepting the slice;
 7. record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open decision, never by omitted test coverage.
 
+For an explicitly authorized M4 lane, agents first read the controller-owned
+[`M4 execution charter`](../m4.md), `AGENTS.md`, and the lane's named
+architecture sources. They add the complete bounded test portfolio before
+production behavior, finish the bounded implementation without per-function
+compile loops, then validate related failures in a batched Makefile phase. The
+charter does not reduce required evidence: until a separately accepted
+package-scoped Makefile lane gate exists, every lane follows this document's
+standard `make quick` / `make verify` acceptance rule. A future candidate lane
+is never accepted M4 behavior until its documented integration barrier passes
+`make verify`.
+
 A test should expose the observable intent. Avoid tests that only assert private implementation steps when a stable contract or result can be asserted instead.
 
 ## Architecture rules to encode
