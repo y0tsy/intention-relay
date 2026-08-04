@@ -180,7 +180,7 @@ def test_workspace_dependency_cycle(root: Path) -> None:
 def test_executable_test_target_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["does-not-exist"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]', 'test_targets = ["does-not-exist"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -188,7 +188,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="intention-types: declared integration test targets",
         )
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["contracts", "contracts"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]', 'test_targets = ["contracts", "contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -262,7 +262,7 @@ def test_m4_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_reexports"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
         run(

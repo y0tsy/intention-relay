@@ -6,7 +6,8 @@
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveQueuedTurnCommandDto,
-    SendUserTurnCommandDto, StopRunCommandDto,
+    RunEventCursorDto, RunEventTailPageDto, RunReplayDto, SendUserTurnCommandDto,
+    StopRunCommandDto,
 };
 use intention_protocol::{
     CreateSessionAcceptedDto, ProtocolAcceptedResultDto, RemoveQueuedTurnAcceptedDto,
@@ -17,7 +18,7 @@ use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, CreateSessionInputDto,
     RemoveQueuedTurnInputDto, StorageRepositoryDto,
 };
-use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, TimestampDto};
+use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
 
 /// Explicit durable values selected for a create-session workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,6 +221,39 @@ where
             command.run_id(),
             change.position(),
         )))
+    }
+
+    /// Loads the current internal run-scoped durable replay.
+    ///
+    /// This application-facing read deliberately does not alter the M3 public
+    /// protocol subscription surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed repository error when the requested scoped replay is
+    /// absent, mismatched, or unavailable.
+    pub fn load_current_run_replay(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunReplayDto> {
+        self.repository.load_current_run_replay(session_id, run_id)
+    }
+
+    /// Loads one bounded internal run-scoped fact tail.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed repository error when the requested tail cannot be
+    /// read for this exact session/run identity and cursor.
+    pub fn load_run_tail(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        after_cursor: RunEventCursorDto,
+    ) -> DtoResult<RunEventTailPageDto> {
+        self.repository
+            .load_run_tail(session_id, run_id, after_cursor)
     }
 
     /// Loads the current durable session projection as a versioned protocol snapshot.
