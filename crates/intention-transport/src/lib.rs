@@ -6,6 +6,7 @@
 
 #[cfg(unix)]
 use std::fs;
+use std::future::Future;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -16,8 +17,14 @@ use intention_protocol::{
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::prelude::{LocalSocketListener, LocalSocketStream};
+use interprocess::local_socket::tokio::{
+    Listener as TokioLocalSocketListener, RecvHalf as TokioRecvHalf, SendHalf as TokioSendHalf,
+    Stream as TokioLocalSocketStream,
+};
 use interprocess::local_socket::traits::Listener as _;
+use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, PathNameType};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const FRAME_LENGTH_BYTES: usize = 4;
 const MAX_FRAME_BYTES: usize = 1_048_576;
@@ -269,6 +276,208 @@ impl Drop for LocalListener {
     }
 }
 
+/// An asynchronous local listener with the existing endpoint ownership policy.
+///
+/// It accepts one client at a time into an opaque daemon-side connection. The
+/// caller supplies the runtime; this transport type never creates one.
+pub struct AsyncLocalListener {
+    listener: TokioLocalSocketListener,
+    #[cfg(unix)]
+    endpoint: LocalEndpoint,
+}
+
+impl AsyncLocalListener {
+    /// Binds a user-private local endpoint for asynchronous connections.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe typed error when the parent cannot be prepared, another
+    /// listener owns the endpoint, or the local IPC implementation is unavailable.
+    pub fn bind(endpoint: LocalEndpoint) -> DtoResult<Self> {
+        prepare_parent_directory(&endpoint)?;
+        let listener = listener_options(&endpoint)?.create_tokio().map_err(|_| {
+            ErrorDto::new(
+                "local_daemon_endpoint_in_use",
+                ErrorCategoryDto::Conflict,
+                "the local daemon endpoint is already in use",
+                ErrorRetryDto::Immediate,
+                None,
+            )
+            .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
+        })?;
+        Ok(Self {
+            listener,
+            #[cfg(unix)]
+            endpoint,
+        })
+    }
+
+    /// Accepts one client into an asynchronous daemon-side connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe unavailable error when the listener cannot accept the
+    /// next peer connection.
+    pub async fn accept(&self) -> DtoResult<AsyncLocalDaemonConnection> {
+        let stream = self
+            .listener
+            .accept()
+            .await
+            .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+        Ok(AsyncLocalDaemonConnection { stream })
+    }
+}
+
+impl Drop for AsyncLocalListener {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = fs::remove_file(&self.endpoint.path);
+        }
+    }
+}
+
+/// An opaque asynchronous client connection before hello negotiation.
+pub struct AsyncLocalClientConnection {
+    stream: TokioLocalSocketStream,
+}
+
+impl AsyncLocalClientConnection {
+    /// Connects to the existing local endpoint with the fixed bounded wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe unavailable error when no daemon endpoint can be reached.
+    pub async fn connect(endpoint: &LocalEndpoint) -> DtoResult<Self> {
+        let options = ConnectOptions::new()
+            .name(endpoint.socket_name()?)
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT));
+        let stream = timeout_async_connect(CONNECT_TIMEOUT, options.connect_tokio())
+            .await
+            .map_err(|_| unavailable("local_daemon_unavailable"))?;
+        Ok(Self { stream })
+    }
+
+    /// Exchanges the client hello and consumes the connection into client roles.
+    ///
+    /// The returned roles retain only the appropriate typed protocol direction:
+    /// requests flow to the daemon and responses flow from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed incompatibility or safe framing/connection error when the
+    /// hello exchange cannot complete.
+    pub async fn negotiate(
+        mut self,
+        local: ProtocolHelloDto,
+    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncResponseReceiver)> {
+        write_async_frame(&mut self.stream, &local).await?;
+        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
+        local.version().ensure_compatible_with(remote.version())?;
+        let (receiver, sender) = self.stream.split();
+        Ok((
+            remote,
+            AsyncRequestSender { sender },
+            AsyncResponseReceiver { receiver },
+        ))
+    }
+}
+
+/// An opaque asynchronous daemon connection before hello negotiation.
+pub struct AsyncLocalDaemonConnection {
+    stream: TokioLocalSocketStream,
+}
+
+impl AsyncLocalDaemonConnection {
+    /// Exchanges the daemon hello and consumes the connection into daemon roles.
+    ///
+    /// The returned roles retain only the appropriate typed protocol direction:
+    /// requests arrive from the client and responses flow back to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed incompatibility or safe framing/connection error when the
+    /// hello exchange cannot complete.
+    pub async fn negotiate(
+        mut self,
+        local: ProtocolHelloDto,
+    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestReceiver, AsyncResponseSender)> {
+        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
+        local.version().ensure_compatible_with(remote.version())?;
+        write_async_frame(&mut self.stream, &local).await?;
+        let (receiver, sender) = self.stream.split();
+        Ok((
+            remote,
+            AsyncRequestReceiver { receiver },
+            AsyncResponseSender { sender },
+        ))
+    }
+}
+
+/// The client-to-daemon half of an established asynchronous connection.
+pub struct AsyncRequestSender {
+    sender: TokioSendHalf,
+}
+
+impl AsyncRequestSender {
+    /// Sends one bounded correlated protocol request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the request cannot be sent.
+    pub async fn send(&mut self, request: &ProtocolRequestEnvelopeDto) -> DtoResult<()> {
+        write_async_frame(&mut self.sender, request).await
+    }
+}
+
+/// The daemon-to-client half of an established asynchronous connection.
+pub struct AsyncResponseReceiver {
+    receiver: TokioRecvHalf,
+}
+
+impl AsyncResponseReceiver {
+    /// Receives one bounded correlated protocol response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the response cannot be read.
+    pub async fn receive(&mut self) -> DtoResult<ProtocolResponseEnvelopeDto> {
+        read_async_frame(&mut self.receiver).await
+    }
+}
+
+/// The client-to-daemon half that receives established requests.
+pub struct AsyncRequestReceiver {
+    receiver: TokioRecvHalf,
+}
+
+impl AsyncRequestReceiver {
+    /// Receives one bounded correlated protocol request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the request cannot be read.
+    pub async fn receive(&mut self) -> DtoResult<ProtocolRequestEnvelopeDto> {
+        read_async_frame(&mut self.receiver).await
+    }
+}
+
+/// The daemon-to-client half that sends established responses.
+pub struct AsyncResponseSender {
+    sender: TokioSendHalf,
+}
+
+impl AsyncResponseSender {
+    /// Sends one bounded correlated protocol response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe framing or connection error when the response cannot be sent.
+    pub async fn send(&mut self, response: &ProtocolResponseEnvelopeDto) -> DtoResult<()> {
+        write_async_frame(&mut self.sender, response).await
+    }
+}
+
 /// Performs the mandatory client/daemon hello exchange.
 ///
 /// # Errors
@@ -384,6 +593,68 @@ fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut LocalSocketStream) ->
     })
 }
 
+async fn timeout_async_connect<T>(
+    timeout: Duration,
+    connect: impl Future<Output = std::io::Result<T>>,
+) -> std::io::Result<T> {
+    tokio::time::timeout(timeout, connect)
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "local connect timed out"))?
+}
+
+async fn write_async_frame<T: serde::Serialize + Sync>(
+    stream: &mut (impl AsyncWrite + Send + Unpin),
+    value: &T,
+) -> DtoResult<()> {
+    let payload = serde_json::to_vec(value).map_err(|_| {
+        ErrorDto::validation(
+            "local_protocol_encode_failed",
+            "a typed local protocol message could not be encoded",
+        )
+    })?;
+    let length = u32::try_from(payload.len()).map_err(|_| oversized_frame())?;
+    if payload.len() > MAX_FRAME_BYTES {
+        return Err(oversized_frame());
+    }
+    stream
+        .write_all(&length.to_be_bytes())
+        .await
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    stream
+        .write_all(&payload)
+        .await
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    stream
+        .flush()
+        .await
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))
+}
+
+async fn read_async_frame<T: serde::de::DeserializeOwned>(
+    stream: &mut (impl AsyncRead + Send + Unpin),
+) -> DtoResult<T> {
+    let mut header = [0_u8; FRAME_LENGTH_BYTES];
+    stream
+        .read_exact(&mut header)
+        .await
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    let length = usize::try_from(u32::from_be_bytes(header)).map_err(|_| oversized_frame())?;
+    if length > MAX_FRAME_BYTES {
+        return Err(oversized_frame());
+    }
+    let mut payload = vec![0_u8; length];
+    stream
+        .read_exact(&mut payload)
+        .await
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    serde_json::from_slice(&payload).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_local_protocol_frame",
+            "a local protocol frame was invalid",
+        )
+    })
+}
+
 fn oversized_frame() -> ErrorDto {
     ErrorDto::validation(
         "local_protocol_frame_too_large",
@@ -462,6 +733,71 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn async_listener_enforces_private_permissions_and_removes_owned_socket() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let endpoint = endpoint();
+        let socket_path = endpoint.path.clone();
+        let parent = socket_path
+            .parent()
+            .expect("socket has a parent")
+            .to_owned();
+        let listener = AsyncLocalListener::bind(endpoint).expect("listener binds");
+        assert_eq!(
+            fs::metadata(parent)
+                .expect("parent metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&socket_path)
+                .expect("socket metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(listener);
+        assert!(
+            !socket_path.exists(),
+            "listener removes only its owned socket"
+        );
+    }
+
+    #[tokio::test]
+    async fn async_connect_to_an_absent_endpoint_is_a_typed_error() {
+        let error = match AsyncLocalClientConnection::connect(&endpoint()).await {
+            Ok(_) => panic!("absent endpoint must not connect"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "local_daemon_unavailable");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn async_connect_timeout_bounds_a_pending_connection() {
+        let connect = timeout_async_connect(
+            CONNECT_TIMEOUT,
+            std::future::pending::<std::io::Result<()>>(),
+        );
+        tokio::pin!(connect);
+        tokio::select! {
+            result = &mut connect => panic!("pending connection completed: {result:?}"),
+            () = tokio::task::yield_now() => {}
+        }
+        tokio::time::advance(CONNECT_TIMEOUT).await;
+        assert_eq!(
+            connect
+                .await
+                .expect_err("pending connection times out")
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_endpoints_resolve_to_local_named_pipes() {
@@ -505,6 +841,106 @@ mod tests {
                     | "local_daemon_connection_unavailable"
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn async_negotiation_rejects_oversized_malformed_and_truncated_frames() {
+        for (header, payload, expected_code) in [
+            (
+                u32::try_from(MAX_FRAME_BYTES + 1)
+                    .expect("frame length fits")
+                    .to_be_bytes()
+                    .to_vec(),
+                Vec::new(),
+                "local_protocol_frame_too_large",
+            ),
+            (
+                3_u32.to_be_bytes().to_vec(),
+                b"bad".to_vec(),
+                "invalid_local_protocol_frame",
+            ),
+            (
+                8_u32.to_be_bytes().to_vec(),
+                b"{}".to_vec(),
+                "local_daemon_connection_unavailable",
+            ),
+            (
+                vec![0_u8, 0_u8],
+                Vec::new(),
+                "local_daemon_connection_unavailable",
+            ),
+        ] {
+            let endpoint = endpoint();
+            let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+            let server = tokio::spawn(async move {
+                let connection = listener.accept().await.expect("server accepts");
+                match connection
+                    .negotiate(
+                        ProtocolHelloDto::new(local_protocol_version(), Vec::new(), "async-server")
+                            .expect("fixture hello is valid"),
+                    )
+                    .await
+                {
+                    Ok(_) => panic!("invalid hello frame is rejected"),
+                    Err(error) => error,
+                }
+            });
+            let mut client = ConnectOptions::new()
+                .name(
+                    endpoint
+                        .socket_name()
+                        .expect("fixture socket name is valid"),
+                )
+                .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+                .connect_tokio()
+                .await
+                .expect("raw client connects");
+            client.write_all(&header).await.expect("raw header writes");
+            client
+                .write_all(&payload)
+                .await
+                .expect("raw payload writes");
+            drop(client);
+            let error = server.await.expect("server completes");
+            assert_eq!(error.code(), expected_code);
+        }
+    }
+
+    #[tokio::test]
+    async fn async_negotiation_rejects_an_oversized_outbound_hello_before_framing() {
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(async move {
+            let connection = listener.accept().await.expect("server accepts");
+            match connection
+                .negotiate(
+                    ProtocolHelloDto::new(local_protocol_version(), Vec::new(), "async-server")
+                        .expect("fixture hello is valid"),
+                )
+                .await
+            {
+                Ok(_) => panic!("closed peer is typed"),
+                Err(error) => error,
+            }
+        });
+        let connection = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("client connects");
+        let oversized = ProtocolHelloDto::new(
+            local_protocol_version(),
+            Vec::new(),
+            "x".repeat(MAX_FRAME_BYTES + 1),
+        )
+        .expect("non-empty fixture hello is valid");
+        let error = match connection.negotiate(oversized).await {
+            Ok(_) => panic!("oversized outbound hello is rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "local_protocol_frame_too_large");
+        assert_eq!(
+            server.await.expect("server completes").code(),
+            "local_daemon_connection_unavailable"
+        );
     }
 
     #[test]

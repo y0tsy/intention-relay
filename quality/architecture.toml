@@ -59,6 +59,7 @@ public_resource_patterns = [
   "std::path::PathBuf",
   "std::process::Command",
   "tokio::",
+  "interprocess::",
   "rusqlite::",
   "tauri::",
   "serde_json::Value",
@@ -86,7 +87,7 @@ public_resource_patterns = [
 "intention-domain" = ["serde", "serde_json"]
 "intention-config" = ["serde", "serde_json", "toml"]
 "intention-protocol" = ["serde", "serde_json"]
-"intention-transport" = ["interprocess", "serde", "serde_json", "tempfile"]
+"intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
 "intention-client" = ["fs4", "tempfile"]
 "intention" = ["tempfile"]
 "intention-daemon" = ["tempfile"]
@@ -145,6 +146,7 @@ forbidden_type_prefixes = [
   "std::path::",
   "std::process::",
   "tokio::",
+  "interprocess::",
   "rusqlite::",
   "tauri::",
   "serde_json::Value",
