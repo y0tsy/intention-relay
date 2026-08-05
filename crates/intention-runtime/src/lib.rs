@@ -9,13 +9,13 @@ use intention_domain::{
     ModelRunFactInputDto, RunEventCursorDto, RunFailureDto, RunProjectionDto, RunStatusDto,
     validate_run_status_transition,
 };
-use intention_model::{
-    ModelCancellationSignal, ModelEventDto, ModelExecutionDriver, ModelRequestDto,
-    ModelStreamLifecycleDto,
+pub use intention_model::{
+    ModelCancellationSignal, ModelEventDto, ModelExecutionDriver, ModelMessageDto, ModelRequestDto,
+    ModelRoleDto, ModelStreamLifecycleDto,
 };
 use intention_storage::{
-    AppendModelRunFactsInputDto, CommittedChangeDto, RecoverUnfinishedRunsInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
+    AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
+    RecoverUnfinishedRunsInputDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
     AssistantTurnId, DtoResult, ErrorDto, ErrorRetryDto, RunId, SessionId, TimestampDto,
@@ -181,6 +181,43 @@ where
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Appends one atomic manual-retry failure for exactly a current starting run.
+///
+/// This narrow helper is used by application scheduling when a committed run
+/// cannot acquire context or enter the daemon-owned dispatch queue.
+///
+/// # Errors
+///
+/// Returns a typed error when the exact run is unavailable, no longer
+/// `Starting`, or the atomic failure append cannot commit.
+pub fn fail_starting_run<Repository>(
+    repository: &Repository,
+    session_id: SessionId,
+    run_id: RunId,
+    failure_code: impl Into<String>,
+    occurred_at: TimestampDto,
+) -> DtoResult<AppendModelRunFactsOutcomeDto>
+where
+    Repository: StorageRepositoryDto,
+{
+    let replay = repository.load_current_run_replay(session_id, run_id)?;
+    if replay.snapshot().run_projection().status() != RunStatusDto::Starting {
+        return Err(ErrorDto::validation(
+            "invalid_starting_run_failure_state",
+            "scheduling failure requires the exact run to remain starting",
+        ));
+    }
+    let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
+    repository.append_model_run_facts(AppendModelRunFactsInputDto::new(
+        session_id,
+        run_id,
+        replay.snapshot().cursor(),
+        vec![ModelRunFactInputDto::failed(failure)],
+        Some(RunStatusDto::Failed),
+        occurred_at,
+    )?)
+}
 
 /// Provider-neutral clock and delay boundary for model execution.
 ///

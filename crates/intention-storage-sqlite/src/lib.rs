@@ -17,7 +17,8 @@ use intention_domain::{
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
+    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
+    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
     TransitionRunInputDto,
 };
 use intention_types::{
@@ -997,6 +998,81 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         serde_json::from_str(&snapshot).map_err(|_| run_configuration_unavailable())
     }
 
+    fn load_starting_run_model_context(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<StartingRunModelContextDto> {
+        let mut connection = self
+            .connection()
+            .map_err(|_| run_model_context_unavailable())?;
+        let transaction = connection
+            .transaction_with_behavior(sqlite::TransactionBehavior::Immediate)
+            .map_err(|_| run_model_context_unavailable())?;
+        let context = (|| {
+            let target = load_scoped_run(&transaction, session_id, run_id)
+                .map_err(|_| run_model_context_unavailable())?;
+            if target.status() != RunStatusDto::Starting {
+                return Err(run_model_context_unavailable());
+            }
+            let target_started = target_started_event(&transaction, session_id, run_id)?;
+            if target_started.turn_id() != target.turn_id()
+                || target_started.config_revision_id() != target.config_revision_id()
+            {
+                return Err(run_model_context_unavailable());
+            }
+            let safe_config = load_config_snapshot(&transaction, target.config_revision_id())?;
+            let mut messages = Vec::new();
+            for (historical_run_id, historical_turn_id, historical_revision_id) in
+                started_runs_before(&transaction, session_id, run_id)?
+            {
+                let historical = load_scoped_run(&transaction, session_id, historical_run_id)
+                    .map_err(|_| run_model_context_unavailable())?;
+                if historical.turn_id() != historical_turn_id
+                    || historical.config_revision_id() != historical_revision_id
+                {
+                    return Err(run_model_context_unavailable());
+                }
+                messages.push(
+                    ModelContextMessageDto::new(
+                        ModelContextRoleDto::User,
+                        load_turn_content(&transaction, session_id, historical.turn_id())?,
+                    )
+                    .map_err(|_| run_model_context_unavailable())?,
+                );
+                if historical.status() == RunStatusDto::Completed
+                    && let Some(content) = completed_assistant_content(&transaction, historical)?
+                {
+                    messages.push(
+                        ModelContextMessageDto::new(ModelContextRoleDto::Assistant, content)
+                            .map_err(|_| run_model_context_unavailable())?,
+                    );
+                }
+            }
+            messages.push(
+                ModelContextMessageDto::new(
+                    ModelContextRoleDto::User,
+                    load_turn_content(&transaction, session_id, target.turn_id())?,
+                )
+                .map_err(|_| run_model_context_unavailable())?,
+            );
+            StartingRunModelContextDto::new(session_id, run_id, safe_config, messages)
+                .map_err(|_| run_model_context_unavailable())
+        })();
+        let result = match context {
+            Ok(context) => transaction
+                .commit()
+                .map_err(|_| run_model_context_unavailable())
+                .map(|()| context),
+            Err(error) => {
+                let _ = transaction.rollback();
+                Err(error)
+            }
+        };
+        drop(connection);
+        result
+    }
+
     fn load_current_run_replay(
         &self,
         session_id: SessionId,
@@ -1267,6 +1343,124 @@ fn load_scoped_run(
         .map_err(|_| run_history_unavailable())
 }
 
+fn load_config_snapshot(
+    connection: &sqlite::Connection,
+    revision_id: ConfigRevisionId,
+) -> DtoResult<ConfigSnapshotDto> {
+    let encoded: String = connection
+        .query_row(
+            "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
+            [revision_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| run_model_context_unavailable())?;
+    let snapshot: ConfigSnapshotDto =
+        serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+    snapshot
+        .validate_for_persistence()
+        .map_err(|_| run_model_context_unavailable())?;
+    Ok(snapshot)
+}
+
+fn load_turn_content(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    turn_id: TurnId,
+) -> DtoResult<String> {
+    connection
+        .query_row(
+            "SELECT content FROM turns WHERE session_id=?1 AND turn_id=?2",
+            sqlite::params![session_id.to_string(), turn_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| run_model_context_unavailable())
+}
+
+fn started_runs_before(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    target_run_id: RunId,
+) -> DtoResult<Vec<(RunId, TurnId, ConfigRevisionId)>> {
+    let mut statement = connection
+        .prepare("SELECT envelope_json FROM domain_events WHERE session_id=?1 ORDER BY sequence")
+        .map_err(|_| run_model_context_unavailable())?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_model_context_unavailable())?;
+    let mut started = Vec::new();
+    let mut found_target = false;
+    for row in rows {
+        let encoded = row.map_err(|_| run_model_context_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+        if event.session_id() != session_id {
+            return Err(run_model_context_unavailable());
+        }
+        if let DomainEventDto::RunStarted(started_event) = event.payload() {
+            if started_event.session_id() != session_id
+                || event.run_id() != Some(started_event.run_id())
+            {
+                return Err(run_model_context_unavailable());
+            }
+            if started_event.run_id() == target_run_id {
+                found_target = true;
+                break;
+            }
+            started.push((
+                started_event.run_id(),
+                started_event.turn_id(),
+                started_event.config_revision_id(),
+            ));
+        }
+    }
+    if found_target {
+        Ok(started)
+    } else {
+        Err(run_model_context_unavailable())
+    }
+}
+
+fn target_started_event(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<RunStartedEventDto> {
+    let mut statement = connection
+        .prepare("SELECT envelope_json FROM domain_events WHERE session_id=?1 ORDER BY sequence")
+        .map_err(|_| run_model_context_unavailable())?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_model_context_unavailable())?;
+    for row in rows {
+        let encoded = row.map_err(|_| run_model_context_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+        if let DomainEventDto::RunStarted(started) = event.payload()
+            && event.session_id() == session_id
+            && event.run_id() == Some(run_id)
+            && started.session_id() == session_id
+            && started.run_id() == run_id
+        {
+            return Ok(*started);
+        }
+    }
+    Err(run_model_context_unavailable())
+}
+
+fn completed_assistant_content(
+    connection: &sqlite::Connection,
+    run: RunProjectionDto,
+) -> DtoResult<Option<String>> {
+    let snapshot = load_model_run_snapshot(connection, run.session_id(), run.run_id())
+        .map_err(|_| run_model_context_unavailable())?;
+    let content = snapshot.projection().assistant_content();
+    if content.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(content.to_owned()))
+    }
+}
+
 const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventDto> {
     match event {
         DomainEventDto::ProviderAttemptStarted(value)
@@ -1461,6 +1655,17 @@ fn run_configuration_unavailable() -> ErrorDto {
         "run_configuration_unavailable",
         ErrorCategoryDto::Unavailable,
         "the durable run configuration is unavailable",
+        ErrorRetryDto::Manual,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
+fn run_model_context_unavailable() -> ErrorDto {
+    ErrorDto::new(
+        "run_model_context_unavailable",
+        ErrorCategoryDto::Unavailable,
+        "the durable run model context is unavailable",
         ErrorRetryDto::Manual,
         None,
     )
