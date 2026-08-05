@@ -10,22 +10,28 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, SendUserTurnWorkflowInputDto,
+    ApplicationService, CreateSessionWorkflowInputDto, ModelRunDispatchPort, ScheduleModelRunDto,
+    SendUserTurnWorkflowInputDto,
 };
 #[cfg(test)]
 use intention_config::ConfigPathDto;
 use intention_config::{
-    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
+    ResolvedConfigDto, StartupProviderMaterial,
 };
 use intention_domain::GetSessionSnapshotQueryDto;
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+#[cfg(test)]
+use intention_protocol::SendUserTurnOutcomeDto;
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
     SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto,
     SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
+use intention_provider_generic_chat::GenericChatDriver;
+use intention_provider_openrouter::OpenRouterDriver;
 use intention_runtime::{RuntimeService, RuntimeValuesDto};
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
@@ -50,8 +56,91 @@ pub struct DaemonApplicationFacade {
 struct FacadeInner {
     repository: SqliteStorageRepository,
     config_snapshot: ConfigSnapshotDto,
+    _selected_provider: SelectedProvider,
+    dispatch: PrivateModelRunDispatch,
     publisher: Box<dyn PostCommitPublisher>,
     command_gate: Mutex<()>,
+}
+
+enum SelectedProvider {
+    OpenRouter(OpenRouterDriver),
+    GenericChat(GenericChatDriver),
+    #[cfg(any(test, feature = "test-support"))]
+    TestSupport,
+}
+
+impl SelectedProvider {
+    fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
+        match material.safe_resolved().provider().kind() {
+            ProviderKindDto::Openrouter => {
+                OpenRouterDriver::from_startup_material(material).map(Self::OpenRouter)
+            }
+            ProviderKindDto::GenericChatCompletionApi => {
+                GenericChatDriver::from_startup_material(material).map(Self::GenericChat)
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    const fn for_test_support() -> Self {
+        Self::TestSupport
+    }
+
+    const fn safe_kind(&self) -> Option<ProviderKindDto> {
+        match self {
+            Self::OpenRouter(driver) => {
+                let _ = driver;
+                Some(ProviderKindDto::Openrouter)
+            }
+            Self::GenericChat(driver) => {
+                let _ = driver;
+                Some(ProviderKindDto::GenericChatCompletionApi)
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            Self::TestSupport => None,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PrivateModelRunDispatch {
+    #[cfg(test)]
+    admitted: Mutex<Vec<ScheduleModelRunDto>>,
+}
+
+impl PrivateModelRunDispatch {
+    #[cfg(test)]
+    fn admitted(&self) -> DtoResult<Vec<ScheduleModelRunDto>> {
+        self.admitted
+            .lock()
+            .map(|admitted| admitted.clone())
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_dispatch_unavailable",
+                    "daemon model-run dispatch is unavailable",
+                )
+            })
+    }
+}
+
+impl ModelRunDispatchPort for PrivateModelRunDispatch {
+    fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()> {
+        // Lane E admits a post-commit scheduling payload only. Provider execution,
+        // including an outbound request, remains owned by the future daemon host.
+        #[cfg(not(test))]
+        let _input = input;
+        #[cfg(test)]
+        self.admitted
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_dispatch_unavailable",
+                    "daemon model-run dispatch is unavailable",
+                )
+            })?
+            .push(input);
+        Ok(())
+    }
 }
 
 trait PostCommitPublisher: Send + Sync {
@@ -79,10 +168,11 @@ impl DaemonApplicationFacade {
     /// Returns safe typed failures when platform configuration cannot be resolved,
     /// permission-checked, read, validated, persisted, or recovered.
     pub fn open_platform() -> DtoResult<Self> {
-        let config_snapshot = load_platform_config_snapshot()?;
-        Self::open_with_publisher(
+        let (config_snapshot, selected_provider) = load_platform_provider_configuration()?;
+        Self::open_with_selected_provider(
             platform_database_location()?,
             config_snapshot,
+            selected_provider,
             Box::new(NoopPostCommitPublisher),
         )
     }
@@ -99,9 +189,10 @@ impl DaemonApplicationFacade {
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
     ) -> DtoResult<Self> {
-        Self::open_with_publisher(
+        Self::open_with_selected_provider(
             database_location,
             config_snapshot,
+            SelectedProvider::for_test_support(),
             Box::new(NoopPostCommitPublisher),
         )
     }
@@ -111,18 +202,43 @@ impl DaemonApplicationFacade {
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
     ) -> DtoResult<Self> {
-        Self::open_with_publisher(
+        Self::open_with_selected_provider(
             database_location,
             config_snapshot,
+            SelectedProvider::for_test_support(),
             Box::new(NoopPostCommitPublisher),
         )
     }
 
+    #[cfg(test)]
     fn open_with_publisher(
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
         publisher: Box<dyn PostCommitPublisher>,
     ) -> DtoResult<Self> {
+        Self::open_with_selected_provider(
+            database_location,
+            config_snapshot,
+            SelectedProvider::for_test_support(),
+            publisher,
+        )
+    }
+
+    fn open_with_selected_provider(
+        database_location: impl AsRef<Path>,
+        config_snapshot: ConfigSnapshotDto,
+        selected_provider: SelectedProvider,
+        publisher: Box<dyn PostCommitPublisher>,
+    ) -> DtoResult<Self> {
+        if selected_provider
+            .safe_kind()
+            .is_some_and(|kind| kind != config_snapshot.resolved().provider().kind())
+        {
+            return Err(ErrorDto::validation(
+                "invalid_selected_provider",
+                "selected provider does not match configuration",
+            ));
+        }
         let location = SqliteDatabaseLocationDto::new(
             database_location.as_ref().to_string_lossy().into_owned(),
         )?;
@@ -132,12 +248,19 @@ impl DaemonApplicationFacade {
             inner: Arc::new(FacadeInner {
                 repository,
                 config_snapshot,
+                _selected_provider: selected_provider,
+                dispatch: PrivateModelRunDispatch::default(),
                 publisher,
                 command_gate: Mutex::new(()),
             }),
         };
         facade.recover_before_ready()?;
         Ok(facade)
+    }
+
+    #[cfg(test)]
+    fn selected_provider_kind(&self) -> Option<ProviderKindDto> {
+        self.inner._selected_provider.safe_kind()
     }
 
     /// Returns a credential-free ready health projection.
@@ -272,13 +395,21 @@ impl DaemonApplicationFacade {
                     .create_session(CreateSessionWorkflowInputDto::new(command, timestamp))?
             }
             ProtocolCommandDto::SendUserTurn(command) => {
-                ApplicationService::new(&self.inner.repository).send_user_turn(
+                let proposed_run_id =
+                    RunId::parse(&command.turn_id().to_string()).map_err(|_| {
+                        ErrorDto::unavailable(
+                            "daemon_command_unavailable",
+                            "daemon command is unavailable",
+                        )
+                    })?;
+                ApplicationService::new(&self.inner.repository).send_user_turn_and_schedule(
                     command,
                     SendUserTurnWorkflowInputDto::new(
-                        RunId::new(),
+                        proposed_run_id,
                         self.inner.config_snapshot.clone(),
                         timestamp,
                     ),
+                    &self.inner.dispatch,
                 )?
             }
             ProtocolCommandDto::RemoveQueuedTurn(command) => {
@@ -395,11 +526,13 @@ const fn resync(
     ))
 }
 
-fn load_platform_config_snapshot() -> DtoResult<ConfigSnapshotDto> {
-    load_config_snapshot(ConfigPathResolver::resolve(None)?)
+fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+    load_provider_configuration(ConfigPathResolver::resolve(None)?)
 }
 
-fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto> {
+fn load_provider_configuration(
+    source: ConfigSourceDto,
+) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
     #[cfg(unix)]
     intention_config::ensure_user_only_permissions(source.path())?;
     let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
@@ -408,8 +541,21 @@ fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto>
             "daemon configuration could not be read",
         )
     })?;
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(raw_toml, source))?;
-    ConfigSnapshotDto::new(SCHEMA_VERSION, ConfigRevisionId::new(), now()?, resolved)
+    let material =
+        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
+    let snapshot = ConfigSnapshotDto::new(
+        SCHEMA_VERSION,
+        ConfigRevisionId::new(),
+        now()?,
+        material.safe_resolved().clone(),
+    )?;
+    let selected_provider = SelectedProvider::from_startup_material(material)?;
+    Ok((snapshot, selected_provider))
+}
+
+#[cfg(test)]
+fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto> {
+    load_provider_configuration(source).map(|(snapshot, _)| snapshot)
 }
 
 fn now() -> DtoResult<TimestampDto> {
@@ -587,6 +733,259 @@ mod tests {
             ),
         ));
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+    }
+
+    fn send_user_turn(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        content: &str,
+    ) -> ProtocolCommandResultDto {
+        facade.command(ProtocolCommandDto::SendUserTurn(
+            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), content)
+                .expect("fixture user turn is valid"),
+        ))
+    }
+
+    #[test]
+    fn direct_turn_admits_post_commit_dispatch_without_provider_execution() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("dispatch.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let result = send_user_turn(&facade, session_id, "started turn");
+        let ProtocolCommandResultDto::Accepted(accepted_result) = result else {
+            unreachable!("direct turn is accepted")
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn)) = accepted_result.result()
+        else {
+            unreachable!("direct turn returns user-turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = accepted_turn.outcome() else {
+            unreachable!("first turn starts a run")
+        };
+
+        let accepted = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch recorder remains available");
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].session_id(), session_id);
+        assert_eq!(accepted[0].run_id(), run_id);
+        assert_eq!(
+            accepted[0].safe_config(),
+            &facade.inner.config_snapshot,
+            "dispatch retains only the safe durable selection"
+        );
+        assert_eq!(
+            facade
+                .durable_events_for_test_support(session_id)
+                .expect("durable turn events load")
+                .len(),
+            3,
+            "admission does not execute a provider"
+        );
+    }
+
+    #[test]
+    fn facade_retry_of_same_user_turn_reuses_durable_run_and_skips_events_and_dispatch() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("idempotent-turn.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let command = SendUserTurnCommandDto::new(
+            session_id,
+            intention_types::TurnId::new(),
+            "idempotent turn",
+        )
+        .expect("fixture user turn is valid");
+
+        let initial = facade.command(ProtocolCommandDto::SendUserTurn(command.clone()));
+        let events_after_initial = facade
+            .durable_events_for_test_support(session_id)
+            .expect("durable turn events load");
+        let replay = facade.command(ProtocolCommandDto::SendUserTurn(command));
+        let events_after_replay = facade
+            .durable_events_for_test_support(session_id)
+            .expect("durable turn events load");
+
+        let (
+            ProtocolCommandResultDto::Accepted(initial),
+            ProtocolCommandResultDto::Accepted(replay),
+        ) = (&initial, &replay)
+        else {
+            unreachable!("identical user-turn commands are accepted")
+        };
+        assert_eq!(replay.result(), initial.result());
+        assert!(matches!(
+            initial.result(),
+            Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                if matches!(turn.outcome(), SendUserTurnOutcomeDto::Started { .. })
+        ));
+        assert_eq!(events_after_replay, events_after_initial);
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch recorder remains available")
+                .len(),
+            1,
+            "the idempotent retry does not enter the dispatch seam"
+        );
+    }
+
+    #[test]
+    fn queued_turn_does_not_admit_dispatch() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("queued-dispatch.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let first = send_user_turn(&facade, session_id, "started turn");
+        assert!(matches!(first, ProtocolCommandResultDto::Accepted(_)));
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch recorder remains available")
+                .len(),
+            1
+        );
+
+        let queued = send_user_turn(&facade, session_id, "queued turn");
+        assert!(matches!(
+            queued,
+            ProtocolCommandResultDto::Accepted(accepted)
+                if matches!(
+                    accepted.result(),
+                    Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                        if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
+                )
+        ));
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch recorder remains available")
+                .len(),
+            1,
+            "queued turns never enter the dispatch seam"
+        );
+    }
+
+    #[test]
+    fn facade_send_user_turn_uses_the_selected_provider_dispatch_seam() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("facade-dispatch.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let accepted = send_user_turn(&facade, session_id, "facade turn");
+        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+        let events = facade
+            .durable_events_for_test_support(session_id)
+            .expect("durable turn events load");
+        assert_eq!(events.len(), 3, "admission does not execute a provider");
+    }
+
+    #[test]
+    fn provider_composition_selects_each_valid_kind_without_exposing_credentials() {
+        for (filename, provider_toml, expected_kind) in [
+            (
+                "openrouter.toml",
+                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"selected-provider-secret\"",
+                ProviderKindDto::Openrouter,
+            ),
+            (
+                "generic.toml",
+                "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"selected-provider-secret\"",
+                ProviderKindDto::GenericChatCompletionApi,
+            ),
+        ] {
+            let directory = TempDir::new().expect("temporary directory exists");
+            let path = directory.path().join(filename);
+            fs::write(&path, provider_toml).expect("fixture config writes");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .expect("fixture config permissions set");
+            }
+            let source = ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(path.to_string_lossy().into_owned())
+                    .expect("fixture config path is absolute"),
+            );
+
+            let (snapshot, selected_provider) =
+                load_provider_configuration(source).expect("valid provider config composes");
+            let facade = DaemonApplicationFacade::open_with_selected_provider(
+                directory.path().join("provider.sqlite"),
+                snapshot.clone(),
+                selected_provider,
+                Box::new(NoopPostCommitPublisher),
+            )
+            .expect("selected provider remains owned by the facade");
+
+            assert_eq!(facade.selected_provider_kind(), Some(expected_kind));
+            assert_eq!(snapshot.resolved().provider().kind(), expected_kind);
+            assert!(snapshot.resolved().provider().credential_configured());
+            assert!(
+                !snapshot
+                    .resolved()
+                    .safe_debug_projection()
+                    .contains("selected-provider-secret")
+            );
+        }
+    }
+
+    #[test]
+    fn provider_composition_rejects_invalid_configuration_without_secret_disclosure() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let path = directory.path().join("invalid.toml");
+        fs::write(
+            &path,
+            "schema_version = 1\n[provider]\nkind = \"not-a-provider\"\nmodel = \"fixture\"\ncredential = \"invalid-provider-secret\"",
+        )
+        .expect("fixture config writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("fixture config permissions set");
+        }
+        let source = ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(path.to_string_lossy().into_owned())
+                .expect("fixture config path is absolute"),
+        );
+
+        let result = load_provider_configuration(source);
+        assert!(result.is_err());
+        let error = result
+            .err()
+            .expect("invalid provider configuration must fail safely");
+
+        assert_eq!(error.code(), "invalid_config_schema");
+        assert!(!error.to_string().contains("invalid-provider-secret"));
     }
 
     #[test]

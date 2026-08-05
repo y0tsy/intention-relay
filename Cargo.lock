@@ -726,6 +726,8 @@ dependencies = [
  "intention-config",
  "intention-domain",
  "intention-protocol",
+ "intention-provider-generic-chat",
+ "intention-provider-openrouter",
  "intention-runtime",
  "intention-storage",
  "intention-storage-sqlite",

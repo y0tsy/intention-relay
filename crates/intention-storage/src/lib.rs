@@ -443,6 +443,116 @@ impl CommittedChangeDto {
     }
 }
 
+/// A sender role in the DTO-only persisted model context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelContextRoleDto {
+    /// A durable user turn that started a run.
+    User,
+    /// Final non-blank content from a completed assistant run.
+    Assistant,
+}
+
+/// One non-blank DTO-only message in persisted model context.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelContextMessageDto {
+    role: ModelContextRoleDto,
+    content: String,
+}
+
+impl ModelContextMessageDto {
+    /// Creates one non-blank persisted model-context message.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank.
+    pub fn new(role: ModelContextRoleDto, content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_context_content",
+                "model context content must not be empty",
+            ));
+        }
+        Ok(Self { role, content })
+    }
+
+    /// Returns the message sender role.
+    #[must_use]
+    pub const fn role(&self) -> ModelContextRoleDto {
+        self.role
+    }
+
+    /// Returns the non-blank model context content.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+}
+
+/// DTO-only full session model context for one current starting run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartingRunModelContextDto {
+    session_id: SessionId,
+    run_id: RunId,
+    safe_config: ConfigSnapshotDto,
+    messages: Vec<ModelContextMessageDto>,
+}
+
+impl StartingRunModelContextDto {
+    /// Creates coherent context whose final message is the current starting user turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the context is empty or does not end with a user message.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        safe_config: ConfigSnapshotDto,
+        messages: Vec<ModelContextMessageDto>,
+    ) -> DtoResult<Self> {
+        safe_config.validate_for_persistence()?;
+        if messages
+            .last()
+            .is_none_or(|message| message.role() != ModelContextRoleDto::User)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_model_context",
+                "starting run model context must end with its user message",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            safe_config,
+            messages,
+        })
+    }
+
+    /// Returns the session that owns this model context.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the current starting run that owns this context.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the run's immutable credential-free configuration selection.
+    #[must_use]
+    pub const fn safe_config(&self) -> &ConfigSnapshotDto {
+        &self.safe_config
+    }
+
+    /// Returns ordered durable user and completed assistant messages.
+    #[must_use]
+    pub fn messages(&self) -> &[ModelContextMessageDto] {
+        &self.messages
+    }
+}
+
 /// The DTO-only repository contract implemented by future durable backends.
 pub trait StorageRepositoryDto {
     /// Creates a session and returns its committed projection and events.
@@ -509,6 +619,30 @@ pub trait StorageRepositoryDto {
         Err(ErrorDto::unavailable(
             "run_configuration_unavailable",
             "the durable run configuration is unavailable",
+        ))
+    }
+
+    /// Loads full ordered session model context for one current starting run.
+    ///
+    /// The returned safe immutable configuration belongs only to the target run.
+    /// Messages are ordered by durable `RunStarted` sequence, contain every
+    /// started user turn, contain assistant text only for completed runs with
+    /// non-blank final content, and end with the target starting run's user turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns `run_model_context_unavailable` when the run is unknown,
+    /// cross-session, no longer starting, or durable context cannot be read.
+    /// No partial context, credentials, raw TOML, configuration paths, or backend
+    /// resources cross this DTO-only boundary on failure.
+    fn load_starting_run_model_context(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<StartingRunModelContextDto> {
+        Err(ErrorDto::unavailable(
+            "run_model_context_unavailable",
+            "the durable run model context is unavailable",
         ))
     }
 
