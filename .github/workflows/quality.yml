@@ -66,8 +66,31 @@ jobs:
             cargo-outdated@0.19.0
           fallback: cargo-binstall
 
+      - name: Report disk space before quality gate
+        run: |
+          df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
+          for path in target quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
+            if [ -e "$path" ]; then
+              du -sh "$path"
+            else
+              printf '%s: absent\n' "$path"
+            fi
+          done
+
       - name: Run repository quality gate
         run: make ci
+
+      - name: Report disk space after quality gate
+        if: always()
+        run: |
+          df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
+          for path in target quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
+            if [ -e "$path" ]; then
+              du -sh "$path"
+            else
+              printf '%s: absent\n' "$path"
+            fi
+          done
 
       - name: Upload quality reports
         if: always()
