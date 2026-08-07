@@ -236,6 +236,17 @@ pub trait ModelTimePort {
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
+/// Optional deterministic seam immediately before an executor's first durable append.
+///
+/// Production composition supplies no gate. Daemon-host outcome fixtures use a
+/// gate to make the narrow `Starting`/`Cancelling` admission race observable
+/// without changing provider, storage, or transport behavior.
+pub trait ModelRunFirstAppendGate: Send + Sync {
+    /// Waits after the initial durable `Starting` replay and preflight, but
+    /// before the first `Starting -> Running` fact append.
+    fn wait_before_first_append(&self) -> ModelSleepFuture<'_>;
+}
+
 /// Immutable caller-selected input for one model execution.
 #[derive(Clone)]
 pub struct ModelRunExecutionInputDto {
@@ -301,17 +312,84 @@ pub enum ModelRunExecutionOutcomeDto {
     Cancelled { cursor: RunEventCursorDto },
 }
 
-/// DTO-only executor over injected storage, selected driver, and time port.
-pub struct ModelRunExecutionService<'a, Repository, Driver, Time> {
+/// Safe evidence that a model execution write or state transition committed.
+///
+/// The snapshot is limited to safe run identity, cursor, and status evidence.
+/// Implementers independently reload the durable run scope before publication;
+/// this observer receives neither a repository transaction nor provider/runtime
+/// resources, so it cannot publish an uncommitted mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelRunCommitDto {
+    session_id: SessionId,
+    run_id: RunId,
+    cursor: RunEventCursorDto,
+    snapshot: intention_domain::RunSnapshotDto,
+}
+
+impl ModelRunCommitDto {
+    /// Creates provider-neutral committed execution evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        cursor: RunEventCursorDto,
+        snapshot: intention_domain::RunSnapshotDto,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            cursor,
+            snapshot,
+        }
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the committed run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the latest durable run cursor known to the executor.
+    #[must_use]
+    pub const fn cursor(&self) -> RunEventCursorDto {
+        self.cursor
+    }
+
+    /// Returns a committed safe run snapshot suitable for independent reread.
+    #[must_use]
+    pub const fn snapshot(&self) -> &intention_domain::RunSnapshotDto {
+        &self.snapshot
+    }
+}
+
+/// Receives only durable model-execution commit evidence after a successful write.
+///
+/// A daemon publisher uses this provider-neutral seam to independently reread
+/// the run scope before delivering a live update.
+pub trait ModelRunCommitObserver: Send + Sync {
+    /// Observes a successful fact append or execution-driven state transition.
+    fn observe_model_run_commit(&self, committed: ModelRunCommitDto);
+}
+
+/// DTO-only executor over injected storage, selected driver, time port, and optional observer.
+pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
+    observer: Option<&'a dyn ModelRunCommitObserver>,
+    first_append_gate: Option<&'a dyn ModelRunFirstAppendGate>,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
 where
     Repository: StorageRepositoryDto,
-    Driver: ModelExecutionDriver,
+    Driver: ModelExecutionDriver + ?Sized,
     Time: ModelTimePort,
 {
     /// Creates an executor without selecting providers or owning an async runtime.
@@ -321,6 +399,46 @@ where
             repository,
             driver,
             time,
+            observer: None,
+            first_append_gate: None,
+        }
+    }
+
+    /// Adds a post-commit observer without exposing storage or provider resources.
+    #[must_use]
+    pub const fn with_commit_observer(
+        repository: &'a Repository,
+        driver: &'a Driver,
+        time: &'a Time,
+        observer: &'a dyn ModelRunCommitObserver,
+    ) -> Self {
+        Self {
+            repository,
+            driver,
+            time,
+            observer: Some(observer),
+            first_append_gate: None,
+        }
+    }
+
+    /// Adds a deterministic gate before the first durable execution append.
+    ///
+    /// This is reserved for host-race outcome fixtures. Normal daemon
+    /// execution must use [`Self::with_commit_observer`] or [`Self::new`].
+    #[must_use]
+    pub const fn with_commit_observer_and_first_append_gate(
+        repository: &'a Repository,
+        driver: &'a Driver,
+        time: &'a Time,
+        observer: &'a dyn ModelRunCommitObserver,
+        first_append_gate: &'a dyn ModelRunFirstAppendGate,
+    ) -> Self {
+        Self {
+            repository,
+            driver,
+            time,
+            observer: Some(observer),
+            first_append_gate: Some(first_append_gate),
         }
     }
 
@@ -380,19 +498,28 @@ where
             )?;
             return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
         }
+        if let Some(first_append_gate) = self.first_append_gate {
+            first_append_gate.wait_before_first_append().await;
+        }
 
         let policy = persisted.resolved().provider_execution();
         let assistant_turn_id = AssistantTurnId::new();
         let mut pending_text = String::new();
         let mut durable_output = false;
         for attempt in 1..=u16::from(policy.max_attempts()) {
-            cursor = self.append(
+            cursor = match self.append(
                 input.session_id,
                 input.run_id,
                 cursor,
                 vec![ModelRunFactInputDto::provider_attempt_started(attempt)?],
                 (attempt == 1).then_some(RunStatusDto::Running),
-            )?;
+            ) {
+                Ok(cursor) => cursor,
+                Err(error) => match self.cancel_after_append_race(&input)? {
+                    Some(outcome) => return Ok(outcome),
+                    None => return Err(error),
+                },
+            };
             let result = self
                 .drive_attempt(
                     &input,
@@ -628,12 +755,7 @@ where
                         vec![ModelRunFactInputDto::finished(reason)],
                         Some(RunStatusDto::Completing),
                     )?;
-                    self.repository.transition_run(TransitionRunInputDto::new(
-                        input.session_id,
-                        input.run_id,
-                        RunStatusDto::Completed,
-                        self.time.now(),
-                    ))?;
+                    self.transition_completed(input.session_id, input.run_id, cursor)?;
                     return Ok(AttemptResult::Completed { cursor });
                 }
             }
@@ -685,7 +807,7 @@ where
         facts: Vec<ModelRunFactInputDto>,
         status: Option<RunStatusDto>,
     ) -> DtoResult<RunEventCursorDto> {
-        Ok(self
+        let outcome = self
             .repository
             .append_model_run_facts(AppendModelRunFactsInputDto::new(
                 session_id,
@@ -694,8 +816,84 @@ where
                 facts,
                 status,
                 self.time.now(),
-            )?)?
-            .cursor())
+            )?)?;
+        let cursor = outcome.cursor();
+        self.observe_snapshot(session_id, run_id, cursor, outcome.snapshot().clone());
+        Ok(cursor)
+    }
+
+    /// Resolves the narrow admission race where StopRun commits `Cancelling`
+    /// after the executor's initial replay but before its first append.
+    ///
+    /// The failed append must not strand a durable cancelling run: the task
+    /// re-reads its exact scope and remains the owner of the terminal
+    /// cancellation transition. Unrelated write failures remain errors.
+    fn cancel_after_append_race(
+        &self,
+        input: &ModelRunExecutionInputDto,
+    ) -> DtoResult<Option<ModelRunExecutionOutcomeDto>> {
+        let replay = self
+            .repository
+            .load_current_run_replay(input.session_id, input.run_id)?;
+        let snapshot = replay.snapshot();
+        let status = snapshot.run_projection().status();
+        if status == RunStatusDto::Cancelling || input.cancellation.is_cancelled() {
+            self.cancel(input.session_id, input.run_id, snapshot.cursor(), status)
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn transition_completed(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        cursor: RunEventCursorDto,
+    ) -> DtoResult<()> {
+        self.repository.transition_run(TransitionRunInputDto::new(
+            session_id,
+            run_id,
+            RunStatusDto::Completed,
+            self.time.now(),
+        ))?;
+        self.observe_current_replay(session_id, run_id, cursor)
+    }
+
+    fn observe_snapshot(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        cursor: RunEventCursorDto,
+        snapshot: intention_domain::RunSnapshotDto,
+    ) {
+        if let Some(observer) = self.observer {
+            observer.observe_model_run_commit(ModelRunCommitDto::new(
+                session_id, run_id, cursor, snapshot,
+            ));
+        }
+    }
+
+    fn observe_current_replay(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        cursor: RunEventCursorDto,
+    ) -> DtoResult<()> {
+        let replay = self
+            .repository
+            .load_current_run_replay(session_id, run_id)?;
+        self.observe_snapshot(session_id, run_id, cursor, replay.snapshot().clone());
+        Ok(())
+    }
+
+    fn observe_transition(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        cursor: RunEventCursorDto,
+    ) -> DtoResult<()> {
+        self.observe_current_replay(session_id, run_id, cursor)
     }
 
     fn fail(
@@ -764,6 +962,7 @@ where
                 RunStatusDto::Cancelling,
                 self.time.now(),
             ))?;
+            self.observe_transition(session_id, run_id, cursor)?;
         }
         match self.repository.transition_run(TransitionRunInputDto::new(
             session_id,
@@ -771,7 +970,10 @@ where
             RunStatusDto::Cancelled,
             self.time.now(),
         )) {
-            Ok(_) => Ok(ModelRunExecutionOutcomeDto::Cancelled { cursor }),
+            Ok(_) => {
+                self.observe_transition(session_id, run_id, cursor)?;
+                Ok(ModelRunExecutionOutcomeDto::Cancelled { cursor })
+            }
             Err(_) => {
                 let cursor = self.fail(
                     session_id,

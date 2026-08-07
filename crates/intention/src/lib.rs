@@ -19,9 +19,12 @@ use intention_config::{
     ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
-use intention_domain::GetSessionSnapshotQueryDto;
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_domain::{GetSessionSnapshotQueryDto, RunEventCursorDto, RunReplayDto, RunStatusDto};
+use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
+#[cfg(any(test, feature = "test-support"))]
+use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
 #[cfg(test)]
 use intention_protocol::SendUserTurnOutcomeDto;
 use intention_protocol::{
@@ -32,7 +35,12 @@ use intention_protocol::{
 };
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_provider_openrouter::OpenRouterDriver;
-use intention_runtime::{RuntimeService, RuntimeValuesDto};
+#[cfg(feature = "test-support")]
+use intention_runtime::ModelRunFirstAppendGate;
+use intention_runtime::{
+    ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
+    ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, fail_starting_run,
+};
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -66,7 +74,28 @@ enum SelectedProvider {
     OpenRouter(OpenRouterDriver),
     GenericChat(GenericChatDriver),
     #[cfg(any(test, feature = "test-support"))]
-    TestSupport,
+    TestSupport(Arc<dyn ModelExecutionDriver + Send + Sync>),
+}
+
+#[cfg(any(test, feature = "test-support"))]
+struct TestSupportUnconfiguredDriver;
+
+#[cfg(any(test, feature = "test-support"))]
+impl ModelDriver for TestSupportUnconfiguredDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(false, false, false, false, false, false)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
+    fn execute(
+        &self,
+        _request: intention_model::ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        Box::pin(futures_util::stream::empty())
+    }
 }
 
 impl SelectedProvider {
@@ -82,8 +111,17 @@ impl SelectedProvider {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    const fn for_test_support() -> Self {
-        Self::TestSupport
+    fn for_test_support(driver: Arc<dyn ModelExecutionDriver + Send + Sync>) -> Self {
+        Self::TestSupport(driver)
+    }
+
+    fn driver(&self) -> &(dyn ModelExecutionDriver + Send + Sync) {
+        match self {
+            Self::OpenRouter(driver) => driver,
+            Self::GenericChat(driver) => driver,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::TestSupport(driver) => driver.as_ref(),
+        }
     }
 
     const fn safe_kind(&self) -> Option<ProviderKindDto> {
@@ -97,7 +135,10 @@ impl SelectedProvider {
                 Some(ProviderKindDto::GenericChatCompletionApi)
             }
             #[cfg(any(test, feature = "test-support"))]
-            Self::TestSupport => None,
+            Self::TestSupport(driver) => {
+                let _ = driver;
+                None
+            }
         }
     }
 }
@@ -144,8 +185,10 @@ impl ModelRunDispatchPort for PrivateModelRunDispatch {
 }
 
 trait PostCommitPublisher: Send + Sync {
-    /// Receives an event batch only after an independent durable read observed it.
-    // @todo(m4-streaming)
+    /// Retained M3 session publisher seam, invoked only after an independent durable read.
+    ///
+    /// M3 composition supplies the no-op implementation. M4 run-scoped streaming
+    /// publishes through the daemon host's dedicated commit observer instead.
     fn publish(&self, change: &CommittedChangeDto) -> DtoResult<()>;
 }
 
@@ -185,15 +228,29 @@ impl DaemonApplicationFacade {
     /// never retained in a public DTO or error.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn open_for_test_support(
+    pub fn open_for_test_support_with_driver(
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
+        driver: Arc<dyn ModelExecutionDriver + Send + Sync>,
     ) -> DtoResult<Self> {
         Self::open_with_selected_provider(
             database_location,
             config_snapshot,
-            SelectedProvider::for_test_support(),
+            SelectedProvider::for_test_support(driver),
             Box::new(NoopPostCommitPublisher),
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn open_for_test_support(
+        database_location: impl AsRef<Path>,
+        config_snapshot: ConfigSnapshotDto,
+    ) -> DtoResult<Self> {
+        Self::open_for_test_support_with_driver(
+            database_location,
+            config_snapshot,
+            Arc::new(TestSupportUnconfiguredDriver),
         )
     }
 
@@ -205,7 +262,7 @@ impl DaemonApplicationFacade {
         Self::open_with_selected_provider(
             database_location,
             config_snapshot,
-            SelectedProvider::for_test_support(),
+            SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
             Box::new(NoopPostCommitPublisher),
         )
     }
@@ -219,9 +276,202 @@ impl DaemonApplicationFacade {
         Self::open_with_selected_provider(
             database_location,
             config_snapshot,
-            SelectedProvider::for_test_support(),
+            SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
             publisher,
         )
+    }
+
+    /// Executes one scheduled run through the privately selected provider driver.
+    ///
+    /// This bridge is provider-neutral and safe: it accepts only scheduling DTOs,
+    /// cancellation, a time port, and committed-observation evidence. It does not
+    /// expose provider SDKs, credentials, Tokio, or storage resources.
+    #[doc(hidden)]
+    pub async fn execute_scheduled_model_run_for_daemon<Time>(
+        &self,
+        schedule: ScheduleModelRunDto,
+        cancellation: ModelCancellationSignal,
+        time: &Time,
+        observer: &dyn ModelRunCommitObserver,
+    ) -> DtoResult<ModelRunExecutionOutcomeDto>
+    where
+        Time: ModelTimePort + Sync,
+    {
+        ModelRunExecutionService::with_commit_observer(
+            &self.inner.repository,
+            self.inner._selected_provider.driver(),
+            time,
+            observer,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            schedule.session_id(),
+            schedule.run_id(),
+            schedule.request().clone(),
+            schedule.safe_config().clone(),
+            cancellation,
+        ))
+        .await
+    }
+
+    /// Executes one scheduled run with the fixture-only first-append race gate.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn execute_scheduled_model_run_for_daemon_with_first_append_gate<Time>(
+        &self,
+        schedule: ScheduleModelRunDto,
+        cancellation: ModelCancellationSignal,
+        time: &Time,
+        observer: &dyn ModelRunCommitObserver,
+        first_append_gate: &dyn ModelRunFirstAppendGate,
+    ) -> DtoResult<ModelRunExecutionOutcomeDto>
+    where
+        Time: ModelTimePort + Sync,
+    {
+        ModelRunExecutionService::with_commit_observer_and_first_append_gate(
+            &self.inner.repository,
+            self.inner._selected_provider.driver(),
+            time,
+            observer,
+            first_append_gate,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            schedule.session_id(),
+            schedule.run_id(),
+            schedule.request().clone(),
+            schedule.safe_config().clone(),
+            cancellation,
+        ))
+        .await
+    }
+
+    /// Durably moves the exact active run to `Cancelling` without terminalizing it.
+    ///
+    /// A streaming daemon host must signal the matching execution task after this
+    /// commit. The retained synchronous `command(StopRun)` path terminalizes only
+    /// for legacy M3 callers outside that host.
+    #[doc(hidden)]
+    pub fn stop_run_for_daemon_host(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        let _gate = self.inner.command_gate.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        ApplicationService::new(&self.inner.repository).stop_run(
+            intention_domain::StopRunCommandDto::new(session_id, run_id),
+            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+        )
+    }
+
+    /// Terminalizes an exact durable `Cancelling` run for the daemon task registry.
+    ///
+    /// This is used only when a stop wins before normal executor admission. It
+    /// preserves the required two-step cancellation path while ensuring the host
+    /// retains ownership of the terminal transition rather than leaving active
+    /// durable state without a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the exact run is unavailable or is no longer
+    /// eligible for the `Cancelling -> Cancelled` transition.
+    #[doc(hidden)]
+    pub fn terminalize_cancelling_run_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<()> {
+        let _gate = self.inner.command_gate.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        RuntimeService::new(
+            &self.inner.repository,
+            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+        )
+        .complete_terminal(session_id, run_id, RunStatusDto::Cancelled)?;
+        Ok(())
+    }
+
+    /// Records a safe terminal scheduling failure for an exact unadmitted run.
+    ///
+    /// This private daemon-host bridge preserves the already accepted user turn
+    /// when durable context reconstruction cannot produce executable work.
+    #[doc(hidden)]
+    pub fn fail_starting_run_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        failure_code: &'static str,
+    ) -> DtoResult<()> {
+        let _gate = self.inner.command_gate.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        fail_starting_run(
+            &self.inner.repository,
+            session_id,
+            run_id,
+            failure_code,
+            now()?,
+        )?;
+        Ok(())
+    }
+
+    /// Loads an authoritative current run snapshot for the private daemon host.
+    #[doc(hidden)]
+    pub fn load_current_run_replay_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<RunReplayDto> {
+        ApplicationService::new(&self.inner.repository).load_current_run_replay(session_id, run_id)
+    }
+
+    /// Loads a contiguous durable run-fact range for the private daemon host.
+    #[doc(hidden)]
+    pub fn load_run_tail_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        after_cursor: RunEventCursorDto,
+    ) -> DtoResult<intention_domain::RunEventTailPageDto> {
+        ApplicationService::new(&self.inner.repository).load_run_tail(
+            session_id,
+            run_id,
+            after_cursor,
+        )
+    }
+
+    /// Builds the exact durable scheduling input for a current `Starting` run.
+    #[doc(hidden)]
+    pub fn schedule_starting_run_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ScheduleModelRunDto> {
+        ApplicationService::new(&self.inner.repository).schedule_starting_run(session_id, run_id)
+    }
+
+    /// Returns the currently active durable run when it is eligible for host admission.
+    #[doc(hidden)]
+    pub fn current_starting_run_for_daemon(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<Option<RunId>> {
+        Ok(ApplicationService::new(&self.inner.repository)
+            .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))?
+            .projection()
+            .and_then(|projection| projection.active_run())
+            .filter(|run| run.status() == RunStatusDto::Starting)
+            .map(|run| run.run_id()))
     }
 
     fn open_with_selected_provider(
@@ -288,7 +538,10 @@ impl DaemonApplicationFacade {
     }
 
     /// Returns a durable checkpoint and its contiguous replay tail, or typed resync.
-    // @todo(m4-streaming)
+    ///
+    /// This retained M3 session-subscription seam is replay-only and does not
+    /// filter session snapshots. M4 run-scoped streaming publishes through the
+    /// dedicated daemon-host observer and separate run subscription contract.
     #[must_use]
     pub fn subscribe(&self, command: SubscribeSessionCommandDto) -> SessionSubscriptionResponseDto {
         if command.run_id().is_some() {
@@ -342,7 +595,6 @@ impl DaemonApplicationFacade {
     }
 
     /// Dispatches a durable M3 command and invokes the publisher only after commit.
-    // @todo(m4-streaming)
     #[must_use]
     pub fn command(&self, command: ProtocolCommandDto) -> ProtocolCommandResultDto {
         let result = self.command_result(command);
@@ -906,6 +1158,73 @@ mod tests {
             .durable_events_for_test_support(session_id)
             .expect("durable turn events load");
         assert_eq!(events.len(), 3, "admission does not execute a provider");
+    }
+
+    #[test]
+    fn daemon_host_bridges_read_the_exact_starting_run_and_stop_only_to_cancelling() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("daemon-host-bridge.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let accepted = send_user_turn(&facade, session_id, "host bridge turn");
+        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
+            unreachable!("fixture turn is accepted")
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+            unreachable!("fixture turn has started-run evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
+            unreachable!("first fixture turn starts")
+        };
+
+        assert_eq!(
+            facade
+                .current_starting_run_for_daemon(session_id)
+                .expect("current run reads"),
+            Some(run_id)
+        );
+        let schedule = facade
+            .schedule_starting_run_for_daemon(session_id, run_id)
+            .expect("durable model context schedules");
+        assert_eq!(
+            (schedule.session_id(), schedule.run_id()),
+            (session_id, run_id)
+        );
+        let replay = facade
+            .load_current_run_replay_for_daemon(session_id, run_id)
+            .expect("current run replay reads");
+        assert_eq!(replay.snapshot().cursor(), RunEventCursorDto::new(0));
+        assert!(
+            facade
+                .load_run_tail_for_daemon(session_id, run_id, RunEventCursorDto::new(0))
+                .expect("empty run tail reads")
+                .facts()
+                .is_empty()
+        );
+
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling");
+        assert_eq!(
+            facade
+                .current_starting_run_for_daemon(session_id)
+                .expect("no starting run remains"),
+            None
+        );
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling run replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling
+        );
     }
 
     #[test]

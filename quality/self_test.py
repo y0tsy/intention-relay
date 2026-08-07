@@ -320,8 +320,8 @@ def test_m3_daemon_test_dependency_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '"intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]',
-            '"intention-daemon" = ["intention", "intention-protocol", "intention-transport", "intention-types"]',
+            '"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]',
+            '"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
@@ -332,7 +332,7 @@ def test_m3_daemon_test_dependency_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '"intention-daemon" = ["tempfile"]',
+            '"intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]',
             '"intention-daemon" = []',
         )
         run(
