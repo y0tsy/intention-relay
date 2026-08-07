@@ -709,7 +709,6 @@ impl RunSubscriptionReducer {
 /// The local transport deliberately closes every request connection. This handle
 /// therefore records the latest accepted sequence and creates a fresh negotiated
 /// subscription request after a disconnect. It does not imply a live stream.
-// @todo(m4-streaming)
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionSubscriptionRecovery {
     schema_version: SchemaVersionDto,
@@ -753,7 +752,6 @@ impl SessionSubscriptionRecovery {
     }
 
     /// Returns the accepted daemon checkpoint, if recovery has succeeded.
-    // @todo(m4-streaming)
     #[must_use]
     pub fn snapshot(&self) -> Option<SessionSnapshotDto> {
         self.reducer.snapshot()

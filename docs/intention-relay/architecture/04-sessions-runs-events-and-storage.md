@@ -32,7 +32,7 @@ erDiagram
 3. Every turn, run, plan, tool call, todo, permission, question, and event carries stable typed identity.
 4. Every semantic state-changing repository method commits the current-state projection, append-only event envelope(s), and updated session/run snapshot in one SQLite transaction, or changes nothing.
 5. M3 writes a fresh durable session snapshot after every committed state change; **every affected run, including terminal and recovered runs**, receives a run snapshot at that same durable sequence.
-6. Live events publish only after commit; M3 has no live publisher, so durable replay is the only delivered subscription behavior.
+6. Live run updates publish only after commit and an independent scoped durable reread; M3 session subscriptions remain durable replay-only.
 7. A queued user turn never becomes model input until it is explicitly promoted to a new run.
 8. An interrupted run is terminal. It cannot silently resume after daemon recovery.
 
@@ -136,8 +136,19 @@ sequenceDiagram
 ```
 
 If a write fails before commit, no new projection, event envelope, or snapshot
-exists. M3's publisher seam is invoked only after commit but intentionally has
-no live fan-out; a later one-shot replay reads the committed durable state.
+exists. The M4 daemon host observes successful execution commits, independently
+rereads the exact `(SessionId, RunId)` durable scope, and only then fan-outs a
+contiguous live batch or status snapshot. A publisher failure never rolls back
+the already committed durable state. M3's session publisher remains a no-op; a
+later one-shot session replay reads committed durable state.
+
+Daemon-host outcome fixtures make the `Starting`/`Cancelling` first-append race
+deterministic and prove task-owned cancellation leaves cursor zero with neither
+provider execution nor model facts. They also prove a terminal promotion is
+scheduled from the exact persisted successor once. A blocked in-flight durable
+host reopened through a fresh host interrupts the original run before replay,
+does not resume it or a recovery-promoted `Starting` successor, and retains
+only credential-free replay, event, snapshot, and error representations.
 
 ## Event taxonomy, snapshots, and event sequences
 
@@ -166,6 +177,21 @@ accepted configuration edit or plan action.
   `run_history_unavailable`. An append above the 512 KiB individual fact limit
   returns `run_fact_too_large`; a stale expected cursor returns
   `run_event_cursor_conflict` with immediate retry guidance.
+- The daemon task and cancellation registries are keyed by exact
+  `(SessionId, RunId)`. Admission and `StopRun` serialize through that registry:
+  a host inserts a provider-neutral cancellation signal before spawning a newly
+  admitted durable `Starting` run and deduplicates repeated admission. `StopRun`
+  first commits `Cancelling`, publishes the durable status, then signals that
+  exact task. If stop wins before registration, it installs an exact
+  task-owned cancellation terminalizer, so later admission cannot leave durable
+  `Cancelling` state stranded. The executor owns the terminal cancellation
+  transition and suppression of late facts. If `StopRun` wins between the
+  executor's initial `Starting` replay and its first
+  `Starting -> Running` append, the task rereads its exact durable scope after
+  rejection and terminalizes `Cancelling -> Cancelled`; unrelated append
+  failures remain errors. A terminal commit may
+  promote a queued `Starting` run, which the host schedules once from persisted
+  context. Recovery never admits old or recovery-promoted work to a provider.
 - A runtime configuration lookup for a matching `(SessionId, RunId)` returns
   only its immutable credential-free `ConfigSnapshotDto`, selected by the
   run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
