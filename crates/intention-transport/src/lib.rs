@@ -415,6 +415,42 @@ pub struct AsyncLocalDaemonConnection {
 }
 
 impl AsyncLocalDaemonConnection {
+    /// Negotiates one connection and selects its typed response role from the
+    /// peer's declared run-stream capability.
+    ///
+    /// This keeps ordinary M3 peers on their established response framing while
+    /// allowing opt-in run-stream peers to receive daemon frames on the same
+    /// endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed incompatibility or framing error when hello negotiation
+    /// cannot complete.
+    pub async fn negotiate_by_capability(
+        mut self,
+        local: ProtocolHelloDto,
+    ) -> DtoResult<(ProtocolHelloDto, AsyncDaemonConnectionRoles)> {
+        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
+        local.version().ensure_compatible_with(remote.version())?;
+        write_async_frame(&mut self.stream, &local).await?;
+        let (receiver, sender) = self.stream.split();
+        let roles = if remote
+            .capabilities()
+            .contains(&intention_protocol::ProtocolCapabilityDto::RunStreamSubscriptions)
+        {
+            AsyncDaemonConnectionRoles::RunStream(
+                AsyncRequestReceiver { receiver },
+                AsyncDaemonFrameSender { sender },
+            )
+        } else {
+            AsyncDaemonConnectionRoles::Ordinary(
+                AsyncRequestReceiver { receiver },
+                AsyncResponseSender { sender },
+            )
+        };
+        Ok((remote, roles))
+    }
+
     /// Exchanges the daemon hello and consumes the connection into daemon roles.
     ///
     /// The returned roles retain only the appropriate typed protocol direction:
@@ -463,6 +499,14 @@ impl AsyncLocalDaemonConnection {
             AsyncDaemonFrameSender { sender },
         ))
     }
+}
+
+/// Opaque daemon roles selected after the peer's hello capabilities are known.
+pub enum AsyncDaemonConnectionRoles {
+    /// The retained correlated M3 response roles.
+    Ordinary(AsyncRequestReceiver, AsyncResponseSender),
+    /// The opt-in correlated-response plus uncorrelated-stream roles.
+    RunStream(AsyncRequestReceiver, AsyncDaemonFrameSender),
 }
 
 /// The client-to-daemon half of an established asynchronous connection.

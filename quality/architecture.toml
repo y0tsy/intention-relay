@@ -73,8 +73,8 @@ public_resource_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
-"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-types"]
-"intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]
+"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-types"]
+"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-types"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
@@ -92,8 +92,8 @@ public_resource_patterns = [
 "intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
 "intention-client" = ["fs4", "tempfile", "tokio"]
-"intention" = ["tempfile"]
-"intention-daemon" = ["tempfile"]
+"intention" = ["futures-util", "tempfile"]
+"intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]
 "intention-application" = []
 "intention-runtime" = ["futures-executor", "futures-util"]
 "intention-storage" = ["serde_json"]
@@ -317,8 +317,8 @@ coverage_tier = "adapter"
 [[future_crates]]
 name = "intention-daemon"
 responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
-test_target = "bootstrap and recovery integration tests"
-test_targets = ["daemon_bootstrap"]
+test_target = "bootstrap, recovery, and model-execution bridge integration tests"
+test_targets = ["daemon_bootstrap", "m4_streaming_foundation"]
 coverage_tier = "C"
 
 [[future_crates]]

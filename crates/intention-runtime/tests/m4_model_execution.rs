@@ -20,8 +20,8 @@ use intention_model::{
     ProviderErrorDto, UsageDto,
 };
 use intention_runtime::{
-    ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort,
+    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
+    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
@@ -104,6 +104,8 @@ struct FakeRepository {
     appends: RefCell<Vec<AppendModelRunFactsInputDto>>,
     transitions: RefCell<Vec<TransitionRunInputDto>>,
     config_error: RefCell<Option<ErrorDto>>,
+    append_failure: RefCell<Option<ErrorDto>>,
+    cancel_before_first_append: RefCell<bool>,
     transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
 }
 
@@ -118,6 +120,8 @@ impl FakeRepository {
             appends: RefCell::new(Vec::new()),
             transitions: RefCell::new(Vec::new()),
             config_error: RefCell::new(None),
+            append_failure: RefCell::new(None),
+            cancel_before_first_append: RefCell::new(false),
             transition_failure: RefCell::new(None),
         }
     }
@@ -211,6 +215,27 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         input: AppendModelRunFactsInputDto,
     ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
+        if self.cancel_before_first_append.replace(false) {
+            // This is the deterministic scheduling barrier: execution has read
+            // Starting, then the host's StopRun commit wins immediately before
+            // the first transition-to-Running append.
+            *self.status.borrow_mut() = RunStatusDto::Cancelling;
+            self.transitions
+                .borrow_mut()
+                .push(TransitionRunInputDto::new(
+                    self.session_id,
+                    self.run_id,
+                    RunStatusDto::Cancelling,
+                    time(2),
+                ));
+            return Err(ErrorDto::unavailable(
+                "run_status_changed",
+                "the run changed while execution was being admitted",
+            ));
+        }
+        if let Some(error) = self.append_failure.borrow_mut().take() {
+            return Err(error);
+        }
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
         assert_eq!(input.expected_cursor(), *self.cursor.borrow());
@@ -362,6 +387,122 @@ fn execute(
             ),
         ),
     )
+}
+
+struct RecordingCommitObserver {
+    commits: std::sync::Mutex<Vec<ModelRunCommitDto>>,
+}
+
+impl RecordingCommitObserver {
+    const fn new() -> Self {
+        Self {
+            commits: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ModelRunCommitObserver for RecordingCommitObserver {
+    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
+        self.commits
+            .lock()
+            .expect("observer recorder remains available")
+            .push(committed);
+    }
+}
+
+#[test]
+fn observer_receives_only_successful_fact_appends_and_completion_transition() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let driver = ScriptedDriver::new(vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::text_delta("complete").expect("text is valid")),
+        Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+    ]);
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+
+    let outcome = futures_executor::block_on(
+        ModelRunExecutionService::with_commit_observer(&repository, &driver, &clock, &observer)
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                ModelCancellationSignal::new(),
+            )),
+    )
+    .expect("execution completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto { .. }
+        }
+    ));
+    let commits = observer
+        .commits
+        .lock()
+        .expect("observer recorder remains available");
+    assert_eq!(commits.len(), 4, "attempt, content, finishing, completion");
+    assert!(
+        commits
+            .windows(2)
+            .all(|pair| pair[0].cursor() <= pair[1].cursor())
+    );
+    assert!(commits.iter().all(|commit| {
+        commit.session_id() == session_id
+            && commit.run_id() == run_id
+            && commit.snapshot().run_id() == run_id
+    }));
+    assert_eq!(
+        commits
+            .last()
+            .expect("completion is observed")
+            .snapshot()
+            .run_projection()
+            .status(),
+        RunStatusDto::Completed
+    );
+    drop(commits);
+}
+
+#[test]
+fn observer_is_not_called_when_a_durable_append_fails() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    *repository.append_failure.borrow_mut() = Some(ErrorDto::unavailable(
+        "append_failed",
+        "append fails before commit",
+    ));
+    let driver = ScriptedDriver::new(vec![Ok(ModelEventDto::started())]);
+    let clock = ImmediateTime::new();
+    let observer = RecordingCommitObserver::new();
+
+    let error = futures_executor::block_on(
+        ModelRunExecutionService::with_commit_observer(&repository, &driver, &clock, &observer)
+            .execute(ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                ModelCancellationSignal::new(),
+            )),
+    )
+    .expect_err("failed append must abort execution");
+
+    assert_eq!(error.code(), "append_failed");
+    assert!(
+        observer
+            .commits
+            .lock()
+            .expect("observer recorder remains available")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -603,6 +744,43 @@ fn direct_cancellation_suppresses_late_events_and_completes_cancelling() {
     let transitions = repository.transitions.borrow();
     assert_eq!(
         transitions
+            .iter()
+            .map(TransitionRunInputDto::status)
+            .collect::<Vec<_>>(),
+        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+    );
+}
+
+#[test]
+fn stop_between_initial_replay_and_first_append_is_terminalized_by_the_task() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    *repository.cancel_before_first_append.borrow_mut() = true;
+    let driver = ScriptedDriver::new(vec![Ok(ModelEventDto::started())]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("the task resolves the durable cancellation race");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Cancelled {
+            cursor: RunEventCursorDto::new(0)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 0);
+    assert!(repository.appends.borrow().is_empty());
+    assert_eq!(
+        repository
+            .transitions
+            .borrow()
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),

@@ -721,10 +721,12 @@ dependencies = [
 name = "intention"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "intention-application",
  "intention-client",
  "intention-config",
  "intention-domain",
+ "intention-model",
  "intention-protocol",
  "intention-provider-generic-chat",
  "intention-provider-openrouter",
@@ -774,12 +776,20 @@ dependencies = [
 name = "intention-daemon"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "intention",
+ "intention-application",
+ "intention-client",
  "intention-config",
+ "intention-domain",
+ "intention-model",
  "intention-protocol",
+ "intention-runtime",
  "intention-transport",
  "intention-types",
+ "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

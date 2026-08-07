@@ -398,6 +398,26 @@ where
             .load_run_tail(session_id, run_id, after_cursor)
     }
 
+    /// Reconstructs the exact durable context for one current `Starting` run.
+    ///
+    /// This is the daemon-host admission read. It deliberately does not dispatch
+    /// work itself, so composition remains the owner of provider execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed context or scheduling error when the exact durable run is
+    /// unavailable or is no longer eligible for execution.
+    pub fn schedule_starting_run(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<ScheduleModelRunDto> {
+        schedule_from_context(
+            self.repository
+                .load_starting_run_model_context(session_id, run_id)?,
+        )
+    }
+
     /// Loads the current durable session projection as a versioned protocol snapshot.
     ///
     /// # Errors
