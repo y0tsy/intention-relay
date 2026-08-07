@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,14 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SHARED_TARGET_DIRECTORY = ROOT / "target"
+
+
+def command_environment(cwd: Path) -> dict[str, str] | None:
+    """Share Cargo artifacts only with an isolated copy of this repository."""
+    if cwd != ROOT and (cwd / "quality" / "self_test.py").is_file():
+        return {**os.environ, "CARGO_TARGET_DIR": str(SHARED_TARGET_DIRECTORY)}
+    return None
 
 
 def run(
@@ -24,7 +33,13 @@ def run(
     expected_output: str | None = None,
     expected_outputs: tuple[str, ...] = (),
 ) -> None:
-    completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=command_environment(cwd),
+    )
     output = (completed.stdout + "\n" + completed.stderr).strip()
     succeeded = completed.returncode == 0
     if succeeded != expect_success:
@@ -64,6 +79,18 @@ def replace_once(path: Path, old: str, new: str) -> None:
     if old not in text:
         raise RuntimeError(f"fixture replacement source not found in {path}: {old!r}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def test_copied_repository_commands_share_the_controller_target(_root: Path) -> None:
+    with copied_repository() as copied_root:
+        environment = command_environment(copied_root)
+        if environment is None:
+            raise RuntimeError("copied repository command environment is missing")
+        if environment.get("CARGO_TARGET_DIR") != str(SHARED_TARGET_DIRECTORY):
+            raise RuntimeError("copied repository commands must share the controller target directory")
+    with tempfile.TemporaryDirectory() as temporary:
+        if command_environment(Path(temporary)) is not None:
+            raise RuntimeError("standalone temporary-project commands must not share the controller target directory")
 
 
 def test_formatting_drift(root: Path) -> None:
@@ -790,6 +817,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true")
     arguments = parser.parse_args()
     repository_tests = [
+        test_copied_repository_commands_share_the_controller_target,
         test_formatting_drift,
         test_lint_warning,
         test_unreasoned_suppression,

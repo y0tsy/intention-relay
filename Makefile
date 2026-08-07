@@ -7,12 +7,12 @@ SHELL := /bin/bash
 .NOTPARALLEL:
 .DEFAULT_GOAL := help
 
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage coverage-artifacts-clean deps quality-self-test quick check verify ci
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
 	  'Non-mutating: tools-check fmt-check notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
-	  'Mutating/networked: bootstrap-tools fmt notices' \
+	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
 
@@ -61,6 +61,9 @@ architecture: tools-check ## Verify workspace membership and architectural polic
 coverage: tools-check ## Collect branch-aware coverage and enforce declared tiers.
 	$(PYTHON) quality/run_coverage.py
 
+coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build artifacts after coverage passes.
+	rm -rf target/llvm-cov-target
+
 deps: tools-check notices-check ## Run online dependency, license, advisory, notices, and hygiene gates.
 	$(CARGO) metadata --locked --format-version 1 > /dev/null
 	$(PYTHON) quality/check_deny_policy.py
@@ -79,8 +82,9 @@ quick: tools-check fmt-check lint ## Fast default local quality loop.
 check: tools-check fmt-check features isolated-release check-cargo lint test docs-check architecture ## Complete non-mutating source-quality gate.
 	@true
 
-verify: check coverage deps quality-self-test ## Full reproducible merge and release gate.
-	@true
+verify: check coverage deps ## Full reproducible merge and release gate.
+	$(MAKE) coverage-artifacts-clean
+	$(MAKE) quality-self-test
 
 ci: verify ## CI alias. GitHub Actions must invoke only this target.
 	@true

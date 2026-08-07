@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
+`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI records free space and relevant artifact-directory sizes before and after the quality gate as operational diagnostics; those reports never change a gate's verdict. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -189,13 +189,14 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
 | `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and public-API boundary checks. |
 | `make coverage` | No | Collect coverage and apply the tier policy. |
+| `make coverage-artifacts-clean` | Yes, generated artifacts only | Remove `target/llvm-cov-target` after coverage's JSON reports are checked; it preserves reports and ordinary Cargo artifacts. |
 | `make deps` | No | Run locked metadata, third-party-notice freshness, deny, audit, unused-dependency, manifest, stale-direct-dependency, and duplicate-version checks. |
 | `make quick` | No | Run tools-check, fmt-check, lint, and focused/default tests for fast iteration. |
 | `make check` | No | Run complete source-quality checks: tools, formatting, features, lint, all tests, doctests, docs, and architecture. |
 | `make verify` | No | Run `check` plus coverage and dependency/supply-chain checks. |
 | `make ci` | No | Alias the blocking CI gate, `verify`. |
 
-`make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
+`make verify` runs `check`, `coverage`, and `deps`, then removes only the generated LLVM coverage target before `quality-self-test`; coverage reports remain available for CI upload. `quality-self-test` still copies and mutates an isolated source tree, but its copied-repository Cargo commands reuse the controller workspace `target` directory. Quality scripts resolve Cargo-generated artifacts through `CARGO_TARGET_DIR` when it is set. Cargo fingerprints the copied source paths and contents, so intentional fixture defects still recompile affected crates and must produce their required failures without allocating a second complete target tree in the temporary directory. `make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
 
 ### Cargo command coverage
 
