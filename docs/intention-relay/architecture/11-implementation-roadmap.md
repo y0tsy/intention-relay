@@ -242,11 +242,12 @@ M3 uses the platform AppData/state location for production SQLite state and
 never falls back to process CWD. TOML is applied once per daemon startup;
 editing TOML requires restart and does not live-reload a running daemon.
 Subscriptions are durable one-shot snapshot/tail replay or typed resync only.
-`@todo(m4-streaming)` explicitly defers persistent live subscriptions,
-post-commit fan-out, slow-peer stream policy, and safely represented run-scoped
-replay to M4. A M3 request with `run_id: Some` always returns typed
-`HistoryUnavailable` resync rather than unfiltered session state, because its
-session-contiguous snapshot/tail DTOs cannot safely express filtered run state.
+M3 remains one-shot and replay-only. M4 supplies persistent live run
+streaming, post-commit fan-out, slow-peer policy, and safely represented
+run-scoped replay through separate contracts. A M3 request with `run_id: Some`
+always returns typed `HistoryUnavailable` resync rather than unfiltered session
+state, because its session-contiguous snapshot/tail DTOs cannot safely express
+filtered run state.
 
 ### Tests first
 
@@ -284,10 +285,10 @@ storage contract remains DTO-only: it does not expose a SQL connection,
 transaction closure, path, or SQLite row.
 
 M3 is intentionally not M4 streaming/model runtime. A post-commit publisher
-seam exists but is a no-op; `@todo(m4-streaming)` means M4 must add persistent
-live event streaming, fan-out/buffering, and slow-peer policy. Durable one-shot
-replay, ordering, resync, and restart recovery are M3 behavior, not a streaming
-deferral.
+seam exists but is a no-op; M4 supplies persistent live run streaming,
+fan-out/buffering, and slow-peer policy through separate contracts. Durable
+one-shot replay, ordering, resync, and restart recovery are M3 behavior, not a
+streaming deferral.
 
 ## Milestone 4: Model contract, providers, and one streaming run
 

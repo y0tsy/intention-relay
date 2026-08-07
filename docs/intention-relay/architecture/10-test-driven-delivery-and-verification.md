@@ -161,7 +161,31 @@ M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `int
 
 ## M4 run-stream protocol evidence
 
-M4's dedicated run-stream contract is proven before daemon hosting: `m4_run_stream_contracts` covers validated run subscription/replay/live/snapshot/resync wire DTOs, all closed resync reasons, additive JSON compatibility, and retained M3 session behavior. `run_stream_contract` uses a real scripted asynchronous local peer to prove correlated initial replay followed by uncorrelated daemon frames, duplicate/stale tolerance, gap recovery from the last valid cursor, wrong-scope rejection, fail-closed unavailable history, historical reasoning without snapshot double application, and daemon-authoritative status-only snapshot updates. `transport_integration` proves daemon-frame sender/receiver roles without widening existing M3 correlated response roles. These tests do not claim daemon host, publisher, fan-out, queue, deadline, or slow-peer behavior.
+M4's dedicated run-stream contract is proven before daemon hosting: `m4_run_stream_contracts` covers validated run subscription/replay/live/snapshot/resync wire DTOs, all closed resync reasons, additive JSON compatibility, and retained M3 session behavior. `run_stream_contract` uses a real scripted asynchronous local peer to prove correlated initial replay followed by uncorrelated daemon frames, duplicate/stale tolerance, gap recovery from the last valid cursor, wrong-scope rejection, fail-closed unavailable history, historical reasoning without snapshot double application, and daemon-authoritative status-only snapshot updates. `transport_integration` proves daemon-frame sender/receiver roles without widening existing M3 correlated response roles.
+
+`m4_streaming_foundation` adds daemon-host outcome evidence using injected
+scripted/blocking drivers and a real asynchronous local transport. It proves a
+host-accepted `SendUserTurn` invokes the driver once, exposes an initial
+authoritative replay followed by durable live state and `Completed` on one
+persistent connection, and permits a new connection plus a repeated correlated
+replay request to receive the current snapshot. Its blocked-driver scenario
+proves host `StopRun` reaches task-owned `Cancelled` without late facts. The
+real host's deterministic first-append gate proves the durable `Cancelling`
+race after initial `Starting` observation is terminalized exactly once by that
+registered task at cursor zero, with no provider call or fact. A real-host
+stop-before-registration fixture proves registry/stop linearization installs
+and cleans up an exact cancellation terminalizer rather than stranding durable
+`Cancelling` state. A real-host
+promotion fixture proves the commit observer schedules the original persisted
+queued `RunId` once with its durable context and ignores duplicate admission.
+A durable blocked-host restart fixture first aborts and joins all first-host
+connection/execution tasks and drops all first-facade clones, then serializes actual replay, transport
+replay/error frames, events, snapshots, and safe errors from a recognizable
+fake-credential configuration; the credential is absent, the old run becomes
+`Interrupted` before replay, and neither it nor a recovery-promoted `Starting`
+run resumes provider execution. Queue capacity and exact writer-deadline
+behavior remain focused daemon-host unit evidence. The fixture uses no network
+or real credential.
 
 ## Result-oriented acceptance scenarios
 
