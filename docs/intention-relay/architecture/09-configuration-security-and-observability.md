@@ -63,6 +63,11 @@ The optional TOML table `[provider.execution]` resolves into the credential-free
 
 `parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`, `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor. Safe resolved/snapshot DTOs, persistence, events, protocol, diagnostics, logs, and adapter projections remain credential-free.
 
+These M4 configuration and credential-isolation rules are implemented and
+verified at the M4 closure baseline. They remain startup-only behavior; a
+follow-on milestone must not imply live reload, credential persistence, or
+rotation without new contracts and outcome evidence.
+
 ## Open-text provider credentials
 
 Provider credentials may be stored in TOML in open text by explicit product decision. This is not equivalent to allowing them to leak through the system.

@@ -14,6 +14,25 @@ daemon startup, records one immutable credential-free selection per run, and
 explicitly excludes configuration live reload, credential rotation, and M6 UI
 work.
 
+## Prime Agent research and long-term direction
+
+The following preserved research informs the wider M4+ direction:
+
+- [Prime Agent runtime reference](../reference/prime-agent-research/prime-agent-runtime-reference.md);
+- [RLM, IPython, and continual-harness integration analysis](../reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md).
+
+In the longer term, Intention Relay should implement the overall capability
+described by that research: RLM-style recursive orchestration, persistent
+IPython control-plane support, durable child-agent operation, and a continual
+harness. M4+ must establish the architectural and durable-runtime foundations
+for that direction, rather than claim to deliver the complete capability.
+
+Before that scope is approved for implementation, the architecture
+documentation, milestone roadmap, crate map, quality policy, and related
+decision records require comprehensive replanning around the new direction.
+This concept records only that intent; it does not amend M4 or authorize those
+broader documentation or implementation changes.
+
 ## Research question
 
 The investigated product direction is:
@@ -135,6 +154,50 @@ catalog DTO may contain profile ID, protocol kind, model, endpoint, effective
 execution policy, and `credential_configured`, but never secret text,
 authorization headers, raw TOML, or configuration paths.
 
+### Configuration change awareness and controlled reload
+
+M4+ or subsequent approved phases should provide configuration change
+awareness and a controlled configuration reload workflow. A local file watcher
+should report that the configuration file changed, but it must not apply the
+changed file automatically.
+
+The user must be able to inspect the detected change, discard it by restoring
+the prior configuration, or explicitly accept the changed configuration and
+request a reload. A successful reload applies only to future work; it must not
+silently change active runs, queued turns, their immutable selections, or
+retry behavior.
+
+This direction requires future architecture, lifecycle, protocol, persistence,
+security, and presentation decisions. It does not decide the watcher,
+comparison, confirmation, reload, rollback, error, or credential-rotation
+mechanisms, and it does not amend M4's startup-only configuration behavior.
+
+### Adapter configuration control plane
+
+M4+ or subsequent approved phases should give adapters and their shared client
+a safe configuration control plane, so users do not need to edit TOML directly
+for ordinary configuration work. The daemon remains the sole authority for
+reading, validating, writing, retaining, and reloading configuration; TOML
+remains the persistent authoritative source.
+
+Adapters should be able to obtain safe runtime configuration status, inspect a
+safe semantic preview of a detected or proposed change, request validation,
+explicitly request reload, and edit non-secret settings through daemon-owned
+workflows. The control plane should let users understand which configuration is
+active, whether a change awaits review, and whether a requested change can
+affect future work, without exposing raw TOML, configuration paths, credentials,
+authorization headers, or provider SDK resources.
+
+This direction includes future support for user review, explicit acceptance or
+rejection, and safe non-secret editing. It does not decide public DTOs,
+protocol commands, client APIs, presentation layouts, TOML-writing fidelity,
+change-preview format, concurrency behavior, or audit semantics.
+
+Credential entry, secret storage, and persistent restoration of prior
+secret-bearing TOML are separate future security decisions. Rejecting a changed
+candidate must at minimum mean that it is not applied to the active runtime;
+it does not by itself decide how a prior persistent configuration is restored.
+
 ### Selection lifecycle
 
 1. A session has a durable default profile for **future** accepted turns.
@@ -207,6 +270,10 @@ public contracts include:
 3. a command that chooses a profile for future turns in a session; and
 4. an optional typed profile override on a future `SendUserTurn` command.
 
+The same future public surface must also support safe configuration status,
+change review, validation, controlled reload, and non-secret configuration
+editing without making an adapter a raw TOML or credential transport channel.
+
 These contracts require versioned protocol capability negotiation, client
 methods, durable session projection/event support, and M6 presentation work.
 They must never accept raw credentials, arbitrary endpoints, or SDK-specific
@@ -227,7 +294,12 @@ Any approved implementation of this concept must add evidence for:
 - concurrent sessions selecting different profiles without shared mutable
   selection state;
 - protocol/client compatibility and safe presentation projections for profile
-  list/default/override workflows.
+  list/default/override workflows;
+- safe configuration status, change preview, validation, explicit
+  accept/reject/reload, and non-secret editing workflows;
+- redaction and failure coverage proving that adapters, events, snapshots,
+  logs, diagnostics, and previews do not disclose credential-bearing source
+  material.
 
 The root `make quick` and `make verify` contracts remain mandatory. Any new
 production crate or integration target must be registered in the
@@ -244,8 +316,9 @@ Recommended sequence:
 1. Complete M4 under its accepted single-startup-selection scope.
 2. Create and approve a dedicated follow-on specification for startup-loaded
    provider profiles among already supported provider protocols. It may include
-   multiple Generic Chat endpoints, profile IDs, session defaults, and per-turn
-   overrides, while continuing to defer live reload and credential rotation.
+   multiple Generic Chat endpoints, profile IDs, session defaults, per-turn
+   overrides, configuration change awareness, and controlled user-approved
+   reload, while continuing to defer credential rotation.
 3. Add profile-selection presentation UX through the M6 adapter scope after the
    daemon/protocol contract exists.
 
