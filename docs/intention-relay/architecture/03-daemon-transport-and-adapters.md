@@ -216,9 +216,9 @@ express filtered run state. Therefore every subscription with `run_id: Some`
 returns typed `HistoryUnavailable` resync **before any session or cursor
 validation**, whether the run matches, does not exist, belongs to another
 session, or has an invalid cursor. It must never fall back to an unfiltered
-session snapshot or tail. Correctly scoped replay remains deferred with the M4
-persistent-streaming/representation hardening; this safe resync is not a live
-stream.
+session snapshot or tail. Correctly scoped replay is delivered separately by
+the M4 run-stream subscription contract; this M3 safe resync remains distinct
+and is not a live stream.
 
 ## Subscription and reconnect
 
@@ -334,8 +334,6 @@ The daemon, transport, client, and adapter tests in this document are blocking `
 
 ## Open implementation decisions
 
-- maximum subscription buffer, streaming shape, read/write deadline, and
-  slow-client eviction policy;
 - durable endpoint cleanup and stale-listener recovery policy beyond listener
   ownership safeguards;
 - daemon upgrades with connected adapters;

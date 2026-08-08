@@ -19,7 +19,7 @@ ModelDriver
   preflight(ModelRequestDto) -> DtoResult<()>
 ```
 
-M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and `ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage facts, followed by exactly one terminal `Finished` fact. A second start, a fact before start or after finish, duplicate usage, or a second finish fails validation. `ModelRunExecutionService` consumes this injected stream, performs preflight only after exact persisted/current safe-selection equality, owns cancellation late-event suppression, deadlines, and retries, and persists only validated facts through the DTO-only storage contract. Its `ModelTimePort` exposes fresh provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio runtime. `prepare_request` validates and privately translates a request only; it never performs an outbound provider action in Package 1.
+M4 defines text-only `ModelMessageDto` context, an optional system context, explicit requested capability flags, and `ModelStreamLifecycleDto`. Providers must emit `Started` first, then zero or more text/reasoning/tool/usage facts, followed by exactly one terminal `Finished` fact. A second start, a fact before start or after finish, duplicate usage, or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream, performs preflight only after exact persisted/current safe-selection equality, owns cancellation late-event suppression, deadlines, and retries, and persists only validated facts through the DTO-only storage contract. Its `ModelTimePort` exposes fresh provider-neutral delay futures and safe timestamps, never Tokio. The service does not select a provider or own a Tokio runtime; the daemon-owned composition host supplies those private execution resources.
 
 Core DTO families:
 
@@ -90,7 +90,10 @@ It owns:
 - provider-specific model discovery/capability metadata where available; and
 - safe diagnostics and correlation identifiers.
 
-Package 1 does not start an SDK stream or make an outbound request; runtime-owned execution and stream delivery are deferred.
+The completed M4 daemon host starts the selected SDK-backed stream through the
+private provider composition path. Provider crates continue to expose only
+provider-neutral contracts; runtime-owned execution and persistent delivery do
+not expose SDK resources.
 
 ### Generic Chat Completion
 
@@ -103,7 +106,10 @@ It owns:
 - documented capability limitations; and
 - normalized failures.
 
-Package 1 does not start an SDK stream or make an outbound request; runtime-owned execution and stream delivery are deferred.
+The completed M4 daemon host starts the selected SDK-backed stream through the
+private provider composition path. Provider crates continue to expose only
+provider-neutral contracts; runtime-owned execution and persistent delivery do
+not expose SDK resources.
 
 Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, usage, finish reasons, and function-style tool calls; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
 
@@ -115,9 +121,11 @@ Provider/model selection changes do not mutate an already-started run. They appl
 
 ## Streaming and tool calls
 
-The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering, stable assistant-turn identity, persistence, and conversion of a model tool call into typed tool execution.
+The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering, stable assistant-turn identity, persistence, and conversion of a model tool call into typed durable evidence and denial until M5 provides tool execution.
 
-Provider drivers do not invoke local tools directly.
+Provider drivers do not invoke local tools directly. M4 records typed tool-call
+evidence and then fails `tool_execution_unavailable`; concrete tool execution
+remains M5 scope.
 
 ## Retry and timeout ownership
 

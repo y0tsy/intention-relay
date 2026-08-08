@@ -290,21 +290,37 @@ fan-out/buffering, and slow-peer policy through separate contracts. Durable
 one-shot replay, ordering, resync, and restart recovery are M3 behavior, not a
 streaming deferral.
 
-## Milestone 4: Model contract, providers, and one streaming run
+## Milestone 4: Model contract, providers, and one streaming run, complete
 
-### Package 1 foundation
+**Closed at immutable implementation baseline
+[`d2a85370a66d63fc759e4987a74d435ecd5d5115`](../closeout/m4-closure-evidence.md).**
+The baseline passed local `make verify` and the required Linux and Windows
+`make ci` matrix. The [M4 Closure Evidence](../closeout/m4-closure-evidence.md)
+records the complete verification matrix, coverage, exceptions, and retained
+deferrals; the [M4 execution charter](../m4.md) retains the accepted decisions
+and integration history.
 
-Package 1 activates the Tier C model and provider crates before runtime streaming work. It establishes validated provider-neutral DTOs and stream ordering, safe per-run execution policy in snapshots, opaque startup-only provider material, and private SDK-backed request/mapping boundaries. It selects `openrouter-rs` 0.14.0 for OpenRouter and `async-openai` 0.29.3 for configured-base-URL Generic Chat Completions, without custom HTTP/SSE parsing. The generic subset is text, usage, finish, and function-style tool calls; reasoning, multimodal, and vendor extensions reject preflight. Runtime-owned Tokio lifecycle, retry delay, durable stream publication, tool execution, and one streaming run are later M4 packages.
+M4 delivered the Tier C provider foundation and all runtime, protocol,
+scheduling, and daemon-host packages. It establishes validated provider-neutral
+DTOs and stream ordering, safe per-run execution policy in snapshots, opaque
+startup-only provider material, and private SDK-backed request/mapping
+boundaries. It selects `openrouter-rs` 0.14.0 for OpenRouter and
+`async-openai` 0.29.3 for configured-base-URL Generic Chat Completions,
+without custom HTTP/SSE parsing. The generic subset is text, usage, finish, and
+function-style tool calls; reasoning, multimodal, and vendor extensions reject
+preflight. A private daemon-owned Tokio runtime executes one streaming run,
+persists durable facts, handles bounded retry and cancellation, and provides
+persistent run-scoped replay and live delivery.
 
-### Deliver
+### Delivered
 
-- model DTOs and runtime model loop skeleton;
+- provider-neutral model DTOs and runtime model execution;
 - OpenRouter SDK driver;
 - Generic Chat Completion driver;
-- provider capability validation, usage/events, timeout/retry policy skeleton;
+- provider capability validation, usage/events, and timeout/retry policy;
 - one streaming user turn ending in a durable run state.
 
-### Tests first
+### Completed test evidence
 
 - provider stream/error normalization fixtures;
 - OpenRouter SDK isolation test;
@@ -313,7 +329,7 @@ Package 1 activates the Tier C model and provider crates before runtime streamin
 - provider credential redaction test;
 - Tier C coverage fixtures and provider feature-profile checks.
 
-### Acceptance outcomes
+### Accepted outcomes
 
 - a fixture model stream produces ordered assistant events and durable run completion;
 - the application rejects unsupported provider/model combinations before execution;

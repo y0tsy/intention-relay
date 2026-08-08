@@ -78,8 +78,9 @@ When one exists, the repository creates that turn's already-selected `RunId`
 with its immutable snapshot, appends `RunStatusChanged` before `RunStarted`, and
 snapshots the final projection; callers cannot opt out of this behavior.
 
-The exact policy for a question or permission after restart is M4 work. M3 marks
-the unfinished run interrupted and does not resume it.
+The exact policy for a question or permission after restart remains future tool
+and interaction work. M4 preserves the M3 rule: the unfinished run is marked
+interrupted and does not resume.
 
 ## Durable input queue
 
