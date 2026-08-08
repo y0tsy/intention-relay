@@ -3,16 +3,23 @@
 ## Status
 
 **Research concept, not an approved implementation scope.** This document
-captures an investigation performed while M4 Lane E was in progress. It does
-not amend the M4 execution charter, authorize code changes, alter accepted M4
-behavior, or claim that provider profiles, configuration reload, credential
-rotation, or a provider-selection user interface are delivered.
+preserves an investigation performed during M4 work and retained after M4
+closure. It does not amend the closed M4 charter or implementation baseline,
+authorize code changes, alter accepted M4 behavior, or claim that provider
+profiles, configuration reload, credential rotation, or a provider-selection
+user interface are delivered.
 
-The current M4 authority remains [`m4.md`](m4.md). In particular, M4 currently
-accepts only `openrouter` and `generic-chat-completion-api`, applies TOML at
-daemon startup, records one immutable credential-free selection per run, and
-explicitly excludes configuration live reload, credential rotation, and M6 UI
-work.
+"M4+" is a shorthand for this unapproved research direction, not an approved
+milestone or project phase. This document records possible future constraints;
+it does not add a roadmap entry, crate, quality-policy target, or implementation
+authorization.
+
+The closed M4 record remains [`m4.md`](m4.md), with its immutable
+implementation baseline and acceptance evidence recorded in [M4 Closure
+Evidence](closeout/m4-closure-evidence.md). The closed M4 baseline accepts only
+`openrouter` and `generic-chat-completion-api`, applies TOML at daemon startup,
+records one immutable credential-free selection per run, and explicitly
+excludes configuration live reload, credential rotation, and M6 UI work.
 
 ## Prime Agent research and long-term direction
 
@@ -24,14 +31,76 @@ The following preserved research informs the wider M4+ direction:
 In the longer term, Intention Relay should implement the overall capability
 described by that research: RLM-style recursive orchestration, persistent
 IPython control-plane support, durable child-agent operation, and a continual
-harness. M4+ must establish the architectural and durable-runtime foundations
-for that direction, rather than claim to deliver the complete capability.
+harness. Any future approved work in this direction must establish the
+architectural and durable-runtime foundations first, rather than claim to
+deliver the complete capability.
 
 Before that scope is approved for implementation, the architecture
 documentation, milestone roadmap, crate map, quality policy, and related
 decision records require comprehensive replanning around the new direction.
 This concept records only that intent; it does not amend M4 or authorize those
 broader documentation or implementation changes.
+
+## Conceptual execution direction: IPython and a unified Rust-owned capability plane
+
+The long-term IPython direction is an optional programmable orchestration
+control plane, not a second daemon, persistence system, or independent tool
+implementation. The Rust daemon remains the sole authority for session and run
+identity, provider selection, tool policy, child-agent admission, durable
+state, event publication, and recovery. A persistent Python namespace may hold
+variables, helper functions, skill wrappers, and child-agent handles, but it is
+recoverable convenience state rather than authoritative application progress.
+
+Future IPython code should call a thin Python facade over a typed daemon host
+bridge. A later provider-native direct model tool may expose an equivalent
+capability, but both paths must adapt to the same Rust-owned invocation service
+and registered base tool. They must not independently perform equivalent file,
+process, network, or other agent actions.
+
+```mermaid
+flowchart LR
+  PY[IPython facade] --> GW[Tool gateway]
+  MT[Model tool] --> GW
+  GW --> PL[Policy hooks]
+  PL --> BT[Base Rust tool]
+  BT --> DS[Durable state]
+  DS --> MV[Safe model view]
+```
+
+<!-- IPython and direct provider tool calls share one Rust-owned capability path. -->
+
+The shared future invocation path must:
+
+1. bind the request to daemon-held active session/run context rather than trust
+   caller-supplied identity;
+2. validate a typed tool request and apply WorkspaceRoot, mode, risk,
+   confirmation, and hook policy;
+3. execute the registered Rust base tool;
+4. durably commit the tool outcome and policy evidence before publication; and
+5. return a safe, size-bounded model-visible projection, preserving VFR,
+   Headroom, retrieval, redaction, and observability policy.
+
+A future direct-tool descriptor is a deliberate model-facing projection of a
+Rust tool contract, not automatic exposure of every internal tool. Provider
+function schemas, Python facade calls, daemon protocol commands, durable tool
+events, and model-visible result projections must derive from compatible typed
+Rust DTO contracts rather than manually maintained divergent schemas.
+
+An unrestricted IPython kernel executes with its operating-system permissions.
+It can bypass the facade through `pathlib`, `os`, or `subprocess`, so it is not
+a technical enforcement boundary for WorkspaceRoot, Plan mode, hooks, or
+audit. The facade is therefore the intended architecture and ergonomics path,
+not a sandbox by itself. Enforcing those boundaries for Python requires a later
+OS-level restricted sidecar or sandbox design where filesystem, process, and
+network access are available only through the daemon bridge. Current trusted
+local v1 assumptions neither provide nor claim such isolation, and this concept
+does not decide its packaging, permission model, or delivery scope.
+
+A full `model -> tool -> model` loop, including typed tool-result messages, is
+a prerequisite for either IPython-driven or direct-tool agent execution. M4's
+closed `tool_execution_unavailable` behavior remains unchanged. Cancellation,
+kernel failure, and daemon restart must not silently resume external work;
+existing no-resume recovery semantics continue to apply.
 
 ## Research question
 
@@ -47,9 +116,9 @@ The direction is technically feasible but is a cross-cutting configuration,
 persistence, composition, runtime, protocol, and presentation feature. It is
 not a small adjustment to the current single-provider configuration.
 
-## Current M4 baseline
+## Closed M4 baseline
 
-M4 currently has one daemon-startup provider selection:
+The closed M4 baseline has one daemon-startup provider selection:
 
 ```toml
 [provider]
@@ -156,10 +225,10 @@ authorization headers, raw TOML, or configuration paths.
 
 ### Configuration change awareness and controlled reload
 
-M4+ or subsequent approved phases should provide configuration change
-awareness and a controlled configuration reload workflow. A local file watcher
-should report that the configuration file changed, but it must not apply the
-changed file automatically.
+A later approved scope should provide configuration change awareness and a
+controlled configuration reload workflow. A local file watcher should report
+that the configuration file changed, but it must not apply the changed file
+automatically.
 
 The user must be able to inspect the detected change, discard it by restoring
 the prior configuration, or explicitly accept the changed configuration and
@@ -170,15 +239,16 @@ retry behavior.
 This direction requires future architecture, lifecycle, protocol, persistence,
 security, and presentation decisions. It does not decide the watcher,
 comparison, confirmation, reload, rollback, error, or credential-rotation
-mechanisms, and it does not amend M4's startup-only configuration behavior.
+mechanisms, and it does not amend M4's closed startup-only configuration
+behavior.
 
 ### Adapter configuration control plane
 
-M4+ or subsequent approved phases should give adapters and their shared client
-a safe configuration control plane, so users do not need to edit TOML directly
-for ordinary configuration work. The daemon remains the sole authority for
-reading, validating, writing, retaining, and reloading configuration; TOML
-remains the persistent authoritative source.
+A later approved scope should give adapters and their shared client a safe
+configuration control plane, so users do not need to edit TOML directly for
+ordinary configuration work. The daemon remains the sole authority for reading,
+validating, writing, retaining, and reloading configuration; TOML remains the
+persistent authoritative source.
 
 Adapters should be able to obtain safe runtime configuration status, inspect a
 safe semantic preview of a detected or proposed change, request validation,
@@ -297,6 +367,17 @@ Any approved implementation of this concept must add evidence for:
   list/default/override workflows;
 - safe configuration status, change preview, validation, explicit
   accept/reject/reload, and non-secret editing workflows;
+- equivalent WorkspaceRoot, mode, confirmation, hook, audit, and durable
+  publication outcomes when the same future capability is reached through a
+  Python facade or a direct model tool;
+- typed host-request validation, daemon-bound run identity, cancellation,
+  bounded model-visible output, and safe error/redaction behavior for a future
+  Python bridge;
+- proof that an unrestricted kernel is not represented as an enforcement
+  boundary, plus separate evidence for any future restricted-sidecar claim;
+- compatible direct-tool schema/DTO contracts with no provider SDK, Python
+  object, raw Jupyter frame, credential, or implementation resource escaping a
+  public boundary; and
 - redaction and failure coverage proving that adapters, events, snapshots,
   logs, diagnostics, and previews do not disclose credential-bearing source
   material.
@@ -308,21 +389,26 @@ is accepted.
 
 ## Recommendation and sequencing
 
-Do not expand unfinished M4 with this catalog, session-default, UI, and reload
-work.
+Do not reopen closed M4 with this catalog, session-default, UI, and reload work.
 
 Recommended sequence:
 
-1. Complete M4 under its accepted single-startup-selection scope.
-2. Create and approve a dedicated follow-on specification for startup-loaded
+1. Use the closed M4 single-startup-selection baseline as the compatibility and
+   safety foundation for a dedicated follow-on specification for startup-loaded
    provider profiles among already supported provider protocols. It may include
    multiple Generic Chat endpoints, profile IDs, session defaults, per-turn
    overrides, configuration change awareness, and controlled user-approved
    reload, while continuing to defer credential rotation.
-3. Add profile-selection presentation UX through the M6 adapter scope after the
+2. Add profile-selection presentation UX through the M6 adapter scope after the
    daemon/protocol contract exists.
+
+Any later approved plan that adds IPython or direct model tools must first
+establish the shared typed tool/policy and agent-loop contracts. It may then
+design a Python sidecar/host bridge and direct-tool adapters over that one
+capability plane. Persistent kernels, recursive child agents, continual
+harness behavior, sandboxing, crates, milestones, roadmap changes, and
+quality-policy entries remain separate future replanning decisions.
 
 This sequencing preserves durable run immutability, queue correctness,
 credential isolation, no-resume recovery, and provider SDK boundaries while
-avoiding a broad redesign during M4's remaining scheduling and daemon-host
-work.
+avoiding a broad redesign of the closed M4 baseline.
