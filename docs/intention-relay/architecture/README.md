@@ -85,6 +85,8 @@ flowchart TD
 5. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
 6. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
 7. [M2 closure evidence](../closeout/m2-closure-evidence.md)
+8. [M3 closure evidence](../closeout/m3-closure-evidence.md)
+9. [M4 closure evidence](../closeout/m4-closure-evidence.md)
 
 ## Document map
 
