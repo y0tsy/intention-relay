@@ -11,6 +11,14 @@ use intention_types::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
+mod model_facts;
+
+pub use model_facts::{
+    ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
+    ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
+    RunSnapshotDto,
+};
+
 /// The agent policy active for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -714,6 +722,24 @@ pub enum DomainEventDto {
     RunStarted(RunStartedEventDto),
     /// A run state changed through a later application/runtime workflow.
     RunStatusChanged(RunStatusChangedEventDto),
+    /// A provider attempt started; its typed payload carries the durable run cursor.
+    ProviderAttemptStarted(ModelRunFactEventDto),
+    /// A provider attempt failed safely; its typed payload carries the durable run cursor.
+    ProviderAttemptFailed(ModelRunFactEventDto),
+    /// A retry was scheduled; its typed payload carries the durable run cursor.
+    RetryScheduled(ModelRunFactEventDto),
+    /// Assistant content was appended; its typed payload carries the durable run cursor.
+    AssistantContentAppended(ModelRunFactEventDto),
+    /// A tail-only reasoning delta was recorded with a durable run cursor.
+    ReasoningDeltaRecorded(ModelRunFactEventDto),
+    /// Usage was recorded with a durable run cursor.
+    UsageRecorded(ModelRunFactEventDto),
+    /// Tool-call evidence was recorded with a durable run cursor.
+    ToolCallRecorded(ModelRunFactEventDto),
+    /// A provider finish reason was recorded with a durable run cursor.
+    Finished(ModelRunFactEventDto),
+    /// A safe terminal failure was recorded with a durable run cursor.
+    Failed(ModelRunFactEventDto),
     /// A configuration revision was accepted by a later persistence workflow.
     ConfigurationRevisionAccepted(ConfigurationRevisionAcceptedEventDto),
     /// A plan status changed through a later plan policy workflow.

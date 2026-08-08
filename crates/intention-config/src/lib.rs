@@ -304,6 +304,8 @@ impl ProviderSelectionDto {
 pub struct ResolvedConfigDto {
     schema_version: SchemaVersionDto,
     provider: ProviderSelectionDto,
+    #[serde(default)]
+    provider_execution: ProviderExecutionPolicyDto,
     source_kind: ConfigSourceKindDto,
 }
 
@@ -317,12 +319,19 @@ impl<'de> Deserialize<'de> for ResolvedConfigDto {
         struct RawResolvedConfigDto {
             schema_version: SchemaVersionDto,
             provider: ProviderSelectionDto,
+            #[serde(default)]
+            provider_execution: ProviderExecutionPolicyDto,
             source_kind: ConfigSourceKindDto,
         }
 
         let raw = RawResolvedConfigDto::deserialize(deserializer)?;
-        Self::from_public_parts(raw.schema_version, raw.provider, raw.source_kind)
-            .map_err(serde::de::Error::custom)
+        Self::from_public_parts(
+            raw.schema_version,
+            raw.provider,
+            raw.provider_execution,
+            raw.source_kind,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -368,8 +377,10 @@ impl ResolvedConfigDto {
                 "configuration does not match the supported schema",
             )
         })?;
+        let provider_execution = raw.provider.execution.clone();
         Ok(NormalizedConfig {
             provider: raw.provider,
+            provider_execution,
         })
     }
 
@@ -386,7 +397,9 @@ impl ResolvedConfigDto {
                 model: raw.model.name,
                 credential: raw.model.api_key,
                 endpoint: None,
+                execution: None,
             },
+            provider_execution: None,
         })
     }
 
@@ -406,6 +419,7 @@ impl ResolvedConfigDto {
         Self::from_public_parts(
             SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR),
             provider,
+            ProviderExecutionPolicyDto::from_raw(config.provider_execution)?,
             source_kind,
         )
     }
@@ -413,6 +427,7 @@ impl ResolvedConfigDto {
     fn from_public_parts(
         schema_version: SchemaVersionDto,
         provider: ProviderSelectionDto,
+        provider_execution: ProviderExecutionPolicyDto,
         source_kind: ConfigSourceKindDto,
     ) -> DtoResult<Self> {
         SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
@@ -420,7 +435,22 @@ impl ResolvedConfigDto {
         Ok(Self {
             schema_version,
             provider,
+            provider_execution,
             source_kind,
+        })
+    }
+
+    /// Parses configuration into opaque startup-only material and its safe projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns only safe typed validation errors and never exposes the raw credential.
+    pub fn parse_startup_material(input: RawConfigInputDto) -> DtoResult<StartupProviderMaterial> {
+        let credential = parse_credential(&input.text)?;
+        let resolved = Self::parse_resolve(input)?;
+        Ok(StartupProviderMaterial {
+            resolved,
+            opaque: credential,
         })
     }
 
@@ -436,6 +466,12 @@ impl ResolvedConfigDto {
         &self.provider
     }
 
+    /// Returns the fully effective safe provider execution policy.
+    #[must_use]
+    pub const fn provider_execution(&self) -> &ProviderExecutionPolicyDto {
+        &self.provider_execution
+    }
+
     /// Returns the safe source category without its local filesystem path.
     #[must_use]
     pub const fn source_kind(&self) -> ConfigSourceKindDto {
@@ -446,13 +482,15 @@ impl ResolvedConfigDto {
     #[must_use]
     pub fn safe_debug_projection(&self) -> String {
         format!(
-            "schema_version={}.{} source={} provider={} model={} credential_configured={}",
+            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={}",
             self.schema_version.major(),
             self.schema_version.minor(),
             self.source_kind,
             self.provider.kind,
             self.provider.model,
-            self.provider.credential_configured
+            self.provider.credential_configured,
+            self.provider_execution.attempt_timeout_seconds,
+            self.provider_execution.max_attempts,
         )
     }
 }
@@ -559,6 +597,94 @@ impl Display for ResolvedConfigDto {
     }
 }
 
+/// Safe per-run provider execution policy resolved at startup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderExecutionPolicyDto {
+    attempt_timeout_seconds: u8,
+    max_attempts: u8,
+}
+
+impl Default for ProviderExecutionPolicyDto {
+    fn default() -> Self {
+        Self {
+            attempt_timeout_seconds: 30,
+            max_attempts: 2,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderExecutionPolicyDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawProviderExecutionPolicyDto::deserialize(deserializer)?;
+        Self::from_raw(Some(raw)).map_err(serde::de::Error::custom)
+    }
+}
+
+impl ProviderExecutionPolicyDto {
+    fn from_raw(raw: Option<RawProviderExecutionPolicyDto>) -> DtoResult<Self> {
+        let raw = raw.unwrap_or_default();
+        let attempt_timeout_seconds = raw.attempt_timeout_seconds.unwrap_or(30);
+        let max_attempts = raw.max_attempts.unwrap_or(2);
+        if !(1..=60).contains(&attempt_timeout_seconds) {
+            return Err(ErrorDto::validation(
+                "invalid_provider_attempt_timeout_seconds",
+                "provider attempt timeout seconds must be between 1 and 60",
+            ));
+        }
+        if !(1..=2).contains(&max_attempts) {
+            return Err(ErrorDto::validation(
+                "invalid_provider_max_attempts",
+                "provider max attempts must be between 1 and 2",
+            ));
+        }
+        Ok(Self {
+            attempt_timeout_seconds,
+            max_attempts,
+        })
+    }
+
+    /// Returns the timeout for one provider attempt in seconds.
+    #[must_use]
+    pub const fn attempt_timeout_seconds(self) -> u8 {
+        self.attempt_timeout_seconds
+    }
+
+    /// Returns the bounded number of attempts available to the run.
+    #[must_use]
+    pub const fn max_attempts(self) -> u8 {
+        self.max_attempts
+    }
+}
+
+/// Startup-only opaque provider material paired with its safe resolved projection.
+///
+/// This type intentionally implements no `Debug`, `Display`, or serde traits and
+/// provides no credential accessor. Composition may move it only into a selected
+/// provider constructor during daemon startup.
+pub struct StartupProviderMaterial {
+    resolved: ResolvedConfigDto,
+    opaque: String,
+}
+
+impl StartupProviderMaterial {
+    /// Returns the credential-free startup selection.
+    #[must_use]
+    pub const fn safe_resolved(&self) -> &ResolvedConfigDto {
+        &self.resolved
+    }
+
+    /// Moves this opaque material into the supplied startup-only consumer.
+    pub fn into_parts_for_provider<T>(
+        self,
+        consumer: impl FnOnce(ResolvedConfigDto, String) -> T,
+    ) -> T {
+        consumer(self.resolved, self.opaque)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawV1Config {
@@ -588,10 +714,58 @@ struct RawProviderConfig {
     model: String,
     credential: String,
     endpoint: Option<String>,
+    execution: Option<RawProviderExecutionPolicyDto>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProviderExecutionPolicyDto {
+    #[serde(default)]
+    attempt_timeout_seconds: Option<u8>,
+    #[serde(default)]
+    max_attempts: Option<u8>,
 }
 
 struct NormalizedConfig {
     provider: RawProviderConfig,
+    provider_execution: Option<RawProviderExecutionPolicyDto>,
+}
+
+fn parse_credential(text: &str) -> DtoResult<String> {
+    let document: toml::Value = toml::from_str(text).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_config_toml",
+            "configuration TOML could not be parsed",
+        )
+    })?;
+    let credential = document
+        .get("provider")
+        .and_then(toml::Value::as_table)
+        .and_then(|provider| provider.get("credential"))
+        .and_then(toml::Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            document
+                .get("model")
+                .and_then(toml::Value::as_table)
+                .and_then(|model| model.get("api_key"))
+                .and_then(toml::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .ok_or_else(|| {
+            ErrorDto::validation(
+                "missing_provider_credential",
+                "provider credential must not be empty",
+            )
+        })?;
+    if credential.trim().is_empty() {
+        Err(ErrorDto::validation(
+            "missing_provider_credential",
+            "provider credential must not be empty",
+        ))
+    } else {
+        Ok(credential)
+    }
 }
 
 impl<'de> Deserialize<'de> for ProviderKindDto {

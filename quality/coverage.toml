@@ -4,7 +4,7 @@ B = 90.0
 C = 85.0
 
 [policy]
-phase = "m3"
+phase = "m4"
 production_crates = [
   "intention-types",
   "intention-domain",
@@ -18,6 +18,9 @@ production_crates = [
   "intention-runtime",
   "intention-storage",
   "intention-storage-sqlite",
+  "intention-model",
+  "intention-provider-openrouter",
+  "intention-provider-generic-chat",
 ]
 adapter_crates = ["intention-tauri", "intention-tui"]
 
@@ -34,6 +37,9 @@ adapter_crates = ["intention-tauri", "intention-tui"]
 "intention-runtime" = "B"
 "intention-storage" = "B"
 "intention-storage-sqlite" = "B"
+"intention-model" = "C"
+"intention-provider-openrouter" = "C"
+"intention-provider-generic-chat" = "C"
 
 [[exclusions]]
 enabled = true

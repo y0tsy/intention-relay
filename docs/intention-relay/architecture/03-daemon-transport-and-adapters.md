@@ -47,6 +47,78 @@ client therefore blocks only that thread during its blocking I/O operation; the
 subscription buffering, read/write deadlines beyond the bounded connect wait,
 or eviction of slow peers. Those are later transport-hardening decisions.
 
+### M4 asynchronous transport foundation
+
+M4 adds an **additive transport foundation only** alongside the retained M3
+synchronous host contract. `AsyncLocalListener` binds the same private
+`LocalEndpoint` mapping and endpoint ownership policy, while
+`AsyncLocalClientConnection` connects with the existing 500 ms bounded wait.
+After the existing typed `ProtocolHelloDto` negotiation succeeds, each
+connection is consumed into direction-specific opaque roles:
+`AsyncRequestSender` / `AsyncResponseReceiver` on the client and
+`AsyncRequestReceiver` / `AsyncResponseSender` on the daemon. Those roles
+exchange only the existing correlated request/response DTOs; Tokio,
+interprocess, socket, endpoint-path, and I/O-half resources remain private to
+`intention-transport`.
+
+The foundation preserves the 4-byte big-endian JSON frame format and its 1 MiB
+payload cap. Oversize frames are rejected before payload allocation or write as
+`local_protocol_frame_too_large`; malformed JSON is
+`invalid_local_protocol_frame`; incomplete headers, incomplete payloads, and
+closed peers are `local_daemon_connection_unavailable`. The foundation itself introduces no
+read/write deadline, runtime owner, daemon/client host loop, persistent
+subscription semantics, fan-out, queue capacity, slow-peer policy, or resync
+behavior. M3 consumers continue to use their synchronous one-request connection
+behavior unchanged.
+
+The asynchronous implementation uses the locked `interprocess` Tokio feature
+with its private local Unix-socket / Windows-named-pipe mapping. It preserves
+Unix parent mode `0700`, socket mode `0600`, listener-owned cleanup, and refusal
+to reclaim active endpoint names. Its required transport test target exercises
+real endpoint hello negotiation, ordered correlated multi-frame exchanges,
+concurrent split reader/writer roles, all framing safety outcomes, retained M3
+synchronous behavior, and Windows named-pipe multi-frame fixtures under
+`cfg(windows)`.
+
+### M4 persistent run-stream host
+
+The run-stream protocol adds an additive daemon-frame role without changing `AsyncResponseSender` or `AsyncResponseReceiver`: `ProtocolDaemonFrameDto::Response(ProtocolResponseEnvelopeDto)` carries correlated initial replies, and `ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto)` carries later uncorrelated live, snapshot, or resync frames. Dedicated opaque async daemon-frame sender/receiver roles keep Tokio and IPC types private. The opt-in `RunStreamClient` negotiates `RunStreamSubscriptions` on its own connection; global M3 client capabilities and synchronous one-shot session behavior remain unchanged.
+
+`intention-daemon` now owns one private Tokio runtime and serves both roles from
+one `AsyncLocalListener`, selecting the response role after hello capabilities.
+Ordinary peers retain their correlated M3 request/response semantics. A
+run-stream peer receives a current authoritative `RunReplayDto` with an empty
+tail on every subscribe or replay request, then receives committed
+`RunLiveBatchDto` or status-only `RunSnapshotFrameDto` frames on the same local
+connection. Unknown/cross-session runs are safe errors; future cursors are
+`InvalidCursor`, and unavailable history is `HistoryUnavailable`. A run stream
+never uses a filtered `SessionSnapshotDto`.
+
+Each peer has a private bounded queue of exactly 64 daemon frames and its own
+writer path; every frame write has a ten-second deadline. An overflowing,
+closed, or timed-out peer is removed without awaiting it from execution,
+persistence, or healthy peer delivery. The host attempts a typed
+`SubscriberTooSlow` resync where queue capacity permits before it closes that
+peer. Queue-capacity isolation and the paused-clock ten-second deadline are
+daemon-host unit evidence; the persistent host outcome fixture proves a real
+healthy local peer's replay/live/replay lifecycle, rather than OS-buffer
+timing. The fixed one-megabyte framing bound and local Unix-socket/Windows-pipe
+permissions are unchanged.
+
+The persistent-host fixtures additionally hold an admitted executor after its
+initial durable `Starting` replay and before its first append. A real ordinary
+peer's `StopRun` then wins that race: the registered task writes exactly one
+`Cancelled` terminal transition at cursor zero, with no provider call or model
+fact. Admission and `StopRun` are linearized through the exact task registry:
+when stop wins before executor registration, the host installs a cancellation
+terminalizer for that exact key, so later admission cannot strand durable
+`Cancelling` state. A separate queued-host outcome verifies that terminal commit
+observation schedules the exact persisted promoted run once; repeated admission
+does not execute it again. Test-only restart fixtures explicitly abort and join
+all first-host connection and execution tasks before dropping every first-host
+facade clone and reopening the database; this is deterministic fixture
+lifecycle ownership, not a production signal-handling claim.
+
 ## Shared client
 
 `intention-client` is the only supported client-side integration path for local adapters. It owns:
@@ -135,11 +207,9 @@ not a retained connection and not a live event feed. Historical projection
 reconstruction is not represented in M3. The post-commit publication seam is
 intentionally a no-op in M3.
 
-`@todo(m4-streaming)` marks exactly the deferred work to introduce persistent
-live event streaming, post-commit fan-out/buffering, slow-peer lifecycle policy,
-and a representation capable of safely replaying a run-filtered view. It does
-not mean that M3 durability, unscoped snapshot/tail replay, ordering, or resync
-is deferred.
+M3 durability, unscoped snapshot/tail replay, ordering, and resync remain
+unchanged. Persistent delivery is implemented only for the separate M4
+run-scoped DTOs, never for filtered M3 session state.
 
 M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely
 express filtered run state. Therefore every subscription with `run_id: Some`
@@ -198,9 +268,9 @@ seam. TUI and daemon binary tests do not own a parallel fixture protocol or a
 fixture startup CLI mode.
 
 M3 does not implement idle shutdown, an explicit daemon-stop command, model or
-provider execution, or persistent live streaming. M4 owns model/provider
-runtime behavior and live run execution; its streaming work also owns the
-persistent subscription semantics marked by `@todo(m4-streaming)`.
+provider execution, or persistent live streaming. M3 remains replay-only, and
+implemented M4 persistent delivery is provided through the separate run-scoped
+subscription contract.
 
 ## Tauri bridge
 

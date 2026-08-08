@@ -53,6 +53,17 @@ For each implementation slice:
 6. run `make verify` before accepting the slice;
 7. record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open decision, never by omitted test coverage.
 
+For an explicitly authorized M4 lane, agents first read the controller-owned
+[`M4 execution charter`](../m4.md), `AGENTS.md`, and the lane's named
+architecture sources. They add the complete bounded test portfolio before
+production behavior, finish the bounded implementation without per-function
+compile loops, then validate related failures in a batched Makefile phase. The
+charter does not reduce required evidence: until a separately accepted
+package-scoped Makefile lane gate exists, every lane follows this document's
+standard `make quick` / `make verify` acceptance rule. A future candidate lane
+is never accepted M4 behavior until its documented integration barrier passes
+`make verify`.
+
 A test should expose the observable intent. Avoid tests that only assert private implementation steps when a stable contract or result can be asserted instead.
 
 ## Architecture rules to encode
@@ -143,6 +154,38 @@ The M3 closure record must distinguish listed tests from actually executed
 commands and results. Until those commands are captured, the baseline SHA,
 coverage values, and gate results remain pending; see [M3 Closure
 Evidence](../closeout/m3-closure-evidence.md).
+
+## M4 model/provider foundation evidence
+
+M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their exact Cargo integration targets are policy-declared and must prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, tool denial, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures must reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. No test needs live credentials or provider network access.
+
+## M4 run-stream protocol evidence
+
+M4's dedicated run-stream contract is proven before daemon hosting: `m4_run_stream_contracts` covers validated run subscription/replay/live/snapshot/resync wire DTOs, all closed resync reasons, additive JSON compatibility, and retained M3 session behavior. `run_stream_contract` uses a real scripted asynchronous local peer to prove correlated initial replay followed by uncorrelated daemon frames, duplicate/stale tolerance, gap recovery from the last valid cursor, wrong-scope rejection, fail-closed unavailable history, historical reasoning without snapshot double application, and daemon-authoritative status-only snapshot updates. `transport_integration` proves daemon-frame sender/receiver roles without widening existing M3 correlated response roles.
+
+`m4_streaming_foundation` adds daemon-host outcome evidence using injected
+scripted/blocking drivers and a real asynchronous local transport. It proves a
+host-accepted `SendUserTurn` invokes the driver once, exposes an initial
+authoritative replay followed by durable live state and `Completed` on one
+persistent connection, and permits a new connection plus a repeated correlated
+replay request to receive the current snapshot. Its blocked-driver scenario
+proves host `StopRun` reaches task-owned `Cancelled` without late facts. The
+real host's deterministic first-append gate proves the durable `Cancelling`
+race after initial `Starting` observation is terminalized exactly once by that
+registered task at cursor zero, with no provider call or fact. A real-host
+stop-before-registration fixture proves registry/stop linearization installs
+and cleans up an exact cancellation terminalizer rather than stranding durable
+`Cancelling` state. A real-host
+promotion fixture proves the commit observer schedules the original persisted
+queued `RunId` once with its durable context and ignores duplicate admission.
+A durable blocked-host restart fixture first aborts and joins all first-host
+connection/execution tasks and drops all first-facade clones, then serializes actual replay, transport
+replay/error frames, events, snapshots, and safe errors from a recognizable
+fake-credential configuration; the credential is absent, the old run becomes
+`Interrupted` before replay, and neither it nor a recovery-promoted `Starting`
+run resumes provider execution. Queue capacity and exact writer-deadline
+behavior remain focused daemon-host unit evidence. The fixture uses no network
+or real credential.
 
 ## Result-oriented acceptance scenarios
 

@@ -13,6 +13,9 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
 - M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one startup snapshot, storage records it by revision, and each accepted or promoted run retains its immutable revision. TOML is applied only at daemon startup; live reload remains deferred.
 - M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime -> config` edges required to persist and attach canonical snapshots without exposing credentials or filesystem paths.
+- M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only `intention` may select either concrete provider.
+- M4 durable model facts remain domain-owned: domain, storage, and protocol never depend on `intention-model`; SQLite stores typed domain-event envelopes and indexes them by dedicated per-run cursor. `intention-runtime` depends on the provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete provider nor exposes an async runtime resource.
+- M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
 
 ## Planned crates
 
@@ -37,7 +40,7 @@ This document assigns ownership within the Rust workspace and defines allowed de
 | `intention-protocol` | Versioned public transport commands, queries, events. | Domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
-| `intention-daemon` | Daemon host binary: process lifecycle and typed connection hosting. | `intention` composition facade, transport, protocol, types. |
+| `intention-daemon` | Daemon host binary: process lifecycle, private model-task registry, and typed connection/stream hosting. | Composition facade; application/runtime/model/domain/protocol/transport/type DTO contracts; private Tokio/future support. Never concrete provider or storage implementations. |
 | `intention` | Composition root library: factories, dependency wiring, and daemon application facade. | All selected concrete implementations. |
 | `intention-tauri` | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
 | `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
@@ -66,6 +69,10 @@ flowchart BT
   RT --> IN
   SQ --> IN
   IN --> DH[daemon host]
+  AP --> DH
+  RT --> DH
+  MO --> DH
+  DO --> DH
   PR --> TR[transport]
   TR --> DH
   TR --> CL[client]
@@ -94,7 +101,12 @@ flowchart BT
 - application facade and runtime actor factories;
 - a daemon application facade that `intention-daemon` hosts over transport.
 
-`intention-daemon` depends on this composition facade, never the reverse. This preserves an acyclic graph: composition selects concrete implementations, while the thin binary only owns process lifecycle and typed connection hosting.
+`intention-daemon` depends on this composition facade, never the reverse. Its M4
+private host may also consume DTO/application/runtime/model contracts to own the
+task registry, cancellation, and streaming transport loop, but it never imports
+or selects concrete provider/storage implementations. This preserves an acyclic
+graph: composition selects concrete implementations, while the binary owns
+process lifecycle and typed connection hosting.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 

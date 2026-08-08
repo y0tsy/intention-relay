@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,6 +15,14 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SHARED_TARGET_DIRECTORY = ROOT / "target"
+
+
+def command_environment(cwd: Path) -> dict[str, str] | None:
+    """Share Cargo artifacts only with an isolated copy of this repository."""
+    if cwd != ROOT and (cwd / "quality" / "self_test.py").is_file():
+        return {**os.environ, "CARGO_TARGET_DIR": str(SHARED_TARGET_DIRECTORY)}
+    return None
 
 
 def run(
@@ -24,7 +33,13 @@ def run(
     expected_output: str | None = None,
     expected_outputs: tuple[str, ...] = (),
 ) -> None:
-    completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=command_environment(cwd),
+    )
     output = (completed.stdout + "\n" + completed.stderr).strip()
     succeeded = completed.returncode == 0
     if succeeded != expect_success:
@@ -64,6 +79,18 @@ def replace_once(path: Path, old: str, new: str) -> None:
     if old not in text:
         raise RuntimeError(f"fixture replacement source not found in {path}: {old!r}")
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def test_copied_repository_commands_share_the_controller_target(_root: Path) -> None:
+    with copied_repository() as copied_root:
+        environment = command_environment(copied_root)
+        if environment is None:
+            raise RuntimeError("copied repository command environment is missing")
+        if environment.get("CARGO_TARGET_DIR") != str(SHARED_TARGET_DIRECTORY):
+            raise RuntimeError("copied repository commands must share the controller target directory")
+    with tempfile.TemporaryDirectory() as temporary:
+        if command_environment(Path(temporary)) is not None:
+            raise RuntimeError("standalone temporary-project commands must not share the controller target directory")
 
 
 def test_formatting_drift(root: Path) -> None:
@@ -180,7 +207,7 @@ def test_workspace_dependency_cycle(root: Path) -> None:
 def test_executable_test_target_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["does-not-exist"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]', 'test_targets = ["does-not-exist"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -188,7 +215,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="intention-types: declared integration test targets",
         )
     with modified(policy):
-        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts"]', 'test_targets = ["contracts", "contracts"]')
+        replace_once(policy, 'test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]', 'test_targets = ["contracts", "contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -196,7 +223,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -210,7 +237,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
@@ -224,7 +251,19 @@ def test_m3_active_test_target_policy(root: Path) -> None:
 def test_m3_phase_partition_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'active_milestone = "m3"', 'active_milestone = "m2"')
+        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m2"')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="policy phase and active_milestone must be matching supported milestones",
+        )
+
+
+def test_m4_phase_activation_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m3"')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -234,14 +273,72 @@ def test_m3_phase_partition_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '  "intention-storage",\n  "intention-storage-sqlite",\n]',
-            '  "intention-storage",\n]',
+            '  "intention-provider-generic-chat",\n]',
+            ']',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="M3 active production crates must equal the roadmap crate set",
+            expected_output="M4 active production crates must equal the roadmap crate set",
+        )
+
+
+def test_m4_active_test_target_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-model: declared integration test targets",
+        )
+
+
+def test_m4_sdk_ownership_and_public_contract_boundaries(root: Path) -> None:
+    forbidden_owner = root / "crates/intention-model/src/lib.rs"
+    with modified(forbidden_owner):
+        forbidden_owner.write_text(
+            forbidden_owner.read_text(encoding="utf-8")
+            + "\nuse async_openai::Client as LeakedSdk;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="allowed only in intention-provider-generic-chat private implementation",
+        )
+    public_provider = root / "crates/intention-provider-generic-chat/src/lib.rs"
+    with modified(public_provider):
+        public_provider.write_text(
+            public_provider.read_text(encoding="utf-8")
+            + "\npub type LeakedGenericSdk = async_openai::Client<async_openai::config::OpenAIConfig>;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_public_api.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="LeakedGenericSdk",
+        )
+    non_composition = root / "crates/intention-daemon/src/lib.rs"
+    with modified(non_composition):
+        non_composition.write_text(
+            non_composition.read_text(encoding="utf-8")
+            + "\nuse intention_provider_openrouter::OpenRouterDriver;\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="composition ownership outside intention forbids",
         )
 
 
@@ -250,8 +347,8 @@ def test_m3_daemon_test_dependency_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '"intention-daemon" = ["intention", "intention-config", "intention-protocol", "intention-transport", "intention-types"]',
-            '"intention-daemon" = ["intention", "intention-protocol", "intention-transport", "intention-types"]',
+            '"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]',
+            '"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
@@ -262,7 +359,7 @@ def test_m3_daemon_test_dependency_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '"intention-daemon" = ["tempfile"]',
+            '"intention-daemon" = ["futures-util", "serde_json", "tempfile", "tokio"]',
             '"intention-daemon" = []',
         )
         run(
@@ -508,6 +605,9 @@ def test_coverage_exclusion_semantics(root: Path) -> None:
                     ("crates/intention-runtime/src/lib.rs", 100, 100),
                     ("crates/intention-storage/src/lib.rs", 100, 100),
                     ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
+                    ("crates/intention-model/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -539,7 +639,7 @@ enabled = true
             ),
             ("traversal", valid.replace('path = "crates/intention-types/src/excluded_fixture.rs"', 'path = "crates/intention-types/src/../src/excluded_fixture.rs"'), "workspace-relative without traversal"),
             ("other-owner", valid.replace('owner = "intention-types"', 'owner = "intention-domain"'), "must be under intention-domain source root"),
-            ("inactive-owner", valid.replace('owner = "intention-types"', 'owner = "intention-model"'), "owner must be an active production crate"),
+            ("unknown-owner", valid.replace('owner = "intention-types"', 'owner = "missing-owner"'), "owner must be an active production crate"),
             ("unreported", valid.replace('excluded_fixture.rs', 'unreported_fixture.rs'), "must appear exactly once in coverage report"),
             ("outside-source", valid.replace('crates/intention-types/src/excluded_fixture.rs', 'crates/intention-types/outside_fixture.rs'), "must be under intention-types source root"),
             ("duplicate", valid + valid, "duplicate enabled exclusion path"),
@@ -570,6 +670,9 @@ enabled = true
                     ("crates/intention-runtime/src/lib.rs", 100, 100),
                     ("crates/intention-storage/src/lib.rs", 100, 100),
                     ("crates/intention-storage-sqlite/src/lib.rs", 100, 100),
+                    ("crates/intention-model/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
+                    ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -647,11 +750,26 @@ def test_invalid_isolated_release_package_and_target(root: Path) -> None:
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
-        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib"]', 'allow = ["Apache-2.0"]'),
+        ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib", "BSD-3-Clause", "ISC", "CDLA-Permissive-2.0"]', 'allow = ["Apache-2.0"]'),
         ('multiple-versions = "deny"', 'multiple-versions = "allow"'),
+        ('"RUSTSEC-2024-0384",', '"RUSTSEC-2024-0000",'),
+        ('"RUSTSEC-2025-0012",', ''),
         ("version = 2", "version = 1"),
     ]
     policy = root / "deny.toml"
+    outdated_policy = root / "quality/outdated.toml"
+    with modified(policy), modified(outdated_policy):
+        outdated_policy.write_text(
+            outdated_policy.read_text(encoding="utf-8").replace(
+                'crates = ["async-openai"]', 'crates = []', 1
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_deny_policy.py", "--policy", str(policy), "--outdated-policy", str(outdated_policy)],
+            cwd=root,
+            expect_success=False,
+        )
     for old, new in invalid_replacements:
         with modified(policy):
             replace_once(policy, old, new)
@@ -699,6 +817,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true")
     arguments = parser.parse_args()
     repository_tests = [
+        test_copied_repository_commands_share_the_controller_target,
         test_formatting_drift,
         test_lint_warning,
         test_unreasoned_suppression,
@@ -710,6 +829,9 @@ def main() -> None:
         test_executable_test_target_policy,
         test_m3_active_test_target_policy,
         test_m3_phase_partition_policy,
+        test_m4_phase_activation_policy,
+        test_m4_active_test_target_policy,
+        test_m4_sdk_ownership_and_public_contract_boundaries,
         test_m3_daemon_test_dependency_policy,
         test_m3_non_production_test_target_policy,
         test_m3_non_production_dependency_policy,

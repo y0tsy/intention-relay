@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -50,7 +51,8 @@ def rustdoc_json(root: Path, toolchain: str, package: str) -> dict[str, object]:
         subprocess.run(command, cwd=root, check=True)
     except subprocess.CalledProcessError as error:
         fail(f"failed to generate rustdoc JSON for {package}: {error}")
-    artifact = root / "target" / "doc" / f"{package.replace('-', '_')}.json"
+    target_directory = Path(os.environ.get("CARGO_TARGET_DIR", root / "target"))
+    artifact = target_directory / "doc" / f"{package.replace('-', '_')}.json"
     if not artifact.is_file():
         fail(f"rustdoc JSON artifact is missing for {package}: {artifact}")
     with artifact.open(encoding="utf-8") as artifact_file:

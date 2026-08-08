@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
+`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI records free space and relevant artifact-directory sizes before and after the quality gate as operational diagnostics; those reports never change a gate's verdict. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -112,7 +112,8 @@ The policy deliberately does **not** deny all `pedantic` or all `restriction` li
 `make architecture` currently detects or prohibits:
 
 - direct process-CWD fallback in checked source;
-- listed provider SDK and implementation-resource leakage from active M1 contract crates;
+- listed provider SDK namespaces and HTTP/runtime resources from active model/config/domain/runtime/application/storage/protocol/transport/client/daemon/adapter source, while allowing `openrouter-rs` only in private `intention-provider-openrouter` implementation and `async-openai` only in private `intention-provider-generic-chat` implementation;
+- provider SDK/resource types from public rustdoc-visible APIs of every active crate;
 - direct application/runtime/storage implementation access from Tauri/TUI adapters;
 - `unsafe` and process-level escape hatches without an approved, local explanation;
 - raw debug output or secret-bearing errors reaching checked paths.
@@ -159,7 +160,7 @@ All applicable check, lint, test, documentation, and coverage paths exercise:
 
 This is intentionally not an exhaustive combinatorial matrix. M1 has no enabled critical combination. Every future optional provider, adapter, or feature must either be covered by one of the first three profiles or add a critical combination in the same change.
 
-The feature-profile policy is machine-readable and verified by `make features`.
+The feature-profile policy is machine-readable and verified by `make features`. M4's selected provider SDK dependencies do not add a workspace feature flag or critical combination; default, no-default, and all-features profiles therefore remain the required coverage for their private SDK integration.
 
 Some production packages additionally declare isolated release profiles in the
 same policy. `make isolated-release` checks each declared package's explicit
@@ -188,13 +189,14 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
 | `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and public-API boundary checks. |
 | `make coverage` | No | Collect coverage and apply the tier policy. |
+| `make coverage-artifacts-clean` | Yes, generated artifacts only | Remove `target/llvm-cov-target` after coverage's JSON reports are checked; it preserves reports and ordinary Cargo artifacts. |
 | `make deps` | No | Run locked metadata, third-party-notice freshness, deny, audit, unused-dependency, manifest, stale-direct-dependency, and duplicate-version checks. |
 | `make quick` | No | Run tools-check, fmt-check, lint, and focused/default tests for fast iteration. |
 | `make check` | No | Run complete source-quality checks: tools, formatting, features, lint, all tests, doctests, docs, and architecture. |
 | `make verify` | No | Run `check` plus coverage and dependency/supply-chain checks. |
 | `make ci` | No | Alias the blocking CI gate, `verify`. |
 
-`make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
+`make verify` runs `check`, `coverage`, and `deps`, then removes only the generated LLVM coverage target before `quality-self-test`; coverage reports remain available for CI upload. `quality-self-test` still copies and mutates an isolated source tree, but its copied-repository Cargo commands reuse the controller workspace `target` directory. Quality scripts resolve Cargo-generated artifacts through `CARGO_TARGET_DIR` when it is set. Cargo fingerprints the copied source paths and contents, so intentional fixture defects still recompile affected crates and must produce their required failures without allocating a second complete target tree in the temporary directory. `make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
 
 ### Cargo command coverage
 
@@ -225,6 +227,8 @@ An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an i
 
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory. It contains license texts and registry dependency attribution for the locked graph; private `publish = false` workspace packages remain project-owned code and are excluded. `cargo-about` selects a valid license branch for multi-licensed crates using `quality/about.toml`, while `cargo deny` independently enforces the complete policy expression and source allowlist. A failed or stale notice generation is a blocking supply-chain failure, not an inferred pass.
 
+M4 adds direct `openrouter-rs 0.14.0` and `async-openai 0.29.3` dependencies. Their graph requires existing-policy MIT/Apache terms plus BSD-3-Clause, ISC, and CDLA-Permissive-2.0 for Rustls and `webpki-roots`; each is explicitly allowed in `deny.toml` and `quality/about.toml`, then disclosed by generated notices. M4 also pins the unavoidable duplicate branches from these SDKs: `getrandom@0.2.17`, `getrandom@0.3.4`, target-only `r-efi@5.3.0`, `rand@0.8.7`, `rand_chacha@0.3.1`, `rand_core@0.6.4`, `syn@1.0.109`, `thiserror@1.0.69`, `thiserror-impl@1.0.69`, and target-only `windows-sys@0.52.0`. Each exception is limited to the documented provider SDK path in `deny.toml` and must be reassessed when either selected SDK or its immediate HTTP/random/backoff path changes. The M4 provider graph also requires the two transitive-only advisory acknowledgements `RUSTSEC-2025-0012` (`async-openai -> backoff`) and `RUSTSEC-2024-0384` (`async-openai -> backoff -> instant`): neither has a compatible upstream remediation, neither creates a direct project dependency, and both are explicitly passed to `cargo audit --ignore` as well as recorded in `deny.toml`. Both must be removed or reassessed with an `async-openai`/`backoff` update. `async-openai` is also the only reviewed `cargo outdated` hold because `0.41.3` is outside the selected `0.29.3` compatibility contract; reassess its API and the two advisory acknowledgements together before removing the hold. No source exception is approved by this package.
+
 Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. The approved `0BSD` entry is required transitively by `interprocess`'s local-IPC support (`doctest-file` and `recvmsg`) and is an OSI-approved permissive license. The SQLite graph also introduces `foldhash 0.2.0`, whose Zlib license is explicitly allowed in both `quality/about.toml` and `deny.toml` and disclosed through the generated notices. M3 has two narrowly version-pinned duplicate exceptions, both limited to the target-specific WASM dependencies selected by `rusqlite 0.40.1 -> sqlite-wasm-rs 0.5.5`: `hashbrown@0.16.1` is required only by `rsqlite-vfs 0.1.1`, while `syn@2.0.119` is required only by `wasm-bindgen-macro-support 0.2.126` through `wasm-bindgen 0.2.126`. Native bundled SQLite instead resolves `rusqlite 0.40.1 -> hashlink 0.12.1 -> hashbrown 0.17.1`; the independently required native proc-macro path retains `syn@3.0.3`. The native daemon continues to use bundled SQLite through `rusqlite` with its `bundled` feature and retains `rusqlite_migration 2.6.0`; these exceptions do not replace either dependency or relax duplicate bans for other crates or versions. Reassess both exceptions whenever `rusqlite`, `sqlite-wasm-rs`, `rsqlite-vfs`, `wasm-bindgen`, or their supported target selection changes, and again before M3 closeout; record the locked native and WASM validation trees with the review. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
 
 ## Test-first, architectural, and outcome integration
@@ -239,7 +243,33 @@ Every implementation slice must:
 6. run `make verify` before the slice is accepted;
 7. record every policy exception, test exclusion, and known risk explicitly.
 
+For an explicitly authorized M4 lane, the controller-owned
+[`M4 execution charter`](../m4.md) additionally requires package-level
+code-first batching: agents write the complete bounded fixture portfolio, then
+finish the bounded production change before entering a grouped Makefile
+validation/repair phase. It remains test-first and does not replace steps 5–7
+or authorize an unimplemented focused gate.
+
 A high coverage percentage, passing lint, or successful compilation never replaces a required end-to-end outcome scenario.
+
+### M4 controller charter and future lane validation
+
+[`docs/intention-relay/m4.md`](../m4.md) records the controller-owned M4
+execution charter. It is read-only for sub-agents and does not override this
+quality policy or authorize worktrees, lane execution, or any Makefile change.
+It records package-level code-first delivery: a future authorized lane writes
+its full bounded fixture portfolio before production behavior, finishes the
+bounded implementation, then validates related failures in batches rather than
+compiling after every function.
+
+The active Makefile contract remains unchanged: every implementation handoff
+runs `make quick` while iterating and `make verify` before acceptance. The
+charter's planned package-scoped `make focus PACKAGES=...` candidate gate is not
+yet implemented. Until a separately reviewed policy and Makefile change adds
+it, no lane may use it or weaken the full-gate requirement. No simultaneous
+full `make verify` executions may claim independent acceptance on the same
+host; coverage, dependency, documentation, and Cargo resource contention would
+make their results impractical to interpret.
 
 ## Required quality-gate failure tests
 

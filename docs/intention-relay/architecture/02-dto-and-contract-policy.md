@@ -19,6 +19,8 @@ A DTO is a stable contract, not merely any serializable struct.
 | Event DTO | Immutable fact that occurred. | `RunStartedEventDto`, `PlanUpdatedEventDto`. |
 | Persistence DTO | Storage-safe representation of a record/snapshot/event. | `PersistedRunDto`, `RunSnapshotDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract. | `ModelRequestDto`, `ModelEventDto`. |
+| Durable model fact DTO | Typed append-only provider/model evidence, safe run projection, and scoped replay. | `ModelRunFactDto`, `RunSnapshotDto`, `RunReplayDto`. |
+| Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
 | Tool DTO | Typed tool invocation, result, metadata, policy decision. | `ToolInvocationDto`, `ToolResultDto`. |
 | Hook DTO | Controlled state passed between tool hook phases. | `ToolHookContextDto`. |
 | Config DTO | Parsed, validated, resolved, and snapshotted TOML configuration. | `ResolvedConfigDto`, `ConfigSnapshotDto`. |
@@ -96,7 +98,9 @@ The following must not cross a boundary as public inputs or outputs:
 - bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
 - implementation error types that reveal secrets or topology.
 
-`serde_json::Value` may exist inside a tightly bounded provider or protocol codec implementation, but it must be decoded into a DTO before leaving that implementation boundary.
+Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. `intention-types` owns the shared safe usage, finish-reason, tool-call, and provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
+
+M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-scoped snapshot carries its compatible M3 `RunProjectionDto`, dedicated `RunEventCursorDto`, bounded assistant-turn content, optional normalized usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only contiguous typed facts strictly after a cursor. M4's dedicated wire family keeps this scope separate from M3 session replay: `SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunReplayDto`, `RunResyncDto`, or a safe `ErrorDto`; subsequent `RunLiveBatchDto`, `RunSnapshotFrameDto`, and `RunResyncDto` are uncorrelated `RunStreamFrameDto` values. Live batches are non-empty, run-scoped, positive-cursor contiguous ranges, while snapshot frames are daemon-authoritative status checkpoints. `RunResyncReasonDto` is closed and rejects unknown variants; `run_replay_not_found` remains a safe error rather than a resync.
 
 ## Validation ownership
 

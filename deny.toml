@@ -4,11 +4,14 @@ no-default-features = false
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+  "RUSTSEC-2024-0384", # M4 transitive-only: async-openai 0.29.3 -> backoff 0.4.0 -> instant 0.1.13; no compatible SDK update removes it. Reassess with async-openai/backoff updates.
+  "RUSTSEC-2025-0012", # M4 transitive-only: async-openai 0.29.3 -> backoff 0.4.0; no compatible SDK update removes it. Reassess with async-openai updates.
+]
 
 [licenses]
 version = 2
-allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib"]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib", "BSD-3-Clause", "ISC", "CDLA-Permissive-2.0"]
 confidence-threshold = 0.8
 exceptions = []
 
@@ -20,6 +23,16 @@ deny = []
 skip = [
   { crate = "hashbrown@0.16.1", reason = "M3 reviewed target-specific duplicate: required only by rusqlite 0.40.1 -> sqlite-wasm-rs -> rsqlite-vfs on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires hashbrown 0.16." },
   { crate = "syn@2.0.119", reason = "M3 reviewed target-specific duplicate: required only by rusqlite 0.40.1 -> sqlite-wasm-rs -> wasm-bindgen on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires syn 2." },
+  { crate = "getrandom@0.2.17", reason = "M4 reviewed provider HTTP/random branch: required by async-openai 0.29.3 -> backoff 0.4 -> rand 0.8 and Rustls ring; reassess with either provider SDK or its HTTP/random path." },
+  { crate = "getrandom@0.3.4", reason = "M4 reviewed Generic Chat SDK duplicate: async-openai 0.29.3 uses rand 0.9 while the existing graph uses getrandom 0.4.3; reassess when async-openai updates." },
+  { crate = "r-efi@5.3.0", reason = "M4 reviewed target-specific companion duplicate: required only by async-openai 0.29.3 -> rand 0.9 -> getrandom 0.3 on EFI targets; reassess with async-openai." },
+  { crate = "rand@0.8.7", reason = "M4 reviewed Generic Chat SDK duplicate: async-openai 0.29.3 -> backoff 0.4 uses rand 0.8 while async-openai itself uses rand 0.9; reassess with async-openai or backoff." },
+  { crate = "rand_chacha@0.3.1", reason = "M4 reviewed companion duplicate required only by async-openai 0.29.3 -> backoff 0.4 -> rand 0.8; reassess with async-openai or backoff." },
+  { crate = "rand_core@0.6.4", reason = "M4 reviewed companion duplicate required only by async-openai 0.29.3 -> backoff 0.4 -> rand 0.8; reassess with async-openai or backoff." },
+  { crate = "syn@1.0.109", reason = "M4 reviewed OpenRouter SDK duplicate: required only by openrouter-rs 0.14.0 -> dotenvy_macro 0.15.7; reassess with openrouter-rs." },
+  { crate = "thiserror@1.0.69", reason = "M4 reviewed provider SDK duplicate: required by openrouter-rs 0.14.0 and async-openai 0.29.3 request-event parsing while the existing SQLite graph uses thiserror 2; reassess with either provider SDK." },
+  { crate = "thiserror-impl@1.0.69", reason = "M4 reviewed companion duplicate required only by the provider-SDK thiserror 1 branch; reassess with either provider SDK." },
+  { crate = "windows-sys@0.52.0", reason = "M4 reviewed target-specific provider-HTTP duplicate: required by ring 0.17 through Rustls TLS while the existing graph uses windows-sys 0.61; reassess with provider SDK HTTP/TLS updates." },
 ]
 skip-tree = []
 
