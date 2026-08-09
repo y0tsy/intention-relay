@@ -93,15 +93,24 @@ function schemas, Python facade calls, daemon protocol commands, durable tool
 events, and model-visible result projections must derive from compatible typed
 Rust DTO contracts rather than manually maintained divergent schemas.
 
-An unrestricted IPython kernel executes with its operating-system permissions.
-It can bypass the facade through `pathlib`, `os`, or `subprocess`, so it is not
-a technical enforcement boundary for WorkspaceRoot, Plan mode, hooks, or
-audit. The facade is therefore the intended architecture and ergonomics path,
-not a sandbox by itself. Enforcing those boundaries for Python requires a later
-OS-level restricted sidecar or sandbox design where filesystem, process, and
-network access are available only through the daemon bridge. Current trusted
-local v1 assumptions neither provide nor claim such isolation, and this concept
-does not decide its packaging, permission model, or delivery scope.
+The target execution model is trusted local execution under the user's ordinary
+operating-system identity. The daemon, agent, IPython kernel, child agents, and
+Rust tools run with the same OS permissions as the user who starts the daemon.
+This concept does not plan an agent sandbox, container or VM isolation,
+privilege separation, restricted Python sidecar, or other mechanism intended to
+reduce the agent's operating-system authority. The daemon must not claim to
+expand those permissions either; access to files, processes, networks, and
+other resources is bounded by the user's existing OS permissions and by the
+normal behavior of the selected tools and programs.
+
+`WorkspaceRoot`, Plan/Build mode, confirmation, hooks, audit, redaction, and
+the Rust-owned capability plane remain important logical product and safety
+policies. They are not security boundaries against a malicious, compromised,
+or unrestricted program running as the user. An IPython kernel can bypass the
+facade through `pathlib`, `os`, or `subprocess`, and that is an accepted
+property of this trusted local model rather than a gap to be closed by a later
+sandbox design. Future work must not describe a facade, tool gateway, prompt
+policy, or audit trail as OS-level isolation.
 
 A full `model -> tool -> model` loop, including typed tool-result messages, is
 a prerequisite for either IPython-driven or direct-tool agent execution. M4's
@@ -119,7 +128,8 @@ directions:
    plane;
 2. one Rust-owned capability plane shared by direct model tools and an optional
    IPython/RLM orchestration control plane, with later durable child-agent and
-   continual-harness support; and
+   continual-harness support under the same trusted user-privilege execution
+   model; and
 3. non-destructive session branching, regeneration, and a bounded conversation
    tree over independently durable sessions.
 
@@ -875,8 +885,10 @@ Any approved implementation of this concept must add evidence for:
 - typed host-request validation, daemon-bound run identity, cancellation,
   bounded model-visible output, and safe error/redaction behavior for a future
   Python bridge;
-- proof that an unrestricted kernel is not represented as an enforcement
-  boundary, plus separate evidence for any future restricted-sidecar claim;
+- proof that the trusted local execution model is explicit: the daemon, agent,
+  kernel, child agents, and tools run with the user's OS permissions, while
+  WorkspaceRoot, mode, hooks, confirmation, and audit are not presented as
+  OS-level isolation or protection from a compromised user-authorized process;
 - compatible direct-tool schema/DTO contracts with no provider SDK, Python
   object, raw Jupyter frame, credential, or implementation resource escaping a
   public boundary;
@@ -937,11 +949,15 @@ assigning milestone numbers here:
 3. Reconcile parallel branch mutation with the typed M5 tool/WorkspaceRoot
    foundation before claiming safe concurrent writes or execution.
 4. Establish the shared typed tool/policy and full agent-loop contracts before
-   adding direct model tools or a Python sidecar/host bridge.
+   adding direct model tools or a Python host bridge. Those contracts must
+   preserve the trusted user-privilege execution model rather than introduce
+   an implicit isolation guarantee.
 5. Add presentation only after each daemon/client contract exists. Persistent
    kernels, RLM delegation, session forks, continual harness, provider profiles,
-   reload, and sandboxing must not be forced into one delivery package merely
-   because this concept preserves all of them.
+   and reload must not be forced into one delivery package merely because this
+   concept preserves all of them. Sandbox, container/VM isolation, privilege
+   separation, and restricted-sidecar work are explicitly outside this
+   direction, not deferred deliverables within it.
 
 This sequencing preserves durable run and history immutability, queue
 correctness, credential isolation, no-resume recovery, provider SDK boundaries,
