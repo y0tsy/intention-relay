@@ -118,19 +118,127 @@ closed `tool_execution_unavailable` behavior remains unchanged. Cancellation,
 kernel failure, and daemon restart must not silently resume external work;
 existing no-resume recovery semantics continue to apply.
 
+## Reasoning support in generic Chat Completions
+
+### Current gap
+
+The closed M4 baseline accepts only OpenRouter as a reasoning-capable provider.
+The generic Chat Completions adapter in `intention-provider-generic-chat`
+deliberately declares `supports_reasoning() == false`. A model request that
+requests reasoning fails preflight with `unsupported_model_capability` before
+any outbound provider call. The request translator does not send `thinking`,
+`enable_thinking`, or `reasoning_effort` parameters. The stream normalizer does
+not parse `reasoning_content` or `reasoning` fields from Chat Completions
+response deltas.
+
+Despite this adapter gap, the provider-neutral runtime foundation already
+supports reasoning end to end. `ModelEventDto::ReasoningDelta` exists,
+`ModelStreamLifecycleDto` accepts it, `ModelRunExecutionService` persists
+`ReasoningDeltaRecorded` facts as tail-only durable evidence, and the client
+reducer reconstructs reasoning content from replay and live fact batches.
+OpenRouter reasoning flows through this path today. The gap is therefore
+localized to the generic adapter translation layer, not to the runtime,
+storage, or protocol design.
+
+### Industry landscape (June–August 2026)
+
+An industry survey of cloud providers and local inference runtimes shows that
+reasoning output has become a mainstream capability rather than a niche
+feature. The table below summarizes current formats:
+
+| Provider / runtime | Model | Thinking enable parameter | Response field | reasoning_effort support |
+| --- | --- | --- | --- | --- |
+| DeepSeek | V4-Pro, V4-Flash | `thinking: {type: "enabled"}` | `reasoning_content` | `low` / `high` / `xhigh` / `max` |
+| Qwen / Alibaba | Qwen3.8-Max | `enable_thinking: true` | `reasoning_content` | `low` / `medium` / `xhigh` |
+| GLM / ZhipuAI / Z.AI | GLM-5.2 | `thinking: {type: "enabled"}` | `reasoning_content` | `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
+| Kimi / Moonshot | K3 | Always on; no toggle | `reasoning_content` | `low` / `high` / `max` |
+| MiniMax | M3 | `thinking: {type: "adaptive"}` + `reasoning_split: true` | `reasoning_details[].text` | Not supported |
+| Baidu ERNIE | ERNIE-5.1 | `thinking: {type: "enabled"}` | `reasoning_content` | Not supported |
+| Volcengine Doubao | Seed 2.0 | Model-default / `encrypted_content` | `reasoning_content` | Not supported |
+| Tencent | Hy3 | Model-default (three modes) | `reasoning_content` | Not supported |
+| StepFun | Step-3.7-Flash | Always on; no toggle | `reasoning` | `low` / `medium` / `high` |
+| vLLM | DeepSeek, Qwen, GLM, etc. | `--reasoning-parser` + `chat_template_kwargs` | `reasoning` (renamed from `reasoning_content`, RFC #27755) | `none` / `low` / `medium` / `high` (auto-injects `enable_thinking`) |
+| SGLang | DeepSeek, Qwen, Kimi, GPT-OSS | `--reasoning-parser` + `enable_thinking` / `thinking` | `reasoning_content` | Not directly; parser-dependent |
+| Ollama | Qwen3, DeepSeek-R1, GPT-OSS | `think: true` / `think: "low"` / `think: "high"` | `message.thinking` (native) | `low` / `medium` / `high` / `max` |
+| OpenRouter | Many models | Model-dependent | `reasoning` (OpenRouter convention) | `low` / `medium` / `high` (model-dependent) |
+
+The key patterns observed across these providers are:
+
+- **Response field**: `reasoning_content` dominates among cloud providers
+  (8 of 10 surveyed). vLLM renamed to `reasoning` in October 2025 (RFC #27755)
+  following OpenAI guidance for GPT-OSS; `reasoning_content` remains as a
+  backwards-compatible alias. StepFun already uses `reasoning`. MiniMax returns
+  thinking through a `reasoning_details[].text` array when `reasoning_split` is
+  enabled. No provider returns both fields simultaneously except OpenRouter,
+  which populates `reasoning` and a separate `reasoning_details` array for
+  models with encrypted or summary reasoning.
+- **Thinking enable**: two incompatible request-parameter families.
+  `thinking: {type: "enabled"}` is used by DeepSeek, GLM, Baidu ERNIE, MiniMax,
+  and Volcengine Doubao. `enable_thinking: true` is used by Qwen, vLLM chat
+  templates, and Baidu Qianfan for Qwen models. Always-on models (Kimi K3,
+  StepFun Step-3.7) accept no toggle and expose only `reasoning_effort`.
+- **`reasoning_effort`**: the closest approximation to a cross-provider
+  parameter, adopted by OpenAI, DeepSeek, GLM, Kimi K3, Qwen3.8, StepFun, and
+  Baidu Qianfan. However, no two providers support the same set of values.
+  Common values include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+  and `max`, but each provider implements a different subset and maps
+  unsupported values differently.
+- **Preserved / cross-turn reasoning**: the most fragmented area. Four
+  incompatible mechanisms exist: Kimi's `thinking.keep: "all"`, Qwen's
+  `preserve_thinking: true`, Volcengine Doubao's `encrypted_content` blob, and
+  OpenAI's `reasoning.context: "all_turns"` with `encrypted_content` in the
+  Responses API. DeepSeek and Kimi K3 require passing `reasoning_content` back
+  in assistant messages during multi-turn tool-call flows; other providers
+  optionally ignore it. No unified convention exists.
+- **Thinking budget**: also fragmented. Qwen and Alibaba use `thinking_budget`,
+  Baidu uses `thinking_budget`, vLLM uses `thinking_token_budget` as a sampling
+  parameter. DeepSeek, GLM, Kimi, and StepFun do not support an explicit budget
+  parameter.
+- **Local runtimes** (vLLM, SGLang, Ollama) provide parser-based reasoning
+  extraction for dozens of models, but naming conventions and parameter formats
+  differ across runtimes. vLLM supports 14 reasoning parsers, SGLang supports
+  7, and Ollama uses a native `think` field that is incompatible with the
+  OpenAI-compatible `reasoning_content` convention.
+
+### Direction and context
+
+Adding reasoning support to the generic Chat Completions adapter is a necessary
+future direction, not an optional enhancement. The provider-neutral runtime
+foundation is already prepared. The adapter translation layer is the gap.
+
+No industry standard exists for thinking parameters or reasoning response
+fields as of August 2026. The trend is converging toward a `reasoning` response
+field name and `reasoning_effort` as a cross-provider parameter, but
+`reasoning_content` remains dominant among cloud providers and will not be
+deprecated in the near term. Cross-turn reasoning preservation is the least
+standardized area.
+
+Specific design decisions, including which request and response formats the
+adapter should support, how native reasoning fields map to
+`ModelEventDto::ReasoningDelta`, how `reasoning_effort` integrates with
+execution policy, how preserved or cross-turn reasoning interacts with durable
+run history, and whether the adapter accepts multiple concurrent format
+conventions, are outside this concept. They belong to a separately approved
+specification that reconciles these constraints with the provider profiles
+direction, whose capability-aware routing must account for reasoning capability
+when it becomes available.
+
 ## Concept capability portfolio
 
-This concept now preserves three related but independently deliverable
+This concept now preserves four related but independently deliverable
 directions:
 
 1. provider profiles, immutable per-run selection, configuration change
    awareness, controlled reload, and a safe adapter configuration control
    plane;
-2. one Rust-owned capability plane shared by direct model tools and an optional
+2. reasoning support in the generic Chat Completions adapter, whose
+   industry-landscape analysis and direction are recorded above, and whose
+   specific contract decisions remain a separately approved specification;
+3. one Rust-owned capability plane shared by direct model tools and an optional
    IPython/RLM orchestration control plane, with later durable child-agent and
    continual-harness support under the same trusted user-privilege execution
    model; and
-3. non-destructive session branching, regeneration, and a bounded conversation
+4. non-destructive session branching, regeneration, and a bounded conversation
    tree over independently durable sessions.
 
 These directions have different prerequisites and do not have to become one
