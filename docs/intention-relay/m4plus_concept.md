@@ -196,8 +196,9 @@ typed map, an unvalidated `PathBuf`, a stringly typed identity, a provider SDK
 object, a Python object, a file/process resource, or an implementation error.
 Its schema references identify closed typed request/result DTO families rather
 than serializable Rust implementation types. The primitive owner validates its
-input, while the shared path applies the selected workspace, mode, policy, hook,
-persistence, publication, and safe-projection rules.
+input, while the shared path applies the selected workspace-resolution,
+observation, mode, policy, hook, persistence, publication, and safe-projection
+rules.
 
 `display_name` is safe presentation metadata. It is validated plain text for
 adapters and diagnostics, but never changes descriptor or registry identity,
@@ -247,16 +248,19 @@ confirmation, quotas, audit, and presentation without changing an accepted
 descriptor's meaning. No flag itself requires confirmation.
 
 `WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`,
-`grep`, and `expand`. Those descriptors use the existing logical-path and CWD
-rules; `execute` starts with that root as its CWD. `fetch_url`, `ask_user`,
+`grep`, and `expand`. For every descriptor whose typed input contains a local
+path, it is the default base for relative-path resolution and the initial CWD
+for `execute`, not an access boundary. Absolute paths and relative paths that
+contain `..` are accepted; their location never creates a path-based denial.
+`fetch_url`, `ask_user`,
 `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp` do not receive a
 fictional workspace path. Their owner may instead require a typed URL, question,
 todo, retained-content, plan, child-agent, or MCP-method reference. A plan remains
 outside the workspace until the plan policy authorizes it. Existing Plan/Build
 rules remain unchanged: ordinary project `write`/`edit` is denied in Plan mode,
-whereas plan mutation remains plan-policy work; this contract neither
-settles symlink policy nor assigns additional file-management semantics to the
-tool contract.
+whereas plan mutation remains plan-policy work. The workspace contract observes
+explicit path inputs for safe audit metadata but does not sanction a path that
+resolves outside the default root.
 
 An active descriptor declares only whether it can supply a code-owned function
 schema to a compatible model subset. The exact model-visible function set for a
@@ -278,8 +282,9 @@ and opaque owner resources are outside both revisions.
 
 The descriptor record contains its `ToolId`, intended owner, typed input/result
 schema references, required model capabilities, effect profile, workspace
-binding, mode relation, model-function schema revision, safe-result-projection
-revision, observation contract revision, and stream shape. The registry record is the fixed
+binding for default resolution/CWD, mode relation, model-function schema
+revision, safe-result-projection revision, observation contract revision, and
+stream shape. The registry record is the fixed
 `ToolId`-ordered list of all fourteen slots, each with its intended owner,
 `Reserved`/`Active` state, and active descriptor revision when present. A
 semantic change to either record requires a new canonical record version rather
@@ -463,8 +468,8 @@ ToolCallAdmissionOutcomeDto
 
 Before `Admitted` can become `ToolCallStarted`, the daemon-held active-run
 context validates the call identity, its typed decoded input, the selected
-active descriptor/version, the applicable WorkspaceRoot boundary, mode, risk,
-confirmation, and hook policy. A `Reserved` registry slot is always unavailable
+active descriptor/version, the WorkspaceRoot default-resolution and observation
+contract, mode, risk, confirmation, and hook policy. A `Reserved` registry slot is always unavailable
 before admission and starts no external action. The registry and descriptor
 contracts above fix canonical ownership, typed shape, revision, and direct-effect
 meaning; the selected programmatic-caller policy supplies the closed root,
@@ -477,10 +482,11 @@ step. They never invoke a base tool.
 All admitted calls may start concurrently. A call awaiting user confirmation
 does not delay other independently admitted calls. The run remains `Running`;
 there is no `WaitingTool` run status. The durable call facts and compact run
+The durable call facts and compact run
 projection distinguish a current model step, an awaiting confirmation, an
 admitted call, and an externally started call. A group is not a workspace
-transaction and claims no serializability or merge of tool effects.
-
+transaction and claims no serializability or merge of tool effects. A path
+observation never changes admission or creates a path-based denial.
 The loop begins the next model step only when every group call has one terminal
 result. Its `ModelToolExchangeDto` preserves the model's original call order,
 not the schedule-dependent order in which concurrent calls completed.
@@ -797,8 +803,10 @@ following semantics:
   below. The bridge defines only where that policy is enforced; it never creates
   a durable authority, second actor identity, or authority context outside an
   active run.
-- Per-call cancellation, symlink policy, and owner-specific tool semantics remain
-  separate decisions.
+- Per-call cancellation and owner-specific tool semantics remain separate
+  decisions. Explicit-path resolution and best-effort outside-root observation
+  are selected here; OS-level tracing of shell, Python, or descendant-process
+  filesystem activity is not part of this contract.
 
 The trusted local model remains explicit: this bridge is not a sandbox,
 privilege boundary, or protection against a compromised Python process running
@@ -1017,8 +1025,10 @@ The kernel does not provide a scheduler, autonomous continuation, or
 cross-session background worker in this package. The separately selected
 continual-harness model owns durable trigger and checkpoint rules, while the
 selected programmatic-caller policy below constrains every gateway request to
-the active run and its frozen policy selection. Per-call cancellation and symlink
-behavior remain separate decisions.
+the active run and its frozen policy selection. Per-call cancellation remains a
+separate decision. Explicit path inputs use the selected default-resolution and
+best-effort observation contract; direct Python and descendant-process
+filesystem activity is not traced.
 
 The kernel adds these closed safe failures through `ErrorDto`:
 
@@ -2122,6 +2132,32 @@ credential, provider value, Python value, socket, process handle, external
 response, or implementation resource. A returned tool result may refer to the
 safe provenance record but does not turn it into model context by itself.
 
+For a tool whose typed input contains one or more local paths, the daemon may
+also create a best-effort audit-only `WorkspacePathOutsideObserved` record. It
+contains only the `ToolCallId`, `ToolId`, selected descriptor revision, a closed
+observation kind, and the count of explicit path values observed outside the
+session's default root. It contains no source, normalized, absolute, canonical,
+or symlink-target path; no `WorkspaceRoot`; no CWD, command, content, path
+digest, operating-system detail, or file error. The record is safe audit data,
+never model context, a public tool-result field, a notification, a confirmation,
+or a sanction. Failure to persist this optional record never blocks, changes,
+retries, or rolls back the tool call.
+
+```text
+WorkspacePathObservationKindDto
+  LexicallyOutsideRoot
+  ResolvedLinkOutsideRoot
+```
+
+The workspace owner first resolves a relative path from `WorkspaceRoot` or
+uses an absolute path as supplied. It records `LexicallyOutsideRoot` when the
+lexically resolved path is outside the root. When a symlink or an existing
+parent can be resolved, it additionally records `ResolvedLinkOutsideRoot` if
+the resolved target is outside. Missing, inaccessible, changing, or
+unresolvable links produce no guessed observation and never deny access. This
+observation covers explicit path-bearing DTOs only; it makes no claim about
+filesystem activity hidden inside `execute`, IPython, or child processes.
+
 ```mermaid
 flowchart LR
   IU[Interactive user] --> RR[Root run]
@@ -2231,9 +2267,10 @@ ProgrammaticAdmissionRuleDto
 ```
 
 `DirectLocalRead` is valid only for `InteractiveUser` and only for `read`,
-`glob`, `grep`, `expand`, or `retrieve`. It permits local workspace reading or
-disclosure of already retained content, subject to the frozen registry,
-descriptor, WorkspaceRoot where applicable, mode, hooks, per-run limit, and
+`glob`, `grep`, `expand`, or `retrieve`. It permits local reading or disclosure
+of already retained content, subject to the frozen registry, descriptor,
+WorkspaceRoot default resolution and observation where applicable, mode, hooks,
+per-run limit, and
 every stricter policy. It does not state that a file is safe, current, or free
 of sensitive content. A direct policy never admits `fetch_url`, `write`,
 `edit`, `execute`, `plan_submit`, `sub_agent`, `mcp`, user interaction, a
@@ -2267,7 +2304,8 @@ admission in this first scope. `ShellCommandTextDto` deliberately permits
 pipelines, redirects, and compound commands, so WorkspaceRoot CWD does not make
 its input a closed corridor constraint. It remains available only through an
 exact user confirmation that displays the exact typed command and still applies
-WorkspaceRoot, mode, hook, output, cancellation, and no-resume rules. A future
+WorkspaceRoot CWD, explicit-path observation where applicable, mode, hook,
+output, cancellation, and no-resume rules. A future
 typed command-template direction would require a separately selected contract.
 
 `fetch_url` never receives direct admission. It may use a bounded corridor only
@@ -3590,6 +3628,7 @@ Every durable fact belongs to exactly one owning sequence:
 | Session or run state transition | Ordinary session event sequence and affected projections/snapshots |
 | Model, reasoning, or tool stream fact | Shared `RunEventCursorDto` for one run |
 | Run audit without a model-fact cursor advance | Ordinary session transaction, not `ModelRunFactDto` |
+| Explicit workspace-path observation | Ordinary session audit transaction associated with the `ToolCallId`; no `RunEventCursorDto` advance |
 | Conversation-tree provenance | Separate monotonic lineage journal |
 | Provider-catalog lifecycle | Separate typed configuration-audit sequence |
 | Agent activity | Separate monotonic `AgentActivityJournalSequenceDto` for one `AgentActivityTreeId` |
@@ -3609,6 +3648,14 @@ one durable transaction, or commits none of them. A `ToolGroupRecorded` group,
 are examples of indivisible multi-fact transitions. A policy decision that
 admits, waits, denies, or otherwise determines such a transition commits in the
 same transaction as the outcome it governs.
+
+An explicit local-path observation may be computed before `ToolCallStarted` and
+written as the audit-only `WorkspacePathOutsideObserved` record. Its durable
+write is best-effort: a storage failure does not deny, delay, retry, roll back,
+or otherwise change the associated tool call. When the record is committed, it
+is independently reread for audit availability, but it is never added to the
+model-tool exchange, a run stream, or a user notification. No observation is
+created for an unavailable or unresolvable link merely to fill an audit gap.
 
 Each accepted `ToolOutputDeltaRecorded`, `ReasoningDeltaRecorded`, or
 `ReasoningSummaryDeltaRecorded` fragment commits as one durable fact in its own
@@ -4581,6 +4628,7 @@ The initial record-tag table is closed for this package:
 | `tool-descriptor-revision` | `1 tool_id`, `2 intended_owner`, `3 input_schema_reference`, `4 result_schema_reference`, `5 required_model_capabilities`, `6 tool_effect_profile`, `7 workspace_binding`, `8 mode_relation`, `9 model_schema_availability`, `10 model_function_schema_revision`, `11 safe_result_projection_revision`, `12 observation_contract_revision`, `13 stream_shape` |
 | `tool-registry-revision` | `1 fixed_tool_slots` in canonical `ToolId` order, each with intended owner, `Reserved`/`Active` state, and active descriptor revision when present |
 | `bridge-invocation-v1` | `1 authority_context_identity`, `2 bridge_operation_id`, `3 tool_id`, `4 tool_descriptor_revision`, `5 typed_input_digest` |
+| `workspace-path-observation-v1` | `1 tool_call_id`, `2 tool_id`, `3 descriptor_revision`, `4 observation_kind`, `5 observed_path_count` |
 | `programmatic-caller-policy-revision` | `1 policy_id`, `2 policy_scope`, `3 calendar_period_kind`, `4 root_origin_rules`, `5 admission_rules`, `6 per_run_limits`, `7 calendar_limit`, `8 inherited_policy_references` in declared narrowing order |
 | `effective-programmatic-caller-policy-snapshot` | `1 root_origin`, `2 selected_policy_revisions` in declared scope/narrowing order, `3 inherited_scope_provenance`, `4 effective_rule_projection`, `5 fixed_run_limits`, `6 calendar_counter_references`, `7 interactive_local_read_baseline_present` |
 | `programmatic-caller-policy-selection-v1` | `1 root_origin`, `2 effective_policy_snapshot_reference`, `3 policy_selection_digest`, `4 inherited_scope_provenance`, `5 fixed_run_limits` |
@@ -5174,10 +5222,16 @@ Any approved implementation of this concept must add evidence for:
   only and does not itself require confirmation or claim a process-effect
   inventory;
 - WorkspaceRoot and mode fixtures proving that only `read`, `write`, `edit`,
-  `execute`, `glob`, `grep`, and `expand` receive the workspace boundary;
-  plan access remains plan policy rather than ordinary workspace
-  access; non-workspace tools receive their own typed references; and existing
-  Plan/Build project-mutation restrictions remain unchanged;
+  `execute`, `glob`, `grep`, and `expand` receive the default workspace base
+  and CWD; absolute and escaping relative explicit paths execute without a
+  path-based denial; plan access remains plan policy rather than ordinary
+  workspace access; non-workspace tools receive their own typed references; and
+  existing Plan/Build project-mutation restrictions remain unchanged;
+- workspace-path observation fixtures proving lexical outside-root detection,
+  best-effort resolved-link outside-root detection, safe metadata-only durable
+  audit, no path or path digest in model/public values, no guessed observation
+  for unavailable links, and no tool denial, retry, or result change when the
+  audit write is unavailable;
 - selected-tool snapshots proving `ModelToolLoopV1` persists the registry,
   admission-policy, and hook-pipeline revisions together with the ordered
   active descriptors actually supplied to model requests, never all slots or a
@@ -5793,7 +5847,7 @@ change, configuration change, or implementation.
 | --- | --- | --- | --- | --- |
 | [Provider contracts and profiles](#selected-concept-constraints-provider-contracts-typed-kinds-and-reasoning) | Selected constraints only | `responses`, typed immutable user kinds, credential/endpoint policy, capability envelope/subset, immutable run selection, `typed-tlv-v1` SHA-256 identity, legacy M4 bridge, driver compatibility, catalog lifecycle/tombstones, full candidate audit, degraded recovery, held recovery promotion, queue reconciliation, first-scope limits, and the selected cross-direction taxonomy/snapshot/version rules. | No further first-scope profile decision. Controlled reload, credential rotation, health checks, model discovery, pricing, arbitrary headers, and configuration editing remain explicitly deferred. | None. |
 | [Reasoning](#reasoning-support-in-generic-chat-completions) | Selected constraints only | Typed stateless dialect catalog; `Primary`/`Detail` fragments and summaries on one cursor; immediate durable facts; 4-MiB run/history bounds; typed textual cross-turn history and immutable manifests; optional reported reasoning usage; automatic paged initial delivery; frozen branch references; Responses effort/mode/summary; `store: false`; local-history-first; rejection of unexpected calls outside `model_tool_loop_v1`; and the selected cross-direction taxonomy/snapshot/version rules. | No further first-scope reasoning decision. Encrypted/opaque or remote continuation, provider-native preservation controls, server-side parser setup, semantic content inspection, and pricing remain explicitly deferred. | None. |
-| [Capability plane, IPython, RLM, continual harness, goals, MCP, programmatic policy, and agent communication](#conceptual-execution-direction-ipython-and-a-unified-rust-owned-capability-plane) | Selected constraints only | Rust daemon authority, trusted-local execution model, recoverable Python convenience state, one shared Rust-owned gateway, `model_tool_loop_v1`, the 14-slot registry, daemon host bridge, session kernel, bounded `sub_agent` tree, continual harness, project/session goals, frozen leading-goal snapshots, gates, project/goal/session memory, skills, roles, compaction, user-confirmed proposals, one typed bounded MCP gateway, programmatic policy, direct-pair RLM messages, activity-tree identity, durable safe observation, and bounded two-level notifications. | Per-call cancellation, symlink policy, and owner-specific semantics beyond the selected direct-pair communication remain deferred. | None. |
+| [Capability plane, IPython, RLM, continual harness, goals, MCP, programmatic policy, and agent communication](#conceptual-execution-direction-ipython-and-a-unified-rust-owned-capability-plane) | Selected constraints only | Rust daemon authority, trusted-local execution model, recoverable Python convenience state, one shared Rust-owned gateway, `model_tool_loop_v1`, the 14-slot registry, daemon host bridge, session kernel, bounded `sub_agent` tree, continual harness, project/session goals, frozen leading-goal snapshots, gates, project/goal/session memory, skills, roles, compaction, user-confirmed proposals, one typed bounded MCP gateway, programmatic policy, direct-pair RLM messages, activity-tree identity, durable safe observation, and bounded two-level notifications. | Per-call cancellation and owner-specific semantics beyond the selected direct-pair communication remain deferred. | None. |
 | [Session branching and regeneration](#non-destructive-session-branching-and-regeneration) | Selected constraints only | Separate child sessions, deterministic root trees, closed boundaries, materialized text context, whole typed base snapshots/digests, separate lineage audit, daemon-assigned child identity, source/preview optimistic checks, bounded live tree reads, reversible idle-only archive, typed reference provenance, `unverified` workspace state, fixed limits, and inherited session-policy references with shared counters. | No further first-scope fork-history decision. Tool-result execution, child-agent execution, physical deletion, export, and garbage collection remain explicitly deferred. | None. |
 | [Cross-direction foundations](#cross-direction-decisions) | Selected constraints only | Credential-free provider/run selection boundary; provider-selection historical compatibility; `model-capability-taxonomy-v1`; `RunExecutionMeaningDto` v4; common fact, transaction, publication, recovery, activity/notification ownership, and historical-version rules. | No further first-scope cross-direction decision. Historical M4/v1/v2 selections remain readable; v3 adds programmatic-policy selection and v4 adds separately versioned activity selection. | None. |
 
@@ -5946,9 +6000,10 @@ and do not authorize implementation.
   composition-assembled registry with no direct bypass; typed descriptor/input/
   result boundaries; `tool-descriptor-revision` and `tool-registry-revision`
   `typed-tlv-v1`/SHA-256 identity; frozen per-run model-tool selection; the
-  independent direct-effect profile; WorkspaceRoot/mode relation; and the
+  independent direct-effect profile; WorkspaceRoot default resolution/CWD and
+  outside-root observation relation; and the
   selected `execute`, `fetch_url`, and `ask_user` contracts. This closure does
-  not require one delivery slice or settle risk/confirmation policy, symlinks,
+  not require one delivery slice or settle risk/confirmation policy,
   RLM, harnesses, or owner-specific semantics outside the selected initial
   contracts.
 - [x] Specify the typed daemon host-bridge/gateway protocol used by a Python
