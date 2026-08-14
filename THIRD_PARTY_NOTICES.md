@@ -1139,14 +1139,14 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [futures-channel 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-core 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-executor 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-io 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-macro 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-sink 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-task 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-util 0.3.33](https://github.com/rust-lang/futures-rs)
+- [futures-channel 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-core 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-executor 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-io 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-macro 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-sink 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-task 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-util 0.3.34](https://github.com/rust-lang/futures-rs)
 - [futures 0.3.33](https://github.com/rust-lang/futures-rs)
 
 ```text
