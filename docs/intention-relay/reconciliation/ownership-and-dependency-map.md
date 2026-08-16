@@ -13,6 +13,7 @@
 | Tool registry and Mandate-loop package | Registry/descriptor revisions, frozen tool selection, direct Mandate admission, WorkspaceRoot policy, step/group loop, and tool-effect recovery. | Mandate lifecycle, execution-kind selection, child/MCP/verifier, bridge/kernel, provider evolution, scheduler, and adapters. |
 | Scheduler and readiness package | Durable candidate reevaluation, typed readiness/capacity evidence, admission handoff, and scheduler recovery gate. | Lifecycle/reason authority, immutable meaning, tool admission, worker topology, child/MCP/verifier, bridge/kernel, provider evolution, and adapters. |
 | Child graph and verifier package | Immutable child edges/delegation, direct controls, terminalization, child-local uncertainty, verifier authority/targets/audits, and target mutation. | Lifecycle/reason ordering, envelope/codec, scheduler admission, tool implementation, MCP, provider evolution, general activity/UI, and activation. |
+| Mandate MCP capability package | Typed source/discovery, normalization, immutable capability/selection revisions, invocation binding, safe projection, disposal, and MCP recovery. | ToolId/registry creation, generic loop, lifecycle/scheduling, child/verifier/Goal/Skill authority, administration UI, plugins, supervision, and activation. |
 | Tools/gateway | One typed capability path and descriptor contracts. | A second registry, lifecycle authority, or persistence authority. |
 | Daemon | Process/task ownership, identity assignment, publication after commit. | Product decisions reserved to the user. |
 | Composition | Concrete provider/tool/storage assembly. | Process hosting or a second runtime. |
@@ -33,9 +34,12 @@ flowchart TD
   E --> C
   T --> C
   S --> C
+  M --> P[MCP lifecycle]
+  E --> P
   T --> G[Gateway bridge]
   S --> X[Effect reconciliation]
-  T --> P[MCP lifecycle]
+  T --> P
+  S --> P
   M --> K[Skills Goals context]
   G --> I[IPython]
   E --> V[Provider evolution]

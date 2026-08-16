@@ -349,3 +349,15 @@ M4 replay. Recovery rebuilds only supported graph projections and never resumes
 child/verifier external work. This adds no current table, event, migration, or
 historical reinterpretation. Detailed semantics are owned by [Mandate child
 graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
+
+## Post-M4 MCP storage consequence
+
+Future MCP discovery atomically commits safe discovery evidence, immutable
+capability revisions, accumulated selection, and its tool result before
+publication. Future invocation atomically binds its exact selection/capability/
+input before effect and persists only safe terminal projection or exact
+uncertainty evidence. These records remain separate from Session sequence, Run
+cursor, ordinary queues, and M4 replay. Recovery never reconnects, reattaches,
+rediscoveries, retries, or resumes MCP work. This adds no current table, event,
+migration, or historical reinterpretation. Detailed semantics are owned by
+[Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md).

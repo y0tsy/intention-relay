@@ -148,8 +148,9 @@ an independent Mandate-scoped durable reread.
 A Mandate selection includes only credential-free references to the Mandate,
 revision, reason, service-session/activity context where later defined, verified
 checkpoints, and applicable frozen context. Exact canonical fields, tags,
-digests, provider/registry/Skill/MCP selections, and verifier payloads belong to
-later execution-meaning contracts. Missing, corrupt, unsupported, or mismatched
+digests, provider/registry/Skill selections, MCP initial-selection semantics,
+and verifier payloads belong to later execution-meaning contracts. Missing,
+corrupt, unsupported, or mismatched
 meaning blocks dependent work before any effect and never falls back to current
 TOML, registry, model name, provider, ancestry, or live resources.
 
@@ -249,7 +250,7 @@ Mandate calls only. Lifecycle retains fresh-admission eligibility and uncertaint
 ownership; it does not duplicate tool-loop or scheduler rules.
 
 It does not define tool loops, registry detail, child graph or verifier-authority
-semantics, MCP lifecycle, Goal/Skill behavior, provider profiles/Responses/reasoning,
+semantics, MCP capability lifecycle semantics, Goal/Skill behavior, provider profiles/Responses/reasoning,
 bridge/IPython, forks, activity/UI, scheduler topology, schema,
 migrations, crates, Cargo, or implementation policy activation.
 

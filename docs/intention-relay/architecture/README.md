@@ -72,8 +72,9 @@ flowchart TD
 5. [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md)
 6. [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
 7. [Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
-8. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-9. [VFR and Headroom](06-vfr-and-headroom.md)
+8. [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md)
+9. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+10. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -211,3 +212,11 @@ is the sole detailed authority for future immutable child edges, direct-parent
 controls, graph terminalization, and separately issued target-scoped verifier
 authority. It preserves M3/M4 and retained RLM history and does not activate an
 executor, protocol, schema, or runtime implementation.
+
+### Mandate MCP capability owner
+
+[Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md) is
+the sole detailed authority for future typed MCP source acquisition, discovery
+normalization, immutable run-local capability selections, invocation, disposal,
+and MCP recovery. It preserves the fixed `mcp` slot and M3/M4 behavior and does
+not activate direct administration, protocol, schema, crate, or runtime work.

@@ -215,6 +215,14 @@ controls and no implicit lifecycle, scheduler, tool, or verifier authority. A
 verifier may mutate only an explicitly named target under separately user-issued
 target-scoped authority, immutable baseline, and qualifying evidence. Detailed
 rules are owned by architecture 17.
+
+### 23. MCP capabilities are typed evidence, not authority
+
+Future Mandate MCP work uses the one fixed `mcp` capability path to acquire and
+invoke immutable run-local capabilities. An MCP server, discovery, capability,
+or result cannot create lifecycle, scheduler, registry, child, verifier, or
+user authority. Started uncertain MCP work never resumes. Detailed rules are
+owned by architecture 18.
 The authoritative source and package boundaries for these principles are the
 [Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
@@ -222,4 +230,5 @@ records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
 and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md),
 and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md),
 and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md),
-and [0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).
+and [0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md),
+and [0010](../decisions/0010-mandate-mcp-capability-lifecycle.md).

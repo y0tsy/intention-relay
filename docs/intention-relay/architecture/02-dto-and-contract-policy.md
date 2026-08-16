@@ -248,5 +248,13 @@ relationship, prompt, evidence, or current state. Architecture 17 owns their
 semantics; architecture 14 retains canonical framing, digest, decoder, and
 compatibility ownership.
 
+Future MCP families include typed capability source, discovery, server
+observation, normalized capability revision, accumulated run-local selection,
+model-step selection binding, invocation selection, safe capability/result
+projection, and attempt/recovery values. They are closed, credential-free, and
+cannot expose raw endpoint, command, header, token, frame, server error, SDK,
+socket, or process resource. Architecture 18 owns their semantics; architecture
+14 retains canonical framing, digest, decoder, and compatibility ownership.
+
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).

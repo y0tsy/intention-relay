@@ -9,7 +9,7 @@
 | Durable Mandate scheduler and readiness admission | SCH-001..012 | Readiness-driven admission adopted; calendar/interval/time-zone and continual-harness ownership remain deferred or historical-only. | Mandate scheduler package. |
 | Child work, verification, activity | CHD-001..018, VER-001..011, ACT-001..010 | Child graph and verifier authority adopted for future Mandates; general activity/UI remains deferred and retained RLM remains historical. | Architecture 17 and later activity/UI package. |
 | Goals, Skills, memory, compaction | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Deferred. | Context packages. |
-| Dynamic MCP | MCP-001..016 | Deferred; fixed-single-path non-authority rule mapped. | MCP lifecycle package. |
+| Dynamic MCP | MCP-001..016 | Adopted for future Mandate execution; retained bounded connection/catalogue policy remains historical. | Architecture 18, Mandate MCP capability lifecycle. |
 | Provider, reasoning, execution meaning | PRV-001..020, RSN-001..015, RUN-001..012 | Envelope/canonical/compatibility adopted; provider and reasoning payload details deferred. | Execution-meaning and provider evolution packages. |
 | Forks and lineage | FRK-001..018 | Deferred. | Session branching package. |
 | Verification portfolio, checklist, deferred work | DUR-001..012, HIS-001..008, QLT-001..010, RDM-001..010 | Evidence and delivery rules mapped. | Quality and later roadmap reconciliation. |
