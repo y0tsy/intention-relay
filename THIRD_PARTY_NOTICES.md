@@ -2450,7 +2450,7 @@ limitations under the License.
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
 - [unicase 2.9.0](https://github.com/seanmonstar/unicase)
 - [url 2.5.8](https://github.com/servo/rust-url)
-- [uuid 1.24.0](https://github.com/uuid-rs/uuid)
+- [uuid 1.24.1](https://github.com/uuid-rs/uuid)
 
 ```text
                               Apache License
