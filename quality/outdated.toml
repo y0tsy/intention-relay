@@ -3,4 +3,4 @@
 # its transitive RUSTSEC acknowledgements before allowing a newer SDK line.
 
 [outdated_ignores]
-crates = ["async-openai"]
+crates = ["async-openai", "uuid"]
