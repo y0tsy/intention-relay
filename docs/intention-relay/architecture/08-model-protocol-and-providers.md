@@ -181,3 +181,12 @@ select a provider kind or driver.
 Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle,
 reasoning, and driver compatibility are separate provider-evolution work. They
 require their own authoritative contract and fixtures before implementation.
+
+## Execution-meaning compatibility consequence
+
+Future provider selection is a credential-free nested execution-meaning
+selection. Model names never infer provider kind, driver, endpoint, capability
+or execution kind. Driver-contract compatibility and the distinction between
+stored semantic compatibility and live availability are owned by [Run execution
+meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+This does not introduce profiles, `responses`, aliases or a new M4 driver.

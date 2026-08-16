@@ -304,3 +304,11 @@ run states and M3/M4 recovery behavior remain unchanged.
 
 See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
 and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
+
+## Post-M4 execution-meaning storage consequence
+
+Future Mandate admission binds immutable canonical execution meaning in the same
+transaction as the new RunId and Mandate transition. The detailed envelope,
+canonical bytes, decoder outcomes and historical bridge law are owned by [Run
+execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+This does not add a table, event, migration or synthetic M3/M4 field.

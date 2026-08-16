@@ -276,3 +276,12 @@ cover:
 These are obligations for later implementation packages, not claims that the
 corresponding runtime behavior exists today. See the
 [reconciliation matrix](../reconciliation/source-of-truth-matrix.md).
+
+## Execution-meaning compatibility evidence
+
+Before implementation, canonical execution-meaning work requires golden
+bytes/digests, kind/tag/version mismatch fixtures, M3/M4 byte-preservation,
+no-current-state-reconstruction, no-external-work-on-incompatibility,
+negotiation/resync, no-resume, driver-contract, redaction and cross-platform
+outcome evidence. The detailed portfolio is owned by [Run execution meaning and
+historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).

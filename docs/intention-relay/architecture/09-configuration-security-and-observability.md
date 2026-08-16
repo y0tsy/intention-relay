@@ -178,3 +178,11 @@ Future observability may expose typed capacity outcomes and safe Mandate/attempt
 references, but it cannot convert logs, notifications, activity, or provider
 responses into authority. Redaction rules apply to every new persistence,
 protocol, diagnostic, and canonical-identity surface.
+
+## Execution-meaning compatibility consequence
+
+Canonical execution meaning never carries raw TOML, configuration paths,
+credentials, SDK objects, provider payloads, handles or live resources. The
+compatibility owner defines its canonical/digest and decoder requirements; this
+document retains M3/M4 startup-only configuration and redaction boundaries.
+See [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
