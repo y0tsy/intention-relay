@@ -172,6 +172,15 @@ Delegated Verification Mandate authority defined below. That authority is
 explicit, revisioned, target-scoped, auditable, and never inferred from a
 prompt, Goal, parent/child relation, activity tree, or tool call.
 
+> **Mandate child-control qualification.** A parent Mandate has only the
+> explicit direct-child graph controls selected below: child creation,
+> observation, direct-edge instruction/reply, and a creation-delegated pause or
+> stop. Parentage never grants completion, needs-rework, revision, archive, or
+> unknown-effect reconciliation authority over a child, and never grants any
+> mutation authority over a root, sibling, or unrelated Mandate. User lifecycle
+> decisions still own every root and child Mandate except for an explicitly
+> issued verifier authority naming the exact target and operation.
+
 ```mermaid
 stateDiagram-v2
   [*] --> Draft
@@ -398,6 +407,12 @@ child agent invoke the primitive implementation directly. A `ToolId` has one
 immutable intended-owner slot and at most one active canonical registration.
 Duplicate active registration, reassignment of an existing identifier, or a
 call path that bypasses the registry fails before any external action.
+
+For new Mandate work, the future MCP boundary owns capability-source readiness,
+private endpoint and credential handles, discovery, schema normalization, and
+immutable run-scoped capability revisions under the one active `mcp`
+descriptor. It does not activate a new `ToolId`, mutate the registry, create a
+second gateway, or expose a remote method as an independently registered tool.
 
 Every first registry revision contains all fourteen slots, so delivery may be
 split without omitting or substituting a core identity:
@@ -1344,10 +1359,188 @@ permission. The parent owns a durable child-work graph and the Mandate-scoped
 activity identity spans fresh continuation runs. A verifier child may gather
 evidence but cannot inherit verification target-mutation authority.
 
+#### Complete Mandate child-work graph
+
+For new Mandate work, an admitted `sub_agent` call from a working Mandate run
+creates a child Mandate, not a parallel child run. One durable transaction
+creates the child Mandate and initial revision, immutable parent link, typed
+delegation snapshot, graph projection, Mandate-scoped activity record, and the
+parent call's idempotent terminal creation result, or creates none of them:
+
+```text
+MandateChildCreationDto
+  creation_id
+  parent_mandate_id
+  parent_revision
+  parent_run_id
+  creating_tool_call_id
+  child_mandate_id
+  child_initial_revision
+  child_delegation_snapshot_reference
+  child_provider_capability_selection
+  child_activity_graph_id
+  canonical_creation_digest
+
+MandateParentLinkDto
+  child_mandate_id
+  parent_mandate_id
+  parent_revision
+  creating_run_reference
+  creating_tool_call_id
+  delegation_snapshot_reference
+  graph_id
+  canonical_link_digest
+
+MandateChildDelegationSnapshotDto
+  delegation_id
+  parent_mandate_reference
+  parent_revision
+  parent_run_reference
+  child_objective
+  child_scope
+  child_mode
+  frozen_goal_context_references
+  typed_provenance_references
+  required_evidence_contract_references
+  continuation_configuration
+  provider_capability_selection_rule
+  canonical_delegation_digest
+```
+
+Repeating the creating `ToolCallId` with equal typed child input returns the
+stored child, link, and result. Changed reuse, a different parent run, or a
+different parent revision fails before another child, graph edge, or external
+action. A child has one immutable direct parent and cannot detach, reparent,
+merge, become a root, or become a conversation branch without the separately
+selected explicit user fork. Self edges, incompatible duplicate creations,
+missing parent revisions, and ancestry cycles fail before durable mutation. A
+child may itself invoke `sub_agent`, producing another child Mandate in the
+same immutable root graph.
+
+The graph is a durable append-only projection keyed by an immutable root
+Mandate identity. It records immutable links and direct or recursive summaries;
+it is not an authorization source and does not make siblings communication peers.
+No fixed tree depth, child count, lifetime, class, message, content, or
+concurrency value is a product ceiling for new Mandate work. Actual finite
+capacity remains a typed, observable, non-lossy unavailability outcome.
+
+Each child fresh run has its own immutable `MandateRunExecutionMeaningV1`. Its
+provider, capability, descriptor, MCP, activity, checkpoint, and continuation
+selections resolve from the child revision and delegation snapshot at child
+fresh-run admission. A parent selection may be compatibility or provenance only;
+it is not a policy, corridor, quota, class, root-origin, or permission
+inheritance. No raw model, endpoint, credential, provider request, kernel,
+bridge grant, MCP connection, process, or unfinished effect is inherited.
+
+For a child Mandate, `MandateRunExecutionMeaningV1` is the Mandate overlay's
+immutable execution selection: it records selected provider/model capabilities,
+active registry revision and descriptors, Mandate-scoped activity identity,
+checkpoint and continuation selections, and any run-scoped
+`MandateMcpCapabilitySelectionV1`. It has no Goal, policy, corridor, quota, or
+root-origin authorization selection and no pre-admission
+`McpMethodCatalogSelectionV1`; retained execution-meaning fields or validation
+rules that require either are historical-only for that child fresh run.
+
+```mermaid
+flowchart TD
+  P[Parent Mandate] -->|sub_agent| C1[Child Mandate]
+  C1 -->|sub_agent| C2[Descendant Mandate]
+  P <-->|direct-edge messages| C1
+  C1 <-->|direct-edge messages| C2
+  C1 --> S1[Terminal summary]
+  S1 --> P
+```
+
+The direct parent may use only creation-delegated graph controls:
+
+```text
+MandateChildControlDto
+  GetStatus
+  AwaitTerminalSummary
+  SendInstruction
+  ReplyToClarification
+  PauseChild
+  StopChild
+```
+
+Observation is read-only. Instructions and matching clarification replies are
+durable redacted direct-edge messages delivered only before the recipient's next
+fresh model step. They never change an already sent provider request, revive
+terminal or interrupted work, or independently schedule a run. A child may send
+`Report` or `ClarificationRequest` only to its direct parent. A clarification
+reply can open the next model step only while that child run is live; after
+cancellation, interruption, terminalization, or daemon restart it is rejected
+and never resumes old work. A parent cannot complete, mark needs-rework, revise,
+archive, or reconcile an unknown effect for a child merely through parentage.
+
+> **Historical-only child-model qualification.** For new Mandate work, retained
+> RLM identity, `SubAgentId`/`RlmParentLinkDto`, policy/corridor, class, tree,
+> lifetime, context, result, message, queue, activity, and run-rooted limits
+> below do not govern child creation or coordination. Their durable ordering,
+> idempotency, redaction, typed-reference, commit-and-reread publication,
+> direct-edge communication, and no-resume principles remain active where
+> compatible with this Mandate child-work graph.
+
 This is a selected concept constraint for future replanning. It closes the
 first-scope RLM child-agent model without authorizing a crate, implementation,
 storage migration, public protocol change, configuration schema, or delivery
 scope. It does not alter the closed M4 baseline.
+
+#### Mandate graph messages and aggregation
+
+```text
+MandateChildMessageDto
+  message_id
+  graph_id
+  parent_link_reference
+  message_order
+  direction = ParentToChild | ChildToParent
+  kind = Instruction | Report | ClarificationRequest | ClarificationReply
+  sender_run_reference
+  recipient_mandate_reference
+  recipient_run_reference_when_live
+  safe_text
+  typed_references
+  delivery_state
+  canonical_message_digest
+
+MandateChildTerminalSummaryDto
+  child_mandate_id
+  child_revision
+  terminal_run_reference
+  terminal_kind
+  disposition
+  verified_checkpoint_reference_when_present
+  external_effect_unknown_reference_when_present
+  evidence_references
+  safe_conclusion
+  canonical_summary_digest
+```
+
+Each edge owns one durable monotonic order across both message directions.
+Messages are redacted typed records and carry only identity, revision or cursor,
+digest, safe visibility, and provenance references. Equal replay returns the
+stored message; changed reuse fails before publication; no message grants a
+tool, capability, lifecycle authority, or right to survive a terminal run.
+
+A terminal child run records one redacted summary in the graph. The parent gets
+its summary reference once in its next eligible model exchange, never raw child
+transcript or output. Graph summaries aggregate state and source provenance;
+they never make child success complete a parent, child failure fail a parent, or
+child evidence satisfy a parent acceptance contract. Usage aggregation
+deduplicates original `RunId` values. Parent completion is rejected while any
+descendant is non-terminal.
+
+Parent pause or stop propagates only selected direct graph controls in durable
+descendant order. A known child outcome changes only that child and supplies its
+summary. A child `Paused`, `NeedsRework`, or `Stopped` state does not implicitly
+change the parent. A child `ExternalEffectUnknown` pauses that child, emits an
+urgent graph safety observation, and blocks only automatic parent continuation
+that depends on its result; it does not invent an unknown effect on the parent.
+Only the child user or verifier authority explicitly naming that child and
+uncertainty can resolve it. Recovery interrupts unfinished parent and child
+runs, preserves graph/history/messages/checkpoints, and never resumes, retries,
+or reruns old provider, tool, process, kernel, bridge, MCP, or external work.
 
 #### Ownership, identity, and `sub_agent`
 
@@ -2428,6 +2621,125 @@ already selected known pre-effect or unknown-effect evidence. Goals, records,
 summaries, proposals, and readable history survive recovery; a later user
 attempt obtains a new run identity and target snapshot.
 
+#### Mandate dynamic MCP capability acquisition
+
+For new Mandate work, `mcp` remains the one canonical Rust-owned gateway and
+fixed `ToolId`, but it may autonomously acquire, discover, normalize, and invoke
+an external capability through an active Mandate-compatible descriptor. This is
+run-scoped immutable capability registration under `mcp`, never registration of
+a new `ToolId`, a second registry, a plug-in, or a direct primitive bypass.
+
+```text
+MandateMcpCapabilitySourceDto
+  source_id
+  source_revision
+  transport = Http | LocalStdio
+  endpoint_reference
+  credential_reference
+  discovery_protocol_revision
+  gateway_revision
+  safe_endpoint_identity
+  canonical_source_digest
+
+MandateMcpDiscoveryDto
+  discovery_id
+  source_reference
+  discovery_request_id
+  protocol_revision
+  server_identity_digest
+  discovered_tool_set_digest
+  canonical_discovery_digest
+
+MandateMcpCapabilityRevisionDto
+  capability_id
+  capability_revision
+  source_reference
+  discovery_reference
+  remote_method_name
+  normalized_input_schema_reference
+  normalized_result_schema_reference
+  remote_schema_digest
+  invocation_shape
+  idempotency_contract
+  safe_result_projection_revision
+  canonical_capability_digest
+
+MandateMcpCapabilitySelectionV1
+  source_reference
+  discovery_reference
+  ordered_capability_references
+  canonical_selection_digest
+
+MandateMcpInvocationSelectionV1
+  capability_reference
+  typed_input_digest
+  idempotency_key
+  canonical_invocation_digest
+```
+
+`source_reference` identifies a typed Mandate-provided source proposal committed
+as part of `AcquireCapability`; it is not required to reference a user-created
+connection, catalogue, policy record, or pre-admission method set. The daemon
+may resolve private endpoint and credential material only after the active
+descriptor receives the typed proposal. Equal idempotent acquisition replays the
+committed source/discovery result; changed reuse fails before another discovery
+or external action.
+
+All records are typed, credential-free, immutable, canonical, and versioned.
+An endpoint reference is a safe opaque identity, not a raw URL, socket, command,
+or endpoint resource. A credential reference identifies daemon-private material
+and generation, never a secret, bearer token, OAuth material, header value,
+SDK client, keychain locator, or public configuration value. The remote method
+name is a validated bounded protocol identifier accepted only during discovery
+normalization; it never becomes a generic stringly invocation boundary.
+
+The active `mcp` descriptor provides two typed forms:
+
+```text
+McpInvocationDto
+  AcquireCapability { source_reference, requested_capability_hint }
+  InvokeCapability { capability_reference, normalized_typed_input }
+```
+
+`AcquireCapability` validates the Mandate run, selected descriptor and mode,
+typed source, private endpoint/credential availability, protocol compatibility,
+and idempotency. It performs descriptor-defined MCP discovery using only private
+materials, normalizes accepted remote schemas into the MCP boundary's closed
+input/result schema family, and atomically commits discovery evidence and
+capability revisions before publishing safe capability schemas to a later model
+step. Unsupported, malformed, ambiguous, raw-map-only, or unrepresentable
+remote schemas fail before registration or invocation. Raw discovery JSON,
+protocol frames, arbitrary maps, header maps, SDK values, process resources, and
+server error bodies never leave the MCP boundary.
+
+`InvokeCapability` resolves one immutable capability revision, validates its
+typed input, and durably records the capability, input digest, idempotency key,
+and `ToolCallId` before external work. It uses selected endpoint and credential
+generation only in private daemon material, validates the result against the
+selected normalized result schema, and persists only a descriptor-owned safe
+projection. An unavailable source, credential generation, endpoint, protocol, or
+schema is typed pre-effect unavailability without fallback. A started ambiguous
+operation records `ExternalEffectUnknown`; cancellation, loss, or restart never
+reattaches, retries, resumes, or repeats discovery or invocation. A later fresh
+Mandate run acquires again and may retain historical discovery only as evidence.
+
+> **Mandate MCP supersession.** For new Mandate work, retained requirements for
+> user-created connections or method catalogues, pre-admission complete method
+> sets, no dynamic discovery or registration, and policy/corridor/confirmation/
+> quota gating are historical-only. One `mcp` ToolId, one gateway, typed schema
+> normalization, private credentials, idempotency, durable commit and reread,
+> redaction, safe projection, cancellation, process disposal, and no-resume
+> recovery remain active. An MCP server cannot create a ToolId, registry entry,
+> Goal, session, run, child, message, confirmation, authority, or lifecycle
+> mutation.
+
+> **Historical-only for new Mandate MCP work.** The retained user-created
+> connection/catalogue, complete-at-admission method-set, no-discovery, no-dynamic-
+> registration, and policy/corridor/confirmation/quota rules below do not govern
+> a `MandateMcpCapabilitySourceDto`. The one `mcp` ToolId, gateway, typed
+> boundary, private resources, idempotency, redaction, safe projection,
+> cancellation, process disposal, and no-resume semantics remain active.
+
 #### Bounded MCP gateway
 
 `mcp` is the one canonical MCP gateway `ToolId`, owned by a future MCP boundary
@@ -2737,6 +3049,13 @@ fresh calendar allowance by copying, changing a title, or creating a new
 session. Its materialized historical context remains immutable even if a later
 live policy makes a future action unavailable.
 
+> **Mandate MCP qualification.** The retained requirement to select one
+> preexisting connection/method and its policy effect selectors, typed corridor,
+> or confirmation is historical-only for a new Mandate MCP call. A discovered
+> immutable capability revision and normalized typed input remain mandatory; an
+> MCP service still cannot create another authority, user question, Goal, run,
+> child, or registry entry.
+
 #### Decisions, typed input constraints, and confirmation
 
 The closed first policy decision is:
@@ -3030,6 +3349,14 @@ provider resource, process topology, external response, counter history, or
 implementation detail. Every listed failure is known before an external effect,
 except that a later cancellation or recovery preserves the independently
 selected `ExternalEffectUnknown` evidence for work that had already started.
+
+> **Mandate graph activity supersession.** For new Mandate work, retained
+> RLM run-rooted `AgentActivityTreeId`, `RlmParentLinkDto`, root-origin, direct-
+> pair queue, and fixed observation limits are historical-only where they
+> conflict. The Mandate child-work graph and its immutable links own activity
+> identity across fresh runs. Durable ordering, redaction, typed references,
+> post-commit reread publication, and the rule that communication cannot create
+> authority or independently schedule work remain active.
 
 ### Selected agent communication, observation, and notifications
 
@@ -4141,12 +4468,20 @@ MandateRunExecutionMeaningV1
   goal_context_selection
   mcp_selection
   verifier_selection_when_applicable
+  mandate_child_link_selection_when_applicable
   terminal_provenance_references
 ```
 
 `MandateRunExecutionMeaningV1` is credential-free and excludes raw objectives,
 evidence bodies, prompts, tool output, provider resources, process state, live
-configuration, and implementation handles. v1--v4 remain readable exactly as
+configuration, and implementation handles. For Mandate work, `mcp_selection` is
+either `Disabled` or accumulated `MandateMcpCapabilitySelectionV1` records that
+were durably acquired before a later model step. Each invocation freezes one
+discovered capability revision and input digest before effect. A Mandate child
+selection records the immutable parent link and delegation digest when
+applicable. Neither selection rewrites a prior step, uses a retained
+`McpMethodCatalogSelectionV1`, or reconstructs a capability, link, endpoint,
+credential, server state, or activity from a current process. v1--v4 remain readable exactly as
 recorded; no decoder infers a Mandate, verifier authority, or direct-admission
 selection from their policy/activity fields. Canonical conceptual records for
 verification authority, target set, audit contract/evidence, verdict, and target
@@ -5748,6 +6083,22 @@ prove:
 - `MandateRunExecutionMeaningV1` canonicalization, retained v1--v4 decoder
   compatibility, no synthetic historic selections, and redaction of objectives,
   evidence bodies, provider resources, process state, and raw tool content.
+- Mandate MCP acquisition through the fixed `mcp` ToolId without retained
+  user-created catalog, confirmation, corridor, quota, or root-origin gating;
+  typed discovery/schema normalization, private credential/endpoint handling,
+  immutable capability revisions, idempotent invocation, safe projection, and
+  no current-server substitution or old-session reattachment;
+- Mandate child creation idempotency, immutable one-parent graph links,
+  cycle/reparent/detach rejection, credential-free delegation snapshots,
+  direct-edge messaging, terminal summaries, source-`RunId` usage
+  deduplication, and no implicit parent lifecycle transition from child results;
+- parent completion rejection while descendants remain non-terminal; narrowly
+  delegated direct-child pause/stop controls; child unknown-effect safety
+  observations without a fabricated parent unknown effect; and child recovery
+  through fresh runs only; and
+- compatibility proof that retained RLM and bounded MCP fixtures retain their
+  historical meaning while M4/v1--v4 records acquire no synthetic Mandate MCP
+  capability, child graph, or activity selection.
 
 
 Any approved implementation of this concept must add evidence for:
@@ -6439,7 +6790,10 @@ change, configuration change, or implementation.
 > below are selected historical compatibility evidence only. They are not
 > requirements for new Mandate execution, which uses direct admission, no
 > product ceilings, Mandate-scoped activity, fresh-run recovery, and
-> `MandateRunExecutionMeaningV1`.
+> `MandateRunExecutionMeaningV1`. It also does not require user-created MCP
+> catalogues, retained RLM tree or message ceilings, or run-rooted activity
+> identity for new Mandate work; those requirements remain historical
+> compatibility evidence only.
 
 | Direction | State | Already selected | Still to decide | Candidate next decision package |
 | --- | --- | --- | --- | --- |
@@ -6463,6 +6817,13 @@ change, configuration change, or implementation.
 - [x] Select Delegated Verification Mandates: immutable explicit target set,
   full delegated future revision, stale-audit failure, atomic/idempotent target
   mutation, and delegated unknown-effect reconciliation.
+- [x] Select Mandate dynamic MCP capability acquisition through the fixed
+  `mcp` ToolId, private credential sources, typed discovery/schema
+  normalization, immutable capability revisions, direct invocation, and
+  fresh-run-only external recovery.
+- [x] Complete durable child-Mandate creation, graph control, direct-edge
+  messaging, aggregation, propagation, and child unknown-effect semantics
+  without retained RLM product ceilings.
 - [ ] Reconcile this research overlay into authoritative architecture, roadmap,
   crate map, protocol/storage ownership, quality policy, decision records, and
   delivery milestones before any implementation is authorized.
