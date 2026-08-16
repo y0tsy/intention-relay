@@ -305,6 +305,18 @@ run states and M3/M4 recovery behavior remain unchanged.
 See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
 and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
 
+## Post-M4 tool-loop storage consequence
+
+Future model-tool-loop work atomically records a completed tool-calling model
+step, its ordered tool group, normalized calls, cursor/projection/event/snapshot
+updates before any local effect. Future admissions, starts, fragments, and
+terminal results remain run-cursor ordered, commit before publication, and
+publish only after an independent scoped reread. A started effect without
+terminal proof follows the Mandate uncertainty transition; recovery never retries
+or resumes a tool action. This adds no current table, event, state, migration,
+or reinterpretation of M4 `ToolCallRecorded` denial. Exact semantics are owned
+by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
+
 ## Post-M4 execution-meaning storage consequence
 
 Future Mandate admission binds immutable canonical execution meaning in the same

@@ -46,7 +46,7 @@ EventId
 ConfigRevisionId
 ```
 
-IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO.
+IDs must have a defined generation owner, parse/validation behavior, serialization representation, and error DTO. Future tool-loop IDs include daemon-assigned `ModelStepId` and `ToolGroupId`; provider-native tool-call identifiers remain private implementation state.
 
 ### Envelopes
 
@@ -200,6 +200,15 @@ external-attempt phase/evidence, capacity outcome, and explicit verifier
 authority where applicable. These are future contract families, not current M4
 storage or wire fields.
 
+The future tool-loop families include `ToolRegistryEntryDto`,
+`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, `DirectToolSelectionV1`,
+`ModelStepId`, `ToolGroupId`, model-step/group facts, typed direct-admission
+outcomes, safe workspace-path observations, output fragments, terminal results,
+and `ModelToolExchangeDto`. Architecture 15 owns their semantics; architecture
+14 owns canonical framing, digest, decoder, and compatibility rules. They cannot
+widen historical M4 tool facts, expose provider-native IDs, raw paths, secrets,
+SDK resources, or recreate stored selection from a current registry.
+
 ### Historical compatibility classes
 
 - **Execution compatibility:** a supported record may execute only under its
@@ -218,6 +227,9 @@ corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 
 Mandate lifecycle DTO families, validation and revision/sequence rules are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md). Detailed envelope, canonicalization, digest and decoder rules are owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+
+Registry, direct-admission, WorkspaceRoot, and tool-loop DTO semantics are owned
+by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
 
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).

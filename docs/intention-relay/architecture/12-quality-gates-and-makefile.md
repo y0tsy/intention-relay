@@ -325,3 +325,10 @@ must update the existing machine-readable architecture, test-target, coverage,
 and feature policies together with its focused expected-failure architecture
 fixtures and outcome evidence. Research or a reconciliation row alone is not a
 quality-policy declaration.
+
+The post-M4 tool-registry and Mandate tool-loop package is likewise
+documentation-only. It activates no crate, test target, coverage tier, feature
+combination, protocol implementation, migration, quality tool, or Makefile
+target. A later activating change must add its exact owners, test targets,
+coverage/features, expected-failure architecture fixtures, and outcome evidence
+atomically with production work.

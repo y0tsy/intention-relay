@@ -165,3 +165,15 @@ Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocki
 - which core tools ship in the first vertical slice;
 - exact tool capability taxonomy;
 - risk categories and confirmation policy for `execute`, network, and destructive file actions.
+
+## Post-M4 Mandate tool boundary
+
+The v1 ordinary containment and confirmation rules above remain authoritative
+for ordinary/M3/M4 behavior. Future Mandate execution intentionally differs:
+WorkspaceRoot is a required default base/CWD with safe observation, not a path
+containment authority, and compatible frozen active descriptors admit without
+ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
+recreate discretionary Mandate authorization. The fixed registry, descriptor
+revisions, direct admission, and loop details are owned by [Tool registry and
+direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
+not change current tools or activate future slots.

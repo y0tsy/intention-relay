@@ -33,8 +33,8 @@ contradiction register.
 
 | Family | Concept anchor family | Disposition | Owner/delivery bucket |
 | --- | --- | --- | --- |
-| TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Defer, with CON-001/002 explicit | tools and tool-loop packages |
-| MTL-001..018 | model-tool loop | Defer | model-tool-loop package |
+| TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Adopt for future Mandate execution; ordinary behavior preserved | `15-tool-registry-and-mandate-tool-loop.md` |
+| MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
 | BRG-001..014, KER-001..014 | bridge and IPython | Defer | gateway/programmable-runtime packages |
 | CHD-001..018, VER-001..011, ACT-001..010 | child graph, verifier, activity | Defer | child/verifier/activity packages |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
@@ -42,6 +42,23 @@ contradiction register.
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Defer | provider evolution package |
 | FRK-001..018 | session forks | Defer | branching package |
 | EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | Exclude or Defer as recorded in concept | explicit later decision only |
+
+## Tool registry and Mandate-loop topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| TLS-002 | The registry has fourteen canonical slots with immutable intended owners. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Missing, reordered, reassigned, or duplicate slots block before effect. | Tool-loop | canonical goldens planned |
+| TLS-003 | Only composition assembles active descriptors into the one daemon-owned capability path. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | A private registry or direct primitive bypass fails before effect. | Tool-loop | architecture fixture planned |
+| TLS-004 | Reserved slots are absent from model visibility and execution. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Reserved invocation has known pre-effect `ExecutionUnavailable`. | Tool-loop | slot-state fixture planned |
+| TLS-005 | Descriptor and registry revisions are immutable canonical meaning. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Current registry/readiness cannot rebuild stored meaning. | Tool-loop | decode goldens planned |
+| TLS-006 | Direct tool selection freezes only active descriptors supplied to the model. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Unknown/corrupt selection blocks dependent work before effect. | Tool-loop | no-fallback fixture planned |
+| TLS-007 | Effect profiles are descriptive, non-authorizing, and not sandbox claims. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Profiles cannot create confirmation or OS-authority claims. | Tool-loop | policy fixture planned |
+| TLS-008 | Mandate WorkspaceRoot is default base/CWD with safe observation; ordinary containment remains unchanged. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Explicit Mandate paths are not denied solely by location. | Tool-loop | cross-kind path fixture planned |
+| TLS-009 | Compatible frozen active Mandate descriptors admit without confirmation, corridor, quota, or root-origin gate. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Only typed incompatibility or actual unavailability can refuse pre-effect work. | Tool-loop | admission matrix planned |
+| MTL-001 | Tool-calling model steps atomically record one ordered group before effects. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Invalid groups fail before local work. | Tool-loop | transaction fixture planned |
+| MTL-002 | Calls admit independently, may complete concurrently, and next model context preserves call order. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Completion order cannot change semantic exchange order. | Tool-loop | concurrency fixture planned |
+| MTL-003 | Started unknown tool effects pause only the owning Mandate; recovery never repeats work. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No next step, retry, attach, or resume follows uncertainty. | Tool-loop | crash matrix planned |
+| MTL-004 | Tool-loop delivery is separately negotiated and fails closed for unsupported peers. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No partial replay/history/live projection. | Tool-loop | negotiation fixture planned |
 
 ## Coverage ledger
 
