@@ -70,8 +70,9 @@ flowchart TD
 3. [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
 4. [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
 5. [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md)
-6. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-7. [VFR and Headroom](06-vfr-and-headroom.md)
+6. [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
+7. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+8. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -191,3 +192,12 @@ is the sole detailed authority for future fixed registry identity, frozen tool
 selection, Mandate direct admission, Mandate WorkspaceRoot semantics, tool-loop
 facts, and tool-effect recovery. It preserves ordinary M3/M4 tool behavior and
 does not activate a registry, protocol, schema, or runtime implementation.
+
+### Scheduler owner
+
+[Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
+is the sole detailed authority for future durable candidate reevaluation,
+readiness/capacity evidence, scheduler handoff, and recovery admission gating.
+Architecture 13 retains Mandate lifecycle, reason validity/order, and atomic
+fresh admission. This does not activate timer topology, a scheduler crate, or a
+protocol implementation.

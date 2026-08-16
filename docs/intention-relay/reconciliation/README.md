@@ -85,3 +85,11 @@ Mandate WorkspaceRoot policy, tool-loop facts, and effect recovery. It resolves
 CON-001 and CON-002 only for future Mandate execution; ordinary M3/M4 behavior
 remains unchanged. [Decision 0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md)
 records the cross-document decision.
+
+## Scheduler and readiness authority
+
+[Mandate scheduler and readiness-driven admission](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
+now owns durable candidate reevaluation, typed readiness/capacity evidence, and
+handoff to lifecycle-owned fresh admission. It does not replace the Mandate
+lifecycle, execution-meaning, or tool-loop owners. [Decision 0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md)
+records the cross-document decision.

@@ -153,6 +153,9 @@ remain activation-time projections.
 | Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
 | Public commands, queries, events, and future negotiated replay | Protocol | No runtime, SDK, storage, or adapter resources. |
 | Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
+| Scheduler readiness/candidate values | Domain/types | Typed, credential-free operational evidence. |
+| Scheduler reevaluation and admission orchestration | Application/runtime | Lifecycle-owned admission only; no second runtime. |
+| Scheduler observations and decision evidence | Storage | Atomic persistence without resource leaks. |
 | Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
 | Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
 | Presentation and typed user input | Adapters | No local business authority or bypass. |
@@ -161,6 +164,9 @@ Future child, verifier, MCP, Skill, kernel, provider-profile, and fork
 boundaries remain separate delivery decisions. Any split must preserve this
 acyclic direction, DTO-first contracts, a declared test target, a coverage tier,
 and isolated architecture fixtures before production activation.
+
+Architecture 16 creates no scheduler crate or dependency edge. Exact crate
+allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md)
 and the [ownership map](../reconciliation/ownership-and-dependency-map.md).

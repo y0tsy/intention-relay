@@ -297,3 +297,14 @@ preservation, no-current-state reconstruction, and fake-secret absence. These
 are future obligations, not claims that a runtime or test target exists; the
 detailed portfolio is owned by [Tool registry and direct Mandate tool
 loop](15-tool-registry-and-mandate-tool-loop.md).
+
+## Mandate scheduler and readiness evidence
+
+Before implementation, future scheduler work requires durable-reason versus
+observation/candidate/admission fixtures; deterministic ordering; unavailable
+reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
+races; transaction fault injection; recovery-before-scheduling; no-resume;
+ordinary queue and M4 preservation; no-current-state reconstruction; negotiated
+replay; and fake-secret/resource absence. These are future obligations, not
+current tests or targets. The detailed portfolio is owned by [Mandate scheduler
+and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).

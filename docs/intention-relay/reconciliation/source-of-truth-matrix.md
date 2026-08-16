@@ -35,6 +35,7 @@ contradiction register.
 | --- | --- | --- | --- |
 | TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Adopt for future Mandate execution; ordinary behavior preserved | `15-tool-registry-and-mandate-tool-loop.md` |
 | MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
+| SCH-001..012 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval semantics deferred | `16-mandate-scheduler-and-readiness-driven-admission.md` |
 | BRG-001..014, KER-001..014 | bridge and IPython | Defer | gateway/programmable-runtime packages |
 | CHD-001..018, VER-001..011, ACT-001..010 | child graph, verifier, activity | Defer | child/verifier/activity packages |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
@@ -59,6 +60,23 @@ contradiction register.
 | MTL-002 | Calls admit independently, may complete concurrently, and next model context preserves call order. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Completion order cannot change semantic exchange order. | Tool-loop | concurrency fixture planned |
 | MTL-003 | Started unknown tool effects pause only the owning Mandate; recovery never repeats work. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No next step, retry, attach, or resume follows uncertainty. | Tool-loop | crash matrix planned |
 | MTL-004 | Tool-loop delivery is separately negotiated and fails closed for unsupported peers. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No partial replay/history/live projection. | Tool-loop | negotiation fixture planned |
+
+## Scheduler and readiness topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SCH-001 | One daemon-owned logical scheduler coordinates durable Mandate reasons; it is not a second runtime or authority. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Wakeups/task state cannot mutate lifecycle directly. | Trigger scheduler | architecture fixture planned |
+| SCH-002 | Scheduler candidates derive only from durable eligible reasons and current Mandate state. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | No synthetic queue item or current-state reconstruction. | Trigger scheduler | candidate fixture planned |
+| SCH-003 | Selection uses the explicit-user-first total order owned by Mandate lifecycle. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Ties are deterministic by time, MandateId, and ReasonId. | Trigger scheduler | ordering fixture planned |
+| SCH-004 | Readiness/capacity is typed operational evidence, not authority or immutable meaning. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Unknown/stale evidence fails closed; current resources cannot repair meaning. | Trigger scheduler | readiness matrix planned |
+| SCH-005 | Unavailability retains the exact reason and creates no RunId, reservation, retry counter, or quota. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | A later observation may reevaluate, never resume old work. | Trigger scheduler | capacity fixture planned |
+| SCH-006 | Readiness restoration wakes reevaluation, not direct launch or fabricated trigger. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Duplicate/lost wakeups cannot lose or duplicate work. | Trigger scheduler | wakeup fixture planned |
+| SCH-007 | Lifecycle-owned admission atomically revalidates sequence, revision, reason, meaning, and readiness. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Conflict loser rereads; no external effect occurs in transaction. | Trigger scheduler | fault/race fixture planned |
+| SCH-008 | Recovery completes before fresh scheduler admission and never resumes old work. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Pre-crash live readiness is not trusted. | Trigger scheduler | recovery fixture planned |
+| SCH-009 | Scheduler replay is Mandate-local, negotiated, and fail-closed. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Replay never repeats wakeups, admissions, or effects. | Trigger scheduler | protocol fixture planned |
+| SCH-010 | Scheduler introduces no product ceiling, lease, claim, reservation, or fairness entitlement. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Retained numeric bounds require intrinsic/capacity classification. | Trigger scheduler | taxonomy fixture planned |
+| SCH-011 | M3 queue promotion and M4 scheduling behavior remain unchanged. | historical-only | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Queue tickets never become Mandate reasons. | Trigger scheduler | historical fixture planned |
+| SCH-012 | Calendar/interval/time-zone/DST semantics and worker topology remain deferred. | future Mandate | Defer | Later scheduler package | No historical harness rule silently governs Mandates. | Later scheduler work | later decision |
 
 ## Coverage ledger
 

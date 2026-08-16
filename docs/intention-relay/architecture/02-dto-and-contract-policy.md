@@ -231,5 +231,13 @@ Mandate lifecycle DTO families, validation and revision/sequence rules are owned
 Registry, direct-admission, WorkspaceRoot, and tool-loop DTO semantics are owned
 by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
 
+Future scheduler families include typed readiness observations, candidate views,
+capacity-unavailable outcomes, and scheduler admission requests. They are closed,
+credential/resource-free DTOs: no SDK health values, handles, task identities,
+opaque timer objects, raw paths, or current-state-derived execution meaning may
+cross a boundary. Unknown scheduler/readiness variants block dependent admission
+and cannot synthesize ordinary queue or Mandate state. Detailed semantics are
+owned by [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).

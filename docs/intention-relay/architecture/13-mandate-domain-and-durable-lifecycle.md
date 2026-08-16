@@ -116,6 +116,13 @@ Eligible selection is total: explicit user start/continuation reasons first,
 then ascending `first_observed_at`, `MandateId`, and `ReasonId`. This ordering
 is deterministic but does not reserve capacity or guarantee execution.
 
+Architecture 16 owns readiness observations, candidate reevaluation, and
+cross-Mandate scheduler coordination. This document retains reason validity,
+captured revision, total ordering key, lifecycle eligibility, conflict
+precedence, and the atomic admission transition. Scheduler candidates and
+readiness observations cannot mutate lifecycle except by invoking that fresh
+admission contract.
+
 ## Fresh admission and immutable meaning
 
 Admission is legal only when the Mandate is `Active`, has no non-terminal
@@ -238,11 +245,11 @@ This document resolves the aggregate separation in `CON-004` and applies the
 Foundation limit taxonomy to Mandate lifecycle. Architecture 15 resolves
 `CON-001` WorkspaceRoot and `CON-002` direct descriptor admission for future
 Mandate calls only. Lifecycle retains fresh-admission eligibility and uncertainty
-ownership; it does not duplicate tool-loop rules.
+ownership; it does not duplicate tool-loop or scheduler rules.
 
 It does not define tool loops, registry detail, child graph, verifier authority,
 MCP lifecycle, Goal/Skill behavior, provider profiles/Responses/reasoning,
-bridge/IPython, forks, activity/UI, scheduler process topology, schema,
+bridge/IPython, forks, activity/UI, scheduler topology, schema,
 migrations, crates, Cargo, or implementation policy activation.
 
 ## Required evidence before implementation

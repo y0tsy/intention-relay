@@ -176,6 +176,11 @@ capacity/readiness. Availability may refuse/defer pre-effect work but never
 mutates, reroutes or rebuilds meaning. Incompatible/corrupt meaning blocks
 before effect.
 
+Scheduler readiness is live operational evidence outside canonical execution
+meaning. It may defer fresh admission but cannot repair, reroute, replace, or
+reconstruct frozen meaning from a current scheduler, time zone, configuration,
+registry, provider, model, or resource state.
+
 ### Replay compatibility
 
 Readable history may replay while execution is unavailable. M3 session replay
@@ -249,11 +254,12 @@ only through typed IDs. Existing M3/M4 protocol DTOs are not widened here.
 ## Dependencies and non-goals
 
 This document does not define SQL/wire implementation, provider
-profiles/Responses, scheduler,
+profiles/Responses, scheduler topology,
 child graph, verifier workflow, MCP, Skills/Goals, bridge/kernel, forks, UI,
 crates, Cargo, feature/coverage policy, Makefile/CI or M4 changes. CON-003 and
 provider evolution remain later-owner work. Tool-loop/registry, WorkspaceRoot,
-and direct-admission policy are owned by architecture 15.
+and direct-admission policy are owned by architecture 15; scheduler/readiness
+semantics are owned by architecture 16.
 
 ## Required evidence before implementation
 
