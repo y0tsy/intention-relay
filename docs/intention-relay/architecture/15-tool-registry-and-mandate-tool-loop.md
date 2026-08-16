@@ -155,3 +155,7 @@ A later activating specification must define exact crate owners, test targets, c
 - before-start/started/known/unknown cancellation, crash and restart outcomes, no retries/reattach/resume, Mandate uncertainty pause, and exact fresh reconciliation;
 - negotiated/unnegotiated replay, paging, cursor capture, live-frame gating, resync, and historical M4 denial preservation; and
 - fake-secret, unsafe-path, raw-corrupt-byte, SDK-resource, and provider-native identifier absence from identities, persistence, protocol, logs, diagnostics, adapters, and model projections.
+
+Architecture 20 kernel host requests consume this document's frozen descriptor
+selection, direct admission, `ToolCallId`, start/result facts, and publication
+path. Kernel execution is not a new ToolId, registry, or primitive bypass.

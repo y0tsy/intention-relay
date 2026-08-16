@@ -160,13 +160,18 @@ remain activation-time projections.
 | Child/verifier orchestration and target mutation | Application/runtime | Lifecycle-owned transitions and DTO-only storage. |
 | MCP source, capability, selection, and invocation values | Domain/types | Typed, credential-free values and invariants. |
 | MCP discovery/invocation orchestration and recovery | Application/runtime | One registry path and DTO-only storage. |
+| Kernel IDs, selections, checkpoint metadata, and safe projections | Domain/types | Typed, credential-free values and no Python/Jupyter resources. |
+| Kernel epoch/cell/checkpoint lifecycle and recovery | Application/runtime | Bridge/tool-loop consumption only; no lifecycle or registry authority. |
+| Private Python/Jupyter sidecar translation | Private daemon adapter | No public resource types, no second listener, and no direct primitive path. |
 | Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
 | Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
 | Presentation and typed user input | Adapters | No local business authority or bypass. |
 
-Architectures 17 and 18 own future child/verifier and MCP semantics but activate
-no crate or dependency edge. Skill, kernel, provider-profile, and fork boundaries
-remain separate delivery decisions. Any split must preserve this
+Architectures 17, 18, and 20 own future child/verifier, MCP, and kernel
+semantics but activate no crate or dependency edge. Kernel activation must split
+typed contracts, lifecycle orchestration, and private Python/Jupyter translation
+without exposing implementation resources. Skill, provider-profile, and fork
+boundaries remain separate delivery decisions. Any split must preserve this
 acyclic direction, DTO-first contracts, a declared test target, a coverage tier,
 and isolated architecture fixtures before production activation.
 

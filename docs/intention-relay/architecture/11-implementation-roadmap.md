@@ -711,3 +711,34 @@ migration, feature profile, quality-policy target, or implementation milestone.
   remain unchanged; and
 - kernel lifecycle, RLM executor topology, provider evolution, Skills/Goals,
   session forks, activity/UI, schema, and activation remain excluded.
+
+## Post-M4 run-scoped IPython kernel lifecycle package
+
+**Documentation-only package.** It depends on Mandate lifecycle, execution
+meaning, fixed tool loop, scheduler recovery, child/verifier authority, MCP
+lifecycle, and Gateway/RLM bridge. It creates [the authoritative kernel
+contract](20-ipython-kernel-lifecycle.md) and decision 0012, and activates no
+crate, Python/Jupyter dependency, listener, protocol implementation, schema,
+migration, feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- run-scoped private kernel epochs, foreground cells, safe output, verified
+  checkpoints, background-task restrictions, cancellation, recovery, and
+  no-resume semantics;
+- immutable kernel selection and checkpoint restore policy under existing
+  execution meaning;
+- bridge-only host requests and child/verifier/MCP non-authority boundaries; and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- KER-001..018 have one owner and compatibility/failure rule;
+- live namespaces, grants, tasks, checkpoints, and output cannot become Mandate,
+  scheduler, registry, child, verifier, MCP, or reconciliation authority;
+- every host request uses the existing bridge and frozen tool-loop path;
+- M3/M4, M4 tool denial, retained IPython/RLM history, and ordinary protocol
+  behavior remain unchanged; and
+- process implementation, dependencies, resource values, harness, Skills/Goals,
+  provider evolution, forks, activity/UI, schema, and activation remain excluded.

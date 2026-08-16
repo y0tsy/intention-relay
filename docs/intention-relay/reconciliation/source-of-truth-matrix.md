@@ -37,7 +37,7 @@ contradiction register.
 | MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
 | SCH-001..012 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval semantics deferred | `16-mandate-scheduler-and-readiness-driven-admission.md` |
 | BRG-001..014 | Gateway/RLM bridge | Adopt for future Mandate execution; historical bridge/RLM preserved | `19-mandate-gateway-rlm-bridge.md` |
-| KER-001..014 | IPython and programmable runtime | Defer | later kernel package |
+| KER-001..018 | Run-scoped IPython kernel lifecycle | Adopt for future Mandate execution; retained IPython/RLM preserved | `20-ipython-kernel-lifecycle.md` |
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
 | ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
@@ -81,6 +81,29 @@ contradiction register.
 | BRG-012 | Bridge-carried `sub_agent` uses architecture-17 child creation and assigns no RLM child authority. | future Mandate | Adopt | architecture 19 | No retained RLM identity becomes a Mandate edge. | Gateway/RLM bridge | child outcome planned |
 | BRG-013 | Bridge-held grants, evidence, child references, and MCP facts are non-authorizing. | future Mandate | Adopt | architecture 19 | No verifier, child, MCP, scheduler, or lifecycle authority amplification. | Gateway/RLM bridge | authority fixture planned |
 | BRG-014 | Historical M3/M4 and retained RLM records gain no bridge state or reconstructed meaning. | historical-only | Adopt | architecture 19 | Preserve bytes/meaning; readable history remains isolated. | Gateway/RLM bridge | compatibility fixture planned |
+
+## Run-scoped IPython kernel topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| KER-001 | Kernel is a private daemon-managed sidecar, not a second daemon, registry, store, scheduler, or authority. | future Mandate | Adopt | architecture 20 | Second capability path or authority fails before effect. | Kernel lifecycle | architecture fixture planned |
+| KER-002 | One live kernel epoch belongs to one admitted RunId. | future Mandate | Adopt | architecture 20 | No cross-run, child, verifier, session, project, or daemon sharing. | Kernel lifecycle | scope fixture planned |
+| KER-003 | Kernel creation is lazy and occurs only after recovery, durable reread, compatible meaning, and live availability. | future Mandate | Adopt | architecture 20 | No process on replay, queued work, or invalid meaning. | Kernel lifecycle | lifecycle fixture planned |
+| KER-004 | Kernel selection is immutable credential-free meaning; live resources are not. | future Mandate | Adopt | architecture 20 | Current kernel/process/configuration cannot repair missing meaning. | Kernel lifecycle | canonical fixture planned |
+| KER-005 | Kernel host requests consume architecture 19 and architecture 15 only. | future Mandate | Adopt | architecture 20 | No listener, ToolId, registry, primitive bypass, sequence, or result channel. | Kernel lifecycle | gateway fixture planned |
+| KER-006 | Foreground cells bind exact run, revision, step, epoch, selection, and attempt identity. | future Mandate | Adopt | architecture 20 | Python cannot choose application identities. | Kernel lifecycle | binding fixture planned |
+| KER-007 | At most one foreground cell executes per epoch; direct effects retain exact attempt evidence. | future Mandate | Adopt | architecture 20 | Cell evidence does not replace ToolCallStarted for host calls. | Kernel lifecycle | concurrency fixture planned |
+| KER-008 | Kernel output is closed safe text projection through existing durable facts. | future Mandate | Adopt | architecture 20 | Raw frames, MIME, binary, tracebacks, objects, and resources stay private. | Kernel lifecycle | projection fixture planned |
+| KER-009 | Checkpoints are private, deterministic, verified, bounded convenience state. | future Mandate | Adopt | architecture 20 | They cannot prove effects or replace durable run/tool history. | Kernel lifecycle | checkpoint fixture planned |
+| KER-010 | Checkpoints exclude grants, tasks, processes, handles, credentials, resources, and unfinished work. | future Mandate | Adopt | architecture 20 | Unsupported values are omitted; unsafe state never serializes. | Kernel lifecycle | redaction fixture planned |
+| KER-011 | Required restore fails closed; optional restore may start empty only in a new run. | future Mandate | Adopt | architecture 20 | No silent checkpoint substitution or old-run continuation. | Kernel lifecycle | restore fixture planned |
+| KER-012 | Kernel background work is private convenience and cannot schedule, create children, or retain authority. | future Mandate | Adopt | architecture 20 | Expired-grant requests fail and are never queued. | Kernel lifecycle | task fixture planned |
+| KER-013 | Cancellation and late facts cannot assert rollback or repair terminal/unknown state. | future Mandate | Adopt | architecture 20 | Started unproven work pauses only its owner. | Kernel lifecycle | race fixture planned |
+| KER-014 | Recovery rejects old sidecars and never resumes, retries, reattaches, reruns, polls, or redisplays old work. | future Mandate | Adopt | architecture 20 | Later work uses fresh RunId, epoch, grant, and operations. | Kernel lifecycle | recovery fixture planned |
+| KER-015 | Child/verifier kernel state is isolated and non-authorizing. | future Mandate | Adopt | architecture 20 | Only selected checkpoint copy may seed a child; no verifier authority transfer. | Kernel lifecycle | isolation fixture planned |
+| KER-016 | Kernel MCP work uses fixed mcp lifecycle and checkpoints contain no live MCP state. | future Mandate | Adopt | architecture 20 | Fresh work reacquires capabilities. | Kernel lifecycle | MCP fixture planned |
+| KER-017 | Kernel replay is negotiated, history-before-live, read-only, and zero-effect. | future Mandate | Adopt | architecture 20 | Unnegotiated peers fail closed. | Kernel lifecycle | protocol fixture planned |
+| KER-018 | Retained limits require intrinsic/capacity classification and historical records gain no kernel state. | future/historical | Adopt | architecture 20 | No hidden Mandate quota or synthetic history. | Kernel lifecycle | compatibility fixture planned |
 
 ## Scheduler and readiness topics
 

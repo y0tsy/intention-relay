@@ -243,4 +243,15 @@ and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admis
 and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md),
 and [0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md),
 and [0010](../decisions/0010-mandate-mcp-capability-lifecycle.md),
-and [0011](../decisions/0011-mandate-gateway-rlm-bridge.md).
+and [0011](../decisions/0011-mandate-gateway-rlm-bridge.md),
+and [0012](../decisions/0012-ipython-kernel-lifecycle.md).
+
+### 25. Kernel state is run-scoped convenience, not authority
+
+Future IPython is a private daemon-managed sidecar with one kernel epoch per
+Mandate run. A live namespace never crosses fresh admission; only an explicitly
+selected verified checkpoint may seed a replacement kernel. Kernel state,
+checkpoints, cells, background tasks, grants, and output cannot create lifecycle,
+scheduling, tool, child, verifier, MCP, or reconciliation authority. The kernel
+consumes the one Gateway/RLM and tool path and is not a sandbox or privilege
+boundary. Detailed rules are owned by architecture 20 and decision 0012.

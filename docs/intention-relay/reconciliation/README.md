@@ -120,3 +120,11 @@ safe replay, cancellation propagation, and bridge recovery. [Decision
 0011](../decisions/0011-mandate-gateway-rlm-bridge.md) records the
 cross-document decision. Reconciliation remains an index: retained RLM bridge
 material is provenance, and the bridge is not a second gateway or authority.
+
+## Run-scoped IPython kernel authority
+
+[Run-scoped IPython kernel lifecycle](../architecture/20-ipython-kernel-lifecycle.md)
+now owns future private kernel epochs, cells, checkpoints, safe projections, and
+kernel recovery. [Decision 0012](../decisions/0012-ipython-kernel-lifecycle.md)
+records the cross-document decision. Reconciliation remains an index; the kernel
+consumes the bridge and one capability path and never becomes another authority.

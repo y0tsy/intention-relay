@@ -362,3 +362,11 @@ or Makefile target. A later activating change must declare exact bridge owners,
 test targets, coverage/features, storage/wire versions, expected-failure
 architecture fixtures, redaction evidence, and Linux/Windows outcomes atomically
 with production work.
+
+The post-M4 run-scoped IPython kernel package is likewise documentation-only.
+It activates no crate, Python/Jupyter dependency, test target, coverage tier,
+feature combination, protocol implementation, listener, process, migration,
+quality tool, or Makefile target. A later activating change must declare exact
+kernel owners, dependencies, test targets, coverage/features, storage/wire
+versions, expected-failure architecture fixtures, resource-redaction evidence,
+and Linux/Windows outcomes atomically with production work.

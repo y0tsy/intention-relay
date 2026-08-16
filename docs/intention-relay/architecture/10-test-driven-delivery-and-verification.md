@@ -343,3 +343,15 @@ verifier, and MCP isolation; negotiated replay/resync and zero-effect reconnect;
 M3/M4 plus retained-RLM preservation; limit classification; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
+
+## Run-scoped IPython kernel evidence
+
+Before implementation, future kernel work requires canonical selection/checkpoint
+goldens; run-scoped lazy epoch/no-sharing fixtures; required/optional restore and
+no-current-state reconstruction; cell/host-request/checkpoint fault injection;
+cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and
+stale-grant/task tests; child/verifier/MCP isolation; negotiated replay/resync;
+historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
+Python/Jupyter/resource absence. These are future obligations, not current tests
+or targets. The detailed portfolio is owned by [Run-scoped IPython kernel
+lifecycle](20-ipython-kernel-lifecycle.md).

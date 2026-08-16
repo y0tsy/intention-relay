@@ -283,3 +283,8 @@ A later implementation specification must define fixtures for:
 Before code, the activating package must declare exact crate owners, test
 targets, coverage tiers, feature profiles, and expected-failure architecture
 fixtures, then satisfy `make quick` and `make verify`.
+
+Architecture 20 owns run-scoped kernel lifecycle. Kernel state creates neither a
+trigger reason nor a `RunId`; an unproven started kernel effect uses this
+document's uncertainty law, and later work requires fresh admission and a new
+kernel epoch.

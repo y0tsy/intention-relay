@@ -258,3 +258,13 @@ socket, or process resource. Architecture 18 owns their semantics; architecture
 
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).
+
+## Post-M4 kernel DTO boundary
+
+Future kernel DTOs include typed kernel selection, epoch, execution binding,
+safe output chunk, checkpoint metadata, restoration outcome, and host-request
+references. They are closed, credential-free families: Python/Jupyter objects,
+raw frames, checkpoint payloads, grants, credentials, endpoints, handles,
+process resources, raw tracebacks, and caller-selected application identities
+never cross a public boundary. Architecture 20 owns their semantics; architecture
+14 owns canonical framing, digest, decoder, and compatibility.

@@ -296,3 +296,9 @@ A later implementation specification must define:
 
 Before code, declare exact crate/test-target/coverage/feature/architecture
 fixtures, then require `make quick`, `make verify` and Linux/Windows CI.
+
+Architecture 20 owns kernel nested-selection field semantics. A selected kernel
+contract and checkpoint policy are canonical meaning; live epochs, namespaces,
+processes, grants, tasks, checkpoint payloads, and current resources are not. No
+path may reconstruct missing kernel meaning from current kernel/process/checkpoint
+state.

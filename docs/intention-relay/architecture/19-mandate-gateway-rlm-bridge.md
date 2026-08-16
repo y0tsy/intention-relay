@@ -221,9 +221,10 @@ legacy bytes under architecture 14, but cannot rewrite, normalize, make old work
 Mandate-executable, or synthesize future state.
 
 This document depends on architectures 13--18 and decisions 0001, 0002, 0003,
-0004, 0006, 0007, 0008, 0009, and 0010. It precedes a later IPython/kernel
-lifecycle package. It does not define kernel process/namespace/checkpoint
-lifecycle, RLM executor or recursion topology, provider evolution, Skills,
+0004, 0006, 0007, 0008, 0009, and 0010. Architecture 20 owns kernel
+process/namespace/checkpoint lifecycle while this document retains grants,
+operation correlation, ingress, delivery, and bridge recovery. It does not define
+kernel process/namespace/checkpoint lifecycle, RLM executor or recursion topology, provider evolution, Skills,
 Goals, context, session forks, activity/UI, direct MCP administration, SQL,
 migrations, wire tags, crates, Cargo, Makefile/CI, or production implementation.
 
