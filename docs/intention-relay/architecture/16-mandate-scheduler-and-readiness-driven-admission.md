@@ -118,7 +118,10 @@ durable observation.
 
 Readiness restoration is a reevaluation cause for an existing reason, not a
 new reason or direct launch, unless a later explicit trigger-source contract
-defines it as causal work. Wakeups are non-authoritative hints: trigger capture,
+defines it as causal work. Graph messages, child summaries, verifier verdicts,
+and cascade facts are likewise durable reevaluation inputs only: they cannot
+invent a reason, select authority, or directly launch work. Wakeups are
+non-authoritative hints: trigger capture,
 lifecycle changes, terminal dispositions, readiness changes, recovery completion,
 and a future safety scan may prompt a durable reread. Lost or duplicate wakeups
 cannot lose or duplicate work.
@@ -196,9 +199,10 @@ historical record gains scheduler facts.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 14, and 15 and decisions 0001, 0002,
-0006, and 0007. It does not define calendar/interval syntax, time-zone/DST
-semantics, timer or worker topology, child/verifier, MCP, bridge/IPython,
+This document depends on architectures 13, 14, 15, and 17 and decisions 0001,
+0002, 0006, 0007, and 0009. It does not define calendar/interval syntax,
+time-zone/DST semantics, timer or worker topology, child/verifier semantics,
+MCP, bridge/IPython,
 Skills/Goals/context, provider evolution, UI, distributed coordination, leases,
 reservations, quotas, schema, migrations, crates, Cargo, Makefile/CI, or
 production implementation.

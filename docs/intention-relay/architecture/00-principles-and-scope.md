@@ -206,10 +206,20 @@ reserve capacity, or create hidden quotas/retry counters. Unavailability retains
 the reason, and recovery completes before fresh admission. Detailed rules are
 owned by architecture 16.
 
+
+### 22. Child edges and verifier authority are explicit
+
+Future child work uses immutable direct Mandate edges and credential-free
+delegation snapshots. Parenthood grants only explicitly selected direct-child
+controls and no implicit lifecycle, scheduler, tool, or verifier authority. A
+verifier may mutate only an explicitly named target under separately user-issued
+target-scoped authority, immutable baseline, and qualifying evidence. Detailed
+rules are owned by architecture 17.
 The authoritative source and package boundaries for these principles are the
 [Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
 [0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md),
 and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md),
 and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md),
-and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md).
+and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md),
+and [0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).

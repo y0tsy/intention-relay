@@ -300,8 +300,9 @@ The detailed Mandate lifecycle, trigger ordering, fresh admission, uncertainty,
 and recovery contract is owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md).
 Scheduler semantics are owned by architecture 16; concrete timer/process
 topology, event variants, protocol delivery, and schema design remain later
-packages. Verifier authority and child graph remain deferred. Existing run states
-and M3/M4 recovery behavior remain unchanged.
+packages. Child graph and verifier authority semantics are owned by architecture
+17; their SQL, migrations, event variants, and protocol delivery remain
+deferred. Existing run states and M3/M4 recovery behavior remain unchanged.
 
 See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
 and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
@@ -336,3 +337,15 @@ readiness atomically; no scheduler action occurs in that transaction. Scheduler
 admission begins only after recovery, and pre-crash live readiness is never
 trusted. This adds no current table, event, migration, or ordinary queue change.
 See [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+
+## Post-M4 child/verifier storage consequence
+
+Future child creation atomically binds the child Mandate, immutable direct edge,
+delegation snapshot, parent tool result, and their affected projections/events/
+snapshots before publication. Future verifier mutation atomically validates its
+authority and frozen target baseline with its applied or rejected result. These
+facts remain separate from Session sequence, Run cursor, M3 queue tickets, and
+M4 replay. Recovery rebuilds only supported graph projections and never resumes
+child/verifier external work. This adds no current table, event, migration, or
+historical reinterpretation. Detailed semantics are owned by [Mandate child
+graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md).

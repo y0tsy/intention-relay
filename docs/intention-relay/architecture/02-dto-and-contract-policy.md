@@ -239,5 +239,14 @@ cross a boundary. Unknown scheduler/readiness variants block dependent admission
 and cannot synthesize ordinary queue or Mandate state. Detailed semantics are
 owned by [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
 
+Future child/verifier families include typed child-edge, `ParentMandateId`,
+delegation snapshot, direct-edge control/message, terminal-summary, verifier
+authority/revision, immutable target-set, audit baseline/evidence/verdict,
+target-mutation, and reconciliation values. They are credential-free, closed,
+versioned families that neither widen historical records nor grant authority by
+relationship, prompt, evidence, or current state. Architecture 17 owns their
+semantics; architecture 14 retains canonical framing, digest, decoder, and
+compatibility ownership.
+
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).

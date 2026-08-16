@@ -93,3 +93,12 @@ now owns durable candidate reevaluation, typed readiness/capacity evidence, and
 handoff to lifecycle-owned fresh admission. It does not replace the Mandate
 lifecycle, execution-meaning, or tool-loop owners. [Decision 0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md)
 records the cross-document decision.
+
+## Child graph and delegated verifier authority
+
+[Mandate child graph and delegated verifier authority](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md)
+now owns future immutable child edges, direct-parent controls, graph
+terminalization, and separately issued target-scoped verifier authority.
+[Decision 0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md)
+records the cross-document decision. Reconciliation remains an index and does
+not duplicate those semantics or amend M3/M4 or retained RLM history.

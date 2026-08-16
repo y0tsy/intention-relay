@@ -37,7 +37,8 @@ contradiction register.
 | MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
 | SCH-001..012 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval semantics deferred | `16-mandate-scheduler-and-readiness-driven-admission.md` |
 | BRG-001..014, KER-001..014 | bridge and IPython | Defer | gateway/programmable-runtime packages |
-| CHD-001..018, VER-001..011, ACT-001..010 | child graph, verifier, activity | Defer | child/verifier/activity packages |
+| CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
+| ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
 | MCP-001..016 | Mandate MCP lifecycle | Defer | MCP package |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Defer | provider evolution package |
@@ -77,6 +78,34 @@ contradiction register.
 | SCH-010 | Scheduler introduces no product ceiling, lease, claim, reservation, or fairness entitlement. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Retained numeric bounds require intrinsic/capacity classification. | Trigger scheduler | taxonomy fixture planned |
 | SCH-011 | M3 queue promotion and M4 scheduling behavior remain unchanged. | historical-only | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Queue tickets never become Mandate reasons. | Trigger scheduler | historical fixture planned |
 | SCH-012 | Calendar/interval/time-zone/DST semantics and worker topology remain deferred. | future Mandate | Defer | Later scheduler package | No historical harness rule silently governs Mandates. | Later scheduler work | later decision |
+
+## Child graph and verifier topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CHD-001 | `sub_agent` creates a durable child Mandate, not a child run or queue item. | future Mandate | Adopt | architecture 17 | No ordinary queue or retained RLM reinterpretation. | Child/verifier | creation outcome planned |
+| CHD-002 | Child creation atomically binds Mandate, edge, delegation, result, projections, events, snapshots, and idempotency. | future Mandate | Adopt | architecture 17 | Commit all or nothing; publish after reread. | Child/verifier | fault injection planned |
+| CHD-003 | Every child has one immutable direct parent and root graph identity. | future Mandate | Adopt | architecture 17 | Edges, not projections, are authority. | Child/verifier | topology fixture planned |
+| CHD-004 | Self-link, cycle, reparent, detach, merge, and cross-graph relations reject. | future Mandate | Adopt | architecture 17 | Reject before mutation/effect. | Child/verifier | graph race planned |
+| CHD-005 | Delegation is immutable, canonical, credential-free, and non-inheriting. | future Mandate | Adopt | architecture 17 | Current parent state cannot repair child meaning. | Child/verifier | canonical fixture planned |
+| CHD-006 | Child fresh runs bind independent immutable execution meaning. | future Mandate | Adopt | architecture 17 | No live resource/permission/effect inheritance. | Child/verifier | no-fallback fixture planned |
+| CHD-007 | Parenthood grants only closed direct-child controls. | future Mandate | Adopt | architecture 17 | No verifier/general lifecycle/indirect authority. | Child/verifier | authority matrix planned |
+| CHD-008 | Direct-edge messages are typed, ordered, durable, and non-scheduling. | future Mandate | Adopt | architecture 17 | No RunId, trigger, or direct launch. | Child/verifier | message fixture planned |
+| CHD-009 | Parent completion requires required descendant terminal evidence. | future Mandate | Adopt | architecture 17 | Child result never implicitly mutates parent. | Child/verifier | terminalization fixture planned |
+| CHD-010 | Daemon safety cascade is durable and grants no indirect authority. | future Mandate | Adopt | architecture 17 | Revalidate graph epoch before completion. | Child/verifier | cascade race planned |
+| CHD-011 | Child uncertainty remains child-local and recovery never resumes old work. | future Mandate | Adopt | architecture 17 | No fabricated parent uncertainty or replay. | Child/verifier | recovery matrix planned |
+| CHD-012 | Historical M3/M4 and retained RLM records gain no child graph state. | historical-only | Adopt | architecture 17 | Preserve bytes/meaning and fail closed. | Child/verifier | historical fixture planned |
+| VER-001 | Verifier mutation requires separately issued, revisioned, target-scoped authority. | future VerifierMandate | Adopt | architecture 17 | Prompt, relation, verdict, and evidence are non-authorizing. | Child/verifier | authority fixture planned |
+| VER-002 | Target sets are explicit, immutable, non-self, and never relationship-expanded. | future VerifierMandate | Adopt | architecture 17 | Child work cannot relay or amplify authority. | Child/verifier | target-set fixture planned |
+| VER-003 | Audit binds immutable authority, target baseline, contract, evidence, and verdict. | future VerifierMandate | Adopt | architecture 17 | Current state cannot repair a stale audit. | Child/verifier | baseline fixture planned |
+| VER-004 | Missing, stale, revoked, expired, consumed, corrupt, or unsupported authority fails before mutation. | future VerifierMandate | Adopt | architecture 17 | Readable history remains isolated where supported. | Child/verifier | failure matrix planned |
+| VER-005 | Only named operations may mutate a target under their lifecycle preconditions. | future VerifierMandate | Adopt | architecture 17 | No implicit pause/resume or live-run rewrite. | Child/verifier | operation matrix planned |
+| VER-006 | Mutation atomically validates authority, baseline, evidence, target state, and idempotency. | future VerifierMandate | Adopt | architecture 17 | Changed reuse fails before consumption/mutation. | Child/verifier | fault/race fixture planned |
+| VER-007 | User lifecycle/revision/reconciliation and authority commands win verifier conflicts. | future VerifierMandate | Adopt | architecture 17 | Loser rereads without merge or changed retry. | Child/verifier | precedence race planned |
+| VER-008 | Exact delegated reconciliation names the uncertainty and yields only fresh Active or Stopped. | future VerifierMandate | Adopt | architecture 17 | No rollback, replay, or safe-repeat claim. | Child/verifier | reconciliation fixture planned |
+| VER-009 | Verifier unknown effect pauses only the verifier and recovery replays nothing. | future VerifierMandate | Adopt | architecture 17 | Target remains untouched. | Child/verifier | recovery fixture planned |
+| VER-010 | Child/verifier delivery is negotiated and fails closed. | future Mandate | Adopt | architecture 17 | Replay is read-only and no partial ordinary projection appears. | Child/verifier | protocol fixture planned |
+| VER-011 | Historical records gain no verifier authority, audit, verdict, or mutation state. | historical-only | Adopt | architecture 17 | Preserve M3/M4 and retained RLM meaning. | Child/verifier | compatibility fixture planned |
 
 ## Coverage ledger
 
