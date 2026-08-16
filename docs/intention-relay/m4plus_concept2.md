@@ -1462,6 +1462,7 @@ MandateChildDelegationSnapshotDto
   child_scope
   child_mode
   frozen_goal_context_references
+  selected_skill_references
   typed_provenance_references
   required_evidence_contract_references
   continuation_configuration
@@ -2357,6 +2358,12 @@ canonical target-snapshot digest, and immutable bounds. It contains no full
 memory, skill, role, summary, credential, provider value, current machine
 state, raw transcript, grant, process resource, or implementation handle.
 
+For Factory-aligned Skills, each selected card/revision is represented by the
+exact `SkillSelectionV1` selected under the frozen target snapshot. A card-only
+selection does not disclose its body, while a later body or supplement disclosure
+adds only the corresponding frozen reference. A selection never re-resolves the
+effective origin/catalog or substitutes a current card after admission.
+
 The admission transaction validates the selected goal and session link, the
 complete target snapshot, all required references and bounds, exact provider
 selection, registry revision, and applicable programmatic-caller policy. It
@@ -2643,6 +2650,238 @@ narrow its task, class, context/result limits, or permitted tool subset. It
 cannot add a tool, increase a class, widen a scope, bypass a gate, change a
 provider, or weaken policy. Skill and role cards are discovered first; their
 full bounded records require explicit disclosure in the active run.
+
+#### Factory-aligned Skill model
+
+This selected direction adopts the Factory Droid Skill interaction model: a
+reusable workflow has a mandatory `SKILL.md`-equivalent entry record, validated
+frontmatter, an instructional body, and optional supporting resources. Its
+required `name` and `description` are the routing surface: the description
+states the action, trigger, and boundary by which a model or user can select
+the Skill. A Skill is distinct from always-on instructions, a user command, a
+delegated agent, a hook, an MCP server, and a registered tool.
+
+```text
+SkillDto
+  skill_id
+  canonical_name
+  origin
+  owner_scope
+  lifecycle_state
+  active_revision
+  safe_card
+  provenance
+  canonical_skill_digest
+
+SkillRevisionDto
+  skill_id
+  revision
+  frontmatter
+  textual_body_reference
+  supplemental_resource_references
+  typed_reference_set
+  replacement_reference_when_present
+  rollback_reference_when_present
+  canonical_revision_digest
+
+SkillFrontmatterV1
+  name
+  description
+  allowed_tool_ids
+  enabled
+  user_invocable
+  model_invocable
+  license_when_present
+  compatibility_when_present
+  validated_metadata
+  declared_version_when_present
+
+SkillCardDto
+  skill_id
+  canonical_name
+  origin
+  owner_scope
+  lifecycle_state
+  exact_revision
+  description
+  safe_purpose
+  applicability
+  model_invocable
+  user_invocable
+  allowed_tool_ids
+  content_reference
+  canonical_card_digest
+
+SkillSupplementDto
+  supplement_id
+  skill_revision_reference
+  logical_name
+  kind = Checklist | Schema | ReferenceText
+  retained_content_reference
+  canonical_supplement_digest
+```
+
+`name` is a canonical lowercase letters/numbers/hyphens identifier and
+`description` is bounded safe routing text. `allowed_tool_ids` is declarative
+review/presentation metadata only: it neither grants unavailable tools nor
+sandboxes an invocation. `enabled = false` disables all invocation;
+`user_invocable = false` suppresses the slash-like user command only; and
+`model_invocable = false` suppresses model matching only. Validated optional
+license, compatibility, version, and metadata values carry no credential,
+authority, executable, or configuration semantics. Unknown or untyped
+frontmatter cannot change behavior.
+
+Bodies and supplements are bounded immutable UTF-8 text or typed structured
+reference content only. They contain no binary/image/rich-MIME payload,
+executable code, shell template, Python package, install instruction, plug-in
+runtime, raw JSON schema, arbitrary URL/host/header, endpoint, credential,
+provider/SDK value, process/kernel/socket handle, hidden external effect, or
+dynamic registration. The only typed references are immutable memory, role,
+gate-template, registered descriptor revision, retained content, and an exact
+Mandate MCP capability revision that is already present in the same frozen
+run-local MCP selection.
+
+```text
+SkillOriginDto
+  Session
+  Goal
+  Project
+  Personal
+  ProjectPlugin
+  UserPlugin
+  Builtin
+
+SkillLifecycleStateDto
+  Enabled
+  Disabled
+  Archived
+  Revoked
+  Overridden
+  Invalid
+```
+
+The first three origins retain their selected durable IR scope. `Personal`,
+`ProjectPlugin`, `UserPlugin`, and `Builtin` preserve Factory distribution and
+resolution semantics as daemon-owned provenance, not ambient filesystem
+authority: no recursive path scan, symlink traversal, remote fetch, marketplace
+activity, executable package, MCP/server activation, or installation occurs at
+runtime. A user may explicitly import a reviewed Factory-compatible textual
+bundle; the daemon validates it and creates an immutable Skill revision with
+source identity/revision/digest, importer, and time. An import never installs or
+activates another plugin component.
+
+For one canonical name, effective resolution is `Session`, then nearest selected
+Goal, then `Project`, `ProjectPlugin`, `Personal`, `UserPlugin`, and `Builtin`.
+Same-name records across origins are not merged: the winner and every overridden
+loser remain safely queryable with identity, revision, origin, digest, and
+resolution reason. A duplicate canonical name in one origin is invalid. A
+disabled effective record prevents invocation. Explicit replacement is still
+required to replace a record's semantic content; precedence selects one exposed
+name and never invents a text conflict resolution.
+
+Discovery, selection, and invocation use progressive disclosure:
+
+```mermaid
+flowchart LR
+  R[Request] --> C[Safe cards]
+  C --> S[Select skill]
+  S --> F[Freeze revision]
+  F --> B[Disclose body]
+  B --> G[Existing gateway]
+  U[Slash request] --> F
+```
+
+The model initially receives only applicable enabled model-invocable cards,
+ordered deterministically and pinned to one catalog revision. It compares the
+request to description and applicability, then records a selected exact revision
+before the full body is disclosed. A user may invoke `/skill:<name> <arguments>`
+through an equivalent typed command when the effective Skill is enabled and
+user-invocable; the arguments are bounded user text attached to the procedure,
+not authority to widen its scope or capabilities. User and model invocation have
+identical freeze, disclosure, audit, redaction, and no-authority semantics and
+differ only in invocation origin. A custom user command of the same name remains
+its own command; it does not alter model Skill matching.
+
+Supporting resources are never implicitly loaded. The body may name a
+`SkillSupplementDto`, but only an explicit `retrieve` against that exact frozen
+reference discloses its bounded content. A Skill invocation is instructional
+context and selected references only. Every actual action still travels through
+the selected Rust-owned descriptor/gateway path. A card, body, supplement,
+frontmatter, declared tools, origin, role link, Goal, child relation, verifier,
+IPython facade, MCP server, or model request cannot create a ToolId, descriptor,
+registry entry, credential access, provider selection, authorization,
+confirmation, policy/corridor/quota, lifecycle mutation, scheduler trigger,
+child authority, gate success, or external effect.
+
+Skill text is untrusted model-visible data, not policy or executable authority.
+It may recommend already available work and may narrow a task, class,
+context/result bound, or selected descriptor subset through an exact typed role
+or delegation reference. It cannot widen any of them. A Skill reference to MCP
+cannot acquire, discover, refresh, install, register, or invoke an unselected
+capability. Python/IPython may render a selected Skill as convenience
+documentation only; it cannot import a Skill package, execute a body, or bypass
+the typed Skill disclosure and tool gateway paths.
+
+```text
+SkillSelectionV1
+  skill_id
+  exact_revision
+  origin
+  owner_scope_provenance
+  card_digest
+  body_reference_when_disclosed
+  disclosed_supplement_references
+  typed_reference_set_digest
+  invocation_origin = UserSlash | ModelMatch
+  canonical_selection_digest
+```
+
+Selection is immutable before the next affected model step or external action.
+`GoalRunSelectionV1` records exact Skill selections; ordinary runs use a
+separately versioned optional selection; Mandate and VerifierMandate execution
+meaning carries the same non-authorizing frozen Skill context. A child Mandate
+receives only exact selected Skill/role/reference values explicitly placed in
+its delegation snapshot. A verifier Skill never derives authority. Forks retain
+the exact selected card/revision/disclosure references in their immutable base
+snapshot. Retry, replay, queue promotion, and recovery validate stored selection
+and never rediscover a current Skill. A new revision, disable, archive, revoke,
+replacement, or restore affects future discovery/admission only; it never
+rewrites an admitted run, child, fork, verifier, historical selection, or body.
+
+The daemon owns one append-only Skill sequence separate from session/run cursors.
+`SkillCreated`, `SkillImported`, `SkillRevisionCreated`,
+`SkillReplacementLinked`, `SkillRolledBack`, `SkillArchived`, `SkillRestored`,
+`SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`, `SkillDisclosed`,
+`SkillSupplementDisclosed`, `SkillProposalAccepted`, and
+`SkillProposalRejected` are typed facts. Every state-changing command atomically
+commits its projection, event(s), canonical digest, idempotency binding, and
+affected snapshot(s), then publishes only after durable reread. Current cards
+and catalog snapshots accelerate queries but never reconstruct historical use.
+
+`skills_v1` is an additive negotiated capability for card-only `ListSkills`,
+exact inspect/disclosure, user invocation, lifecycle commands, and durable
+skill audit. A list captures one catalog revision, uses stable ordering and an
+opaque token, and returns `has_more`; a malformed, cross-scope, or stale token
+fails typed conflict/resynchronization. An older client keeps existing
+session/run behavior and receives `skill_capability_required` for a Skill
+operation rather than a partially understood frame. Canonical Skill records use
+new fixed tags/field tables in the selected typed-TLV/SHA-256 family. Unknown,
+corrupt, incompatible, stale, missing, archived, revoked, or over-limit content
+blocks only the dependent disclosure/model step before external work while
+unrelated history remains readable; no current card, body, origin, or live path
+is substituted.
+
+At minimum, closed failures are `skill_invalid`, `skill_disabled`,
+`skill_overridden`, `skill_not_user_invocable`, `skill_not_model_invocable`,
+`skill_scope_unavailable`, `skill_revision_stale`,
+`skill_reference_unavailable`, `skill_content_unavailable`,
+`skill_supplement_unavailable`, `skill_catalog_token_invalid`,
+`skill_catalog_conflict`, `skill_name_collision`, `skill_frontmatter_invalid`,
+`skill_content_too_large`, `skill_forbidden_content`,
+`skill_capability_reference_unavailable`, `skill_selection_incompatible`,
+`skill_capability_required`, and `skill_revision_conflict`. They reveal no full
+body, secret, private host, path, raw reference body, implementation resource,
+or external state.
 
 #### Model proposals and user confirmation
 
@@ -4658,7 +4897,9 @@ is selected atomically before provider, tool, kernel, process, MCP, network, or
 other external work. It freezes Mandate revision/trigger/service-session
 provenance, provider/model capabilities, activity, context/direct-tool/Goal
 selections, accumulated MCP selection, applicable child link/delegation and
-verifier selections, and terminal provenance references.
+verifier selections, and terminal provenance references. It additionally carries
+an optional ordered `SkillSelectionV1` set as non-authorizing instructional
+context; a verifier selection cannot derive authority from that set.
 
 It excludes policy, confirmation, corridor, quota, reservation, root-origin,
 inherited permission, retained `McpMethodCatalogSelectionV1`, current
@@ -4838,6 +5079,10 @@ compatibility policy. Canonical semantic records use fixed tags, exact field
 tables, and explicit canonicalization versions in the existing `typed-tlv`
 family. A migration may add an explicit bridge record, but it never rewrites a
 stored event, snapshot, identifier, digest, or historical behavior.
+
+Factory-aligned Skill records, frontmatter, cards, supplements, origins,
+resolution, and selections use new tags and retained Skill decoders; no M3/M4
+record or legacy run acquires a synthetic Skill state.
 
 A binary retains decoders and golden fixtures for every historical version it
 claims is executable. An unknown, corrupt, or incompatible value is never
@@ -5210,6 +5455,13 @@ tool result, policy decision, or child result blocks only the action that
 requires that reference with `fork_reference_unavailable`; it does not
 invalidate already materialized messages or permit fabrication, omission, or a
 live-ancestor substitution.
+
+A fork includes only exact frozen Skill card/revision/disclosure references
+needed by the child, never a current catalog, a live body, an ambient origin, or
+a future Skill revision. An unavailable frozen Skill blocks only the dependent
+disclosure/model step with its applicable Skill failure; it does not invalidate
+already materialized messages or permit a current-skill, fabrication, omission,
+or live-ancestor substitution.
 
 
 For every child run, context construction first validates and loads the child's
@@ -6932,6 +7184,16 @@ Any approved implementation of this concept must add evidence for:
   application, no dynamic extension or registration, redaction, archive
   retention, and explicit bounded full-record disclosure only through
   `retrieve`;
+- Factory-aligned Skill fixtures proving mandatory name/description frontmatter,
+  invocation-flag matrix, safe declared-tool metadata, text-only supplements,
+  canonical tags/digests, origin precedence and overridden/disabled/invalid
+  presentation, collision rejection, explicit import/update/revoke/archive/
+  restore, card-only discovery, user slash versus model invocation, frozen
+  body/supplement disclosure, no automatic supplement loading, no ToolId/plugin/
+  MCP/child/provider/policy authority escalation, exact ordinary/Goal/Mandate/
+  verifier/child/fork selection freezing, `skills_v1` negotiation and pagination,
+  old-client preservation, fault-atomic events/projections/snapshots, retained
+  decoder compatibility, redaction, and restart without rediscovery or resume;
 - refinement-draft fixtures proving only selected terminal goal milestones may
   create one coalesced durable draft, exact provenance/base revisions/evidence,
   no current-state effect or model visibility before typed user decision,
@@ -7064,6 +7326,10 @@ change, configuration change, or implementation.
 - [x] Complete durable child-Mandate creation, graph control, direct-edge
   messaging, aggregation, propagation, and child unknown-effect semantics
   without retained RLM product ceilings.
+- [x] Adopt the Factory-aligned Skill model: required entry/frontmatter, safe
+  discovery cards, progressive disclosure, effective-origin precedence,
+  user/model invocation flags, bounded supplements, durable selection/audit,
+  typed `skills_v1` protocol, and no executable/plugin/tool/authority bypass.
 - [ ] Reconcile this research overlay into authoritative architecture, roadmap,
   crate map, protocol/storage ownership, quality policy, decision records, and
   delivery milestones before any implementation is authorized.
