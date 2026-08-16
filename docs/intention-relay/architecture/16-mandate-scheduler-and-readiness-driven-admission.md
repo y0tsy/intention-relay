@@ -19,6 +19,7 @@ Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason
 order, conflict precedence, uncertainty, and the atomic fresh-admission
 transaction. Architecture 14 owns immutable meaning and decoder compatibility.
 Architecture 15 owns frozen tool selection and tool/resource compatibility.
+Architecture 18 owns MCP source/capability semantics and MCP-specific readiness.
 
 The scheduler owns only durable reread-based candidate evaluation, consumption
 of typed readiness evidence, deterministic selection among eligible Mandates,
@@ -83,7 +84,9 @@ observations; timestamps are diagnostic only. Equal identity/digest is
 idempotent, while changed reuse fails before mutation.
 
 The scheduler may aggregate observations but cannot manufacture, override, or
-probe an alternate resource path. Compatibility is determined from persisted
+probe an alternate resource path. MCP readiness cannot perform discovery, select
+a source/capability, start a local service, mutate a selection, or retry an MCP
+call. Compatibility is determined from persisted
 meaning; readiness reports only current live availability. A current registry,
 provider, configuration, hook, or model cannot repair missing meaning.
 
@@ -199,10 +202,10 @@ historical record gains scheduler facts.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 14, 15, and 17 and decisions 0001,
-0002, 0006, 0007, and 0009. It does not define calendar/interval syntax,
-time-zone/DST semantics, timer or worker topology, child/verifier semantics,
-MCP, bridge/IPython,
+This document depends on architectures 13, 14, 15, 17, and 18 and decisions
+0001, 0002, 0006, 0007, 0009, and 0010. It does not define calendar/interval
+syntax, time-zone/DST semantics, timer or worker topology, child/verifier
+semantics, MCP capability lifecycle, bridge/IPython,
 Skills/Goals/context, provider evolution, UI, distributed coordination, leases,
 reservations, quotas, schema, migrations, crates, Cargo, Makefile/CI, or
 production implementation.

@@ -346,3 +346,11 @@ combination, protocol implementation, migration, quality tool, or Makefile
 target. A later activating change must declare exact graph/verifier owners,
 test targets, coverage/features, expected-failure architecture fixtures, and
 outcome evidence atomically with production work.
+
+The post-M4 Mandate MCP capability package is likewise documentation-only. It
+activates no crate, test target, coverage tier, feature combination, protocol
+implementation, migration, quality tool, Makefile target, network connection,
+or local process. A later activating change must declare exact MCP owners,
+test targets, coverage/features, storage/wire versions, expected-failure
+architecture fixtures, redaction evidence, and cross-platform outcomes
+atomically with production work.

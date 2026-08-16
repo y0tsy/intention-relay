@@ -80,7 +80,7 @@ explicit disabled variants for optional selections.
 | 5 | Context projection selection | Later context package |
 | 6 | Direct tool selection | Tool registry and Mandate tool-loop package |
 | 7 | Goal context selection | Later Goal package |
-| 8 | MCP selection | MCP lifecycle package |
+| 8 | MCP selection | Architecture 18 |
 | 9 | Verifier selection presence | Architecture 17 |
 | 10 | Verifier selection when present | Architecture 17 |
 | 11 | Child-link selection presence | Architecture 17 |
@@ -104,6 +104,11 @@ verifier selection is missing, corrupt or unsupported. Architecture 17 owns
 verifier and child-link nested field semantics; it binds immutable authority,
 target/baseline, edge, and delegation references without changing this document's
 canonical/decode ownership.
+
+Architecture 18 owns the MCP nested selection field semantics. Admission freezes
+the MCP acquisition contract, while later run-local discovery/selection revisions
+are append-only facts bound by model steps and invocations. They never mutate the
+admitted envelope or reconstruct capability meaning from current server state.
 
 ## Canonical record and digest policy
 

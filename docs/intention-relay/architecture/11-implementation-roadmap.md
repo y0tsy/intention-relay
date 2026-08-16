@@ -650,3 +650,32 @@ milestone.
 - executor/worker topology, MCP, bridge/kernel, Skills/Goals, provider
   evolution, activity/UI, schema, and activation remain excluded; and
 - a later implementation specification is still required before code begins.
+
+## Post-M4 Mandate MCP capability lifecycle package
+
+**Documentation-only package.** It depends on Mandate lifecycle, execution
+meaning, fixed tool registry/tool loop, and scheduler readiness. It creates [the
+authoritative MCP contract](18-mandate-mcp-capability-lifecycle.md) and decision
+0010, and activates no crate, schema, migration, protocol implementation,
+network/process behavior, feature profile, quality-policy target, or
+implementation milestone.
+
+### Deliver
+
+- typed source/discovery/capability/selection/invocation semantics under the
+  fixed `mcp` ToolId;
+- dynamic run-local capability acquisition, schema normalization, private
+  resources, idempotency, safe projection, disposal, and no-resume recovery;
+- non-authority, execution-meaning, and negotiated replay boundaries; and
+- reconciliation ownership, compatibility, contradiction, and evidence updates.
+
+### Exit criteria
+
+- MCP-001..016 have one owner and compatibility/failure rule;
+- capabilities cannot become ToolIds, plugins, scheduler/lifecycle authority,
+  or child/verifier authority;
+- model steps and invocations bind immutable selections without current-state
+  repair or schema substitution;
+- M3/M4, M4 tool denial, ordinary behavior, retained bounded-MCP history, and
+  direct-administration exclusion remain unchanged; and
+- a later implementation specification is still required before code begins.

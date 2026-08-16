@@ -102,3 +102,12 @@ terminalization, and separately issued target-scoped verifier authority.
 [Decision 0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md)
 records the cross-document decision. Reconciliation remains an index and does
 not duplicate those semantics or amend M3/M4 or retained RLM history.
+
+## Mandate MCP capability authority
+
+[Mandate MCP capability lifecycle](../architecture/18-mandate-mcp-capability-lifecycle.md)
+now owns future typed MCP source acquisition, discovery normalization, immutable
+run-local capability selections, invocation, disposal, and recovery.
+[Decision 0010](../decisions/0010-mandate-mcp-capability-lifecycle.md) records
+the cross-document decision. Reconciliation remains an index and does not amend
+M3/M4 or retained bounded-MCP history.

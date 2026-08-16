@@ -40,7 +40,7 @@ contradiction register.
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
 | ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
-| MCP-001..016 | Mandate MCP lifecycle | Defer | MCP package |
+| MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Defer | provider evolution package |
 | FRK-001..018 | session forks | Defer | branching package |
 | EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | Exclude or Defer as recorded in concept | explicit later decision only |
@@ -106,6 +106,27 @@ contradiction register.
 | VER-009 | Verifier unknown effect pauses only the verifier and recovery replays nothing. | future VerifierMandate | Adopt | architecture 17 | Target remains untouched. | Child/verifier | recovery fixture planned |
 | VER-010 | Child/verifier delivery is negotiated and fails closed. | future Mandate | Adopt | architecture 17 | Replay is read-only and no partial ordinary projection appears. | Child/verifier | protocol fixture planned |
 | VER-011 | Historical records gain no verifier authority, audit, verdict, or mutation state. | historical-only | Adopt | architecture 17 | Preserve M3/M4 and retained RLM meaning. | Child/verifier | compatibility fixture planned |
+
+## MCP capability topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| MCP-001 | `mcp` is the sole fixed MCP ToolId and one daemon-owned Rust capability path. | future Mandate | Adopt | architecture 18 | A second ToolId, registry, gateway, or bypass fails before effect. | MCP lifecycle | slot fixture planned |
+| MCP-002 | A typed Mandate source proposal may initiate acquisition without a retained user catalog. | future Mandate | Adopt | architecture 18 | Raw URL, command, headers, credentials, and maps cannot cross the boundary. | MCP lifecycle | source fixture planned |
+| MCP-003 | Source records are immutable, canonical, credential-free references to private material. | future Mandate | Adopt | architecture 18 | Missing/corrupt source blocks work without current-state fallback. | MCP lifecycle | canonical fixture planned |
+| MCP-004 | Discovery is an independently identified external attempt outside transitions. | future Mandate | Adopt | architecture 18 | Before-start and started phases remain distinct. | MCP lifecycle | fault matrix planned |
+| MCP-005 | Discovery normalizes only closed typed input/result schema families. | future Mandate | Adopt | architecture 18 | Unsupported, ambiguous, raw-map-only schemas fail before registration. | MCP lifecycle | normalization fixture planned |
+| MCP-006 | Discovery creates immutable capability revisions and ordered selection revisions. | future Mandate | Adopt | architecture 18 | Schema drift creates new records and never rewrites old ones. | MCP lifecycle | revision fixture planned |
+| MCP-007 | Every model step freezes the exact accumulated MCP selection it consumed. | future Mandate | Adopt | architecture 18 | Later discovery cannot alter an admitted/sent step. | MCP lifecycle | step-binding fixture planned |
+| MCP-008 | Invocation binds exact selection, capability, input digest, operation, and ToolCallId before effect. | future Mandate | Adopt | architecture 18 | Current capability cannot substitute for frozen meaning. | MCP lifecycle | invocation fixture planned |
+| MCP-009 | Acquisition and invocation have independent equal-replay/changed-reuse identities. | future Mandate | Adopt | architecture 18 | No duplicate discovery/invocation or changed semantic replay. | MCP lifecycle | idempotency fixture planned |
+| MCP-010 | Endpoint and credential generations resolve only in private daemon material. | future Mandate | Adopt | architecture 18 | Secrets/resources never enter durable/public identity. | MCP lifecycle | redaction fixture planned |
+| MCP-011 | Safe projection validates typed results and excludes raw resources and server bodies. | future Mandate | Adopt | architecture 18 | Invalid/unsafe output cannot cross the MCP boundary. | MCP lifecycle | projection fixture planned |
+| MCP-012 | Source/server/capability/result grants no lifecycle, registry, scheduler, child, verifier, or user authority. | future Mandate | Adopt | architecture 18 | Authority amplification rejects before mutation/effect. | MCP lifecycle | authority fixture planned |
+| MCP-013 | Known MCP outcomes remain known; unproven started work pauses only owning Mandate. | future Mandate | Adopt | architecture 18 | No retry, next step, or continuation follows uncertainty. | MCP lifecycle | effect matrix planned |
+| MCP-014 | Cancellation/restart disposes private resources and never repeats old work. | future Mandate | Adopt | architecture 18 | Later work needs fresh run/acquisition identities. | MCP lifecycle | recovery fixture planned |
+| MCP-015 | MCP readiness is non-authorizing and cannot discover or select capabilities. | future Mandate | Adopt | architecture 18 | Scheduler retains reason, cannot start MCP work. | MCP lifecycle | readiness fixture planned |
+| MCP-016 | Dynamic acquisition supersedes retained bounded rules only for future Mandates. | future/historical | Adapt | architecture 18 | M3/M4 and retained bounded-MCP history stay unchanged. | MCP lifecycle | compatibility fixture planned |
 
 ## Coverage ledger
 

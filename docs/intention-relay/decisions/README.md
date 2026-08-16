@@ -27,3 +27,4 @@ provenance.
 | [0007](0007-unified-tool-registry-and-direct-mandate-tool-admission.md) | Accepted | Unified tool registry and direct Mandate tool admission |
 | [0008](0008-durable-mandate-scheduler-and-readiness-driven-admission.md) | Accepted | Durable Mandate scheduler and readiness-driven admission |
 | [0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) | Accepted | Mandate child graph and delegated verifier authority |
+| [0010](0010-mandate-mcp-capability-lifecycle.md) | Accepted | Mandate MCP capability lifecycle |

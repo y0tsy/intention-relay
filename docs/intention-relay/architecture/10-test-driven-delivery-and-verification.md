@@ -321,3 +321,15 @@ negotiated replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate child graph and delegated verifier
 authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
+
+## Mandate MCP capability evidence
+
+Before implementation, future MCP work requires canonical source/discovery/
+capability/selection/invocation goldens; closed schema-normalization negatives;
+fixed-slot/no-bypass and server-non-authority fixtures; idempotency, selection
+freeze, schema-drift, and no-current-state reconstruction cases; transaction
+fault injection; HTTP/local-stdio cancellation/recovery/no-resume; private
+resource redaction; scheduler/child/verifier isolation; negotiated replay; and
+M3/M4 plus retained bounded-MCP preservation. These are future obligations, not
+current tests or targets. The detailed portfolio is owned by [Mandate MCP
+capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
