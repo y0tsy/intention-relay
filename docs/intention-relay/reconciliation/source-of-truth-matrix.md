@@ -36,7 +36,8 @@ contradiction register.
 | TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Adopt for future Mandate execution; ordinary behavior preserved | `15-tool-registry-and-mandate-tool-loop.md` |
 | MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
 | SCH-001..012 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval semantics deferred | `16-mandate-scheduler-and-readiness-driven-admission.md` |
-| BRG-001..014, KER-001..014 | bridge and IPython | Defer | gateway/programmable-runtime packages |
+| BRG-001..014 | Gateway/RLM bridge | Adopt for future Mandate execution; historical bridge/RLM preserved | `19-mandate-gateway-rlm-bridge.md` |
+| KER-001..014 | IPython and programmable runtime | Defer | later kernel package |
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
 | ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
@@ -61,6 +62,25 @@ contradiction register.
 | MTL-002 | Calls admit independently, may complete concurrently, and next model context preserves call order. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Completion order cannot change semantic exchange order. | Tool-loop | concurrency fixture planned |
 | MTL-003 | Started unknown tool effects pause only the owning Mandate; recovery never repeats work. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No next step, retry, attach, or resume follows uncertainty. | Tool-loop | crash matrix planned |
 | MTL-004 | Tool-loop delivery is separately negotiated and fails closed for unsupported peers. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | No partial replay/history/live projection. | Tool-loop | negotiation fixture planned |
+
+## Gateway/RLM bridge topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| BRG-001 | One daemon-owned Gateway/RLM bridge is the only future facade/direct-model ingress. | future Mandate | Adopt | architecture 19 | A second registry, gateway, listener, daemon, or primitive bypass fails before effect. | Gateway/RLM bridge | architecture fixture planned |
+| BRG-002 | Attachment uses negotiated capability and daemon-issued ephemeral grant. | future Mandate | Adopt | architecture 19 | Unsupported or stale attachment fails closed before partial future state. | Gateway/RLM bridge | negotiation fixture planned |
+| BRG-003 | A grant is scoped transport evidence, not lifecycle, policy, execution meaning, or durable authority. | future Mandate | Adopt | architecture 19 | Expired/detached/restarted grants fail before admission. | Gateway/RLM bridge | scope fixture planned |
+| BRG-004 | Bridge operations bind immutable identity, frozen context, typed input digest, and ToolCallId before effect. | future Mandate | Adopt | architecture 19 | Raw input/resources remain private; changed reuse fails before effect. | Gateway/RLM bridge | canonical fixture planned |
+| BRG-005 | Equal operation replay returns existing durable evidence and never creates another effect. | future Mandate | Adopt | architecture 19 | Duplicate ingress converges; changed reuse conflicts. | Gateway/RLM bridge | idempotency fixture planned |
+| BRG-006 | Bridge ingress uses frozen architecture-15 descriptor admission and tool-loop facts only. | future Mandate | Adopt | architecture 19 | No confirmation, corridor, quota, reservation, or root-origin gate appears. | Gateway/RLM bridge | admission fixture planned |
+| BRG-007 | Bridge publication follows commit and scoped reread and creates no sequence or result channel. | future Mandate | Adopt | architecture 19 | Publisher failure cannot roll back or redispatch. | Gateway/RLM bridge | publication fixture planned |
+| BRG-008 | Bridge replay is negotiated, history-before-live, and read-only. | future Mandate | Adopt | architecture 19 | Replay/resync/reconnect causes no effect or partial ordinary projection. | Gateway/RLM bridge | protocol fixture planned |
+| BRG-009 | Channel loss and grant expiry do not cancel a run; bridge only propagates cancellation. | future Mandate | Adopt | architecture 19 | Late facts cannot mutate terminal state. | Gateway/RLM bridge | race fixture planned |
+| BRG-010 | A started unproven bridge effect pauses only its owning Mandate. | future Mandate | Adopt | architecture 19 | No retry, next step, reattach, or replay follows uncertainty. | Gateway/RLM bridge | crash matrix planned |
+| BRG-011 | Recovery invalidates grants and never reissues, re-admits, reattaches, retries, resumes, or reruns old bridge work. | future Mandate | Adopt | architecture 19 | Later work requires fresh run/grant/operation identities. | Gateway/RLM bridge | recovery fixture planned |
+| BRG-012 | Bridge-carried `sub_agent` uses architecture-17 child creation and assigns no RLM child authority. | future Mandate | Adopt | architecture 19 | No retained RLM identity becomes a Mandate edge. | Gateway/RLM bridge | child outcome planned |
+| BRG-013 | Bridge-held grants, evidence, child references, and MCP facts are non-authorizing. | future Mandate | Adopt | architecture 19 | No verifier, child, MCP, scheduler, or lifecycle authority amplification. | Gateway/RLM bridge | authority fixture planned |
+| BRG-014 | Historical M3/M4 and retained RLM records gain no bridge state or reconstructed meaning. | historical-only | Adopt | architecture 19 | Preserve bytes/meaning; readable history remains isolated. | Gateway/RLM bridge | compatibility fixture planned |
 
 ## Scheduler and readiness topics
 

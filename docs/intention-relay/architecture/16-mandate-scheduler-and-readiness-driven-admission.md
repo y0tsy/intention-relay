@@ -181,6 +181,10 @@ No timer callback, provider, tool, process, kernel, child, MCP, bridge,
 scheduler task, or old run resumes, reattaches, retries, rediscoveries, or
 reruns. A later admission always has a fresh `RunId`.
 
+Bridge attachment/readiness is operational evidence only. The scheduler cannot
+attach a peer, issue a bridge grant, select a bridge operation, or start bridge
+work; architecture 19 owns those bridge details.
+
 ## Compatibility and protocol boundary
 
 No new execution kind or top-level execution-meaning envelope field is needed.

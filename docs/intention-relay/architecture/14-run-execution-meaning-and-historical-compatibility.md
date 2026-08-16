@@ -110,6 +110,12 @@ the MCP acquisition contract, while later run-local discovery/selection revision
 are append-only facts bound by model steps and invocations. They never mutate the
 admitted envelope or reconstruct capability meaning from current server state.
 
+Architecture 19 owns the bridge nested-selection field semantics. Its frozen
+gateway contract selection is canonical meaning; grants, channels, daemon epochs,
+cursors, kernels, resources, and current transport state are not. No bridge,
+replay, recovery, or audit path may reconstruct missing bridge meaning from
+current registry, configuration, kernel, process, channel, or graph state.
+
 ## Canonical record and digest policy
 
 ```text

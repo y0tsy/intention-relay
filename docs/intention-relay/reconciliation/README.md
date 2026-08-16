@@ -111,3 +111,12 @@ run-local capability selections, invocation, disposal, and recovery.
 [Decision 0010](../decisions/0010-mandate-mcp-capability-lifecycle.md) records
 the cross-document decision. Reconciliation remains an index and does not amend
 M3/M4 or retained bounded-MCP history.
+
+## Mandate Gateway/RLM bridge authority
+
+[Mandate Gateway/RLM bridge](../architecture/19-mandate-gateway-rlm-bridge.md)
+now owns future bridge attachment, ephemeral grants, operation correlation,
+safe replay, cancellation propagation, and bridge recovery. [Decision
+0011](../decisions/0011-mandate-gateway-rlm-bridge.md) records the
+cross-document decision. Reconciliation remains an index: retained RLM bridge
+material is provenance, and the bridge is not a second gateway or authority.

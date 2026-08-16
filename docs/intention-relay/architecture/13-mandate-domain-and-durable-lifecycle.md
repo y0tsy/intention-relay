@@ -251,8 +251,13 @@ ownership; it does not duplicate tool-loop or scheduler rules.
 
 It does not define tool loops, registry detail, child graph or verifier-authority
 semantics, MCP capability lifecycle semantics, Goal/Skill behavior, provider profiles/Responses/reasoning,
-bridge/IPython, forks, activity/UI, scheduler topology, schema,
+Gateway/RLM bridge attachment semantics, IPython, forks, activity/UI, scheduler topology, schema,
 migrations, crates, Cargo, or implementation policy activation.
+
+Architecture 19 owns bridge attachment and operation correlation. A bridge
+operation creates neither a trigger reason nor a `RunId`; started unproven bridge
+work pauses only its owning Mandate under this document's uncertainty law. Later
+work requires fresh admission and a new bridge grant/operation identity.
 
 ## Required evidence before implementation
 

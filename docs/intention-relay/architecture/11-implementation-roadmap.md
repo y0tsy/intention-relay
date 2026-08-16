@@ -679,3 +679,35 @@ implementation milestone.
 - M3/M4, M4 tool denial, ordinary behavior, retained bounded-MCP history, and
   direct-administration exclusion remain unchanged; and
 - a later implementation specification is still required before code begins.
+
+## Post-M4 Mandate Gateway/RLM bridge package
+
+**Documentation-only package.** It depends on Mandate lifecycle, execution
+meaning, the fixed tool registry/tool loop, scheduler recovery, child/verifier
+authority, and MCP lifecycle. It creates [the authoritative Gateway/RLM bridge
+contract](19-mandate-gateway-rlm-bridge.md) and decision 0011, and activates no
+crate, Python dependency, listener, protocol implementation, kernel, schema,
+migration, feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- typed bridge attachment and negotiation, an ephemeral daemon-issued grant,
+  immutable bridge-contract selection, and durable operation correlation;
+- one-path ingress into fixed registry admission/tool-loop facts, safe replay,
+  cancellation propagation, uncertainty, recovery, and no-resume boundaries;
+- child/verifier/MCP bridge non-authority and retained RLM compatibility rules;
+  and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- BRG-001..014 have one owner and compatibility/failure rule;
+- grants/channels/operation IDs cannot become lifecycle, scheduler, registry,
+  child, verifier, MCP, or reconciliation authority;
+- bridge ingress cannot bypass frozen descriptor selection, direct admission,
+  `ToolCallId`, start/result evidence, or post-commit reread publication;
+- M3/M4, M4 tool denial, retained RLM history, and ordinary protocol behavior
+  remain unchanged; and
+- kernel lifecycle, RLM executor topology, provider evolution, Skills/Goals,
+  session forks, activity/UI, schema, and activation remain excluded.

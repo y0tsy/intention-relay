@@ -333,3 +333,13 @@ resource redaction; scheduler/child/verifier isolation; negotiated replay; and
 M3/M4 plus retained bounded-MCP preservation. These are future obligations, not
 current tests or targets. The detailed portfolio is owned by [Mandate MCP
 capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
+
+## Mandate Gateway/RLM bridge evidence
+
+Before implementation, future bridge work requires canonical bridge-selection
+goldens; grant scope/expiry and no-bypass fixtures; operation idempotency and
+fault injection; cancellation/crash/late-result/no-resume matrices; child,
+verifier, and MCP isolation; negotiated replay/resync and zero-effect reconnect;
+M3/M4 plus retained-RLM preservation; limit classification; and fake-secret/raw
+resource absence. These are future obligations, not current tests or targets.
+The detailed portfolio is owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).

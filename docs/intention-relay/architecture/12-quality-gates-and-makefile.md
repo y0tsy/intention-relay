@@ -354,3 +354,11 @@ or local process. A later activating change must declare exact MCP owners,
 test targets, coverage/features, storage/wire versions, expected-failure
 architecture fixtures, redaction evidence, and cross-platform outcomes
 atomically with production work.
+
+The post-M4 Gateway/RLM bridge package is likewise documentation-only. It
+activates no crate, Python dependency, test target, coverage tier, feature
+combination, protocol implementation, listener, kernel, migration, quality tool,
+or Makefile target. A later activating change must declare exact bridge owners,
+test targets, coverage/features, storage/wire versions, expected-failure
+architecture fixtures, redaction evidence, and Linux/Windows outcomes atomically
+with production work.

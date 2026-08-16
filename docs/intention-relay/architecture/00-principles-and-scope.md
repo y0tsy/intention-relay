@@ -223,6 +223,17 @@ invoke immutable run-local capabilities. An MCP server, discovery, capability,
 or result cannot create lifecycle, scheduler, registry, child, verifier, or
 user authority. Started uncertain MCP work never resumes. Detailed rules are
 owned by architecture 18.
+
+### 24. Gateway/RLM attachment is typed ingress, not authority
+
+Future Gateway/RLM attachment uses one daemon-owned capability path, a frozen
+credential-free bridge contract selection, and an ephemeral daemon-issued grant
+bound to one active run/model step. A grant, channel, operation ID, facade,
+kernel, provider, child, or MCP result cannot create lifecycle, scheduling, tool,
+child, verifier, or reconciliation authority. Operation replay is idempotent and
+read-only after binding; restart never resumes or reattaches old work. The bridge
+is a trusted-local product control, not a sandbox or privilege boundary. Detailed
+rules are owned by architecture 19 and decision 0011.
 The authoritative source and package boundaries for these principles are the
 [Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
@@ -231,4 +242,5 @@ and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.
 and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md),
 and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md),
 and [0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md),
-and [0010](../decisions/0010-mandate-mcp-capability-lifecycle.md).
+and [0010](../decisions/0010-mandate-mcp-capability-lifecycle.md),
+and [0011](../decisions/0011-mandate-gateway-rlm-bridge.md).
