@@ -1139,14 +1139,14 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [futures-channel 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-core 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-executor 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-io 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-macro 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-sink 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-task 0.3.33](https://github.com/rust-lang/futures-rs)
-- [futures-util 0.3.33](https://github.com/rust-lang/futures-rs)
+- [futures-channel 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-core 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-executor 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-io 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-macro 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-sink 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-task 0.3.34](https://github.com/rust-lang/futures-rs)
+- [futures-util 0.3.34](https://github.com/rust-lang/futures-rs)
 - [futures 0.3.33](https://github.com/rust-lang/futures-rs)
 
 ```text
@@ -2450,7 +2450,7 @@ limitations under the License.
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
 - [unicase 2.9.0](https://github.com/seanmonstar/unicase)
 - [url 2.5.8](https://github.com/servo/rust-url)
-- [uuid 1.24.0](https://github.com/uuid-rs/uuid)
+- [uuid 1.24.1](https://github.com/uuid-rs/uuid)
 
 ```text
                               Apache License
@@ -4092,8 +4092,8 @@ THE SOFTWARE.
 
 #### Used by
 
-- [libsqlite3-sys 0.38.1](https://github.com/rusqlite/rusqlite)
-- [rusqlite 0.40.1](https://github.com/rusqlite/rusqlite)
+- [libsqlite3-sys 0.38.2](https://github.com/rusqlite/rusqlite)
+- [rusqlite 0.40.2](https://github.com/rusqlite/rusqlite)
 
 ```text
 Copyright (c) 2014 The rusqlite developers
