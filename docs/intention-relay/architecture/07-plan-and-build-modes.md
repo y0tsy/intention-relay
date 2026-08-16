@@ -162,3 +162,12 @@ Plan policy and artifact crates are Tier B coverage targets. Frontmatter hiding,
 - Allowing model-visible frontmatter.
 - Allowing Plan mode to write arbitrary project paths through normal write/edit tools.
 - Claiming that prompt instructions turn `execute` into a technical sandbox.
+
+## Post-M4 Mandate compatibility consequence
+
+Ordinary Plan/Build confirmation and risk behavior remains unchanged. A future
+Mandate's direct tool admission excludes confirmation and risk authorization but
+does not erase mode compatibility: Plan-mode project `write` and `edit` remain
+incompatible, and plan mutation remains its typed plan-owner workflow.
+`ask_user` is a future ordinary tool rather than confirmation transport. See
+[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).

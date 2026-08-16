@@ -233,10 +233,12 @@ No historical record gains synthetic Mandate, verifier, Skill, MCP, child,
 activity, profile, policy, or execution-kind state. Legacy queued turns never
 become Mandate reasons.
 
-This document resolves the aggregate separation in `CON-004` and applies the
-Foundation limit taxonomy to Mandate lifecycle. It leaves `CON-001` WorkspaceRoot
-and `CON-002` direct descriptor admission/confirmation policy explicitly
 deferred.
+This document resolves the aggregate separation in `CON-004` and applies the
+Foundation limit taxonomy to Mandate lifecycle. Architecture 15 resolves
+`CON-001` WorkspaceRoot and `CON-002` direct descriptor admission for future
+Mandate calls only. Lifecycle retains fresh-admission eligibility and uncertainty
+ownership; it does not duplicate tool-loop rules.
 
 It does not define tool loops, registry detail, child graph, verifier authority,
 MCP lifecycle, Goal/Skill behavior, provider profiles/Responses/reasoning,

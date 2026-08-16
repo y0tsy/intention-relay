@@ -190,3 +190,13 @@ or execution kind. Driver-contract compatibility and the distinction between
 stored semantic compatibility and live availability are owned by [Run execution
 meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
 This does not introduce profiles, `responses`, aliases or a new M4 driver.
+
+## Post-M4 tool-loop consequence
+
+M4 tool-call evidence and denial remain unchanged. A future driver may support
+`model_tool_loop_v1` only when it can translate a frozen local typed tool
+selection and complete `ModelToolExchangeDto` history into a fresh provider
+request. It never invokes a local primitive or reuses opaque remote continuation
+state. Registry and tool-loop semantics are owned by [Tool registry and direct
+Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md); provider evolution
+remains separate.

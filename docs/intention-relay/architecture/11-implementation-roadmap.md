@@ -537,7 +537,8 @@ milestone and does not renumber or replace ordinary M5–M9.
 
 - one detailed normative owner exists for every Mandate lifecycle rule;
 - legacy queue tickets and ordinary M3/M4 history remain explicitly separate;
-- direct descriptor/WorkspaceRoot policy remains deferred under CON-001/002;
+- direct descriptor/WorkspaceRoot policy was deferred at this package boundary
+  and is now owned by the later tool-registry package;
 - a later implementation specification is still required before code starts.
 
 ## Post-M4 execution meaning and historical compatibility package
@@ -561,5 +562,33 @@ implementation milestone.
 - one owner defines all execution-meaning fields, tags, field tables, decoder
   outcomes and compatibility classes;
 - M3/M4 bytes and ordinary meaning remain unchanged;
-- deferred payload owners and CON-001/002/003/provider evolution remain explicit;
+- deferred payload owners, CON-003, and provider evolution remain explicit;
 - implementation still needs a separate approved specification.
+
+## Post-M4 unified tool registry and direct Mandate tool-loop package
+
+**Documentation-only package.** It depends on Foundation, Mandate lifecycle,
+and execution meaning. It creates [the authoritative tool registry and
+Mandate-loop contract](15-tool-registry-and-mandate-tool-loop.md) and decision
+0007, but activates no crate, schema, migration, protocol implementation,
+feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- fixed fourteen-slot registry, canonical descriptor/registry revisions, and
+  frozen direct tool selection;
+- direct Mandate admission and execution-kind-scoped WorkspaceRoot policy,
+  resolving CON-001/002 only for future Mandate execution;
+- model-step/tool-group loop, effect evidence, no-retry/no-resume recovery, and
+  negotiated future replay boundary;
+- reconciliation ownership, compatibility, contradiction, and evidence updates.
+
+### Exit criteria
+
+- M3/M4 bytes, M4 tool denial, ordinary containment, and ordinary Plan/Build
+  confirmation remain explicitly preserved;
+- registry, direct admission, WorkspaceRoot, loop, recovery, and compatibility
+  rules have one detailed owner with required future evidence;
+- MCP, child/verifier, bridge/kernel, Skills/Goals, scheduler, UI, provider
+  evolution, and implementation activation remain explicitly excluded;
+- a later implementation specification is still required before code begins.

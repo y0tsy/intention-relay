@@ -285,3 +285,15 @@ no-current-state-reconstruction, no-external-work-on-incompatibility,
 negotiation/resync, no-resume, driver-contract, redaction and cross-platform
 outcome evidence. The detailed portfolio is owned by [Run execution meaning and
 historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+
+## Tool-registry and Mandate-loop evidence
+
+Before implementation, future tool-loop work requires fixed-slot and owner
+goldens, Reserved/non-bypass fixtures, canonical registry/descriptor selection,
+ordinary-versus-Mandate WorkspaceRoot outcomes, direct-Mandate/no-confirmation
+admission, group atomicity/concurrency/order, fragment/result integrity,
+before-start/started/known/unknown recovery, negotiated replay, M4 tool-denial
+preservation, no-current-state reconstruction, and fake-secret absence. These
+are future obligations, not claims that a runtime or test target exists; the
+detailed portfolio is owned by [Tool registry and direct Mandate tool
+loop](15-tool-registry-and-mandate-tool-loop.md).

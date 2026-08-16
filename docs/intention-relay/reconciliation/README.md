@@ -36,9 +36,8 @@ implementation specification can be prepared:
 - ownership and dependency direction;
 - traceability, compatibility, and delivery sequencing.
 
-It maps, but does not detail or implement, later tool-loop, descriptor,
-WorkspaceRoot/direct-admission, child, verifier, MCP, Skill, provider,
-reasoning, fork, kernel, activity, notification, and UI packages.
+It maps, but does not detail or implement, later child, verifier, MCP, Skill,
+provider, reasoning, fork, kernel, activity, notification, and UI packages.
 
 ## Artifacts
 
@@ -77,3 +76,12 @@ become a duplicate runtime specification.
 now owns envelope, canonical identity, decoder and historical compatibility
 rules. Reconciliation remains provenance/index material and does not duplicate
 that authority.
+
+## Tool registry and Mandate-loop authority
+
+[Tool registry and direct Mandate tool loop](../architecture/15-tool-registry-and-mandate-tool-loop.md)
+now owns the fixed registry, immutable tool selection, Mandate direct admission,
+Mandate WorkspaceRoot policy, tool-loop facts, and effect recovery. It resolves
+CON-001 and CON-002 only for future Mandate execution; ordinary M3/M4 behavior
+remains unchanged. [Decision 0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md)
+records the cross-document decision.

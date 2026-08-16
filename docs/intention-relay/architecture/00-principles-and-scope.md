@@ -180,8 +180,25 @@ Product ceilings cannot be introduced as hidden future Mandate admission policy.
 Existing numeric bounds retain their current behavior until a later owner
 classifies their future applicability.
 
+### 19. Mandate tool admission is direct but typed
+
+For future Mandate execution, a descriptor frozen as active and model-visible
+in immutable execution meaning admits directly after typed validation, mode,
+hook, intrinsic-bound, idempotency, and live-readiness checks. Confirmation,
+risk selectors, corridors, root-origin rules, quotas, and secondary tool
+authority cannot veto it. This does not amend ordinary execution.
+
+### 20. WorkspaceRoot is execution-kind-specific
+
+Current ordinary containment remains authoritative. For future Mandate tool
+work, WorkspaceRoot is the required relative-path base and `execute` initial
+CWD, not an OS access boundary; explicit paths are not denied solely for being
+outside it. Both forms forbid process-CWD fallback, and neither claims a
+sandbox. Detailed rules are owned by architecture 15.
+
 The authoritative source and package boundaries for these principles are the
 [Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
 [0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md),
-and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md).
+and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md),
+and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).

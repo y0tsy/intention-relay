@@ -186,3 +186,12 @@ credentials, SDK objects, provider payloads, handles or live resources. The
 compatibility owner defines its canonical/digest and decoder requirements; this
 document retains M3/M4 startup-only configuration and redaction boundaries.
 See [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+
+## Post-M4 tool-loop observability consequence
+
+Future registry/descriptor revisions and safe tool state may be observable, but
+canonical or public projections may not expose credentials, raw typed inputs,
+unsafe absolute/canonical/symlink paths, process resources, provider-native call
+identifiers, SDK values, or raw output. Mandate outside-root observation is
+audit-only and non-authorizing. See [Tool registry and direct Mandate tool
+loop](15-tool-registry-and-mandate-tool-loop.md).

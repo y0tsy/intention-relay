@@ -78,7 +78,7 @@ explicit disabled variants for optional selections.
 | 3 | Model capability selection | Provider evolution |
 | 4 | Mandate activity selection | Later activity package |
 | 5 | Context projection selection | Later context package |
-| 6 | Direct tool selection | Tool-loop package |
+| 6 | Direct tool selection | Tool registry and Mandate tool-loop package |
 | 7 | Goal context selection | Later Goal package |
 | 8 | MCP selection | MCP lifecycle package |
 | 9 | Verifier selection presence | Verifier package |
@@ -248,11 +248,12 @@ only through typed IDs. Existing M3/M4 protocol DTOs are not widened here.
 
 ## Dependencies and non-goals
 
-This document does not define SQL/wire implementation, tool-loop/registry or
-WorkspaceRoot/direct-admission policy, provider profiles/Responses, scheduler,
+This document does not define SQL/wire implementation, provider
+profiles/Responses, scheduler,
 child graph, verifier workflow, MCP, Skills/Goals, bridge/kernel, forks, UI,
-crates, Cargo, feature/coverage policy, Makefile/CI or M4 changes. CON-001,
-CON-002, CON-003 and provider evolution remain later-owner work.
+crates, Cargo, feature/coverage policy, Makefile/CI or M4 changes. CON-003 and
+provider evolution remain later-owner work. Tool-loop/registry, WorkspaceRoot,
+and direct-admission policy are owned by architecture 15.
 
 ## Required evidence before implementation
 

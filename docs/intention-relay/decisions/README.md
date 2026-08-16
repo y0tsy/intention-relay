@@ -24,3 +24,4 @@ provenance.
 | [0004](0004-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path and fixed registry boundary |
 | [0005](0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Accepted | M4+ reconciliation and delivery boundaries |
 | [0006](0006-mandate-lifecycle-and-admission-boundary.md) | Accepted | Mandate lifecycle and admission boundary |
+| [0007](0007-unified-tool-registry-and-direct-mandate-tool-admission.md) | Accepted | Unified tool registry and direct Mandate tool admission |
