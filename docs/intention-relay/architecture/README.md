@@ -68,8 +68,9 @@ flowchart TD
 1. [Daemon, transport, and adapters](03-daemon-transport-and-adapters.md)
 2. [Sessions, runs, events, and storage](04-sessions-runs-events-and-storage.md)
 3. [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
-4. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-5. [VFR and Headroom](06-vfr-and-headroom.md)
+4. [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
+5. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+6. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -174,3 +175,10 @@ matrix, compatibility register, contradiction register, and dependency map.
 is the sole detailed authority for future Mandate lifecycle and admission. The
 [reconciliation package](../reconciliation/README.md) remains a traceability
 index. Neither document amends M4 or current ordinary v1 behavior.
+
+### Execution-meaning owner
+
+[Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
+is the sole detailed authority for future envelope, canonical identity and
+compatibility semantics. It does not amend M3/M4 ordinary behavior or activate
+a protocol/runtime implementation.

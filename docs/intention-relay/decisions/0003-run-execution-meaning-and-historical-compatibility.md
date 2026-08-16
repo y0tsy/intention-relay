@@ -17,12 +17,23 @@ child, activity, policy, profile, or execution-kind state. Missing historical
 meaning is never reconstructed from current configuration, registry, model
 name, ancestry, or live resource state.
 
-## Compatibility and non-goals
+## Canonical envelope and outcomes
 
-Future canonical field tables, tags, provider profiles, reasoning, bridge
-records, and decoder retention schedules are deferred to their owning packages.
-No old byte, UUID, digest, cursor, event, or snapshot is rewritten by this
-decision.
+The accepted envelope is credential-free and binds closed execution kind,
+payload tag/version, canonicalization version, canonical bytes and lowercase
+SHA-256 digest. It is selected atomically before dependent external work.
+Unknown/malformed/mismatched meaning blocks that work before effect while
+preserving unrelated readable replay/audit history. Meaning is never rebuilt
+from current state.
+
+## Ownership and deferrals
+
+[Architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
+owns canonical field tables, tags, digest/decoder rules and compatibility
+outcomes. Later packages own nested provider, tool, MCP, Skill, Goal, child,
+verifier, bridge and UI payload semantics. Provider profiles/Responses,
+reasoning, bridge implementation and decoder removal remain deferred. No old
+byte, UUID, digest, cursor, event or snapshot is rewritten by this decision.
 
 ## Evidence
 

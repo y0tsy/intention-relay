@@ -70,3 +70,10 @@ This reconciliation approval authorizes documentation work only.
 now owns detailed Mandate lifecycle and admission rules. This reconciliation
 package continues to coordinate provenance and dependencies only; it does not
 become a duplicate runtime specification.
+
+## Execution-meaning authority
+
+[Run execution meaning and historical compatibility](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
+now owns envelope, canonical identity, decoder and historical compatibility
+rules. Reconciliation remains provenance/index material and does not duplicate
+that authority.

@@ -9,6 +9,7 @@
 | Protocol | DTO-only commands, queries, events, replay/negotiation families. | Local business authority or resource ownership. |
 | Application/runtime | Admission workflows, lifecycle validation, operational transitions, recovery orchestration. | Concrete provider/tool/storage selection. |
 | Mandate lifecycle package | Mandate aggregate, revisions, reasons, lifecycle, admission linearization, uncertainty pause, and fresh-run boundary. | Tool execution, scheduler topology, child/verifier/MCP authority, and adapters. |
+| Execution-meaning package | Envelope, canonical identity, digest, decoder and historical compatibility. | Payload owner semantics, SQL/wire implementation, current-state fallback or adapter inference. |
 | Tools/gateway | One typed capability path and descriptor contracts. | A second registry, lifecycle authority, or persistence authority. |
 | Daemon | Process/task ownership, identity assignment, publication after commit. | Product decisions reserved to the user. |
 | Composition | Concrete provider/tool/storage assembly. | Process hosting or a second runtime. |
@@ -20,8 +21,9 @@
 flowchart TD
   F[Foundation] --> E[Execution meaning]
   F --> M[Mandate lifecycle]
+  M --> E
   E --> T[Tool loop]
-  M --> S[Trigger scheduler]
+  E --> S[Trigger scheduler]
   T --> G[Gateway bridge]
   S --> X[Effect reconciliation]
   X --> C[Child verifier]

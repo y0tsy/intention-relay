@@ -539,3 +539,27 @@ milestone and does not renumber or replace ordinary M5–M9.
 - legacy queue tickets and ordinary M3/M4 history remain explicitly separate;
 - direct descriptor/WorkspaceRoot policy remains deferred under CON-001/002;
 - a later implementation specification is still required before code starts.
+
+## Post-M4 execution meaning and historical compatibility package
+
+**Documentation-only package.** It depends on Foundation and Mandate lifecycle
+and precedes provider evolution, tool-loop/gateway, scheduler, child/verifier,
+MCP, bridge/kernel and UI packages. It creates [the authoritative execution
+meaning contract](14-run-execution-meaning-and-historical-compatibility.md) but
+activates no crate, schema, migration, protocol family, feature profile or
+implementation milestone.
+
+### Deliver
+
+- closed envelope/canonical/digest/decoder/compatibility contract;
+- immutable admission binding and no-current-state-reconstruction law;
+- M3/M4 preservation and explicit future bridge boundary;
+- nested provider selection compatibility boundary and future evidence portfolio.
+
+### Exit criteria
+
+- one owner defines all execution-meaning fields, tags, field tables, decoder
+  outcomes and compatibility classes;
+- M3/M4 bytes and ordinary meaning remain unchanged;
+- deferred payload owners and CON-001/002/003/provider evolution remain explicit;
+- implementation still needs a separate approved specification.
