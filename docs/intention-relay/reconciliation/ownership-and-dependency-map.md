@@ -11,6 +11,7 @@
 | Mandate lifecycle package | Mandate aggregate, revisions, reasons, lifecycle, admission linearization, uncertainty pause, and fresh-run boundary. | Tool execution, scheduler topology, child/verifier/MCP authority, and adapters. |
 | Execution-meaning package | Envelope, canonical identity, digest, decoder and historical compatibility. | Payload owner semantics, SQL/wire implementation, current-state fallback or adapter inference. |
 | Tool registry and Mandate-loop package | Registry/descriptor revisions, frozen tool selection, direct Mandate admission, WorkspaceRoot policy, step/group loop, and tool-effect recovery. | Mandate lifecycle, execution-kind selection, child/MCP/verifier, bridge/kernel, provider evolution, scheduler, and adapters. |
+| Scheduler and readiness package | Durable candidate reevaluation, typed readiness/capacity evidence, admission handoff, and scheduler recovery gate. | Lifecycle/reason authority, immutable meaning, tool admission, worker topology, child/MCP/verifier, bridge/kernel, provider evolution, and adapters. |
 | Tools/gateway | One typed capability path and descriptor contracts. | A second registry, lifecycle authority, or persistence authority. |
 | Daemon | Process/task ownership, identity assignment, publication after commit. | Product decisions reserved to the user. |
 | Composition | Concrete provider/tool/storage assembly. | Process hosting or a second runtime. |
@@ -25,7 +26,8 @@ flowchart TD
   M --> E
   M --> T[Tool registry loop]
   E --> T
-  E --> S[Trigger scheduler]
+  M --> S[Trigger scheduler]
+  E --> S
   T --> G[Gateway bridge]
   S --> X[Effect reconciliation]
   X --> C[Child verifier]

@@ -298,9 +298,10 @@ For future Mandate work:
 
 The detailed Mandate lifecycle, trigger ordering, fresh admission, uncertainty,
 and recovery contract is owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md).
-Verifier authority, child graph, concrete scheduler/process topology, event
-variants, protocol delivery, and schema design remain later packages. Existing
-run states and M3/M4 recovery behavior remain unchanged.
+Scheduler semantics are owned by architecture 16; concrete timer/process
+topology, event variants, protocol delivery, and schema design remain later
+packages. Verifier authority and child graph remain deferred. Existing run states
+and M3/M4 recovery behavior remain unchanged.
 
 See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
 and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
@@ -324,3 +325,14 @@ transaction as the new RunId and Mandate transition. The detailed envelope,
 canonical bytes, decoder outcomes and historical bridge law are owned by [Run
 execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
 This does not add a table, event, migration or synthetic M3/M4 field.
+
+## Post-M4 scheduler storage consequence
+
+Future scheduler observations and candidate outcomes remain Mandate-local
+evidence, distinct from M3 queue tickets, Session event sequence, and Run event
+cursor. An unavailable candidate retains its reason and creates no Run. Fresh
+admission revalidates lifecycle, sequence, revision, reason, meaning, and
+readiness atomically; no scheduler action occurs in that transaction. Scheduler
+admission begins only after recovery, and pre-crash live readiness is never
+trusted. This adds no current table, event, migration, or ordinary queue change.
+See [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).

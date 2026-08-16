@@ -113,7 +113,9 @@ The following are required before their owning implementation slice begins, but 
 - Remote adapter security and authentication.
 - Multi-daemon or cloud synchronization.
 - Plugin API for externally supplied tools.
-- Background scheduled jobs.
+- Ordinary-v1 background scheduled jobs. Future Mandate scheduler semantics are
+  separately owned by architecture 16; recurring schedule syntax and worker
+  topology remain deferred.
 - Sandboxing, worktrees, or per-run filesystem isolation.
 
 ## Verification
@@ -196,9 +198,18 @@ CWD, not an OS access boundary; explicit paths are not denied solely for being
 outside it. Both forms forbid process-CWD fallback, and neither claims a
 sandbox. Detailed rules are owned by architecture 15.
 
+### 21. Scheduling is durable reevaluation, not authority
+
+A future Mandate scheduler works only from durable reasons and typed readiness
+evidence. It cannot grant lifecycle or tool authority, rebuild immutable meaning,
+reserve capacity, or create hidden quotas/retry counters. Unavailability retains
+the reason, and recovery completes before fresh admission. Detailed rules are
+owned by architecture 16.
+
 The authoritative source and package boundaries for these principles are the
 [Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
 [0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md),
 and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md),
-and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
+and [0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md),
+and [0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md).

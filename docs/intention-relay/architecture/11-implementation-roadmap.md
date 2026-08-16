@@ -494,6 +494,7 @@ flowchart TD
   F --> M[Mandate lifecycle]
   E --> T[Tool loop]
   M --> S[Trigger scheduler]
+  E --> S
   T --> G[Gateway bridge]
   S --> X[Effect reconciliation]
   X --> C[Child verifier]
@@ -591,4 +592,30 @@ feature profile, quality-policy target, or implementation milestone.
   rules have one detailed owner with required future evidence;
 - MCP, child/verifier, bridge/kernel, Skills/Goals, scheduler, UI, provider
   evolution, and implementation activation remain explicitly excluded;
+- a later implementation specification is still required before code begins.
+
+## Post-M4 durable Mandate scheduler and readiness-driven admission package
+
+**Documentation-only package.** It depends on Mandate lifecycle and execution
+meaning, creates [the authoritative scheduler contract](16-mandate-scheduler-and-readiness-driven-admission.md)
+and decision 0008, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- durable reread-based candidate coordination over existing Mandate reasons;
+- typed readiness/capacity evidence, deterministic selection, retained-reason
+  unavailability, and lifecycle-owned atomic fresh-admission handoff;
+- recovery-before-scheduling, no-resume, and future negotiated replay boundary;
+- reconciliation ownership, compatibility, contradiction, and evidence updates.
+
+### Exit criteria
+
+- Mandate lifecycle/reason validity/admission transaction and immutable meaning
+  remain owned by architectures 13 and 14;
+- ordinary M3/M4 queue, tool denial, replay, bytes, and recovery remain unchanged;
+- calendar/interval/time-zone semantics, worker topology, child/verifier, MCP,
+  bridge/kernel, Skills/Goals, provider evolution, UI, and activation remain
+  explicitly excluded; and
 - a later implementation specification is still required before code begins.
