@@ -28,8 +28,6 @@ Evidence](closeout/m4-closure-evidence.md). The closed M4 baseline accepts only
 records one immutable credential-free selection per run, and explicitly
 excludes configuration live reload, credential rotation, and M6 UI work.
 
-
-
 > **Selected semi-autonomous overlay.** This copy preserves every detailed
 > section of the original research concept in its original order. For new
 > Mandate-owned work, the Mandate and Delegated Verification Mandate constraints
@@ -366,7 +364,12 @@ user-facing labels, one common implementation unit, or universal availability.
 
 ### Selected base-tool contracts and unified registry
 
-> **Historical-only where conflicting for new Mandate work.** The detailed registry, descriptor, output, stream, transaction, and compatibility contract remains preserved below. Its policy, confirmation, corridor, root-origin, and fixed product-limit statements cannot authorize or restrict a compatible active descriptor in a new Mandate run; the Mandate overlay above controls that future behavior.
+> **Historical-only where conflicting for new Mandate work.** The detailed
+> registry, descriptor, output, stream, transaction, and compatibility contract
+> remains preserved below. Its policy, confirmation, corridor, root-origin, and
+> fixed product-limit statements cannot authorize or restrict a compatible
+> active descriptor in a new Mandate run; the Mandate overlay above controls
+> that future behavior.
 
 
 This is a selected concept constraint for future replanning. It fixes the
@@ -702,8 +705,19 @@ their stable positions, the run cursor, projections, events, and snapshots, or
 records none of them. The daemon performs no tool, process, filesystem, or
 network action inside that transaction.
 
+> **Mandate admission supersession.** For a new Mandate run, the retained
+> admission DTO and policy-dependent prose below are historical-only. Every
+> active descriptor compatible with the selected model capability and mode is
+> directly admitted after typed input, descriptor, workspace-default-resolution,
+> hook, idempotency, and actual runtime-availability validation.
+> `AwaitingConfirmation`, per-tool risk/policy decisions, root origin,
+> confirmation, corridor, quota, reservation, and inheritance do not occur.
+> `Denied` means only typed incompatibility or actual unavailability. `ask_user`
+> remains an ordinary registered tool, never a confirmation transport.
+
 Every call in the recorded group has an independent typed admission outcome:
 
+<!-- `AwaitingConfirmation` remains only for historical non-Mandate records. -->
 ```text
 ToolCallAdmissionOutcomeDto
   Admitted
@@ -955,7 +969,20 @@ records `InterruptedBeforeStart`. Once a call has reached `ToolCallStarted`, a
 repeat of its bridge operation is read-only: it returns only already durable
 evidence and never re-executes the primitive.
 
+> **Mandate bridge supersession.** For a new Mandate run, a bridge operation
+> reports direct `Admitted` or a typed pre-effect incompatibility/unavailability.
+> The retained `AwaitingConfirmation` state and its producing policy are
+> historical-only. A bridge request cannot introduce confirmation, corridor,
+> quota, reservation, root-origin, or other per-tool authorization gating.
+> Grant binding, operation idempotency, durable replay, expiry, and no-resume
+> behavior remain unchanged.
+
 #### Persistent streaming, limits, and result delivery
+
+> **Historical bounded-layout semantics.** The fixed operation, frame, output,
+> and page values retained below do not constrain new Mandate work. Protocol
+> framing and durable representation validity remain mandatory; actual finite
+> capacity is reported as typed observable unavailability without silent loss.
 
 One attached peer sends correlated attachment, invocation, operation-read, and
 existing run-control commands, while the daemon sends correlated responses and
@@ -1061,7 +1088,12 @@ operating-system APIs outside the facade.
 
 ### Selected IPython kernel lifecycle
 
-> **Historical-only where conflicting for new Mandate work.** Preserve every kernel lifecycle, checkpoint, cancellation, and recovery detail below. New Mandate runs may create a replacement kernel from verified checkpoint state only; background work never owns Mandate triggers or authority, and no old cell, task, grant, or kernel is resumed. Retained fixed kernel limits are not product ceilings for new Mandate work.
+> **Historical-only where conflicting for new Mandate work.** Preserve every
+> kernel lifecycle, checkpoint, cancellation, and recovery detail below. New
+> Mandate runs may create a replacement kernel from verified checkpoint state
+> only; background work never owns Mandate triggers or authority, and no old
+> cell, task, grant, or kernel is resumed. Retained fixed kernel limits are not
+> product ceilings for new Mandate work.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -1294,12 +1326,23 @@ provider resource, process topology, or implementation detail.
 
 ### Selected RLM child-agent model
 
-> **Historical-only where conflicting for new Mandate work.** Preserve this detailed bounded RLM model for traceability and decoder compatibility. For new Mandate work, the Mandate child-work adaptation immediately below supersedes old policy/corridor authority and product tree, lifetime, class, message, and concurrency ceilings.
+> **Historical-only where conflicting for new Mandate work.** Preserve this
+> detailed bounded RLM model for traceability and decoder compatibility. For new
+> Mandate work, the Mandate child-work adaptation immediately below supersedes
+> old policy/corridor authority and product tree, lifetime, class, message, and
+> concurrency ceilings.
 
 #### Mandate child-work adaptation
 
-For new Mandate work, `sub_agent` creates a durable child Mandate rather than a bounded RLM-only child authority. `MandateParentLinkDto` records immutable parent Mandate/revision, parent run, creating `ToolCallId`, child Mandate/revision, and typed delegation snapshot. The child has its own fresh runs and selected provider/runtime meaning; it never inherits an old live process, kernel, bridge grant, MCP connection, external action, or per-tool permission. The parent owns a durable child-work graph and the Mandate-scoped activity identity spans fresh continuation runs. A verifier child may gather evidence but cannot inherit verification target-mutation authority.
-
+For new Mandate work, `sub_agent` creates a durable child Mandate rather than a
+bounded RLM-only child authority. `MandateParentLinkDto` records immutable
+parent Mandate/revision, parent run, creating `ToolCallId`, child
+Mandate/revision, and typed delegation snapshot. The child has its own fresh
+runs and selected provider/runtime meaning; it never inherits an old live
+process, kernel, bridge grant, MCP connection, external action, or per-tool
+permission. The parent owns a durable child-work graph and the Mandate-scoped
+activity identity spans fresh continuation runs. A verifier child may gather
+evidence but cannot inherit verification target-mutation authority.
 
 This is a selected concept constraint for future replanning. It closes the
 first-scope RLM child-agent model without authorizing a crate, implementation,
@@ -1581,7 +1624,13 @@ provider resource, process topology, or raw transcript.
 
 ### Selected continual-harness model
 
-> **Historical-only where conflicting for new Mandate work.** This full continual-harness design remains readable in place. Its read-and-delegate, no-disconnect, policy/corridor, quota, and bounded-rule semantics do not govern a new Mandate. The conceptual mapping is rule -> Mandate, rule revision -> Mandate revision, harness trigger -> Mandate trigger, service session -> Mandate service session, and harness journal/checkpoint -> Mandate work state/verified checkpoint.
+> **Historical-only where conflicting for new Mandate work.** This full
+> continual-harness design remains readable in place. Its read-and-delegate,
+> no-disconnect, policy/corridor, quota, bounded-rule, execution, admission,
+> continuation, and recovery semantics do not govern a new Mandate. The
+> conceptual mapping is rule -> Mandate, rule revision -> Mandate revision,
+> harness trigger -> Mandate trigger, service session -> Mandate service session,
+> and harness journal/checkpoint -> Mandate work state/verified checkpoint.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -1816,7 +1865,16 @@ provider resource, process topology, or raw transcript.
 
 ### Selected goals, working memory, verification, compaction, skills, and MCP model
 
-> **Historical-only where conflicting for new Mandate work.** Preserve all Goal, evidence, memory, role, compaction, MCP, error, and recovery detail below. For new Mandate work, Goals are acceptance/evidence rather than the work-authorization plane; a Mandate may reference frozen Goal revisions, and Goal pause/evidence does not implicitly cancel, complete, or authorize it. The retained leading-goal, policy, confirmation, and bound semantics are historical-only where they conflict. MCP descriptors persist logically across fresh runs, but a per-run process never reattaches; `fetch_url` remains narrow public retrieval while authenticated or transactional capability uses active typed MCP or later registered descriptors.
+> **Historical-only where conflicting for new Mandate work.** Preserve all Goal,
+> evidence, memory, role, compaction, MCP, error, and recovery detail below.
+> For new Mandate work, Goals are acceptance/evidence rather than the
+> work-authorization plane; a Mandate may reference frozen Goal revisions, and
+> Goal pause/evidence does not implicitly cancel, complete, or authorize it.
+> The retained leading-goal, policy, confirmation, and bound semantics are
+> historical-only where they conflict. MCP descriptors persist logically across
+> fresh runs, but a per-run process never reattaches; `fetch_url` remains narrow
+> public retrieval while authenticated or transactional capability uses active
+> typed MCP or later registered descriptors.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -2081,6 +2139,8 @@ VerificationTargetDto
   target_mandate_id
   frozen_target_revision
   baseline_lifecycle_state
+  frozen_goal_references
+  frozen_gate_and_evidence_contract_references
   baseline_unknown_effect_reference_when_present
 
 VerificationAuditContractDto
@@ -2096,6 +2156,8 @@ VerificationAuditEvidenceDto
   authority_reference
   target_reference
   frozen_target_revision
+  frozen_goal_references
+  frozen_gate_and_evidence_contract_references
   evidence_kind
   retained_content_reference
   canonical_evidence_digest
@@ -2104,6 +2166,8 @@ VerificationTargetOperationDto
   MarkCompleted
   MarkNeedsRework
   Pause
+  Resume
+  Stop
   ReviseFull
   ResolveUnknownEffect
 
@@ -2139,33 +2203,34 @@ mode, triggers, Goal/context references, continuation, stop conditions, and
 ordinary future-work references. It still cannot rewrite history or alter a live
 old run; a resulting revision affects fresh admission only.
 
-Each audit binds the explicit target's frozen revision and baseline state before
-evidence gathering. If any selected target revision changes before verdict or
-mutation, the audit becomes `TargetRevisionStale`, fails closed, and cannot be
-used for a mutation. User mutations win through ordinary optimistic concurrency.
-An audit verdict is durable evidence, never an implicit trigger, hidden retry,
-or self-executing mutation.
+Each audit binds the explicit target's frozen Mandate revision and baseline
+state, required Goal revisions, gate/evidence-contract references, and audit
+contract before evidence gathering. If any selected baseline reference changes,
+becomes missing, incompatible, or otherwise invalid before verdict or mutation,
+the audit becomes `TargetRevisionStale`, fails closed, and cannot be used for a
+mutation. User mutations win through ordinary optimistic concurrency. An audit
+verdict is durable evidence, never an implicit trigger, hidden retry, or
+self-executing mutation.
 
 The daemon applies a requested target mutation atomically only after validating
 the authority owner/revision, immutable target membership, allowed operation,
-current target revision equal to the frozen baseline, audit contract/evidence,
-operation-specific lifecycle preconditions, no-resume rule, and idempotency key.
-It commits the mutation/revision, audit reference, activity record, target
-projection, and rejection or applied result together, or commits none. A duplicate
-equal mutation returns the saved result; changed key reuse fails before any
-mutation.
+every frozen Mandate/Goal/gate/evidence-contract baseline reference, audit
+contract/evidence, operation-specific lifecycle preconditions, no-resume rule,
 
-| Target state | `MarkCompleted` | `MarkNeedsRework` | `Pause` | `ReviseFull` | `ResolveUnknownEffect` |
-| --- | --- | --- | --- | --- | --- |
-| `Draft` | Reject | Reject | User-only | Future revision only | Reject |
-| `Active` | Allowed with `Pass` | Allowed with `Fail`/evidence | Allowed | Future revision only | Reject |
-| `Working` | Reject live-run completion | Reject live-run mutation | Pause after ordinary cancellation semantics | Future revision only, no live rewrite | Reject unless state first becomes awaiting decision |
-| `Paused` | Allowed with evidence | Allowed with evidence | Idempotent | Future revision only | Reject |
-| `PausedAwaitingDecision` | Reject | Allowed only when contract proves rework | Allowed/idempotent | Future revision only | Allowed only with delegated reconciliation evidence |
-| `NeedsRework` | Allowed with new `Pass` evidence | Idempotent | Allowed | Future revision only | Reject |
-| `Completed` / `Stopped` | Idempotent only | User or explicit full revision path | Preserve terminal state | Future revision only | Reject |
-| `Archived` | Reject | Reject | Reject | Reject until user restores presentation state | Reject |
+record, target projection, and rejection or applied result together, or commits
+none. A duplicate equal mutation returns the saved result; changed key reuse
+fails before any mutation.
 
+| Target state | `MarkCompleted` | `MarkNeedsRework` | `Pause` | `Resume` | `Stop` | `ReviseFull` | `ResolveUnknownEffect` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `Draft` | Reject | Reject | Reject | Reject | Explicitly granted | Future revision only | Reject |
+| `Active` | Allowed with `Pass` | Allowed with `Fail`/evidence | Allowed | Reject | Explicitly granted | Future revision only | Reject |
+| `Working` | Reject live-run completion | Reject live-run mutation | Reject live-run mutation | Reject | Reject | Future revision only, no live rewrite | Reject |
+| `Paused` | Allowed with evidence | Allowed with evidence | Idempotent | Explicitly granted | Explicitly granted | Future revision only | Reject |
+| `PausedAwaitingDecision` | Reject | Reject | Reject | Reject | Reject | Future revision only | Allowed only with delegated reconciliation evidence |
+| `NeedsRework` | Allowed with new `Pass` evidence | Idempotent | Explicitly granted | Explicitly granted | Explicitly granted | Future revision only | Reject |
+| `Completed` / `Stopped` | Idempotent only | Reject | Reject | Reject | Idempotent only | Explicitly granted reopening revision only | Reject |
+| `Archived` | Reject | Reject | Reject | Reject | Reject | Reject | Reject |
 `ResolveUnknownEffect` is available only when the authority explicitly includes
 it, the target is in `PausedAwaitingDecision`, the mutation names the original
 unknown-effect reference, and the audit contract/evidence proves the selected
@@ -2181,10 +2246,11 @@ Verification activity is added through typed Mandate-scoped records such as
 `VerificationTargetMutationRejected`, and
 `VerificationUnknownEffectReconciled`. They contain typed identity, revision,
 digest, visibility, and provenance references rather than raw evidence content.
-An ordinary pass/fail/inconclusive outcome is an ordinary summary; target
-unavailability, stale audit, or unresolved external-effect safety condition is
-urgent. Notification, replay, and recovery publish only after durable commit and
-reread.
+Pass, fail, inconclusive, target-unavailable, and stale-audit outcomes are
+ordinary target-visible summaries. Delegated unknown-effect reconciliation and
+inability to reconcile an unknown effect are urgent. A verifier's own unknown
+effect is a verifier safety event and never mutates a target. Notification,
+replay, and recovery publish only after durable commit and reread.
 
 Recovery retains authority, target-set, audit, evidence, verdict, and mutation
 history but never resumes verifier or target work, repeats verification tools,
@@ -2475,7 +2541,11 @@ long-lived workers, leases, attach/detach, force-kill, or supervisor recovery.
 
 ### Selected programmatic-caller policy and admission
 
-> **Historical-only for new Mandate work.** All policy DTOs, diagrams, counters, corridors, errors, lifecycle, and recovery detail below remain preserved for historical decoding, audit, and migration analysis. They cannot authorize, narrow, deny, reserve, quota, or gate a new Mandate tool call. No new policy decoder requirement is created beyond preserving historic bytes.
+> **Historical-only for new Mandate work.** All policy DTOs, diagrams,
+> counters, corridors, errors, lifecycle, and recovery detail below remain
+> preserved for historical decoding, audit, and migration analysis. They cannot
+> authorize, narrow, deny, reserve, quota, or gate a new Mandate tool call. No
+> new policy decoder requirement is created beyond preserving historic bytes.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -2963,7 +3033,13 @@ selected `ExternalEffectUnknown` evidence for work that had already started.
 
 ### Selected agent communication, observation, and notifications
 
-> **Historical-only where conflicting for new Mandate work.** Preserve the full communication, journal, notification, replay, ordering, and safe-projection detail below. New Mandate work uses a Mandate-scoped activity identity across fresh runs; retained root-origin and fixed-limit semantics are historical-only where they conflict. Verification authority, audit verdicts, target mutations, and unknown-effect reconciliation add typed activity records as specified below.
+> **Historical-only where conflicting for new Mandate work.** Preserve the full
+> communication, journal, notification, replay, ordering, and safe-projection
+> detail below. New Mandate work uses a Mandate-scoped activity identity across
+> fresh runs; retained root-origin and fixed-limit semantics are historical-only
+> where they conflict. Verification authority, audit verdicts, target mutations,
+> and unknown-effect reconciliation add typed activity records as specified
+> below.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -3954,7 +4030,10 @@ preflight, request, normalization, ordering, and redaction behavior.
 
 ### Immutable run-execution meaning
 
-> **Historical-only where conflicting for new Mandate work.** Keep v1--v4 schemas and selections below exactly readable. New Mandate work introduces a later, separate execution-meaning version; no old record acquires synthetic Mandate or verifier state.
+> **Historical-only where conflicting for new Mandate work.** Keep v1--v4
+> schemas and selections below exactly readable. New Mandate work introduces a
+> later, separate execution-meaning version; no old record acquires synthetic
+> Mandate or verifier state.
 
 
 `RunExecutionMeaningDto` is the credential-free immutable semantic portion of
@@ -4045,9 +4124,11 @@ New Mandate-owned work uses `MandateRunExecutionMeaningV1`, a later additive
 execution-meaning version. It carries the immutable `MandateSelectionV1`,
 Mandate-scoped activity selection, frozen Goal/MCP context when used, selected
 provider/capability/descriptor set, and, when applicable, verifier authority,
-immutable target-set, and audit-contract selections. Direct invocation selection
-records active descriptors supplied to the selected compatible model; it records
-no policy, confirmation, corridor, quota, or root-origin authorization state.
+immutable target-set, audit-contract, allowed-operation, reconciliation, and
+complete Mandate/Goal/gate/evidence-contract baseline selections. Direct
+invocation selection records active descriptors supplied to the selected
+compatible model; it records no policy, confirmation, corridor, quota, or
+root-origin authorization state.
 
 ```text
 MandateRunExecutionMeaningV1
@@ -5620,7 +5701,11 @@ reload, and a full configuration control plane remain separate future decisions.
 
 ## Required verification portfolio
 
-> **Historical verification scope retained.** Every original fixture below remains required for its recorded M4/first-scope semantics. Policy, corridor, quota, and fixed-limit fixtures test historical decoding and compatibility only; they do not define admission or ceilings for new Mandate work. The additive Mandate and verifier checks follow before the retained portfolio.
+> **Historical verification scope retained.** Every original fixture below
+> remains required for its recorded M4/first-scope semantics. Policy, corridor,
+> quota, and fixed-limit fixtures test historical decoding and compatibility
+> only; they do not define admission or ceilings for new Mandate work. The
+> additive Mandate and verifier checks follow before the retained portfolio.
 
 
 ### Additive Mandate and delegated-verifier evidence
@@ -6320,7 +6405,10 @@ is accepted.
 
 ## Concept preparation backlog and tracking checklist
 
-> **Semi-autonomous preparation status.** The original backlog remains intact below for research traceability. The additive entries identify the Mandate and delegated-verifier prerequisites needed before any authoritative replanning; no entry authorizes implementation.
+> **Semi-autonomous preparation status.** The original backlog remains intact
+> below for research traceability. The additive entries identify the Mandate and
+> delegated-verifier prerequisites needed before any authoritative replanning;
+> no entry authorizes implementation.
 
 
 This backlog records the concrete concept work that remains before the
@@ -6345,6 +6433,13 @@ approved architecture, implementation scope, or delivery authorization.
 blocking decisions. `Not prepared` means that only high-level principles are
 available. No row authorizes a milestone, crate, storage migration, protocol
 change, configuration change, or implementation.
+
+> **Legacy summary qualification.** Policy, corridor, confirmation, root-origin,
+> reservation, and fixed-limit entries retained in the summaries and checklists
+> below are selected historical compatibility evidence only. They are not
+> requirements for new Mandate execution, which uses direct admission, no
+> product ceilings, Mandate-scoped activity, fresh-run recovery, and
+> `MandateRunExecutionMeaningV1`.
 
 | Direction | State | Already selected | Still to decide | Candidate next decision package |
 | --- | --- | --- | --- | --- |
@@ -6683,6 +6778,14 @@ assigning milestone numbers here:
    bounded user confirmation, narrowing-only delegation, live tightening,
    calendar reservations, and trusted user-privilege execution model rather
    than introduce an implicit isolation guarantee.
+
+   **Mandate qualification.** For new Mandate execution, typed registry
+   contracts, idempotency, durable commit and reread publication, redaction,
+   immutable provider selection, fresh-run recovery, and trusted local
+   execution remain active. Root origin, frozen policy snapshots,
+   confirmations, corridors, delegation narrowing, live tightening, and
+   calendar reservations are historical compatibility semantics only and must
+   not gate a new Mandate tool call.
 5. Add presentation only after each daemon/client contract exists. Persistent
    kernels, RLM delegation, session forks, continual harness, provider profiles,
    and reload must not be forced into one delivery package merely because this
