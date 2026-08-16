@@ -182,3 +182,7 @@ A later activating specification must declare exact crate owners, targets, cover
 - scheduler non-authority, child isolation, verifier evidence non-authority, deterministic user-precedence races, negotiated replay/resync, and zero-effect replay;
 - M3/M4 byte/meaning/replay/recovery/provider and M4 denial preservation, retained bounded-MCP/RLM non-migration, historical startup, and readable-not-executable isolation; and
 - end-to-end acquisition visible only to a later model step, invocation, known failure, schema drift, unavailable resource, unknown effect/reconciliation, restart, hostile-server redaction, and historical database outcomes.
+
+Kernel-originated MCP work still uses this document's fixed `mcp` lifecycle
+through the bridge and tool loop. Checkpoints contain no live MCP state and later
+runs reacquire capabilities.

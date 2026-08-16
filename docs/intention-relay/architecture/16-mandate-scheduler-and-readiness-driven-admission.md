@@ -244,3 +244,7 @@ quick`, `make verify`, and Linux/Windows CI. It must cover:
   durable/public surfaces; and
 - end-to-end readiness restoration causing exactly one fresh admission from a
   retained reason, plus user-precedence and recovery outcomes.
+
+Kernel readiness is non-authoritative operational evidence only. The scheduler
+cannot create, restore, attach, or execute a kernel; architecture 20 owns those
+kernel details.

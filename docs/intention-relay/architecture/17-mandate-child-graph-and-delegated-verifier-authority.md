@@ -176,3 +176,7 @@ A later activating specification must declare exact crate owners, test targets, 
 - negotiated replay/resync, DTO-only boundary/no-second-registry fixtures, and no-current-state reconstruction;
 - M3/M4 and retained-RLM byte/meaning preservation, M4 tool-denial preservation, historical startup, redaction, and safe failure outcomes; and
 - end-to-end idempotent child creation, graph closure, stale audit, verifier uncertainty, exact reconciliation, recovery, and historical database outcomes.
+
+Architecture 20 permits only separately selected verified checkpoint copies for
+child kernel seeding. No live kernel, namespace, task, grant, or authority is
+inherited, and kernel evidence cannot widen verifier authority.

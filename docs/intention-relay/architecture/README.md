@@ -74,8 +74,9 @@ flowchart TD
 7. [Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
 8. [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md)
 9. [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md)
-10. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-11. [VFR and Headroom](06-vfr-and-headroom.md)
+10. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
+11. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+12. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -229,3 +230,11 @@ detailed authority for future bridge attachment, ephemeral grants, operation
 correlation, safe bridge-visible replay, cancellation propagation, and bridge
 recovery. It is typed ingress to the one capability path, not a second registry,
 lifecycle authority, persistence authority, sandbox, or privilege boundary.
+
+### Run-scoped IPython kernel owner
+
+[Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md) is the
+sole detailed authority for future private kernel epochs, cells, namespace
+checkpoints, safe projections, and kernel recovery. It consumes the Gateway/RLM
+bridge and the one capability path; it is not a second runtime, registry,
+lifecycle authority, sandbox, or privilege boundary.

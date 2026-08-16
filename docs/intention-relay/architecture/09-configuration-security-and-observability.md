@@ -195,3 +195,11 @@ unsafe absolute/canonical/symlink paths, process resources, provider-native call
 identifiers, SDK values, or raw output. Mandate outside-root observation is
 audit-only and non-authorizing. See [Tool registry and direct Mandate tool
 loop](15-tool-registry-and-mandate-tool-loop.md).
+
+## Post-M4 kernel observability consequence
+
+Future kernel selections, checkpoint metadata, and safe output projections remain
+credential-free. Checkpoint payloads, Python values, Jupyter frames, raw
+tracebacks, grants, endpoints, paths, handles, process details, and implementation
+errors never enter storage, protocol, logs, diagnostics, adapters, or model
+context. Kernel availability is typed operational evidence, not authority.
