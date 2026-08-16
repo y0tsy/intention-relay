@@ -270,3 +270,35 @@ Session, run, queue, event, snapshot, and transaction tests are mandatory `make 
 - Concurrent runs and event-merge semantics in one session.
 - Automatic continuation after restart.
 - Distributed replication or cross-device synchronization.
+
+## Post-M4 Mandate foundation boundary
+
+This section preserves the current Session/Run model and records only the
+future aggregate boundary. It does not add a table, event, state variant, or
+scheduler implementation.
+
+A future Mandate is a distinct durable work aggregate. It may associate with a
+future service-session concept while preserving the existing one-active-run
+invariant for that service session. Mandate triggers are durable causal reasons
+for future fresh admission; they are not M3 `queued_turns` and do not reinterpret
+legacy queue tickets.
+
+For future Mandate work:
+
+- admission freezes the selected Mandate revision, trigger, execution meaning,
+  and applicable safe context before dependent external work;
+- a revision while a Mandate run is non-terminal affects only a later fresh run;
+- user lifecycle/revision commands win optimistic conflicts with daemon
+  operational facts or later verifier mutations;
+- no external provider, tool, process, kernel, child, MCP, network, or
+  scheduler action occurs inside the transition transaction;
+- recovery preserves durable facts/triggers but never resumes old work;
+- an unknown external terminal effect causes the owning Mandate to await an
+  explicit future reconciliation, not an automatic retry or next model step.
+
+The detailed lifecycle, trigger ordering, verifier authority, child graph,
+capacity scheduling, event ownership, protocol delivery, and schema design are
+later packages. Existing run states and M3/M4 recovery behavior remain unchanged.
+
+See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
+and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).

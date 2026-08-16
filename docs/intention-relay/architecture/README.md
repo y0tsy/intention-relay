@@ -81,12 +81,14 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
-4. [M4 execution charter](../m4.md)
-5. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
-6. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
-7. [M2 closure evidence](../closeout/m2-closure-evidence.md)
-8. [M3 closure evidence](../closeout/m3-closure-evidence.md)
-9. [M4 closure evidence](../closeout/m4-closure-evidence.md)
+4. [Post-M4 authority reconciliation](../reconciliation/README.md)
+5. [Architecture decision records](../decisions/README.md)
+6. [M4 execution charter](../m4.md)
+7. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
+8. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
+9. [M2 closure evidence](../closeout/m2-closure-evidence.md)
+10. [M3 closure evidence](../closeout/m3-closure-evidence.md)
+11. [M4 closure evidence](../closeout/m4-closure-evidence.md)
 
 ## Document map
 
@@ -133,3 +135,34 @@ Every plan in this directory must:
 v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot enforcement, Plan/Build modes, VFR, and Headroom/CCR.
 
 v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container execution, automatic run resumption, and a direct MCP administration interface.
+
+## Post-M4 authority foundation
+
+The closed M4 baseline remains authoritative for implemented behavior. The
+post-M4 direction is coordinated by the
+[authority reconciliation package](../reconciliation/README.md) and its
+[accepted decision records](../decisions/README.md). Those artifacts do not
+implement or silently supersede v1 behavior: they establish the authority,
+compatibility, ownership, and dependency boundary that later authoritative
+packages must satisfy.
+
+### Foundation terms
+
+| Term | Meaning |
+| --- | --- |
+| **Ordinary execution** | Existing run semantics, including historical M3/M4 behavior. |
+| **Mandate** | Future durable user-issued work authority. It is distinct from a Goal, prompt, Skill, tool permission, provider continuation, or daemon. |
+| **VerifierMandate execution** | Future Mandate execution with explicit, target-scoped delegated verifier authority. |
+| **Fresh run** | A new `RunId` admitted from durable future work state. It is never resumption of prior external work. |
+| **ExternalEffectUnknown** | A future started external attempt whose terminal effect cannot be durably proven. It is distinct from a known failure. |
+| **Intrinsic bound** | A representation, correctness, or security constraint. |
+| **Capacity availability** | Observable temporary resource availability, not a product quota. |
+| **Product ceiling** | A policy quota. It cannot silently govern future Mandate admission. |
+
+A state name is always qualified by its owner, for example Mandate `Active` or
+Run `Running`. WorkspaceRoot, modes, hooks, gateways, and audit are logical
+product controls in a trusted-local process, not OS sandbox or privilege
+boundaries.
+
+See [Post-M4 Authority Reconciliation](../reconciliation/README.md) for the
+matrix, compatibility register, contradiction register, and dependency map.

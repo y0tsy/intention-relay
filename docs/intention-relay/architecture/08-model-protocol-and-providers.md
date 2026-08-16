@@ -164,3 +164,20 @@ cancelling is durable it suppresses later provider events/errors and retries.
 - A provider-agnostic interface that discards reasoning, tool, or native capabilities.
 - Direct SDK use from application, runtime, transport, or adapters.
 - Full provider catalog in v1.
+
+## Post-M4 immutable execution-meaning boundary
+
+M4 provider selection, retry behavior, supported provider kinds, and stream
+contracts remain unchanged. Future packages may introduce a credential-free,
+immutable execution meaning selected at admission, but may not use it to
+reinterpret an M4 selection.
+
+A future provider/model/capability selection is only one nested part of the
+kind-specific execution meaning. Provider drivers remain subordinate adapters:
+they do not select execution kind, Mandate revision, trigger, lifecycle,
+authority, tools, continuation, or current-state fallback. Model names never
+select a provider kind or driver.
+
+Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle,
+reasoning, and driver compatibility are separate provider-evolution work. They
+require their own authoritative contract and fixtures before implementation.

@@ -167,3 +167,55 @@ DTO compatibility, validation, redaction, and public-API boundary tests are bloc
 A feature is not ready unless a Tauri bridge and TUI/REPL can invoke its same public command/query DTOs and interpret the same resulting event/snapshot DTOs without adapter-specific business rules.
 
 See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) for the process boundary, [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md) for mandatory test layers, and [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration contract.
+
+## Post-M4 execution and compatibility boundary
+
+Future M4+ packages use closed, typed families rather than widening historical
+records by implication.
+
+### Execution-kind envelope
+
+A future admitted execution meaning has a closed envelope conceptually
+containing:
+
+```text
+RunExecutionMeaningEnvelopeDto
+  execution_kind: Ordinary | Mandate | VerifierMandate
+  meaning_version: explicit version
+  canonical_meaning_digest: credential-free digest
+  meaning_payload: kind-specific typed payload
+```
+
+The exact field table, tag registry, canonical encoding, digest algorithm,
+decoder retention schedule, and nested selections belong to later owner
+packages. The envelope rule is already fixed: kind/version/payload mismatch
+blocks dependent external work, and live availability does not silently mutate
+a persisted meaning.
+
+### Future DTO families
+
+Future Mandate work requires typed IDs and values for Mandate identity/revision,
+trigger reason, disposition, execution meaning, verified checkpoint reference,
+external-attempt phase/evidence, capacity outcome, and explicit verifier
+authority where applicable. These are future contract families, not current M4
+storage or wire fields.
+
+### Historical compatibility classes
+
+- **Execution compatibility:** a supported record may execute only under its
+  recorded kind, version, immutable selection, and explicitly supported driver
+  contract.
+- **Replay compatibility:** readable history may remain replayable even when it
+  is not executable.
+- **Audit compatibility:** an unknown/corrupt future audit record may isolate
+  that audit result without inventing replacement state.
+
+Historical M3/M4 and ordinary records must not receive synthetic Mandate,
+verifier, Skill, MCP, child, activity, policy, profile, or execution-kind
+fields. Future migrations may add bridges or projections but may not rewrite old
+payload bytes, IDs, digests, cursors, snapshots, or event envelopes. Unknown or
+corrupt future meaning blocks dependent work before an effect and must not fall
+back to current TOML, registry, model name, provider, or live resource state.
+
+See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
+and the [compatibility register](../reconciliation/compatibility-register.md).

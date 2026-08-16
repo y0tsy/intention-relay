@@ -311,3 +311,17 @@ M0 is accepted because its implementation establishes that:
 - Replacing human review with coverage percentage or lint compliance.
 - Exhaustive verification of every mathematically possible Cargo feature combination.
 - Turning the Makefile into a generic build/run/cleanup wrapper unrelated to quality outcomes.
+
+## Post-M4 documentation-only reconciliation policy
+
+The Post-M4 authority reconciliation package is documentation-only. It does not
+weaken, replace, or extend the implemented Makefile gate, and it does not
+activate a production crate, coverage tier, feature combination, quality tool,
+or policy exception. Existing `make quick` and `make verify` remain mandatory
+for the documentation change itself and for every later implementation slice.
+
+When a later M4+ package activates a production boundary, the activating change
+must update the existing machine-readable architecture, test-target, coverage,
+and feature policies together with its focused expected-failure architecture
+fixtures and outcome evidence. Research or a reconciliation row alone is not a
+quality-policy declaration.

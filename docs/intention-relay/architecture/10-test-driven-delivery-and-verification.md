@@ -252,3 +252,27 @@ Each completed implementation slice must report:
 - Replacing reviewer judgment with a test count or coverage percentage.
 - Treating snapshots as a substitute for semantic assertions.
 - Claiming a user flow works because a unit test reached a private method.
+
+## Post-M4 Foundation evidence obligations
+
+Before any future Mandate-capable production slice, its specification must name
+contract, architecture, fault/recovery, compatibility, redaction, and outcome
+evidence for the Foundation rules it consumes. At minimum, later packages must
+cover:
+
+- execution-kind/version/payload mismatch rejection before external work;
+- M3/M4 byte/meaning preservation and no synthetic future state;
+- user-versus-daemon/verifier conflict precedence where relevant;
+- atomic admission/transition rollback at every persistence stage;
+- no external effect inside a transition transaction and post-commit reread
+  publication;
+- crash/cancel behavior before start versus after a potentially uncertain start;
+- no provider/tool/process/kernel/MCP/child/bridge resumption after restart;
+- intrinsic-bound versus capacity-unavailability behavior without hidden
+  Mandate product quotas; and
+- recognizable fake-secret absence from future records, logs, errors, protocol,
+  and diagnostics.
+
+These are obligations for later implementation packages, not claims that the
+corresponding runtime behavior exists today. See the
+[reconciliation matrix](../reconciliation/source-of-truth-matrix.md).

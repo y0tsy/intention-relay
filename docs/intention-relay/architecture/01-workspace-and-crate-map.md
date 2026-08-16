@@ -138,3 +138,29 @@ The exact test strategy and minimum test portfolio are defined in [10 Test-Drive
 ## Non-goals
 
 This map does not freeze individual module names, file names, Cargo feature syntax, or exact trait method signatures. Those are implementation choices that must preserve these ownership and dependency rules.
+
+## Post-M4 prospective ownership boundary
+
+This section records future layer ownership only. It neither creates a crate nor
+activates an existing skeleton. `quality/architecture.toml` remains the sole
+machine-readable future-crate placeholder registry; coverage and feature policy
+remain activation-time projections.
+
+| Concern | Future layer owner | Required boundary |
+| --- | --- | --- |
+| Mandate IDs, revisions, lifecycle values, trigger/disposition values | Domain/types | Typed, credential-free values and invariants. |
+| Admission workflows, user/daemon conflict handling, recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
+| Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
+| Public commands, queries, events, and future negotiated replay | Protocol | No runtime, SDK, storage, or adapter resources. |
+| Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
+| Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
+| Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
+| Presentation and typed user input | Adapters | No local business authority or bypass. |
+
+Future child, verifier, MCP, Skill, kernel, provider-profile, and fork
+boundaries remain separate delivery decisions. Any split must preserve this
+acyclic direction, DTO-first contracts, a declared test target, a coverage tier,
+and isolated architecture fixtures before production activation.
+
+See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md)
+and the [ownership map](../reconciliation/ownership-and-dependency-map.md).

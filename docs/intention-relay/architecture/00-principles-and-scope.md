@@ -119,3 +119,69 @@ The following are required before their owning implementation slice begins, but 
 ## Verification
 
 Before implementation starts, the team must create the architectural test matrix described in [10-test-driven-delivery-and-verification.md](10-test-driven-delivery-and-verification.md) and the reproducible quality foundation described in [12-quality-gates-and-makefile.md](12-quality-gates-and-makefile.md). Every v1 principle above requires at least one executable test or a justified documented exception.
+
+## Post-M4 foundation principles
+
+The following principles govern future authoritative M4+ packages without
+changing closed M4 or current ordinary-run behavior.
+
+### 12. Execution kinds are explicit
+
+Future execution has a closed kind discriminator: `Ordinary`, `Mandate`, or
+`VerifierMandate`. A record's kind, meaning version, and payload must agree
+before dependent external work. New semantics are not inferred from model
+names, current configuration, ancestry, prompts, Goals, Skills, or adapter
+state.
+
+### 13. Mandate authority is user-issued and bounded
+
+A future Mandate is durable user-issued work authority. User commands own its
+product lifecycle and revisions. The daemon owns only explicitly enumerated
+operational facts such as durable trigger capture, admission, known terminal
+disposition, and mandatory uncertainty pausing. A Goal, Skill, parent relation,
+MCP source, provider response, bridge grant, kernel namespace, or activity
+record cannot grant lifecycle, target-mutation, scheduling, or tool authority.
+
+### 14. Continuation is fresh admission, never resumption
+
+A future continuation may admit a new run from durable state. It never resumes,
+reattaches, or repeats an old provider request, tool call, process, kernel task,
+child work, MCP operation, bridge operation, or uncertain external effect.
+
+### 15. Durable transitions and effects are separate
+
+Future lifecycle/admission transitions atomically commit their projections,
+events, snapshots, and idempotency evidence or commit nothing. External work
+occurs after that transaction. Publication follows durable commit and an
+independent scoped reread; publication failure cannot roll back committed state.
+
+### 16. External uncertainty is explicit
+
+A future external attempt distinguishes no-start, started, known terminal, and
+unknown terminal facts. A known validation failure, provider failure, or
+non-zero process exit is not automatically unknown. An `ExternalEffectUnknown`
+pauses its owning Mandate and blocks automatic continuation until an authorized
+future reconciliation records a fresh path or stop decision.
+
+### 17. Compatibility is non-reinterpretation
+
+M3/M4 and existing ordinary records remain readable under their recorded
+semantics. They gain no synthetic Mandate, verifier, Skill, MCP, child, activity,
+profile, policy, or execution-kind state. Current mutable configuration,
+registry, provider/model naming, ancestry, and live resources cannot reconstruct
+missing historical meaning.
+
+### 18. Limits state their class
+
+Future design distinguishes intrinsic bounds, capacity availability, and product
+ceilings. Intrinsic bounds remain mandatory correctness or security constraints.
+Capacity unavailability is typed and preserves its relevant pending work.
+Product ceilings cannot be introduced as hidden future Mandate admission policy.
+Existing numeric bounds retain their current behavior until a later owner
+classifies their future applicability.
+
+The authoritative source and package boundaries for these principles are the
+[Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
+records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
+[0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md),
+and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md).
