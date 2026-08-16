@@ -156,12 +156,15 @@ remain activation-time projections.
 | Scheduler readiness/candidate values | Domain/types | Typed, credential-free operational evidence. |
 | Scheduler reevaluation and admission orchestration | Application/runtime | Lifecycle-owned admission only; no second runtime. |
 | Scheduler observations and decision evidence | Storage | Atomic persistence without resource leaks. |
+| Child edges, delegation, verifier authority, and audit values | Domain/types | Typed, credential-free values and invariants. |
+| Child/verifier orchestration and target mutation | Application/runtime | Lifecycle-owned transitions and DTO-only storage. |
 | Process/task ownership, identity assignment, publication | Daemon | No product-decision authority. |
 | Concrete provider/tool/storage selection | Composition | The only concrete assembler. |
 | Presentation and typed user input | Adapters | No local business authority or bypass. |
 
-Future child, verifier, MCP, Skill, kernel, provider-profile, and fork
-boundaries remain separate delivery decisions. Any split must preserve this
+Architecture 17 owns future child/verifier semantics but activates no crate or
+dependency edge. MCP, Skill, kernel, provider-profile, and fork boundaries
+remain separate delivery decisions. Any split must preserve this
 acyclic direction, DTO-first contracts, a declared test target, a coverage tier,
 and isolated architecture fixtures before production activation.
 

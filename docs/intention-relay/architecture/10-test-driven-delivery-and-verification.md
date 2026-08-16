@@ -308,3 +308,16 @@ ordinary queue and M4 preservation; no-current-state reconstruction; negotiated
 replay; and fake-secret/resource absence. These are future obligations, not
 current tests or targets. The detailed portfolio is owned by [Mandate scheduler
 and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+
+## Mandate child graph and verifier evidence
+
+Before implementation, future child/verifier work requires canonical
+edge/delegation/authority/baseline/evidence/verdict/mutation goldens;
+idempotent child creation and graph-integrity fixtures; direct-edge-only control
+and non-scheduling messages; terminalization/cascade and child-local uncertainty
+matrices; authority revision/revocation/target-set/stale-baseline/operation
+fixtures; user-precedence races; atomic fault injection; recovery/no-resume;
+negotiated replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
+resource absence. These are future obligations, not current tests or targets.
+The detailed portfolio is owned by [Mandate child graph and delegated verifier
+authority](17-mandate-child-graph-and-delegated-verifier-authority.md).

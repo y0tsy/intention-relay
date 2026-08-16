@@ -619,3 +619,34 @@ milestone.
   bridge/kernel, Skills/Goals, provider evolution, UI, and activation remain
   explicitly excluded; and
 - a later implementation specification is still required before code begins.
+
+## Post-M4 Mandate child graph and delegated verifier authority package
+
+**Documentation-only package.** It depends on Mandate lifecycle, execution
+meaning, the fixed tool-loop boundary, and scheduler admission. It creates [the
+authoritative child/verifier contract](17-mandate-child-graph-and-delegated-verifier-authority.md)
+and decision 0009, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- durable immutable child edges, delegation snapshots, direct-edge controls and
+  messages, graph terminalization, child-local uncertainty, and recovery;
+- separately issued verifier authority, immutable target sets/baselines,
+  evidence/verdict, atomic target mutation, conflict precedence, and exact
+  reconciliation;
+- execution-meaning nested-selection ownership and negotiated future replay
+  boundary; and
+- reconciliation ownership, compatibility, contradiction, and evidence updates.
+
+### Exit criteria
+
+- parenthood grants only direct-child controls and no implicit verifier or
+  lifecycle authority;
+- verifier mutation requires exact issued authority, target, operation,
+  baseline, and evidence while user mutations retain precedence;
+- M3/M4 and retained RLM history remain explicitly unchanged;
+- executor/worker topology, MCP, bridge/kernel, Skills/Goals, provider
+  evolution, activity/UI, schema, and activation remain excluded; and
+- a later implementation specification is still required before code begins.

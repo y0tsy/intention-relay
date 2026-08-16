@@ -339,3 +339,10 @@ implementation, migration, quality tool, or Makefile target. A later activating
 change must declare scheduler owners, test targets, coverage/features,
 expected-failure architecture fixtures, and outcome evidence atomically with
 production work.
+
+The post-M4 child graph and delegated verifier authority package is likewise
+documentation-only. It activates no crate, test target, coverage tier, feature
+combination, protocol implementation, migration, quality tool, or Makefile
+target. A later activating change must declare exact graph/verifier owners,
+test targets, coverage/features, expected-failure architecture fixtures, and
+outcome evidence atomically with production work.

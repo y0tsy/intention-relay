@@ -81,10 +81,10 @@ explicit disabled variants for optional selections.
 | 6 | Direct tool selection | Tool registry and Mandate tool-loop package |
 | 7 | Goal context selection | Later Goal package |
 | 8 | MCP selection | MCP lifecycle package |
-| 9 | Verifier selection presence | Verifier package |
-| 10 | Verifier selection when present | Verifier package |
-| 11 | Child-link selection presence | Child package |
-| 12 | Child-link selection when present | Child package |
+| 9 | Verifier selection presence | Architecture 17 |
+| 10 | Verifier selection when present | Architecture 17 |
+| 11 | Child-link selection presence | Architecture 17 |
+| 12 | Child-link selection when present | Architecture 17 |
 | 13 | Terminal provenance references | Mandate/terminal owner |
 | 14 | Skill selection | Skill package |
 
@@ -100,8 +100,10 @@ duplicate semantic keys. Nested records bind their typed identity/revision and
 canonical digest, not mutable current owner state.
 
 A VerifierMandate payload cannot downgrade to Mandate/Ordinary when any required
-verifier selection is missing, corrupt or unsupported. Detailed verifier
-semantics remain deferred.
+verifier selection is missing, corrupt or unsupported. Architecture 17 owns
+verifier and child-link nested field semantics; it binds immutable authority,
+target/baseline, edge, and delegation references without changing this document's
+canonical/decode ownership.
 
 ## Canonical record and digest policy
 

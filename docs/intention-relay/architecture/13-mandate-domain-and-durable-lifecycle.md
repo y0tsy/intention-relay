@@ -91,8 +91,9 @@ stateDiagram
 - Mandate `Archived` is inert historical presentation. Restore/reopen is
   excluded pending a separate contract.
 
-Verifier transitions require separately issued, target-scoped future authority.
-Parent/child controls do not provide verifier or lifecycle authority.
+Verifier transitions require separately issued, target-scoped authority owned by
+architecture 17. Parent/child controls do not provide verifier or general
+lifecycle authority; architecture 17 owns their limited direct-parent effects.
 
 ## Trigger reasons and eligibility
 
@@ -172,7 +173,7 @@ mutation, another trigger consumption, or another RunId.
 | Capacity unavailable | observable outcome with reason retained and no admission |
 
 A known terminal disposition may return Mandate `Working` to Mandate `Active`
-only after required later graph-terminalization rules complete. If an immutable
+only after graph-terminalization rules owned by architecture 17 complete. If an immutable
 continuation configuration applies, it records a new reason; it never directly
 resumes or admits the old run in that terminal transaction.
 
@@ -247,8 +248,8 @@ Foundation limit taxonomy to Mandate lifecycle. Architecture 15 resolves
 Mandate calls only. Lifecycle retains fresh-admission eligibility and uncertainty
 ownership; it does not duplicate tool-loop or scheduler rules.
 
-It does not define tool loops, registry detail, child graph, verifier authority,
-MCP lifecycle, Goal/Skill behavior, provider profiles/Responses/reasoning,
+It does not define tool loops, registry detail, child graph or verifier-authority
+semantics, MCP lifecycle, Goal/Skill behavior, provider profiles/Responses/reasoning,
 bridge/IPython, forks, activity/UI, scheduler topology, schema,
 migrations, crates, Cargo, or implementation policy activation.
 

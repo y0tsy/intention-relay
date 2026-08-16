@@ -71,8 +71,9 @@ flowchart TD
 4. [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
 5. [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md)
 6. [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
-7. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-8. [VFR and Headroom](06-vfr-and-headroom.md)
+7. [Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
+8. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+9. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -157,6 +158,7 @@ packages must satisfy.
 | **Ordinary execution** | Existing run semantics, including historical M3/M4 behavior. |
 | **Mandate** | Future durable user-issued work authority. It is distinct from a Goal, prompt, Skill, tool permission, provider continuation, or daemon. |
 | **VerifierMandate execution** | Future Mandate execution with explicit, target-scoped delegated verifier authority. |
+| **Mandate child graph** | Future immutable direct-child Mandate edges and delegation snapshots, distinct from session or conversation lineage. |
 | **Fresh run** | A new `RunId` admitted from durable future work state. It is never resumption of prior external work. |
 | **ExternalEffectUnknown** | A future started external attempt whose terminal effect cannot be durably proven. It is distinct from a known failure. |
 | **Intrinsic bound** | A representation, correctness, or security constraint. |
@@ -201,3 +203,11 @@ readiness/capacity evidence, scheduler handoff, and recovery admission gating.
 Architecture 13 retains Mandate lifecycle, reason validity/order, and atomic
 fresh admission. This does not activate timer topology, a scheduler crate, or a
 protocol implementation.
+
+### Child graph and verifier owner
+
+[Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
+is the sole detailed authority for future immutable child edges, direct-parent
+controls, graph terminalization, and separately issued target-scoped verifier
+authority. It preserves M3/M4 and retained RLM history and does not activate an
+executor, protocol, schema, or runtime implementation.
