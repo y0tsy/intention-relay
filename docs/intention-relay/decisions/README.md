@@ -28,3 +28,4 @@ provenance.
 | [0008](0008-durable-mandate-scheduler-and-readiness-driven-admission.md) | Accepted | Durable Mandate scheduler and readiness-driven admission |
 | [0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) | Accepted | Mandate child graph and delegated verifier authority |
 | [0010](0010-mandate-mcp-capability-lifecycle.md) | Accepted | Mandate MCP capability lifecycle |
+| [0011](0011-mandate-gateway-rlm-bridge.md) | Accepted | Mandate Gateway/RLM bridge |

@@ -5,7 +5,9 @@
 | Status, closed M4 baseline, recommendation | GOV-001..005 | Research provenance and historical baseline retained. | Architecture index, roadmap, compatibility register. |
 | Selected semi-autonomous Mandate overlay | MAN-001..018, RUN-001..006 | Lifecycle/admission and execution-meaning compatibility authority adopted; nested owner payloads remain later. | Mandate lifecycle and execution-meaning packages. |
 | Direct descriptor admission and unified registry | TLS-001..015 | Adopted for future Mandate execution; ordinary behavior preserved. | Tool registry and Mandate-loop package. |
-| Model-tool loop, bridge, kernel | MTL-001..018, BRG-001..014, KER-001..014 | Model-tool loop adopted for future Mandate execution; bridge/kernel deferred. | Tool registry and Mandate-loop, gateway, programmable runtime packages. |
+| Model-tool loop | MTL-001..018 | Adopted for future Mandate execution. | Tool registry and Mandate-loop package. |
+| Gateway/RLM bridge | BRG-001..014 | Adopted for future Mandate execution; retained bridge/RLM identity remains historical. | Architecture 19, Gateway/RLM bridge package. |
+| Kernel and programmable runtime | KER-001..014 | Deferred. | Later IPython/kernel package. |
 | Durable Mandate scheduler and readiness admission | SCH-001..012 | Readiness-driven admission adopted; calendar/interval/time-zone and continual-harness ownership remain deferred or historical-only. | Mandate scheduler package. |
 | Child work, verification, activity | CHD-001..018, VER-001..011, ACT-001..010 | Child graph and verifier authority adopted for future Mandates; general activity/UI remains deferred and retained RLM remains historical. | Architecture 17 and later activity/UI package. |
 | Goals, Skills, memory, compaction | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Deferred. | Context packages. |

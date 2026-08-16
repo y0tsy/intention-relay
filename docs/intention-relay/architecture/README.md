@@ -73,8 +73,9 @@ flowchart TD
 6. [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
 7. [Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
 8. [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md)
-9. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-10. [VFR and Headroom](06-vfr-and-headroom.md)
+9. [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md)
+10. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+11. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -220,3 +221,11 @@ the sole detailed authority for future typed MCP source acquisition, discovery
 normalization, immutable run-local capability selections, invocation, disposal,
 and MCP recovery. It preserves the fixed `mcp` slot and M3/M4 behavior and does
 not activate direct administration, protocol, schema, crate, or runtime work.
+
+### Mandate Gateway/RLM bridge owner
+
+[Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md) is the sole
+detailed authority for future bridge attachment, ephemeral grants, operation
+correlation, safe bridge-visible replay, cancellation propagation, and bridge
+recovery. It is typed ingress to the one capability path, not a second registry,
+lifecycle authority, persistence authority, sandbox, or privilege boundary.

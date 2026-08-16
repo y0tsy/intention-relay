@@ -163,6 +163,10 @@ M3/M4 and retained bounded-MCP/RLM records gain no synthetic source, discovery, 
 
 This document depends on architectures 13–17 and decisions 0001, 0002, 0003, 0004, 0006, 0007, 0008, and 0009. It does not define direct MCP administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas, plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython, Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
 
+Architecture 19 may carry safe MCP projections through its shared ingress and
+delivery path. It cannot discover, select, invoke, reattach, or recreate MCP
+work independently, and bridge replay remains zero-effect.
+
 It introduces no Mandate product depth/count/calendar/lifetime/concurrency ceiling. Intrinsic representation/protocol bounds and actual finite resource capacity remain separately typed, with no truncation, reservation, hidden retry counter, or quota.
 
 ## Required evidence before implementation

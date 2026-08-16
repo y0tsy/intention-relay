@@ -158,6 +158,10 @@ Future child/verifier projections use a separately negotiated Mandate protocol f
 
 This document depends on architectures 13–16 and decisions 0001, 0002, 0003, 0004, 0006, 0007, and 0008. Architecture 18 owns MCP capability lifecycle; MCP evidence is non-authorizing and MCP uncertainty remains local to its owning Mandate. This document does not define a sub-agent executor, worker or recursion topology, product depth/count/concurrency/lifetime/message quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context semantics, provider evolution, session forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
 
+Architecture 19 may carry safe child-control, summary, or verifier projections,
+but cannot create an edge, widen parenthood, relay verifier authority, or turn
+bridge-held evidence into target-mutation authority.
+
 M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegation snapshot, activity, verifier authority, target set, audit, verdict, mutation, reconciliation, or execution-kind state. Historical M4 tool calls remain denial evidence. Ordinary queues never become child Mandates or Mandate reasons. Current ancestry or historical RLM identity cannot reconstruct future child/verifier meaning.
 
 ## Required evidence before implementation
