@@ -201,6 +201,35 @@ stateDiagram-v2
 
 <!-- Delegated transitions require the explicit verifier authority and audit contract. -->
 
+### Mandate transition linearization
+
+Every Mandate lifecycle command, daemon trigger/admission/disposition, verifier
+mutation, graph cascade, and unknown-effect reconciliation linearizes through
+one durable state-transition transaction against the current Mandate revision
+and lifecycle state. A user activation may move `Draft` to `Active` without a
+pending reason; it starts no run. An explicit user start or continuation first
+creates a durable `MandateTriggerReasonDto`, with a stable idempotency binding
+and the then-active `triggering_revision`; equal delivery returns that record
+and changed reuse fails before admission.
+
+Admission consumes or holds one eligible reason and atomically writes the new
+`RunId`, selected revision, frozen context, execution-kind envelope,
+`MandateSelectionV1`, projections, events, and snapshots, or writes none. No
+provider, scheduler, tool, kernel, process, MCP, network, or other external
+work occurs inside that transaction. A revision made while `Working` affects
+only a later fresh admission; it never changes the working run, its trigger
+binding, execution meaning, or evidence.
+
+User lifecycle commands win an optimistic conflict with daemon operational
+facts. A verifier acts only under an active explicit authority and loses a
+conflict to a user mutation. Among eligible reasons, a user-issued lifecycle or
+continuation reason is selected first; remaining reasons use durable
+`first_observed_at` and then stable Mandate identity. Coalescing preserves every
+source/provenance reference and cannot hide a user reason. A known terminal
+disposition returns a Mandate to `Active` only after required graph
+terminalization completes; enabled continuation records a new reason and can
+admit only a fresh run.
+
 ### Trigger capture, autonomous continuation, and recovery
 
 A Mandate may receive durable reasons from explicit user activation or
@@ -265,6 +294,39 @@ Plan mode remains meaningfully distinct: it denies ordinary project `write` and
 `edit`; plan mutation remains its own typed plan operation. Build mode is the
 default for **Continue autonomously**. Neither mode is a sandbox or a claim to
 constrain programs running with the user's ordinary OS authority.
+
+### Mandate limit classification
+
+```text
+MandateLimitClassDto
+  ProductCeiling
+  IntrinsicBound
+  CapacityAvailability
+
+MandateCapacityOutcomeDto
+  outcome = Available | Unavailable
+  resource_kind
+  reason
+  retry_disposition
+  trigger_reason_reference
+  observed_at
+```
+
+`ProductCeiling` is a product counter, reservation, or quota and is forbidden
+for new Mandate admission. `IntrinsicBound` is a correctness boundary of the
+canonical representation, identifier, schema, ordering, framing, or atomic
+commit; it remains mandatory and rejects without truncation.
+`CapacityAvailability` is temporary finite runtime, storage, provider,
+registry, process, kernel, or scheduler availability; it never becomes a quota
+or a successful result.
+
+An `Unavailable` outcome atomically preserves already committed history, the
+applicable pending trigger, and its projections without dropping, truncating,
+or inventing work. A later durable readiness/capacity observation or explicit
+user lifecycle action may make that trigger eligible for a fresh run only. No
+retry counter, reservation, escalation threshold, or old-run continuation is
+created. Historical fixed limits and quota records remain readable compatibility
+data and cannot synthesize a Mandate restriction.
 
 ### No product-level ceilings for new Mandate work
 
@@ -1486,6 +1548,30 @@ first-scope RLM child-agent model without authorizing a crate, implementation,
 storage migration, public protocol change, configuration schema, or delivery
 scope. It does not alter the closed M4 baseline.
 
+#### Mandate graph terminalization closure
+
+For new Mandate work, a parent may initiate only its explicitly delegated
+direct-child `PauseChild` or `StopChild` control. The daemon may then perform a
+transitive safety cascade through immutable descendant links in durable graph
+order; that implementation action grants the parent no authority over an
+indirect descendant. Cascade intent, each child transition, and affected graph
+projection commit atomically per durable transition and are idempotent.
+
+Parent completion is rejected while any descendant is non-terminal. When a
+parent terminalization requires descendant stop, the parent terminal outcome is
+not committed until every required descendant has durable terminal evidence. A
+child `ExternalEffectUnknown` remains only that child's uncertainty and never
+fabricates parent uncertainty, but blocks an ancestor cascade or automatic
+continuation that requires that child outcome until the child user or explicitly
+named verifier reconciles it.
+
+A graph message never schedules a run. A valid clarification reply changes only
+the recipient's durable eligibility; the ordinary Mandate scheduler separately
+admits a subsequent eligible fresh run. A terminal or interrupted recipient
+rejects delivery. Retained RLM `Cancel` and `EnqueueFollowUp` semantics are
+historical-only for this Mandate graph; its controls are `PauseChild`,
+`StopChild`, `SendInstruction`, and `ReplyToClarification`.
+
 #### Mandate graph messages and aggregation
 
 ```text
@@ -2385,6 +2471,14 @@ VerificationAuditVerdictDto
   VerifierExternalEffectUnknown
 ```
 
+Authority issuance, revocation, expiry, consumption, and archival are
+durable user-owned lifecycle facts. An authority is usable only while its
+revision is active, unrevoked, unexpired, unconsumed where the operation
+requires consumption, and owned by the named verifier Mandate. It cannot target
+its verifier. Each authority revision therefore additionally records its issuer
+reference, issuance time, optional expiry, optional revocation reference, and
+optional consumption reference in its canonical digest.
+
 The target set is immutable and explicitly enumerated at authority issuance. It
 never expands to related parents, children, siblings, Goals, branches, sessions,
 or activity-tree members. A verifier cannot target itself. Its child work may
@@ -2396,6 +2490,14 @@ mode, triggers, Goal/context references, continuation, stop conditions, and
 ordinary future-work references. It still cannot rewrite history or alter a live
 old run; a resulting revision affects fresh admission only.
 
+A user reconciliation uses the same durable reconciliation-record family as
+a delegated verifier, but requires no verifier authority. Both forms name the
+original unknown-effect reference, exact frozen target baseline, selected
+reconciliation standard, evidence references, idempotency key, and canonical
+digest. Either may yield only `Active` for a later fresh run or `Stopped`;
+neither claims rollback, absence, idempotence, or repeatability of the prior
+external effect.
+
 Each audit binds the explicit target's frozen Mandate revision and baseline
 state, required Goal revisions, gate/evidence-contract references, and audit
 contract before evidence gathering. If any selected baseline reference changes,
@@ -2404,6 +2506,14 @@ the audit becomes `TargetRevisionStale`, fails closed, and cannot be used for a
 mutation. User mutations win through ordinary optimistic concurrency. An audit
 verdict is durable evidence, never an implicit trigger, hidden retry, or
 self-executing mutation.
+
+At mutation time, one durable transaction validates authority lifecycle and
+revision, target membership, every frozen baseline reference, audit contract and
+evidence, and the current target revision/lifecycle. A changed or unavailable
+baseline records the machine-distinct `TargetRevisionStale` rejection; a user
+revision conflict records a durable user-wins rejection. Applied mutation or
+rejection, target projection when changed, reconciliation record when present,
+and notification reference commit together or not at all.
 
 The daemon applies a requested target mutation atomically only after validating
 the authority owner/revision, immutable target membership, allowed operation,
@@ -2621,6 +2731,30 @@ already selected known pre-effect or unknown-effect evidence. Goals, records,
 summaries, proposals, and readable history survive recovery; a later user
 attempt obtains a new run identity and target snapshot.
 
+#### Mandate MCP capability selection lifecycle
+
+Discovery is an external effect performed outside a durable transaction. After
+successful typed normalization, the daemon atomically records safe discovery
+evidence, immutable capability revisions, and a new ordered accumulated
+run-local `MandateMcpCapabilitySelectionV1` revision before publishing it to a
+later model step. The model-visible projection contains only bounded method,
+capability/revision, normalized schema, schema digest, and safe-projection
+references; endpoints, credentials, raw frames, resources, and server errors
+remain private.
+
+Every model step freezes the accumulated selection revision it consumed. Every
+invocation freezes that selection revision together with one immutable
+capability revision, typed input digest, idempotency key, and `ToolCallId`
+before external work. Discovery and invocation have independent idempotency
+identities. Equal acquisition returns the committed discovery/capabilities
+without another discovery; changed reuse fails pre-effect.
+
+Schema drift creates a new discovery and capability revision. Existing revisions
+remain historical evidence, but a later invocation cannot substitute a current
+schema or rediscover automatically. A fresh Mandate run imports no live MCP
+process, connection, credential handle, or capability selection; it must acquire
+again and can use earlier discovery only as evidence.
+
 #### Mandate dynamic MCP capability acquisition
 
 For new Mandate work, `mcp` remains the one canonical Rust-owned gateway and
@@ -2667,10 +2801,12 @@ MandateMcpCapabilityRevisionDto
 MandateMcpCapabilitySelectionV1
   source_reference
   discovery_reference
+  accumulated_selection_revision
   ordered_capability_references
   canonical_selection_digest
 
 MandateMcpInvocationSelectionV1
+  accumulated_selection_reference
   capability_reference
   typed_input_digest
   idempotency_key
@@ -3947,6 +4083,21 @@ not ownership of an endpoint: a compatible non-OpenAI endpoint may implement
 the same contract. `responses` must therefore never be represented as
 `generic-chat-completion-api`.
 
+A configuration input `kind = "openai"` is accepted only as a legacy parse-time
+alias and normalizes immediately to canonical `responses` before profile
+validation, descriptor selection, or immutable selection construction. The alias
+never appears in a stored selection, canonical digest, DTO, or new diagnostic.
+An alias with fields that the Responses descriptor cannot represent fails as
+`legacy_config_cannot_represent_active_catalog`; it is never heuristically
+routed through `generic-chat-completion-api`.
+
+Model identifiers, including `gpt-*`, `o*`, and `codex*`, never select a kind,
+driver, endpoint, or capability subset. A generic profile whose descriptor/model
+contract is incompatible with Responses fails pre-effect as typed kind/model
+incompatibility; a `responses` profile requires its descriptor compatibility
+rather than an inferred model-name classification. Historical M4 configuration
+and snapshots remain unchanged; any alias bridge is additive only.
+
 `responses` has the effective default API base `https://api.openai.com/v1`
 when no endpoint is configured. A profile may explicitly override that base
 only for a compatible Responses endpoint. `openrouter` remains a first-party
@@ -4445,6 +4596,35 @@ MCP record. A future persistent kernel, child-agent model, or later selection
 may add only another separately versioned typed nested record. It cannot
 
 
+#### Mandate execution-kind discriminator
+
+```text
+RunExecutionKindDto
+  Ordinary
+  Mandate
+  VerifierMandate
+
+RunExecutionMeaningEnvelopeV1
+  run_kind
+  meaning_version
+  meaning_payload
+  canonical_meaning_digest
+```
+
+The daemon selects this closed envelope atomically at admission from its held
+run context. `Ordinary` uses only its recorded `RunExecutionMeaningDto` v1--v4
+semantics. `Mandate` uses only `MandateRunExecutionMeaningV1`;
+`VerifierMandate` additionally requires the immutable verifier authority, target
+set, and audit-contract selections. Model, bridge, Python, provider, MCP server,
+current registry, current configuration, ancestry, and model name cannot supply
+or change the kind.
+
+A kind/version/payload mismatch, missing verifier baseline, unknown version, or
+invalid canonical digest leaves unrelated replay readable but blocks dependent
+provider, tool, process, kernel, MCP, and network work before effect. Legacy
+v1--v4 bytes decode only under their recorded ordinary semantics and never gain
+Mandate state by inference.
+
 #### Mandate run execution meaning
 
 New Mandate-owned work uses `MandateRunExecutionMeaningV1`, a later additive
@@ -4471,6 +4651,20 @@ MandateRunExecutionMeaningV1
   mandate_child_link_selection_when_applicable
   terminal_provenance_references
 ```
+
+`MandateRunExecutionMeaningV1` is an independent canonical record with its own
+tag, fixed field table, schema/canonicalization version, and SHA-256 digest. It
+is selected atomically before provider, tool, kernel, process, MCP, network, or
+other external work. It freezes Mandate revision/trigger/service-session
+provenance, provider/model capabilities, activity, context/direct-tool/Goal
+selections, accumulated MCP selection, applicable child link/delegation and
+verifier selections, and terminal provenance references.
+
+It excludes policy, confirmation, corridor, quota, reservation, root-origin,
+inherited permission, retained `McpMethodCatalogSelectionV1`, current
+catalog/configuration, credentials, raw provider data, and live resources. A
+replay, fork, retry, recovery, bridge, or child path validates this stored record
+rather than substituting current state.
 
 `MandateRunExecutionMeaningV1` is credential-free and excludes raw objectives,
 evidence bodies, prompts, tool output, provider resources, process state, live
@@ -4575,6 +4769,38 @@ the remaining frames retain this order. Catalog and lineage audit records are
 read through their own bounded queries and do not enter this run publication
 gate merely because they are related to the same user operation.
 
+#### External attempt evidence and Mandate reconciliation
+
+```text
+ExternalAttemptPhaseDto
+  AdmittedBeforeStart
+  Started
+  KnownTerminal
+  UnknownTerminal
+
+ExternalAttemptEvidenceDto
+  attempt_owner_kind
+  attempt_reference
+  phase
+  durable_fact_references
+  safe_effect_digest
+```
+
+This closed family is shared by `execute`, kernel/bridge, MCP discovery and
+invocation, provider-adjacent external work, and child work. Only daemon-owned
+execution and recovery logic classifies an attempt. Before start, a result is a
+known pre-effect outcome, including `InterruptedBeforeStart`; after start without
+durable terminal proof, loss, cancellation, or restart records
+`ExternalEffectUnknown`. A known nonzero exit, typed provider/MCP failure, schema
+mismatch, or validated terminal result remains known.
+
+Unknown evidence atomically prevents the next model step, automatic retry or
+continuation, rediscovery, reattachment, and old-work resume. For Mandate work it
+atomically moves `Working` to `PausedAwaitingDecision`; a child uncertainty stays
+child-local while its parent receives only a safe observation. Reconciliation is
+an idempotent user or explicitly authorized verifier command using the original
+unknown-effect reference and can produce only a fresh `Active` path or `Stopped`.
+
 Recovery never resumes a run, provider request, tool, process, kernel, or
 external action. An already started action whose terminal effect is not proven
 records `ExternalEffectUnknown`. An admitted action that has not reached
@@ -4583,6 +4809,12 @@ it is known not to have started, but it is never transferred to a later daemon
 process. Recovery writes those missing terminal outcomes and the run transition
 to `Interrupted` atomically. It never opens another model step, repeats a tool,
 or reconstructs a remote continuation.
+
+> **Mandate execution-kind compatibility.** The execution-kind envelope and
+> `MandateRunExecutionMeaningV1` use new canonical tags and do not alter retained
+> v1--v4 tags, bytes, digests, decoders, replay, or historical behavior. A
+> decoder never derives a new kind from legacy policy, activity, child ancestry,
+> provider/model name, or current state.
 
 ### Common historical-version policy
 
@@ -6098,7 +6330,15 @@ prove:
   through fresh runs only; and
 - compatibility proof that retained RLM and bounded MCP fixtures retain their
   historical meaning while M4/v1--v4 records acquire no synthetic Mandate MCP
-  capability, child graph, or activity selection.
+  capability, child graph, or activity selection; and
+- execution-kind envelope cross-product rejection; Mandate lifecycle and trigger
+  linearization under user/daemon/verifier races; canonical execution-meaning
+  tag/digest fixtures; authority issue/revoke/expiry/consumption checks; atomic
+  stale-baseline and user-conflict results; graph cascade terminalization and
+  message non-scheduling; capacity retention/re-eligibility without quotas;
+  `openai` alias normalization without model-name heuristics; and accumulated
+  MCP selection visibility, schema drift, independent idempotency, redaction,
+  fresh-run reacquisition, and no-resume evidence.
 
 
 Any approved implementation of this concept must add evidence for:
