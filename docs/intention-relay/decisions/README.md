@@ -23,3 +23,4 @@ provenance.
 | [0003](0003-run-execution-meaning-and-historical-compatibility.md) | Accepted | Execution meaning and historical compatibility |
 | [0004](0004-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path and fixed registry boundary |
 | [0005](0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Accepted | M4+ reconciliation and delivery boundaries |
+| [0006](0006-mandate-lifecycle-and-admission-boundary.md) | Accepted | Mandate lifecycle and admission boundary |

@@ -296,9 +296,11 @@ For future Mandate work:
 - an unknown external terminal effect causes the owning Mandate to await an
   explicit future reconciliation, not an automatic retry or next model step.
 
-The detailed lifecycle, trigger ordering, verifier authority, child graph,
-capacity scheduling, event ownership, protocol delivery, and schema design are
-later packages. Existing run states and M3/M4 recovery behavior remain unchanged.
+The detailed Mandate lifecycle, trigger ordering, fresh admission, uncertainty,
+and recovery contract is owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md).
+Verifier authority, child graph, concrete scheduler/process topology, event
+variants, protocol delivery, and schema design remain later packages. Existing
+run states and M3/M4 recovery behavior remain unchanged.
 
 See [decision 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md)
 and [decision 0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
