@@ -165,3 +165,16 @@ Makefile](12-quality-gates-and-makefile.md).
 - credential rotation flow;
 - event/log retention and diagnostic export policy;
 - platform-specific config permission behavior outside Unix.
+
+## Post-M4 selection and observability boundary
+
+This Foundation preserves M3/M4 startup-only TOML application and adds no live
+reload, credential rotation, profile editing, discovery, pricing, or health
+behavior. Future execution meanings and attempt evidence must remain
+credential-free and exclude SDK objects, process handles, kernel state, bridge
+grants, raw provider/MCP payloads, and private endpoint material.
+
+Future observability may expose typed capacity outcomes and safe Mandate/attempt
+references, but it cannot convert logs, notifications, activity, or provider
+responses into authority. Redaction rules apply to every new persistence,
+protocol, diagnostic, and canonical-identity surface.

@@ -466,3 +466,54 @@ The v1 implementation phase is ready to claim architectural completion only when
 - Plan, VFR, and Headroom demonstrate their required physical/runtime outcomes;
 - `make verify` passes all strict formatting, lint, feature, test, documentation, architecture, coverage, and supply-chain checks;
 - no legacy Antibusy implementation detail is relied upon without an explicit new decision.
+
+## Post-M4 authority reconciliation and foundation boundary
+
+**Documentation-only planning package.** This package follows the closed M4
+baseline and precedes any separate M4+ implementation authorization. It does
+not renumber, replace, or claim delivery of Milestones 5–9. Current M5–M9 remain
+the ordinary v1 roadmap until a later approved roadmap reconciliation changes
+them explicitly.
+
+### Deliver
+
+- the [reconciliation package](../reconciliation/README.md), including the
+  source-of-truth matrix, compatibility register, contradiction register,
+  dependency map, and supersession index;
+- accepted Foundation decision records;
+- authoritative execution-kind, authority, no-resume, transaction/effect,
+  uncertainty, compatibility, limit-taxonomy, and trusted-local boundaries;
+- a dependency-safe delivery shape without implementation milestones or crate
+  activation.
+
+### Dependency buckets
+
+```mermaid
+flowchart TD
+  F[M4+ Foundation] --> E[Execution meaning]
+  F --> M[Mandate lifecycle]
+  E --> T[Tool loop]
+  M --> S[Trigger scheduler]
+  T --> G[Gateway bridge]
+  S --> X[Effect reconciliation]
+  X --> C[Child verifier]
+  T --> P[MCP lifecycle]
+  M --> K[Skills Goals context]
+  E --> V[Provider evolution]
+  M --> B[Session branching]
+  G --> I[IPython]
+```
+
+### Exit criteria
+
+- every selected concept heading has a matrix topic or context-only disposition;
+- every Foundation topic has one owner, applicability, compatibility/failure
+  rule, delivery dependency, and planned evidence;
+- Foundation contains no unresolved conflict; later conflicts are explicit in
+  the contradiction register;
+- closed M4 and ordinary historical behavior remain explicitly preserved;
+- no source, Cargo, Makefile, CI, migration, active crate, coverage, or feature
+  policy is implied or activated;
+- a later implementation specification is still required before code begins.
+
+See [decision 0005](../decisions/0005-m4plus-authority-reconciliation-and-delivery-boundaries.md).
