@@ -217,5 +217,8 @@ payload bytes, IDs, digests, cursors, snapshots, or event envelopes. Unknown or
 corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 
+Mandate-specific DTO families, validation, revision/sequence rules, and
+compatibility application are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md).
+
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).

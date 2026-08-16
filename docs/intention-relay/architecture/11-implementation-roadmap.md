@@ -517,3 +517,25 @@ flowchart TD
 - a later implementation specification is still required before code begins.
 
 See [decision 0005](../decisions/0005-m4plus-authority-reconciliation-and-delivery-boundaries.md).
+
+## Post-M4 Mandate lifecycle and admission architecture package
+
+**Documentation-only package.** It depends on the Post-M4 Foundation and
+creates the authoritative [Mandate lifecycle owner](13-mandate-domain-and-durable-lifecycle.md).
+It does not activate a crate, migration, protocol, runtime, or implementation
+milestone and does not renumber or replace ordinary M5–M9.
+
+### Deliver
+
+- Mandate aggregate, lifecycle, trigger, fresh-admission, conflict, uncertainty,
+  recovery, compatibility, and evidence contracts;
+- ADR 0006 and reconciliation ownership/contradiction updates;
+- explicit dependencies on later execution-meaning, scheduler, tool-loop,
+  child/verifier, MCP, context, provider, protocol, and UI packages.
+
+### Exit criteria
+
+- one detailed normative owner exists for every Mandate lifecycle rule;
+- legacy queue tickets and ordinary M3/M4 history remain explicitly separate;
+- direct descriptor/WorkspaceRoot policy remains deferred under CON-001/002;
+- a later implementation specification is still required before code starts.

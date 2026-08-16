@@ -3,7 +3,7 @@
 | Concept heading family | Matrix topics | Current disposition | Future authority/delivery bucket |
 | --- | --- | --- | --- |
 | Status, closed M4 baseline, recommendation | GOV-001..005 | Research provenance and historical baseline retained. | Architecture index, roadmap, compatibility register. |
-| Selected semi-autonomous Mandate overlay | MAN-001..018, RUN-001..006 | Foundation principles adopted; detailed lifecycle deferred. | Mandate lifecycle and execution-meaning packages. |
+| Selected semi-autonomous Mandate overlay | MAN-001..018, RUN-001..006 | Lifecycle/admission authority adopted; execution-meaning field contract remains later. | Mandate lifecycle and execution-meaning packages. |
 | Direct descriptor admission and unified registry | TLS-001..015 | Registry/gateway direction mapped; admission and WorkspaceRoot conflict deferred. | Tool-loop and tools policy package. |
 | Model-tool loop, bridge, kernel | MTL-001..018, BRG-001..014, KER-001..014 | Deferred. | Tool loop, gateway, programmable runtime packages. |
 | Child work, verification, activity | CHD-001..018, VER-001..011, ACT-001..010 | Deferred; authority limits mapped. | Child/verifier/activity packages. |

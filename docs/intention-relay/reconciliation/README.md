@@ -63,3 +63,10 @@ A later package may become implementation-ready only after its matrix topics,
 owner documents, decision record, crate/test/coverage declarations, contract
 fixtures, architecture fixtures, and outcome evidence are approved together.
 This reconciliation approval authorizes documentation work only.
+
+## Mandate lifecycle authority
+
+[Mandate domain and durable lifecycle](../architecture/13-mandate-domain-and-durable-lifecycle.md)
+now owns detailed Mandate lifecycle and admission rules. This reconciliation
+package continues to coordinate provenance and dependencies only; it does not
+become a duplicate runtime specification.
