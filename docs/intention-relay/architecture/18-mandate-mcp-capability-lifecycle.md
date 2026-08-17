@@ -186,3 +186,5 @@ A later activating specification must declare exact crate owners, targets, cover
 Kernel-originated MCP work still uses this document's fixed `mcp` lifecycle
 through the bridge and tool loop. Checkpoints contain no live MCP state and later
 runs reacquire capabilities.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Context is safe non-authorizing projection only and cannot discover/select/invoke MCP, create a capability, or reconstruct an MCP selection.

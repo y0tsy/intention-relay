@@ -30,3 +30,4 @@ provenance.
 | [0010](0010-mandate-mcp-capability-lifecycle.md) | Accepted | Mandate MCP capability lifecycle |
 | [0011](0011-mandate-gateway-rlm-bridge.md) | Accepted | Mandate Gateway/RLM bridge |
 | [0012](0012-ipython-kernel-lifecycle.md) | Accepted | Run-scoped IPython kernel lifecycle |
+| [0013](0013-goals-skills-context-memory-and-compaction.md) | Accepted | Goals, Skills, context, memory, and compaction |

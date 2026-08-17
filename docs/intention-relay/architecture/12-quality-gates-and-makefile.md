@@ -370,3 +370,11 @@ quality tool, or Makefile target. A later activating change must declare exact
 kernel owners, dependencies, test targets, coverage/features, storage/wire
 versions, expected-failure architecture fixtures, resource-redaction evidence,
 and Linux/Windows outcomes atomically with production work.
+
+The post-M4 Goals, Skills, context, memory, and compaction package is likewise
+documentation-only. It activates no crate, retrieval/index/search engine, prompt
+builder, test target, coverage tier, feature combination, protocol
+implementation, migration, quality tool, or Makefile target. A later activating
+change must declare exact context owners, test targets, coverage/features,
+storage/wire/retention treatment, expected-failure architecture fixtures,
+redaction evidence, and Linux/Windows outcomes atomically with production work.

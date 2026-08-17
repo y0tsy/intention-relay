@@ -159,3 +159,5 @@ A later activating specification must define exact crate owners, test targets, c
 Architecture 20 kernel host requests consume this document's frozen descriptor
 selection, direct admission, `ToolCallId`, start/result facts, and publication
 path. Kernel execution is not a new ToolId, registry, or primitive bypass.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Context projections may inform a model step only through immutable selected safe representations; they cannot add a descriptor, ToolId, direct admission exception, WorkspaceRoot authority, ToolCallId, or retry path.

@@ -255,3 +255,14 @@ checkpoints, cells, background tasks, grants, and output cannot create lifecycle
 scheduling, tool, child, verifier, MCP, or reconciliation authority. The kernel
 consumes the one Gateway/RLM and tool path and is not a sandbox or privilege
 boundary. Detailed rules are owned by architecture 20 and decision 0012.
+
+### 26. Context is immutable evidence, not authority
+
+Future Goals, Skills, source manifests, model-step projections, memory cards,
+disclosures, and compaction summaries are immutable non-authorizing evidence.
+Project Goals apply to sessions only through explicit immutable applicability
+links. Current files, catalogs, indexes, memory, configuration, UI, and runtime
+state cannot reconstruct missing selected context. Safe representations never
+widen their source audience, and compaction cannot replace durable facts or
+become continuation state. Detailed rules are owned by architecture 21 and
+decision 0013.

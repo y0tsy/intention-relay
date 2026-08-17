@@ -248,3 +248,5 @@ quick`, `make verify`, and Linux/Windows CI. It must cover:
 Kernel readiness is non-authoritative operational evidence only. The scheduler
 cannot create, restore, attach, or execute a kernel; architecture 20 owns those
 kernel details.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Their references are non-authorizing evidence and cannot create a scheduler candidate, readiness observation, reservation, quota, trigger reason, or fresh admission.

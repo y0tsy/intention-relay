@@ -742,3 +742,31 @@ migration, feature profile, quality-policy target, or implementation milestone.
   behavior remain unchanged; and
 - process implementation, dependencies, resource values, harness, Skills/Goals,
   provider evolution, forks, activity/UI, schema, and activation remain excluded.
+
+## Post-M4 Goals, Skills, context, memory, and compaction package
+
+**Documentation-only package.** It depends on Mandate lifecycle and execution
+meaning, creates [the authoritative context contract](21-goals-skills-context-memory-and-compaction.md)
+and decision 0013, and activates no crate, search/index engine, prompt builder,
+schema, migration, protocol implementation, feature profile, quality-policy
+target, or implementation milestone.
+
+### Deliver
+
+- scoped Goal acceptance/evidence and explicit project-to-session applicability;
+- immutable untrusted Skill selection and progressive disclosure;
+- admission source manifests, model-step safe projections, typed memory, and
+  immutable compaction over exact completed history;
+- recovery/no-resume, authority, compatibility, and safe delivery boundaries;
+  and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- GOL/SKL/CTX/MEM/CMP topics have one owner and compatibility/failure rule;
+- no context family can become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, provider, or reconciliation authority;
+- M3/M4 and retained context history remain explicitly unchanged; and
+- provider evolution, session forks, activity/UI, retrieval/index implementation,
+  prompt assembly, schema, and activation remain excluded.
