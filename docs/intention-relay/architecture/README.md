@@ -75,8 +75,9 @@ flowchart TD
 8. [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md)
 9. [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md)
 10. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
-11. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-12. [VFR and Headroom](06-vfr-and-headroom.md)
+11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
+12. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+13. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -238,3 +239,13 @@ sole detailed authority for future private kernel epochs, cells, namespace
 checkpoints, safe projections, and kernel recovery. It consumes the Gateway/RLM
 bridge and the one capability path; it is not a second runtime, registry,
 lifecycle authority, sandbox, or privilege boundary.
+
+### Goals, Skills, context, memory, and compaction owner
+
+[Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
+is the sole detailed authority for future non-authorizing Goal scope/evidence,
+Skill disclosure, context manifests/projections, typed memory, and immutable
+compaction. It preserves M3/M4 history, binds project Goals to sessions only
+through explicit applicability links, and cannot become lifecycle, scheduler,
+tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation
+authority.

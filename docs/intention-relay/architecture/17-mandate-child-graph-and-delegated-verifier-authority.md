@@ -180,3 +180,5 @@ A later activating specification must declare exact crate owners, test targets, 
 Architecture 20 permits only separately selected verified checkpoint copies for
 child kernel seeding. No live kernel, namespace, task, grant, or authority is
 inherited, and kernel evidence cannot widen verifier authority.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. A child receives only separately selected frozen safe references, and a Goal/context record cannot create, widen, or consume child or verifier authority.

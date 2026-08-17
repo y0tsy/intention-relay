@@ -258,3 +258,5 @@ cover:
 - recognizable fake-secret, grant, raw input, endpoint, path, Python/SDK value,
   handle, resource, and corrupt-byte absence from persistence, protocol, logs,
   diagnostics, adapters, and model projections.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Bridge-delivered context is safe immutable projection only; no Goal, Skill, memory, or summary can issue a grant, create an operation, widen ingress, or reconstruct missing bridge meaning.

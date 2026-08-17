@@ -288,3 +288,5 @@ Architecture 20 owns run-scoped kernel lifecycle. Kernel state creates neither a
 trigger reason nor a `RunId`; an unproven started kernel effect uses this
 document's uncertainty law, and later work requires fresh admission and a new
 kernel epoch.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction selection semantics. Those records are immutable non-authorizing evidence: project Goals require explicit session applicability links and no context record can create a Mandate reason, RunId, lifecycle transition, scheduler eligibility, or reconciliation authority.

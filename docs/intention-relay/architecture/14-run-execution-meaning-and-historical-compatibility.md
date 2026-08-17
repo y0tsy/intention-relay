@@ -302,3 +302,10 @@ contract and checkpoint policy are canonical meaning; live epochs, namespaces,
 processes, grants, tasks, checkpoint payloads, and current resources are not. No
 path may reconstruct missing kernel meaning from current kernel/process/checkpoint
 state.
+
+Architecture 21 owns context-projection, Goal-context, and Skill-selection nested
+field semantics (fields 5, 7, and 14). Selected manifests, scoped Goal revisions
+and applicability links, Skills, disclosures, memory references, and compaction
+references are canonical evidence; current catalogs, files, indexes, memory, UI,
+and runtime state are not. No path may reconstruct missing context meaning from
+mutable state.

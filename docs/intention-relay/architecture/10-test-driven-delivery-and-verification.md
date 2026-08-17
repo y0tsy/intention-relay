@@ -355,3 +355,14 @@ historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
 Python/Jupyter/resource absence. These are future obligations, not current tests
 or targets. The detailed portfolio is owned by [Run-scoped IPython kernel
 lifecycle](20-ipython-kernel-lifecycle.md).
+
+## Goals, Skills, context, memory, and compaction evidence
+
+Before implementation, future context work requires canonical Goal scope and
+applicability, Skill selection/disclosure, source-manifest/projection, memory,
+and compaction golden/negative fixtures; admission/model-step fault injection;
+no-current-state reconstruction; audience/redaction and non-authority outcomes;
+recovery/no-resume and replay/resync; child/verifier/MCP/bridge/kernel isolation;
+M3/M4 preservation; and fake-secret/raw-source/private-reference absence. These
+are future obligations, not current tests or targets. The detailed portfolio is
+owned by [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md).

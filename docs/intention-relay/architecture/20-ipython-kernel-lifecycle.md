@@ -244,3 +244,5 @@ CI. It must cover:
 - fake-secret, Python value, traceback, Jupyter frame, path, handle, process,
   checkpoint-payload, resource, and corrupt-byte absence from every public or
   durable surface.
+
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Kernel steps consume only immutable safe context projections; context cannot create an epoch, disclose private namespace/checkpoint state, issue a host request, or reconstruct missing kernel meaning.

@@ -40,7 +40,7 @@ contradiction register.
 | KER-001..018 | Run-scoped IPython kernel lifecycle | Adopt for future Mandate execution; retained IPython/RLM preserved | `20-ipython-kernel-lifecycle.md` |
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
 | ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
-| GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Defer | context packages |
+| GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Adopt for future Mandate execution; historical context preserved | `21-goals-skills-context-memory-and-compaction.md` |
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Defer | provider evolution package |
 | FRK-001..018 | session forks | Defer | branching package |
@@ -174,3 +174,19 @@ contradiction register.
 ## Coverage ledger
 
 The selected concept headings listed in [Concept Supersession Index](concept-supersession-index.md) map to exactly one topic family. Detailed DTO field inventories, numeric bounds, and test-case lists remain in later owner documents rather than duplicating the research document here.
+
+## Goals, Skills, context, memory, and compaction topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GOL-001 | Goals are immutable user-managed acceptance/evidence records, never Mandate authority. | future Mandate | Adopt | architecture 21 | Goal cannot create RunId, reason, lifecycle, scheduler, tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation authority. | Context package | authority fixture planned |
+| GOL-002 | Goals are project- or session-scoped; project applicability uses an explicit immutable session link. | future Mandate | Adopt | architecture 21 | No implicit inheritance or cross-session reconstruction. | Context package | scope fixture planned |
+| GOL-003 | Selected Goal revisions and links are immutable canonical context evidence. | future Mandate | Adopt | architecture 21 | Current Goal state cannot alter admitted/model-step context. | Context package | canonical fixture planned |
+| SKL-001 | Skills are immutable versioned untrusted instructional content. | future Mandate | Adopt | architecture 21 | A Skill cannot carry hidden executable or product authority. | Context package | isolation fixture planned |
+| SKL-002 | Skill disclosure is explicit, bounded, and audience-safe. | future Mandate | Adopt | architecture 21 | Unsafe/unavailable material omits or refuses with typed evidence. | Context package | disclosure fixture planned |
+| CTX-001 | Admission freezes an exact typed source manifest and model steps bind immutable safe projections. | future Mandate | Adopt | architecture 21 | No current file/catalog/index/memory/configuration/UI fallback. | Context package | binding fixture planned |
+| CTX-002 | Safe context representation never broadens source content or audience. | future Mandate | Adopt | architecture 21 | Leakage blocks public/model projection. | Context package | redaction fixture planned |
+| MEM-001 | Memory records, cards, disclosures, supersession, and rollback are immutable typed evidence. | future Mandate | Adopt | architecture 21 | No hidden prompt mutation, inferred conflict, or audience widening. | Context package | memory fixture planned |
+| CMP-001 | Compaction is immutable safe summary over exact completed history with provenance and suffix. | future Mandate | Adopt | architecture 21 | Original facts remain authoritative; incomplete/unknown work cannot compact. | Context package | provenance fixture planned |
+| CTX-003 | Context recovery/replay is read-only and never rediscloses, recompacts, resumes, or performs effects. | future/historical | Adopt | architecture 21 | Unsupported context blocks dependent work while unrelated history remains readable. | Context package | recovery fixture planned |
+| CTX-004 | Historical M3/M4 and retained records gain no synthetic context state. | historical-only | Adopt | architecture 21 | Preserve bytes/meaning; no reconstruction from current state. | Context package | compatibility fixture planned |

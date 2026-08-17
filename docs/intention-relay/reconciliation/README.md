@@ -128,3 +128,12 @@ now owns future private kernel epochs, cells, checkpoints, safe projections, and
 kernel recovery. [Decision 0012](../decisions/0012-ipython-kernel-lifecycle.md)
 records the cross-document decision. Reconciliation remains an index; the kernel
 consumes the bridge and one capability path and never becomes another authority.
+
+## Goals, Skills, context, memory, and compaction authority
+
+[Goals, Skills, context, memory, and compaction](../architecture/21-goals-skills-context-memory-and-compaction.md)
+now owns future non-authorizing Goal scope/evidence, Skill disclosure,
+context-source manifests/model-step projections, typed memory, and immutable
+compaction. [Decision 0013](../decisions/0013-goals-skills-context-memory-and-compaction.md)
+records the cross-document decision. Reconciliation remains an index: historical
+records retain their recorded meaning and no context family becomes authority.
