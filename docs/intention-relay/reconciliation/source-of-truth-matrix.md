@@ -42,7 +42,7 @@ contradiction register.
 | ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Adopt for future Mandate execution; historical context preserved | `21-goals-skills-context-memory-and-compaction.md` |
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
-| PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Defer | provider evolution package |
+| PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Adopt for future Mandate execution; M3/M4 provider behavior preserved | `22-provider-evolution-profiles-and-reasoning.md` |
 | FRK-001..018 | session forks | Defer | branching package |
 | EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | Exclude or Defer as recorded in concept | explicit later decision only |
 
@@ -190,3 +190,26 @@ The selected concept headings listed in [Concept Supersession Index](concept-sup
 | CMP-001 | Compaction is immutable safe summary over exact completed history with provenance and suffix. | future Mandate | Adopt | architecture 21 | Original facts remain authoritative; incomplete/unknown work cannot compact. | Context package | provenance fixture planned |
 | CTX-003 | Context recovery/replay is read-only and never rediscloses, recompacts, resumes, or performs effects. | future/historical | Adopt | architecture 21 | Unsupported context blocks dependent work while unrelated history remains readable. | Context package | recovery fixture planned |
 | CTX-004 | Historical M3/M4 and retained records gain no synthetic context state. | historical-only | Adopt | architecture 21 | Preserve bytes/meaning; no reconstruction from current state. | Context package | compatibility fixture planned |
+
+## Provider evolution and reasoning topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PRV-001 | Future canonical Responses kind is `responses`; `openai` is parse-time-only normalization. | future Mandate | Adopt | architecture 22 | Alias never persists; unrepresentable input fails before provider work. | Provider evolution | alias fixture planned |
+| PRV-002 | Model identifiers never select provider kind, endpoint, driver, capability, profile, or execution kind. | future/historical | Adopt | architecture 22 | No routing or fallback from `gpt-*`, `o*`, `codex*`, or any model ID. | Provider evolution | no-routing fixture planned |
+| PRV-003 | User kinds are immutable closed declarative compositions and reserved first-party IDs cannot be replaced. | future Mandate | Adopt | architecture 22 | Plugins, templates, arbitrary parsers/maps, and executable config fail before driver creation. | Provider evolution | descriptor fixture planned |
+| PRV-004 | Provider selections are immutable credential-free meaning; catalog/default/readiness are not. | future Mandate | Adopt | architecture 22 | Current state cannot repair, reroute, or replace selection. | Provider evolution | canonical fixture planned |
+| PRV-005 | Capability is explicit descriptor envelope intersected with exact model subset and compatible driver contract. | future Mandate | Adopt | architecture 22 | Unknown/invalid capability blocks before outbound work. | Provider evolution | preflight fixture planned |
+| PRV-006 | Driver compatibility is code-owned family/major/minor with explicit supported minors. | future Mandate | Adopt | architecture 22 | Major or unsupported-minor mismatch fails before provider work. | Provider evolution | compatibility fixture planned |
+| PRV-007 | Credentials/private clients stay private; endpoint/transport metadata is safe selected evidence only. | future Mandate | Adopt | architecture 22 | No secret/raw endpoint/SDK resource crosses public or durable boundaries. | Provider evolution | redaction fixture planned |
+| PRV-008 | Provider catalog/profile revisions are append-only; IDs tombstone and never reuse. | future Mandate | Adopt | architecture 22 | User-kind edits need new IDs; no historical selection rewrite. | Provider evolution | lifecycle fixture planned |
+| PRV-009 | Catalog validation is all-or-nothing and local-only; acceptance and private activation are distinct. | future Mandate | Adopt | architecture 22 | No network/provider work before exact activated registry. | Provider evolution | fault fixture planned |
+| PRV-010 | Provider readiness is non-authorizing live evidence. | future Mandate | Adopt | architecture 22 | Unavailability retains reason and creates no RunId; restoration only reevaluates. | Provider evolution | readiness fixture planned |
+| PRV-011 | Provider recovery never admits/retries/attaches old work. | future Mandate | Adopt | architecture 22 | Later work requires fresh RunId after exact reconciliation. | Provider evolution | recovery fixture planned |
+| PRV-012 | Historical M3/M4 selections remain ordinary without synthetic profile/catalog/Responses state. | historical-only | Adopt | architecture 22 | Preserve bytes/meaning; explicit bridge may reference only source bytes. | Provider evolution | preservation fixture planned |
+| RSN-001 | Generic Chat remains narrow; divergent reasoning uses closed descriptor/kind semantics. | future Mandate | Adopt | architecture 22 | No model-name or raw vendor-flag reasoning inference. | Provider evolution | dialect fixture planned |
+| RSN-002 | Normalized reasoning uses Primary/Detail fragments and distinct summaries on one run cursor. | future Mandate | Adopt | architecture 22 | No second stream, merge, deduplication, raw payload, or snapshot accumulation. | Provider evolution | ordering fixture planned |
+| RSN-003 | Provider reasoning does not select context sources or disclose prior reasoning. | future Mandate | Adopt | architecture 22 | Architecture 21 owns source/audience/projection; no live history scan. | Provider evolution | authority fixture planned |
+| RSN-004 | Responses is local-history-first with `store: false` and no remote continuation or built-in tools. | future Mandate | Adopt | architecture 22 | Unsupported calls/payloads fail before local tool action. | Provider evolution | Responses fixture planned |
+| RSN-005 | Future reasoning delivery is negotiated, history-before-live, and read-only. | future Mandate | Adopt | architecture 22 | Unnegotiated peers fail closed; reconnect has zero effect. | Provider evolution | protocol fixture planned |
+| RSN-006 | M4 reasoning remains its recorded untagged historical form. | historical-only | Adopt | architecture 22 | No synthetic category, summary, manifest, or replay widening. | Provider evolution | compatibility fixture planned |

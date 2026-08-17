@@ -179,8 +179,10 @@ authority, tools, continuation, or current-state fallback. Model names never
 select a provider kind or driver.
 
 Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle,
-reasoning, and driver compatibility are separate provider-evolution work. They
-require their own authoritative contract and fixtures before implementation.
+reasoning, and driver compatibility are owned by [Provider evolution, profiles,
+and reasoning](22-provider-evolution-profiles-and-reasoning.md). It preserves M4
+exactly: future `responses` is distinct from Generic Chat, `openai` is only a
+future parse-time alias, and model names never route provider behavior.
 
 ## Execution-meaning compatibility consequence
 
@@ -189,7 +191,8 @@ selection. Model names never infer provider kind, driver, endpoint, capability
 or execution kind. Driver-contract compatibility and the distinction between
 stored semantic compatibility and live availability are owned by [Run execution
 meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
-This does not introduce profiles, `responses`, aliases or a new M4 driver.
+This does not introduce profiles, `responses`, aliases or a new M4 driver;
+architecture 22 defines only their future documentation contract.
 
 ## Post-M4 tool-loop consequence
 

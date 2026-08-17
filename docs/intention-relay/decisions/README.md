@@ -31,3 +31,4 @@ provenance.
 | [0011](0011-mandate-gateway-rlm-bridge.md) | Accepted | Mandate Gateway/RLM bridge |
 | [0012](0012-ipython-kernel-lifecycle.md) | Accepted | Run-scoped IPython kernel lifecycle |
 | [0013](0013-goals-skills-context-memory-and-compaction.md) | Accepted | Goals, Skills, context, memory, and compaction |
+| [0014](0014-provider-evolution-profiles-and-reasoning.md) | Accepted | Provider evolution, profiles, and reasoning |

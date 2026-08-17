@@ -770,3 +770,32 @@ target, or implementation milestone.
 - M3/M4 and retained context history remain explicitly unchanged; and
 - provider evolution, session forks, activity/UI, retrieval/index implementation,
   prompt assembly, schema, and activation remain excluded.
+
+## Post-M4 provider evolution, profiles, and reasoning package
+
+**Documentation-only package.** It depends on execution meaning and creates [the
+authoritative provider contract](22-provider-evolution-profiles-and-reasoning.md)
+and decision 0014. It activates no SDK, crate, parser, catalog storage, schema,
+migration, protocol implementation, feature profile, quality-policy target, or
+implementation milestone.
+
+### Deliver
+
+- canonical future `responses`, parse-time alias normalization, immutable typed
+  kinds/profiles/catalogs, and private credential/endpoint boundaries;
+- immutable provider and model-capability selections, driver compatibility, and
+  readiness/non-authority rules;
+- normalized textual reasoning, local-history-first Responses semantics, safe
+  negotiated delivery, recovery, and no-resume boundaries; and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- PRV-001..020 and RSN-001..015 have one owner and compatibility/failure rule;
+- provider state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 provider bytes and meanings remain explicitly unchanged; and
+- SDK/parser activation, profile UI/control plane, live reload, credential
+  rotation, discovery, pricing, session branching, schema, and activation remain
+  excluded.

@@ -188,3 +188,7 @@ through the bridge and tool loop. Checkpoints contain no live MCP state and late
 runs reacquire capabilities.
 
 Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Context is safe non-authorizing projection only and cannot discover/select/invoke MCP, create a capability, or reconstruct an MCP selection.
+
+Architecture 22 owns provider profiles and reasoning semantics. Provider
+selection cannot discover, select, invoke, or reconstruct MCP; provider and MCP
+private credentials/resources remain separate and non-authorizing.

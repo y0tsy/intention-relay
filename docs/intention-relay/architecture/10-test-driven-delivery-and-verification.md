@@ -366,3 +366,14 @@ recovery/no-resume and replay/resync; child/verifier/MCP/bridge/kernel isolation
 M3/M4 preservation; and fake-secret/raw-source/private-reference absence. These
 are future obligations, not current tests or targets. The detailed portfolio is
 owned by [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md).
+
+## Provider evolution, profiles, and reasoning evidence
+
+Before implementation, future provider work requires IRCR canonical descriptor/
+profile/catalog/selection/capability/driver-contract goldens; M3/M4 preservation;
+alias normalization and no model-name routing; capability/driver preflight before
+outbound work; Responses `store: false`; normalized reasoning and context-owner
+selection; catalog activation/recovery fault injection; no-resume/retry matrices;
+negotiated replay; redaction; and Linux/Windows outcomes. These are future
+obligations, not current tests or targets. The detailed portfolio is owned by
+[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).

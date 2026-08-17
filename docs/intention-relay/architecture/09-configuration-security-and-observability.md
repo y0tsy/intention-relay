@@ -16,7 +16,7 @@ It does not introduce remote authentication, cloud secrets management, or multi-
 - configuration migrations;
 - the M1 `ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
 
-M1 accepts only `openrouter` and `generic-chat-completion-api` provider kinds. A future `openai` kind is not implied: it requires a separately declared OpenAI Responses driver crate and architecture decision.
+M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds. A future canonical Responses kind is `responses`, not `openai`; any `openai` spelling is only a future parse-time alias under architecture 22 and does not amend M1/M4.
 
 No YAML, JSON, database-only, or UI-only configuration source is authoritative in v1. YAML is reserved for internal plan frontmatter, not application configuration.
 
@@ -203,3 +203,11 @@ credential-free. Checkpoint payloads, Python values, Jupyter frames, raw
 tracebacks, grants, endpoints, paths, handles, process details, and implementation
 errors never enter storage, protocol, logs, diagnostics, adapters, or model
 context. Kernel availability is typed operational evidence, not authority.
+
+## Post-M4 provider-evolution configuration consequence
+
+Architecture 22 owns future startup-only credential-free provider profile/catalog
+selection. Raw TOML, credentials, private endpoint input, candidate material, and
+private clients remain outside persistence and public diagnostics. Catalog/default
+state cannot reconstruct immutable provider meaning or imply live reload,
+credential rotation, discovery, health testing, or a configuration control plane.

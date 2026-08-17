@@ -378,3 +378,11 @@ implementation, migration, quality tool, or Makefile target. A later activating
 change must declare exact context owners, test targets, coverage/features,
 storage/wire/retention treatment, expected-failure architecture fixtures,
 redaction evidence, and Linux/Windows outcomes atomically with production work.
+
+The post-M4 Provider evolution, profiles, and reasoning package is likewise
+documentation-only. It activates no provider crate, SDK, parser, test target,
+coverage tier, feature combination, protocol implementation, migration, quality
+tool, or Makefile target. A later activating change must declare exact provider
+owners, dependencies, test targets, coverage/features, storage/wire policy,
+expected-failure architecture fixtures, redaction evidence, and Linux/Windows
+outcomes atomically with production work.

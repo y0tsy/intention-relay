@@ -137,3 +137,12 @@ context-source manifests/model-step projections, typed memory, and immutable
 compaction. [Decision 0013](../decisions/0013-goals-skills-context-memory-and-compaction.md)
 records the cross-document decision. Reconciliation remains an index: historical
 records retain their recorded meaning and no context family becomes authority.
+
+## Provider evolution authority
+
+[Provider evolution, profiles, and reasoning](../architecture/22-provider-evolution-profiles-and-reasoning.md)
+now owns future provider kinds, profiles/catalogs, immutable provider/capability
+selections, driver compatibility, and normalized reasoning. [Decision
+0014](../decisions/0014-provider-evolution-profiles-and-reasoning.md) records
+the cross-document decision. Reconciliation remains an index: M3/M4 provider
+kinds, configuration, retries, replay, and recovery keep their recorded meaning.

@@ -250,3 +250,7 @@ cannot create, restore, attach, or execute a kernel; architecture 20 owns those
 kernel details.
 
 Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Their references are non-authorizing evidence and cannot create a scheduler candidate, readiness observation, reservation, quota, trigger reason, or fresh admission.
+
+Architecture 22 owns provider availability evidence. Provider readiness is
+non-authorizing: it retains and reevaluates an existing reason but cannot create
+a reason, reservation, retry budget, RunId, or direct admission.

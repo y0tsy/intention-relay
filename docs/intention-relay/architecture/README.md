@@ -76,8 +76,9 @@ flowchart TD
 9. [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md)
 10. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
 11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
-12. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-13. [VFR and Headroom](06-vfr-and-headroom.md)
+12. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
+13. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+14. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -249,3 +250,11 @@ compaction. It preserves M3/M4 history, binds project Goals to sessions only
 through explicit applicability links, and cannot become lifecycle, scheduler,
 tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation
 authority.
+
+### Provider evolution owner
+
+[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
+is the sole detailed authority for future provider kinds, profiles/catalogs,
+immutable provider and capability selections, driver compatibility, and normalized
+reasoning. It preserves M4 provider kinds and behavior, is non-authorizing, and
+cannot infer, reroute, or reconstruct a provider selection from mutable state.

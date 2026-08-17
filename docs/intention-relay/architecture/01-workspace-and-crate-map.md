@@ -180,3 +180,12 @@ allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md)
 and the [ownership map](../reconciliation/ownership-and-dependency-map.md).
+
+## Post-M4 provider evolution ownership
+
+Architecture 22 owns future typed provider/profile/catalog/revision/capability
+values, private provider translation, driver compatibility, and composition-only
+private driver assembly. It activates no crate or dependency edge. A later
+activation must split typed contracts, orchestration, storage, and private SDK or
+decoder translation without exposing credentials, native payloads, SDK/client
+resources, or another capability authority.
