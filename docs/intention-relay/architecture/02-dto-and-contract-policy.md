@@ -277,3 +277,11 @@ cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
 payloads, SDK/client resources, remote continuation state, or private endpoint
 input. Architecture 22 owns their semantics; architecture 14 retains canonical
 framing, digest, decoding, and compatibility ownership.
+
+## Post-M4 session branching DTO boundary
+
+Future fork DTOs are closed, versioned, credential-free command/query/result,
+lineage, boundary, snapshot, preview, and safe branch-summary families. They
+never carry a client-selected child ID, raw snapshot/event, credential, path,
+resource, provider payload, or authority. Architecture 23 owns their semantics;
+architecture 14 retains canonical framing and compatibility ownership.

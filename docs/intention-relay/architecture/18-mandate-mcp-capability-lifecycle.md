@@ -192,3 +192,7 @@ Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Con
 Architecture 22 owns provider profiles and reasoning semantics. Provider
 selection cannot discover, select, invoke, or reconstruct MCP; provider and MCP
 private credentials/resources remain separate and non-authorizing.
+
+Architecture 23 owns ordinary Session forks. No live MCP source, capability,
+selection, connection, process, or unfinished invocation crosses a fork; only
+explicit safe terminal provenance may be retained.

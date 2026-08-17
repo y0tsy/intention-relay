@@ -146,3 +146,12 @@ selections, driver compatibility, and normalized reasoning. [Decision
 0014](../decisions/0014-provider-evolution-profiles-and-reasoning.md) records
 the cross-document decision. Reconciliation remains an index: M3/M4 provider
 kinds, configuration, retries, replay, and recovery keep their recorded meaning.
+
+## Session branching authority
+
+[Non-destructive session branching and regeneration](../architecture/23-non-destructive-session-branching-and-regeneration.md)
+now owns future ordinary Session lineage, frozen fork context, regeneration, and
+lineage projections. [Decision 0015](../decisions/0015-non-destructive-session-branching-and-regeneration.md)
+records the cross-document decision. Reconciliation remains an index: M3/M4
+history stays unchanged, and conversation branches remain distinct from Mandate
+child/verifier authority, provider meaning, and activity/UI behavior.

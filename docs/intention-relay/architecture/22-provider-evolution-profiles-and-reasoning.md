@@ -312,7 +312,7 @@ This document depends on architectures 13, 14, 15, 16, and 21 plus decisions
 database, wire tags, migrations, profile picker/editor, credential entry/keychain/
 rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, arbitrary headers, plugin drivers, remote continuation,
-provider-side parser administration, session defaults/overrides, forks, lineage,
+provider-side parser administration, session defaults/overrides, while architecture 23 owns forks and lineage,
 UI, Cargo, Makefile/CI, or production activation.
 
 A later activating specification must declare exact crates, dependencies, test

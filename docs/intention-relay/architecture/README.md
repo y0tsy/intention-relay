@@ -77,7 +77,8 @@ flowchart TD
 10. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
 11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
 12. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
-13. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+13. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
+14. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 14. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
@@ -258,3 +259,11 @@ is the sole detailed authority for future provider kinds, profiles/catalogs,
 immutable provider and capability selections, driver compatibility, and normalized
 reasoning. It preserves M4 provider kinds and behavior, is non-authorizing, and
 cannot infer, reroute, or reconstruct a provider selection from mutable state.
+
+### Session branching owner
+
+[Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
+is the sole detailed authority for future ordinary Session lineage, frozen fork
+context, regeneration, and bounded lineage projections. It preserves M3/M4
+history and remains distinct from Mandate child graphs, lifecycle authority,
+provider selections, and activity/UI implementation.

@@ -370,3 +370,11 @@ retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events,
 queues, run cursors, facts, or replay bytes. Catalog audit uses its own sequence;
 recovery never resumes a prior provider request. Detailed semantics are owned by
 [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
+
+## Post-M4 session branching storage consequence
+
+Architecture 23 owns future ordinary Session lineage. Additive fork records and
+a separate lineage sequence may create independent child Sessions, but cannot
+rewrite source events, M3/M4 bytes, queues, cursors, snapshots, or replay. One
+active run remains a per-Session invariant; concurrent branches are separate
+Sessions, not parallel runs in one Session.

@@ -265,3 +265,7 @@ Architecture 22 owns provider profile/capability semantics. A bridge grant,
 channel, facade, or Python value cannot select a profile, alter provider meaning,
 or create a private provider path; bridge delivery uses only safe existing
 provider facts.
+
+Architecture 23 owns ordinary Session forks. Retained RLM child/session identity
+is not conversation lineage without an explicit user fork, and no bridge grant
+or operation crosses it.

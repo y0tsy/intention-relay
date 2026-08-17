@@ -386,3 +386,8 @@ tool, or Makefile target. A later activating change must declare exact provider
 owners, dependencies, test targets, coverage/features, storage/wire policy,
 expected-failure architecture fixtures, redaction evidence, and Linux/Windows
 outcomes atomically with production work.
+
+The post-M4 Session branching and regeneration package is documentation-only. It
+activates no crate, test target, coverage tier, feature profile, storage/wire
+schema, protocol, quality tool, or Makefile target. A later activating change
+must declare those exact policies and architecture fixtures atomically.

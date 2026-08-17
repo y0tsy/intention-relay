@@ -166,3 +166,7 @@ Architecture 22 owns provider/profile/capability and reasoning semantics. A
 provider may normalize a tool call only when the immutable capability selection
 declares `model_tool_loop_v1`; it cannot assign local IDs, use provider-built-in
 tools, create a registry, or bypass the frozen local exchange.
+
+Architecture 23 may preserve terminal tool provenance only as non-authorizing
+frozen fork evidence. It cannot execute, retry, resume, or rebuild a tool
+selection from current registry state.

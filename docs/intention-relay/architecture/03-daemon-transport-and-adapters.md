@@ -338,3 +338,10 @@ The daemon, transport, client, and adapter tests in this document are blocking `
   ownership safeguards;
 - daemon upgrades with connected adapters;
 - explicit daemon stop command and future idle shutdown policy.
+
+## Post-M4 session branching transport boundary
+
+`session_fork_v1` is a future additive negotiated DTO family. It cannot widen
+M3 session replay or M4 run streams: bounded tree reads remain separate,
+read-only projections and no tree-wide event stream is introduced. Adapters
+render daemon-owned results and cannot infer lineage, authority, or rollback.

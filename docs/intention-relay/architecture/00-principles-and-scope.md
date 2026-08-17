@@ -275,3 +275,10 @@ not authority. Model names and current catalog/configuration/credential/driver
 state cannot reconstruct, reroute, or replace stored meaning. Provider readiness
 only supports scheduler reevaluation; it cannot create a reason, RunId, or
 admission. Detailed rules are owned by architecture 22 and decision 0014.
+
+### 28. Session branches are independent history, not rollback
+
+A future ordinary Session fork creates a separate child Session with immutable
+lineage and frozen context. It does not allow parallel runs within one Session,
+rewrite a source Session, transfer authority, or claim rollback of workspace or
+external state. Detailed rules are owned by architecture 23 and decision 0015.
