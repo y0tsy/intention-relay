@@ -203,3 +203,10 @@ request. It never invokes a local primitive or reuses opaque remote continuation
 state. Registry and tool-loop semantics are owned by [Tool registry and direct
 Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md); provider evolution
 remains separate.
+
+## Post-M4 session branching consequence
+
+Architecture 23 owns frozen fork model context and immutable transfer references.
+Provider drivers cannot reconstruct fork history from current state, infer a
+provider selection, or continue a source request. Architecture 22 owns future
+provider and reasoning semantics; M4 provider behavior remains unchanged.

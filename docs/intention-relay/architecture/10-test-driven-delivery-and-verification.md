@@ -377,3 +377,11 @@ selection; catalog activation/recovery fault injection; no-resume/retry matrices
 negotiated replay; redaction; and Linux/Windows outcomes. These are future
 obligations, not current tests or targets. The detailed portfolio is owned by
 [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
+
+## Session branching evidence
+
+Before implementation, architecture 23 requires canonical v1/v2 golden and
+negative fixtures; boundary/context/anchor tests; transaction fault injection;
+additive migration byte preservation; negotiation and bounded tree-page tests;
+authority/no-resume/no-current-state-reconstruction matrices; redaction; and
+Linux/Windows fork/regeneration outcomes. These are future obligations only.

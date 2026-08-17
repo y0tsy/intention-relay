@@ -211,3 +211,10 @@ selection. Raw TOML, credentials, private endpoint input, candidate material, an
 private clients remain outside persistence and public diagnostics. Catalog/default
 state cannot reconstruct immutable provider meaning or imply live reload,
 credential rotation, discovery, health testing, or a configuration control plane.
+
+## Post-M4 session branching observability consequence
+
+Future fork snapshots and lineage projections are credential-free safe records.
+They exclude raw provider/tool/kernel data, workspace contents, implementation
+resources, and secrets. Lineage audit remains separate from Session/Run events
+and cannot be used to infer rollback or external-effect proof.

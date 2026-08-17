@@ -254,3 +254,6 @@ Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. The
 Architecture 22 owns provider availability evidence. Provider readiness is
 non-authorizing: it retains and reevaluates an existing reason but cannot create
 a reason, reservation, retry budget, RunId, or direct admission.
+
+Architecture 23 owns ordinary Session forks. Fork creation and ordinary
+regeneration create no Mandate reason, readiness observation, or admission.

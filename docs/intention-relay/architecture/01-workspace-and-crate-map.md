@@ -189,3 +189,11 @@ private driver assembly. It activates no crate or dependency edge. A later
 activation must split typed contracts, orchestration, storage, and private SDK or
 decoder translation without exposing credentials, native payloads, SDK/client
 resources, or another capability authority.
+
+## Post-M4 session branching ownership
+
+Architecture 23 owns future typed conversation-tree, parent, boundary, fork
+operation, snapshot, lineage-audit, and safe branch-projection values. Domain
+owns validation; storage owns atomic lineage persistence; protocol owns a later
+negotiated DTO family; application/runtime owns fork orchestration; adapters own
+presentation only. This activates no crate or dependency edge.

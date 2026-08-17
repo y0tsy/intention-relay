@@ -250,3 +250,6 @@ Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Ker
 Architecture 22 owns provider profile/capability semantics. Kernel state,
 checkpoints, and namespaces cannot select a provider, retain a provider
 continuation, or carry private provider clients/resources.
+
+Architecture 23 owns ordinary Session forks. No live kernel epoch, grant, task,
+process, namespace, checkpoint authority, or unfinished effect crosses a fork.

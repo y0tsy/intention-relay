@@ -799,3 +799,32 @@ implementation milestone.
 - SDK/parser activation, profile UI/control plane, live reload, credential
   rotation, discovery, pricing, session branching, schema, and activation remain
   excluded.
+
+## Post-M4 non-destructive session branching and regeneration package
+
+**Documentation-only package.** It depends on ordinary Session/storage
+compatibility, Mandate lifecycle boundaries, execution meaning, context, and
+provider evolution. It creates [the authoritative session-branching
+contract](23-non-destructive-session-branching-and-regeneration.md) and decision
+0015, and activates no crate, schema, migration, protocol implementation,
+feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- independent ordinary child Sessions, deterministic tree lineage, closed fork
+  boundaries, immutable base snapshots, and non-destructive regeneration;
+- atomic lineage/idempotency/audit, archive presentation, bounded negotiated
+  tree projections, no-current-state reconstruction, and no-resume boundaries;
+- explicit separation from Mandate child/verifier authority, provider selection,
+  context sourcing, and machine-state rollback; and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- FRK-001..018 have one owner and compatibility/failure rule;
+- M3/M4 bytes, events, cursors, snapshots, queues, provider behavior, replay,
+  recovery, and tool denial remain explicitly unchanged;
+- ordinary fork ceilings never become Mandate quotas or child-graph limits; and
+- storage, protocol, UI, clone/rebind, destructive retention, and activation
+  remain excluded pending a later approved specification.

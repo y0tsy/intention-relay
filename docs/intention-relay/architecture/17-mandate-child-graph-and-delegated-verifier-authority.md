@@ -187,3 +187,7 @@ Architecture 22 owns provider selections and reasoning normalization. A parent
 profile, model, catalog state, or provider output cannot grant child controls or
 verifier authority; every child/verifier fresh run binds its own immutable
 provider selection.
+
+Architecture 23 owns user-visible ordinary Session lineage. A conversation fork
+never derives from or creates a Mandate child edge, verifier authority, target
+set, parent control, or graph terminalization fact.

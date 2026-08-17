@@ -309,3 +309,7 @@ and applicability links, Skills, disclosures, memory references, and compaction
 references are canonical evidence; current catalogs, files, indexes, memory, UI,
 and runtime state are not. No path may reconstruct missing context meaning from
 mutable state.
+
+Architecture 23 owns ordinary Session fork snapshots and lineage. A fork cannot
+repair missing execution meaning, create a bridge, or reconstruct meaning from
+current state.

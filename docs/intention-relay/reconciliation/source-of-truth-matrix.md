@@ -43,7 +43,7 @@ contradiction register.
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Adopt for future Mandate execution; historical context preserved | `21-goals-skills-context-memory-and-compaction.md` |
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Adopt for future Mandate execution; M3/M4 provider behavior preserved | `22-provider-evolution-profiles-and-reasoning.md` |
-| FRK-001..018 | session forks | Defer | branching package |
+| FRK-001..018 | session forks | Adopt for future ordinary Session branching; M3/M4 behavior preserved | `23-non-destructive-session-branching-and-regeneration.md` |
 | EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | Exclude or Defer as recorded in concept | explicit later decision only |
 
 ## Tool registry and Mandate-loop topics
@@ -170,6 +170,29 @@ contradiction register.
 | MCP-014 | Cancellation/restart disposes private resources and never repeats old work. | future Mandate | Adopt | architecture 18 | Later work needs fresh run/acquisition identities. | MCP lifecycle | recovery fixture planned |
 | MCP-015 | MCP readiness is non-authorizing and cannot discover or select capabilities. | future Mandate | Adopt | architecture 18 | Scheduler retains reason, cannot start MCP work. | MCP lifecycle | readiness fixture planned |
 | MCP-016 | Dynamic acquisition supersedes retained bounded rules only for future Mandates. | future/historical | Adapt | architecture 18 | M3/M4 and retained bounded-MCP history stay unchanged. | MCP lifecycle | compatibility fixture planned |
+
+## Session branching topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FRK-001 | A fork creates an independent child Session and never rewrites source history. | future ordinary Session | Adopt | architecture 23 | Rewind never truncates or rolls back effects. | Session branching | outcome fixture planned |
+| FRK-002 | Tree/root/parent/boundary/operation identities are immutable typed lineage. | future ordinary Session | Adopt | architecture 23 | Child never derives or substitutes a root identity. | Session branching | canonical fixture planned |
+| FRK-003 | Only committed user-turn and completed assistant-turn boundaries are valid. | future ordinary Session | Adopt | architecture 23 | Partial, queued, failed, waiting, and unfinished work rejects. | Session branching | boundary matrix planned |
+| FRK-004 | Fork context is a closed materialized projection, not live ancestor replay. | future ordinary Session | Adopt | architecture 23 | Unsupported or oversized context rejects without fallback. | Session branching | context fixture planned |
+| FRK-005 | Each child owns a flattened immutable credential-free base snapshot. | future ordinary Session | Adopt | architecture 23 | Corrupt or unsupported history blocks dependent work pre-effect. | Session branching | canonical fixture planned |
+| FRK-006 | Reasoning and terminal references are typed provenance, not context or authority. | future ordinary Session | Adopt | architecture 23 | No text, resumed work, or authority transfer. | Session branching | isolation fixture planned |
+| FRK-007 | Fork creation is atomic, idempotent, and external-effect-free. | future ordinary Session | Adopt | architecture 23 | Faults leave no partial child or lineage state. | Session branching | fault injection planned |
+| FRK-008 | Lineage audit has its own sequence and never mutates source Session history. | future ordinary Session | Adopt | architecture 23 | No synthetic source fork event or replay widening. | Session branching | sequence fixture planned |
+| FRK-009 | Roots migrate additively while preserving M3/M4 bytes and meaning. | historical/future | Adopt | architecture 23 | No synthetic parent, run, anchor, or message. | Session branching | migration fixture planned |
+| FRK-010 | Regeneration is separate ordinary child execution and cannot bypass Mandate admission. | future ordinary Session | Adopt | architecture 23 | Failed start retains idle branch; no Mandate reason/RunId. | Session branching | workflow fixture planned |
+| FRK-011 | Branch archive/title state is per Session and non-destructive. | future ordinary Session | Adopt | architecture 23 | Archive needs idle session; lineage/snapshot never rewrites. | Session branching | lifecycle fixture planned |
+| FRK-012 | Workspace state is explicitly unverified and makes no rollback claim. | future ordinary Session | Adopt | architecture 23 | No file/process/remote-effect reconstruction. | Session branching | safety fixture planned |
+| FRK-013 | Fork limits are ordinary-session policy and never Mandate quotas. | future ordinary Session | Adopt | architecture 23 | Representation bounds remain intrinsic/protocol only. | Session branching | taxonomy fixture planned |
+| FRK-014 | Fork protocol is separately negotiated and tree reads are bounded/read-only. | future ordinary Session | Adopt | architecture 23 | Old peers fail closed; no tree-wide stream. | Session branching | protocol fixture planned |
+| FRK-015 | Conversation lineage is distinct from Mandate child/verifier/RLM relations. | future/all | Adopt | architecture 23 | No authority or graph edge derives from a branch. | Session branching | authority fixture planned |
+| FRK-016 | Forks copy no active work, grant, request, queue, or unfinished effect. | future/all | Adopt | architecture 23 | Recovery never resumes transferred work. | Session branching | recovery matrix planned |
+| FRK-017 | Child runs bind their own provider meaning; default is non-authorizing. | future ordinary Session | Adopt | architecture 23 | No credential/client/request continuation or model-name routing. | Session branching | selection fixture planned |
+| FRK-018 | Historical records gain no synthetic fork execution state. | historical-only | Adopt | architecture 23 | Preserve readable ordinary history. | Session branching | compatibility fixture planned |
 
 ## Coverage ledger
 

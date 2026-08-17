@@ -210,7 +210,7 @@ meaning.
 This document depends on architectures 13--20 and decisions 0001--0012. It does
 not define actual Goal persistence, search/index/vector retrieval, prompt
 assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
-sizes, resource values, provider evolution, session forks, activity/UI, physical
+sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical
 Plan artifacts, direct MCP administration, Python/Jupyter process behavior,
 Cargo, Makefile/CI, or production activation.
 
