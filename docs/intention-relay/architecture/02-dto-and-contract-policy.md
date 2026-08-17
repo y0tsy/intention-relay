@@ -268,3 +268,12 @@ raw frames, checkpoint payloads, grants, credentials, endpoints, handles,
 process resources, raw tracebacks, and caller-selected application identities
 never cross a public boundary. Architecture 20 owns their semantics; architecture
 14 owns canonical framing, digest, decoder, and compatibility.
+
+## Post-M4 provider evolution DTO boundary
+
+Future provider DTOs are closed, credential-free kind/descriptor/profile/catalog/
+selection/capability/driver-contract and normalized-reasoning families. They
+cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
+payloads, SDK/client resources, remote continuation state, or private endpoint
+input. Architecture 22 owns their semantics; architecture 14 retains canonical
+framing, digest, decoding, and compatibility ownership.

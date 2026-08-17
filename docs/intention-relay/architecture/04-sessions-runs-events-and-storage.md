@@ -361,3 +361,12 @@ cursor, ordinary queues, and M4 replay. Recovery never reconnects, reattaches,
 rediscoveries, retries, or resumes MCP work. This adds no current table, event,
 migration, or historical reinterpretation. Detailed semantics are owned by
 [Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
+
+## Post-M4 provider-evolution storage consequence
+
+Future provider catalog/profile/revision/audit records and provider-selection
+bindings are additive, credential-free records. They do not rewrite or
+retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events,
+queues, run cursors, facts, or replay bytes. Catalog audit uses its own sequence;
+recovery never resumes a prior provider request. Detailed semantics are owned by
+[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).

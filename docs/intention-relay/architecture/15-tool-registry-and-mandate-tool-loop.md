@@ -161,3 +161,8 @@ selection, direct admission, `ToolCallId`, start/result facts, and publication
 path. Kernel execution is not a new ToolId, registry, or primitive bypass.
 
 Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Context projections may inform a model step only through immutable selected safe representations; they cannot add a descriptor, ToolId, direct admission exception, WorkspaceRoot authority, ToolCallId, or retry path.
+
+Architecture 22 owns provider/profile/capability and reasoning semantics. A
+provider may normalize a tool call only when the immutable capability selection
+declares `model_tool_loop_v1`; it cannot assign local IDs, use provider-built-in
+tools, create a registry, or bypass the frozen local exchange.

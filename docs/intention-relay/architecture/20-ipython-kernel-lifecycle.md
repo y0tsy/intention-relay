@@ -246,3 +246,7 @@ CI. It must cover:
   durable surface.
 
 Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Kernel steps consume only immutable safe context projections; context cannot create an epoch, disclose private namespace/checkpoint state, issue a host request, or reconstruct missing kernel meaning.
+
+Architecture 22 owns provider profile/capability semantics. Kernel state,
+checkpoints, and namespaces cannot select a provider, retain a provider
+continuation, or carry private provider clients/resources.

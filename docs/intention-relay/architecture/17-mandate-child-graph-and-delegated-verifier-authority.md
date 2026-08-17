@@ -182,3 +182,8 @@ child kernel seeding. No live kernel, namespace, task, grant, or authority is
 inherited, and kernel evidence cannot widen verifier authority.
 
 Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. A child receives only separately selected frozen safe references, and a Goal/context record cannot create, widen, or consume child or verifier authority.
+
+Architecture 22 owns provider selections and reasoning normalization. A parent
+profile, model, catalog state, or provider output cannot grant child controls or
+verifier authority; every child/verifier fresh run binds its own immutable
+provider selection.

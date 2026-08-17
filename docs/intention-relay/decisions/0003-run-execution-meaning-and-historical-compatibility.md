@@ -31,8 +31,8 @@ from current state.
 [Architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
 owns canonical field tables, tags, digest/decoder rules and compatibility
 outcomes. Later packages own nested provider, tool, MCP, Skill, Goal, child,
-verifier, bridge and UI payload semantics. Provider profiles/Responses,
-reasoning, bridge implementation and decoder removal remain deferred. No old
+verifier, bridge and UI payload semantics. Provider profiles/Responses and reasoning are owned by architecture 22 and
+decision 0014; bridge implementation and decoder removal remain deferred. No old
 byte, UUID, digest, cursor, event or snapshot is rewritten by this decision.
 
 ## Evidence

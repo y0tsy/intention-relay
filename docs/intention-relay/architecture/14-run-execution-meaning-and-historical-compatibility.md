@@ -246,9 +246,9 @@ credential/resource/health/catalog availability is distinct from compatibility:
 it may refuse/defer work but cannot rewrite meaning, reroute a run, substitute a
 default, or consume a trigger as if execution happened.
 
-`responses`, parse-time `openai` aliasing, profiles/catalogs, reasoning,
-discovery, credentials and live reload remain deferred. No M4 provider behavior
-changes here.
+Architecture 22 owns `responses`, parse-time `openai` aliasing, profiles/catalogs,
+and reasoning semantics. Discovery, credential rotation, health testing, and live
+reload remain deferred. No M4 provider behavior changes here.
 
 ## Persistence and protocol boundary
 
@@ -266,8 +266,8 @@ only through typed IDs. Existing M3/M4 protocol DTOs are not widened here.
 
 ## Dependencies and non-goals
 
-This document does not define SQL/wire implementation, provider
-profiles/Responses, scheduler topology,
+This document does not define SQL/wire implementation, provider runtime
+activation, scheduler topology,
 child graph, verifier workflow, MCP, Skills/Goals, bridge/kernel, forks, UI,
 crates, Cargo, feature/coverage policy, Makefile/CI or M4 changes. CON-003 and
 provider evolution remain later-owner work. Tool-loop/registry, WorkspaceRoot,

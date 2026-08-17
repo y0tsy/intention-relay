@@ -266,3 +266,12 @@ state cannot reconstruct missing selected context. Safe representations never
 widen their source audience, and compaction cannot replace durable facts or
 become continuation state. Detailed rules are owned by architecture 21 and
 decision 0013.
+
+### 27. Provider selection is immutable compatibility evidence
+
+Future provider profile, descriptor, capability, endpoint, credential-transport,
+and driver-contract selections are credential-free immutable execution evidence,
+not authority. Model names and current catalog/configuration/credential/driver
+state cannot reconstruct, reroute, or replace stored meaning. Provider readiness
+only supports scheduler reevaluation; it cannot create a reason, RunId, or
+admission. Detailed rules are owned by architecture 22 and decision 0014.

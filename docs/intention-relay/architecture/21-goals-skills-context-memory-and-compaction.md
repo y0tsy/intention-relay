@@ -240,3 +240,8 @@ quick`, `make verify`, and Linux/Windows CI, and cover:
 - fake-secret, raw source, memory payload, corrupt bytes, private references,
   paths, handles, provider material, and unsafe output absence from all public or
   durable surfaces.
+
+Architecture 22 owns provider kind/profile/capability/reasoning normalization.
+Provider may declare compatible reasoning input requirements, but only this
+document selects sources, audiences, disclosures, and model-step context
+projections; provider cannot scan or inject historical context.
