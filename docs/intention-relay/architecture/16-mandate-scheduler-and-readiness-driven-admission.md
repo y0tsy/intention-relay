@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 16.
+- Decision record: [`0008`](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md).
+- Reconciliation topics: `SCH-001..012`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for durable Mandate scheduler reevaluation, readiness/capacity
 evidence, candidate selection, and scheduler handoff to fresh admission. It

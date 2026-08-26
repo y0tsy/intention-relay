@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 14.
+- Decision record: [`0003`](../decisions/0003-run-execution-meaning-and-historical-compatibility.md).
+- Reconciliation topics: `RUN-001..002`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for immutable execution meaning, canonical semantic identity,
 decoding, and execution/replay/audit compatibility. It does not authorize a

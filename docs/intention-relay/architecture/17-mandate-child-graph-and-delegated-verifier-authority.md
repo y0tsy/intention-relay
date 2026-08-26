@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 17.
+- Decision record: [`0009`](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).
+- Reconciliation topics: `CHD-001..012, VER-001..011`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole detailed owner for future Mandate child-graph relations, immutable delegation, direct-parent controls, graph terminalization, and separately issued delegated verifier authority. It does not authorize a crate, schema migration, wire implementation, executor, runtime worker, UI, or production child work.
 
 It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider selection, tool-call denial, replay, recovery, bytes, IDs, UUIDs, digests, cursors, events, and snapshots retain their recorded ordinary semantics. Retained RLM child/activity material remains research and historical provenance, not future Mandate graph authority.
