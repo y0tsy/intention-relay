@@ -1,3 +1,10 @@
+# Accepted Autopilot direction
+
+The product decision and activation scope are recorded in ADR 0017 and ADR
+0018. Implementation evidence remains pending until the separately activated
+slice declares crate ownership, DTO/wire/storage versions, feature profiles,
+coverage targets, tests, and observed `make verify` results.
+
 # Evidence Register
 
 ## Status and authority

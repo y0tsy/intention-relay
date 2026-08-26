@@ -1,6 +1,6 @@
 [policy]
-phase = "m4"
-active_milestone = "m4"
+phase = "m4plus-autopilot-spec"
+active_milestone = "autopilot-transition"
 quality_harness = "quality-harness"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
@@ -275,8 +275,8 @@ coverage_tier = "B"
 [[future_crates]]
 name = "intention-plans"
 responsibility = "Plan artifacts, hidden frontmatter, and Plan/Build policy."
-test_target = "plan integrity and mode-policy tests"
-test_targets = []
+test_target = "plan integrity, focus, approval, and mode-policy tests"
+test_targets = ["autopilot_plan_contracts", "autopilot_plan_outcomes"]
 coverage_tier = "B"
 
 [[future_crates]]

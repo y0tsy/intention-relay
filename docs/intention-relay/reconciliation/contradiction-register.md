@@ -1,3 +1,19 @@
+# Autopilot transition resolutions
+
+The following prior tensions are resolved by ADR 0017 and ADR 0018:
+
+- Plan is a product focus mode, not a shell sandbox. `execute` remains available
+  under advisory model guidance; ordinary typed project `write`/`edit` remains
+  denied.
+- Plan approval automatically starts a fresh Build Autopilot run in the same
+  Session by default. Same Session is continuity of conversation, not resume of
+  the old Run or any external operation.
+- Build Autopilot removes per-action confirmation for configured active tools,
+  while retaining typed admission, daemon ownership, durable evidence,
+  cancellation, unknown-effect quarantine and no-resume recovery.
+- Optional new-session implementation handoff transfers a frozen safe full
+  context projection and approved plan, never live state or authority.
+
 # Contradiction Register
 
 | ID | Current authority | Selected research direction | Impact | Disposition | Later owner |

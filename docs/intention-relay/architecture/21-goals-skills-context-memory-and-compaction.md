@@ -112,6 +112,15 @@ with current catalog content or hidden injected text.
 
 ## Context sources, projections, and memory
 
+Same-Session Plan-to-Build continuation may retain the conversation as model
+context, but it must bind the approved plan revision and create a fresh Build
+run. Conversation history is context evidence, not proof of current mutable
+state or completion of an earlier effect. Before mutation, the Build run must
+revalidate mutable project and external state. An optional new-Session handoff
+materializes the full available safe conversation context, approved plan, and
+execution prompt into an immutable credential-free snapshot; it never transfers
+live runtime resources, credentials, grants, queues, or unfinished effects.
+
 Admission freezes an exact typed manifest before a dependent model step begins:
 
 ```text
