@@ -116,6 +116,20 @@ cursors, kernels, resources, and current transport state are not. No bridge,
 replay, recovery, or audit path may reconstruct missing bridge meaning from
 current registry, configuration, kernel, process, channel, or graph state.
 
+## Cross-domain digest boundary
+
+A digest validates exact canonical semantic bytes; it does not authorize
+replacement, mutation, replay, or reconstruction. Object UUIDs identify domain
+objects, operation IDs identify idempotent requests, sequences/cursors order
+facts, and correlation IDs are diagnostic only. Nested owners may define their
+own semantic digest references, but they must use this document's framing rules
+and must not duplicate or reinterpret byte-level encoding.
+
+Live configuration, readiness, capacity, credentials, handles, provider clients,
+processes, channels, publication state, current catalogs, and mutable UI state
+are never digest inputs. Missing historical bytes cannot be repaired by
+recomputing a digest from current state.
+
 ## Canonical record and digest policy
 
 ```text

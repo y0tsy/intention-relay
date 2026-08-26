@@ -132,6 +132,16 @@ Authority revisions, target sets, audit baselines, evidence, verdicts, mutations
 
 Architecture 14 owns the `VerifierMandate` envelope/codec/decode behavior. This document owns verifier nested selection field semantics. A verifier payload with missing, corrupt, stale, or unsupported mandatory selection cannot downgrade to Mandate or Ordinary execution.
 
+### Stale baseline tuple
+
+A verifier baseline is fresh only when all required values match the committed
+state: exact target identity, target revision, aggregate sequence, lifecycle,
+authority revision/digest, audit contract, graph epoch where applicable, and
+operation idempotency identity/digest. Any mismatch is a typed pre-mutation stale
+failure. The system never best-effort merges, retargets, substitutes current state,
+or retries with changed meaning.
+
+
 ## Audit, mutations, conflicts, and reconciliation
 
 A verdict is durable evidence only. It neither schedules work nor reserves or mutates a target. Before dependent verifier work or mutation, validate exact verifier identity/revision, authority revision/digest/lifecycle, target membership, allowed operation, audit contract, frozen target baseline, and operation-specific lifecycle prerequisites. Missing, revoked, expired, consumed, corrupt, mismatched, stale, or unsupported authority/baseline fails closed before mutation. No path substitutes current authority, target revision, Goal, configuration, registry, ancestry, readiness, evidence store, or UI state.

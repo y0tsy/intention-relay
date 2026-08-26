@@ -470,6 +470,20 @@ The v1 implementation phase is ready to claim architectural completion only when
 
 ## Post-M4 authority reconciliation and foundation boundary
 
+Post-M4 package status uses separate terms: architecture documents are
+`Documentation-approved`, implementation remains not authorized, and evidence
+is `Planned` unless an exact artifact and observed result is cited. The immutable
+`m4plus_concept2.md` is research provenance and is not edited or used as an
+implementation acceptance target.
+
+The ordinary M5-M9 delivery track remains unchanged. Future Mandate packages
+are a separate activation track requiring an approved implementation
+specification and atomic updates to crate ownership, DTO/wire/storage versions,
+quality policy, feature profiles, migration declarations, and evidence. The
+package-to-owner mapping is maintained by the reconciliation source-of-truth
+matrix; this roadmap owns sequencing and milestone acceptance only.
+
+
 **Documentation-only planning package.** This package follows the closed M4
 baseline and precedes any separate M4+ implementation authorization. It does
 not renumber, replace, or claim delivery of Milestones 5–9. Current M5–M9 remain

@@ -49,6 +49,25 @@ A Mandate revision is immutable. Revision during Mandate `Working` affects only
 later fresh admission; it never changes the admitted run, selected trigger,
 execution meaning, or prior evidence.
 
+### Normative transition and cancellation boundary
+
+The lifecycle transition set is closed and explicit: `Draft -> Active | Stopped`,
+`Active -> Working | Paused | Completed | Stopped`, `Working -> Active |
+PausedAwaitingDecision | Paused | Completed | Stopped`, `Paused -> Active |
+NeedsRework | Completed | Stopped`, `PausedAwaitingDecision -> Active | Stopped`,
+and `NeedsRework -> Active | Completed | Stopped`. `Archived` is inert. A
+known run disposition may return a Mandate to `Active` only after required graph
+terminalization owned by architecture 17 completes.
+
+Cancellation is a control signal, not effect evidence. It stops new admission and
+may request executor cancellation, but each attempt is classified independently:
+before-start interruption/cancellation has no external effect; started work without
+terminal proof is `ExternalEffectUnknown`. The run is terminalized only after
+those facts are durably recorded. Unknown effect pauses only its owning Mandate;
+exact reconciliation may yield only fresh `Active` work or `Stopped`, never
+rollback, safe-repeat, reattachment, or old-run continuation.
+
+
 ## Lifecycle
 
 ```mermaid
@@ -94,6 +113,14 @@ stateDiagram
 Verifier transitions require separately issued, target-scoped authority owned by
 architecture 17. Parent/child controls do not provide verifier or general
 lifecycle authority; architecture 17 owns their limited direct-parent effects.
+
+### Deterministic eligibility ordering
+
+“FIFO” is not a lifecycle rule. Eligible reasons use the closed total order:
+explicit-user priority, `first_observed_at`, canonical `MandateId` order, then
+canonical `ReasonId` order. Readiness and wakeups only cause reevaluation; they
+never create a reason, `RunId`, lease, reservation, retry counter, or dispatch.
+
 
 ## Trigger reasons and eligibility
 

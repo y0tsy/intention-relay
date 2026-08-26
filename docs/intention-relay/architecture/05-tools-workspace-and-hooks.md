@@ -50,6 +50,17 @@ ToolResultDto
 
 The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or results.
 
+### Execution-kind scope
+
+The containment rules in this document apply to ordinary M3/M4 and ordinary v1
+execution. Future Mandate WorkspaceRoot semantics are owned by architecture 15:
+WorkspaceRoot supplies the default relative base and `execute` CWD, while explicit
+absolute or parent paths are observed and evidenced rather than denied solely by
+location. Hooks remain typed and mandatory in both modes, but future Mandate hooks
+cannot add discretionary confirmation, risk, corridor, quota, reservation, or
+root-origin authorization.
+
+
 ## WorkspaceRoot is mandatory
 
 A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searches, expands, or executes against a local path/process.

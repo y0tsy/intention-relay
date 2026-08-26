@@ -47,13 +47,16 @@ provider, reasoning, fork, kernel, activity, notification, and UI packages.
 | [Compatibility register](compatibility-register.md) | Closed M3/M4 behavior and permitted future additive boundaries. |
 | [Contradiction register](contradiction-register.md) | Conflicts that must be resolved by a later authoritative package. |
 | [Ownership and dependency map](ownership-and-dependency-map.md) | Layer ownership and future package ordering. |
-| [Concept supersession index](concept-supersession-index.md) | Provenance coverage for selected concept headings. |
+| [Concept supersession index](concept-supersession-index.md) | Provenance coverage and supersession mapping for selected concept headings. |
+| [Evidence register](evidence-register.md) | Exact evidence anchors and verified/planned status. |
+| [Deferred and excluded register](deferred-excluded-register.md) | Atomic non-authorized deferred and excluded claims. |
 | [Decision records](../decisions/README.md) | Accepted Foundation decisions and their rationale. |
 
 ## Review baseline
 
 - Closed M4 implementation baseline: `d2a85370a66d63fc759e4987a74d435ecd5d5115`.
-- Current review branch baseline: `ced6e0e`.
+- Documentation review baseline: branch `docs/m4plus-authoritative-replan`, reviewed at `f3ecaca` on 2026-08-26.
+- The M4 implementation baseline above is immutable; documentation review baselines are moving metadata and must be refreshed when this package changes.
 - Primary research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 
 ## Transition rule
@@ -63,103 +66,40 @@ owner documents, decision record, crate/test/coverage declarations, contract
 fixtures, architecture fixtures, and outcome evidence are approved together.
 This reconciliation approval authorizes documentation work only.
 
-## Mandate lifecycle authority
+## Owner map
 
-[Mandate domain and durable lifecycle](../architecture/13-mandate-domain-and-durable-lifecycle.md)
-now owns detailed Mandate lifecycle and admission rules. This reconciliation
-package continues to coordinate provenance and dependencies only; it does not
-become a duplicate runtime specification.
+Detailed semantics live only in the linked owner architecture documents. The
+following map is navigation and provenance; it does not restate their rules:
 
-## Execution-meaning authority
+| Domain | Owner | Decision |
+| --- | --- | --- |
+| Mandate lifecycle/admission | architecture 13 | decision 0006 |
+| Execution meaning/compatibility | architecture 14 | decision 0003 |
+| Tools/direct admission | architecture 15 | decision 0007 |
+| Scheduler/readiness | architecture 16 | decision 0008 |
+| Child graph/verifier | architecture 17 | decision 0009 |
+| MCP lifecycle | architecture 18 | decision 0010 |
+| Gateway/RLM bridge | architecture 19 | decision 0011 |
+| Kernel lifecycle | architecture 20 | decision 0012 |
+| Goals/Skills/context | architecture 21 | decision 0013 |
+| Provider/reasoning | architecture 22 | decision 0014 |
+| Session branching | architecture 23 | decision 0015 |
+| Activity/UI/adapters | architecture 24 | decision 0016 |
 
-[Run execution meaning and historical compatibility](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
-now owns envelope, canonical identity, decoder and historical compatibility
-rules. Reconciliation remains provenance/index material and does not duplicate
-that authority.
+Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
+the [contradiction register](contradiction-register.md) for conflict resolution,
+the [compatibility register](compatibility-register.md) for historical laws,
+the [evidence register](evidence-register.md) for evidence status, and the
+[deferred/excluded register](deferred-excluded-register.md) for non-scope claims.
 
-## Tool registry and Mandate-loop authority
+### Controlled status vocabulary
 
-[Tool registry and direct Mandate tool loop](../architecture/15-tool-registry-and-mandate-tool-loop.md)
-now owns the fixed registry, immutable tool selection, Mandate direct admission,
-Mandate WorkspaceRoot policy, tool-loop facts, and effect recovery. It resolves
-CON-001 and CON-002 only for future Mandate execution; ordinary M3/M4 behavior
-remains unchanged. [Decision 0007](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md)
-records the cross-document decision.
+Use separate fields and never treat one as another:
 
-## Scheduler and readiness authority
+- **Disposition:** `Adopt`, `Adapt`, `Supersede`, `PreserveHistorical`, `Defer`, `Exclude`, `Conflict`.
+- **Package status:** `Research`, `Planned`, `Documentation-approved`, `Implementation-authorized`, `Implemented`, `Closed`, `Superseded`.
+- **Evidence status:** `Verified`, `Planned`, `Deferred`, `Not applicable`, `Blocked`.
+- **Baseline status:** `Immutable`, `Moving review`, `Unverified`.
 
-[Mandate scheduler and readiness-driven admission](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
-now owns durable candidate reevaluation, typed readiness/capacity evidence, and
-handoff to lifecycle-owned fresh admission. It does not replace the Mandate
-lifecycle, execution-meaning, or tool-loop owners. [Decision 0008](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md)
-records the cross-document decision.
-
-## Child graph and delegated verifier authority
-
-[Mandate child graph and delegated verifier authority](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md)
-now owns future immutable child edges, direct-parent controls, graph
-terminalization, and separately issued target-scoped verifier authority.
-[Decision 0009](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md)
-records the cross-document decision. Reconciliation remains an index and does
-not duplicate those semantics or amend M3/M4 or retained RLM history.
-
-## Mandate MCP capability authority
-
-[Mandate MCP capability lifecycle](../architecture/18-mandate-mcp-capability-lifecycle.md)
-now owns future typed MCP source acquisition, discovery normalization, immutable
-run-local capability selections, invocation, disposal, and recovery.
-[Decision 0010](../decisions/0010-mandate-mcp-capability-lifecycle.md) records
-the cross-document decision. Reconciliation remains an index and does not amend
-M3/M4 or retained bounded-MCP history.
-
-## Mandate Gateway/RLM bridge authority
-
-[Mandate Gateway/RLM bridge](../architecture/19-mandate-gateway-rlm-bridge.md)
-now owns future bridge attachment, ephemeral grants, operation correlation,
-safe replay, cancellation propagation, and bridge recovery. [Decision
-0011](../decisions/0011-mandate-gateway-rlm-bridge.md) records the
-cross-document decision. Reconciliation remains an index: retained RLM bridge
-material is provenance, and the bridge is not a second gateway or authority.
-
-## Run-scoped IPython kernel authority
-
-[Run-scoped IPython kernel lifecycle](../architecture/20-ipython-kernel-lifecycle.md)
-now owns future private kernel epochs, cells, checkpoints, safe projections, and
-kernel recovery. [Decision 0012](../decisions/0012-ipython-kernel-lifecycle.md)
-records the cross-document decision. Reconciliation remains an index; the kernel
-consumes the bridge and one capability path and never becomes another authority.
-
-## Goals, Skills, context, memory, and compaction authority
-
-[Goals, Skills, context, memory, and compaction](../architecture/21-goals-skills-context-memory-and-compaction.md)
-now owns future non-authorizing Goal scope/evidence, Skill disclosure,
-context-source manifests/model-step projections, typed memory, and immutable
-compaction. [Decision 0013](../decisions/0013-goals-skills-context-memory-and-compaction.md)
-records the cross-document decision. Reconciliation remains an index: historical
-records retain their recorded meaning and no context family becomes authority.
-
-## Provider evolution authority
-
-[Provider evolution, profiles, and reasoning](../architecture/22-provider-evolution-profiles-and-reasoning.md)
-now owns future provider kinds, profiles/catalogs, immutable provider/capability
-selections, driver compatibility, and normalized reasoning. [Decision
-0014](../decisions/0014-provider-evolution-profiles-and-reasoning.md) records
-the cross-document decision. Reconciliation remains an index: M3/M4 provider
-kinds, configuration, retries, replay, and recovery keep their recorded meaning.
-
-## Session branching authority
-
-[Non-destructive session branching and regeneration](../architecture/23-non-destructive-session-branching-and-regeneration.md)
-now owns future ordinary Session lineage, frozen fork context, regeneration, and
-lineage projections. [Decision 0015](../decisions/0015-non-destructive-session-branching-and-regeneration.md)
-records the cross-document decision. Reconciliation remains an index: M3/M4
-history stays unchanged, and conversation branches remain distinct from Mandate
-child/verifier authority, provider meaning, and activity/UI behavior.
-
-## Activity, UI, and adapters authority
-
-[Activity, UI, and adapters](../architecture/24-activity-ui-and-adapters.md)
-now owns future safe activity/notification/acknowledgement projections and
-shared-client adapter delivery. [Decision 0016](../decisions/0016-activity-ui-and-adapters.md)
-records the cross-document decision. Reconciliation remains an index: M3/M4
-records retain their recorded meaning and never gain synthetic activity state.
+`Adopt` means selected for authoritative replanning only. It never means
+implementation-authorized or verified.

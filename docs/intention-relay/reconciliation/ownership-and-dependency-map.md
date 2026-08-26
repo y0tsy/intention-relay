@@ -78,3 +78,13 @@ The graph is a planning dependency graph, not a promise that every node becomes
 a crate. Any implementation split must preserve acyclic dependencies,
 DTO-only boundaries, composition-only concrete selection, declared test targets,
 and coverage/feature policy before activation.
+
+
+## Effect reconciliation ownership
+
+Effect reconciliation is a cross-cutting contract with one primary lifecycle
+owner: architecture 13 owns the Mandate transition and reconciliation
+transaction. Architecture 15 and other executor owners classify and report
+attempt facts; architecture 17 owns explicit verifier authority; architecture 16
+only reevaluates eligibility after reconciliation. The dependency graph edge to
+reconciliation is a dependency, never scheduler or executor authority.

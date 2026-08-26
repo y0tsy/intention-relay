@@ -14,7 +14,19 @@
 | Dynamic MCP | MCP-001..016 | Adopted for future Mandate execution; retained bounded connection/catalogue policy remains historical. | Architecture 18, Mandate MCP capability lifecycle. |
 | Provider, reasoning, execution meaning | PRV-001..020, RSN-001..015, RUN-001..012 | Envelope/canonical compatibility remains architecture 14; provider and reasoning payload semantics adopted for future Mandates. | Architectures 14 and 22, provider evolution package. |
 | Forks and lineage | FRK-001..018 | Adopted for future ordinary Session branching; M3/M4 and Mandate authority remain separate. | Architecture 23, session branching package. |
-| Verification portfolio, checklist, deferred work | DUR-001..012, HIS-001..008, QLT-001..010, RDM-001..010 | Evidence and delivery rules mapped. | Quality and later roadmap reconciliation. |
+| Verification portfolio, checklist, deferred work | DUR-001..003, QLT-001, RDM-001 (remaining topics require atomic inventory) | Evidence and delivery rules mapped. | Quality and later roadmap reconciliation. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.
+
+
+## Coverage status
+
+This index maps immutable concept headings to derivative owner documents. A
+mapping is provenance, not implementation approval. Each entry must be marked
+`Mapped`, `Context-only`, or `Unmapped`; broad family ranges do not establish
+claim-level completeness. Conflicting retained concept prose is classified as
+historical/ordinary where the owner architecture explicitly supersedes it for
+future Mandate work. See the [evidence register](evidence-register.md) and
+[deferred/excluded register](deferred-excluded-register.md) for evidence and
+non-scope claims.
