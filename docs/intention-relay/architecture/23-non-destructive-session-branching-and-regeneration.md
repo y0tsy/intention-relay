@@ -172,3 +172,7 @@ eligibility, flattened context, transaction fault injection, idempotency and
 preview races, additive migration byte preservation, negotiated tree paging,
 authority isolation, restart/no-resume, no-current-state fallback, archive
 behavior, fake-secret redaction, and end-to-end fork/regeneration outcomes.
+
+Architecture 24 owns activity/UI projections. `AgentActivityTreeId` remains
+distinct from `ConversationTreeId`; neither tree implies the other, authority,
+or rollback semantics.

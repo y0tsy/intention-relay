@@ -78,8 +78,9 @@ flowchart TD
 11. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
 12. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
 13. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-14. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
-14. [VFR and Headroom](06-vfr-and-headroom.md)
+14. [Activity, UI, and adapters](24-activity-ui-and-adapters.md)
+15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
+16. [VFR and Headroom](06-vfr-and-headroom.md)
 
 ### Agent operation
 
@@ -267,3 +268,11 @@ is the sole detailed authority for future ordinary Session lineage, frozen fork
 context, regeneration, and bounded lineage projections. It preserves M3/M4
 history and remains distinct from Mandate child graphs, lifecycle authority,
 provider selections, and activity/UI implementation.
+
+### Activity, UI, and adapters owner
+
+[Activity, UI, and adapters](24-activity-ui-and-adapters.md) is the sole
+detailed authority for future activity trees, safe projections, direct-pair
+messages, notifications, acknowledgement projections, and shared-client adapter
+behavior. It preserves historical Session/Run contracts and cannot become an
+authority or a second transport path.

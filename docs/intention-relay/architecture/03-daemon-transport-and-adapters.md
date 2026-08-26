@@ -345,3 +345,9 @@ The daemon, transport, client, and adapter tests in this document are blocking `
 M3 session replay or M4 run streams: bounded tree reads remain separate,
 read-only projections and no tree-wide event stream is introduced. Adapters
 render daemon-owned results and cannot infer lineage, authority, or rollback.
+## Post-M4 activity and notification transport boundary
+
+Architecture 24 owns additive negotiated `agent_activity_v1` and
+`user_notifications_v1` DTO families on the existing local endpoint. They are
+separate from M3 session replay and M4 run streams, use daemon-owned cursors and
+resync, and never create a second listener or adapter-owned authority.

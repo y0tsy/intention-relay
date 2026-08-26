@@ -313,3 +313,7 @@ mutable state.
 Architecture 23 owns ordinary Session fork snapshots and lineage. A fork cannot
 repair missing execution meaning, create a bridge, or reconstruct meaning from
 current state.
+
+Architecture 24 owns activity and adapter projection semantics. Activity state
+cannot repair missing meaning, change canonical interpretation, or reconstruct
+meaning from current UI or notification state.

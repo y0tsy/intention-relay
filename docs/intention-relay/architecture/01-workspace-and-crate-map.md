@@ -197,3 +197,9 @@ operation, snapshot, lineage-audit, and safe branch-projection values. Domain
 owns validation; storage owns atomic lineage persistence; protocol owns a later
 negotiated DTO family; application/runtime owns fork orchestration; adapters own
 presentation only. This activates no crate or dependency edge.
+## Post-M4 activity and adapter ownership
+
+Architecture 24 owns future typed activity, notification, acknowledgement, and
+safe presentation projection contracts. Domain/storage/protocol/application/runtime
+roles remain DTO-first; adapters consume only `intention-client`. This activates
+no crate, dependency edge, or test target.

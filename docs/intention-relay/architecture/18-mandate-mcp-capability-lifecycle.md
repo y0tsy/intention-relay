@@ -196,3 +196,6 @@ private credentials/resources remain separate and non-authorizing.
 Architecture 23 owns ordinary Session forks. No live MCP source, capability,
 selection, connection, process, or unfinished invocation crosses a fork; only
 explicit safe terminal provenance may be retained.
+
+Architecture 24 may expose only safe MCP provenance in activity projections. It
+cannot discover, select, invoke, reconnect, or recreate MCP work.

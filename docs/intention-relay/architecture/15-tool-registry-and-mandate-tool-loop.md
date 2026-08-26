@@ -170,3 +170,6 @@ tools, create a registry, or bypass the frozen local exchange.
 Architecture 23 may preserve terminal tool provenance only as non-authorizing
 frozen fork evidence. It cannot execute, retry, resume, or rebuild a tool
 selection from current registry state.
+
+Architecture 24 may project safe tool provenance but cannot create ToolIds,
+descriptors, ToolCallIds, admission, effects, retries, or current-registry repair.

@@ -294,3 +294,7 @@ Architecture 21 owns Goal, Skill, context, memory, and compaction selection sema
 Architecture 23 owns ordinary Session forks. A fork begins Mandate-free and
 cannot create, copy, revise, admit, reconcile, or transfer a Mandate, reason,
 run, or authority.
+
+Architecture 24 owns safe activity, notification, and acknowledgement projections.
+They cannot create a Mandate reason, RunId, lifecycle transition, admission, or
+reconciliation result.

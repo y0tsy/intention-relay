@@ -391,3 +391,8 @@ The post-M4 Session branching and regeneration package is documentation-only. It
 activates no crate, test target, coverage tier, feature profile, storage/wire
 schema, protocol, quality tool, or Makefile target. A later activating change
 must declare those exact policies and architecture fixtures atomically.
+
+The post-M4 Activity, UI, and adapters package is documentation-only. It
+activates no crate, test target, coverage tier, feature profile, storage/wire
+schema, protocol, quality tool, or Makefile target. A later M6 activating change
+must declare exact adapter and activity policies atomically.

@@ -335,3 +335,7 @@ verify`, and Linux/Windows CI. Required evidence includes:
   reconnect, and old-peer failure behavior; and
 - secret, raw TOML, private endpoint input, SDK/client/resource, remote ID,
   corrupt-byte, and unsafe diagnostic absence from all public/durable surfaces.
+
+Architecture 24 owns activity/UI projections. Provider and reasoning facts may
+be safely projected only through their existing owners and never expose raw
+native data, select a provider, or create activity authority.

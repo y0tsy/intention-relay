@@ -285,3 +285,10 @@ lineage, boundary, snapshot, preview, and safe branch-summary families. They
 never carry a client-selected child ID, raw snapshot/event, credential, path,
 resource, provider payload, or authority. Architecture 23 owns their semantics;
 architecture 14 retains canonical framing and compatibility ownership.
+## Post-M4 activity and adapter DTO boundary
+
+Future activity, notification, acknowledgement, snapshot, page, completion, live,
+and resync DTO families are closed, versioned, credential-free safe projections.
+They expose no raw prompt, provider/tool/MCP data, path, credential, grant,
+resource, or implementation value. Architecture 24 owns semantics; architecture
+14 retains canonical compatibility ownership.

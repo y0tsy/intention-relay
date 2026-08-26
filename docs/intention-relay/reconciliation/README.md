@@ -155,3 +155,11 @@ lineage projections. [Decision 0015](../decisions/0015-non-destructive-session-b
 records the cross-document decision. Reconciliation remains an index: M3/M4
 history stays unchanged, and conversation branches remain distinct from Mandate
 child/verifier authority, provider meaning, and activity/UI behavior.
+
+## Activity, UI, and adapters authority
+
+[Activity, UI, and adapters](../architecture/24-activity-ui-and-adapters.md)
+now owns future safe activity/notification/acknowledgement projections and
+shared-client adapter delivery. [Decision 0016](../decisions/0016-activity-ui-and-adapters.md)
+records the cross-document decision. Reconciliation remains an index: M3/M4
+records retain their recorded meaning and never gain synthetic activity state.

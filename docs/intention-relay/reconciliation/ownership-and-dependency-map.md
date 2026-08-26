@@ -19,6 +19,7 @@
 | Goals, Skills, context, memory, and compaction package | Scoped Goal evidence, untrusted Skill disclosure, source manifests/model-step projections, typed memory, and immutable compaction. | Lifecycle/admission, scheduler, registry/tools, child/verifier/MCP/bridge/kernel/provider authority, prompt mutation, search/index implementation, and activation. |
 | Provider evolution package | Provider kinds/profiles/catalogs, immutable selections/capabilities, driver compatibility, private translation, provider availability, and normalized reasoning. | Lifecycle/admission, scheduler/reason authority, registry/tools, context sourcing, child/verifier/MCP/bridge/kernel/branch/UI authority, remote continuation, and activation. |
 | Session branching package | Ordinary Session tree/lineage, closed boundaries, frozen snapshots/context, atomic fork/idempotency, presentation state, and negotiated bounded projections. | Mandate lifecycle/admission, child/verifier authority, provider selection, context sourcing, external-effect rollback, workspace proof, activity/UI implementation, and activation. |
+| Activity/UI/adapters package | Activity trees, direct-pair messages, safe journals, notification/acknowledgement projections, negotiated delivery, and adapter mapping. | Lifecycle/admission, child/verifier authority, provider selection, fork lineage, external effects, OS notification, and activation. |
 | Tools/gateway | One typed capability path and descriptor contracts. | A second registry, lifecycle authority, or persistence authority. |
 | Daemon | Process/task ownership, identity assignment, publication after commit. | Product decisions reserved to the user. |
 | Composition | Concrete provider/tool/storage assembly. | Process hosting or a second runtime. |
@@ -64,10 +65,13 @@ flowchart TD
   E --> B
   K --> B
   V --> B
-  B --> U[Adapters UI]
-  C --> U[Adapters UI]
-  P --> U
-  I --> U
+  B --> A[Activity UI]
+  C --> A
+  P --> A
+  I --> A
+  K --> A
+  V --> A
+  A --> U[Adapters UI]
 ```
 
 The graph is a planning dependency graph, not a promise that every node becomes
