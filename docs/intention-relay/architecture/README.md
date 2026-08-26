@@ -177,8 +177,71 @@ Run `Running`. WorkspaceRoot, modes, hooks, gateways, and audit are logical
 product controls in a trusted-local process, not OS sandbox or privilege
 boundaries.
 
+### Cross-domain identity and sequence summary
+
+Architecture 14 is the sole owner of byte-level canonical framing and digest
+encoding. Architecture 02 owns the common UUID/newtype rules; architectures
+13–24 own their domain-specific identity payloads. UUID equality never creates
+cross-domain identity, and no digest, sequence, cursor, or correlation ID may be
+converted into authority.
+
+| Domain | Owner | Identity/sequence boundary |
+| --- | --- | --- |
+| Session/Run and historical config | architecture 04 | preserve recorded IDs, events, cursors and bytes |
+| Mandate/reason | architecture 13 | Mandate-local identity and lifecycle sequence |
+| execution meaning | architecture 14 | canonical semantic bytes and tagged digest |
+| tools/MCP/provider/kernel selections | architectures 15, 18, 20, 22 | immutable semantic references, never live resources |
+| child/verifier | architecture 17 | graph edges, authority and target baselines |
+| Session lineage | architecture 23 | independent conversation tree and lineage sequence |
+| Activity/notifications | architecture 24 | daemon-assigned activity identity, tree-local journal, separate notification cursor |
+
+Semantic metadata (identity, revision, canonicalization, selections, digests,
+and baselines) is frozen before dependent work. Operational metadata (readiness,
+capacity, processes, handles, endpoints, catalogs, wakeups, grants, and
+publication) may defer or reject fresh work but cannot repair, reroute,
+reinterpret, or replace semantic metadata. All sequence domains remain
+independent; ordering in one domain never authorizes conversion to another.
+
+
 See [Post-M4 Authority Reconciliation](../reconciliation/README.md) for the
 matrix, compatibility register, contradiction register, and dependency map.
+
+### Cross-domain identity and sequencing invariants
+
+The following table is normative at the role level. Architecture 14 remains the
+sole owner of byte-level canonical framing and digest encoding; owner documents
+below define only their domain-specific semantic payloads.
+
+| Value | Owner | Scope | Representation/ordering | Reconstruction rule |
+| --- | --- | --- | --- | --- |
+| `SessionId`, `WorkspaceId`, `RunId`, `TurnId` | architecture 04 and existing domain owners | ordinary M3/M4 | historical domain newtypes and recorded sequences | never reconstruct or replace historical identity |
+| `MandateId`, revision, `ReasonId` | architecture 13 | Mandate aggregate | daemon/user-issued domain values with Mandate-local ordering | never derive from current mutable state |
+| execution-meaning envelope and digest | architecture 14 | admitted run | versioned canonical bytes and tagged SHA-256 digest | no fallback after missing/corrupt/mismatched bytes |
+| child edge, delegation, verifier authority/baseline | architecture 17 | Mandate graph and target mutation | domain newtypes plus owner-defined canonical references | stale or absent baselines fail before mutation |
+| `ConversationTreeId`, `ForkOperationId` | architecture 23 | ordinary Session lineage | typed lineage values; tree root derivation is frozen by architecture 23 | never infer lineage from current ancestry |
+| `AgentActivityTreeId` and activity records | architecture 24 | projections | daemon-assigned IDs and tree-local journal sequence | never convert from Session/Run/lineage identity |
+| provider/tool/MCP/kernel selections | architectures 15, 18, 20, 22 | future admitted run | immutable credential-free semantic references | live registry/resources cannot repair selection |
+| UUIDs, digests, operation IDs, correlation IDs | architecture 02 plus owning architecture | all | distinct domain newtypes; UUID equality is not cross-domain identity | no conversion or authority inference |
+
+Sequences and cursors are independent authorities and are never interchangeable:
+
+| Sequence/cursor | Owner | Orders | Must not be reused for |
+| --- | --- | --- | --- |
+| Session event sequence | architecture 04 | Session events | Run, Mandate, lineage, activity |
+| Run event cursor | architecture 04 and future loop owners | Run/model/tool facts | Session or activity records |
+| Mandate-local sequence | architecture 13 | Mandate lifecycle and reasons | queue tickets or Run cursors |
+| graph/message sequence | architecture 17 | direct child/verifier messages | global event order |
+| lineage sequence | architecture 23 | fork lineage facts | Session events or Run facts |
+| activity journal sequence | architecture 24 | activity-tree records | notification cursor or domain events |
+| notification cursor | architecture 24 | local-user observation | notification facts or acknowledgements |
+| scheduler observation order | architecture 16 | live readiness evidence | semantic identity or admission order |
+
+Semantic/frozen metadata includes identities, revisions, canonicalization,
+selection references, digests, and baselines. Operational/live metadata includes
+readiness, capacity, processes, handles, endpoints, current catalogs, wakeups,
+grants, and publication state. Operational data may defer or reject fresh work,
+but can never repair, reroute, reinterpret, or replace frozen semantic data.
+
 
 ### Mandate lifecycle owner
 

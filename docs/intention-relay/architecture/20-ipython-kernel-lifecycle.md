@@ -36,6 +36,16 @@ sandbox, or OS privilege boundary. Namespace, checkpoint, Python value, output,
 kernel epoch, task, process, or resource never grants lifecycle, scheduling,
 tool, child, verifier, MCP, or reconciliation authority.
 
+### Epoch isolation invariant
+
+One live `KernelEpochId` belongs to exactly one admitted `RunId`. A persistent
+process, if retained for operational reasons, is not an executable epoch and
+cannot carry a usable namespace across runs. A new run receives a fresh epoch;
+only an explicitly verified checkpoint projection may seed it. Session-scoped
+kernel and fixed idle/concurrency limits in retained research are historical
+provenance, not future Mandate policy.
+
+
 ## Immutable selection and run scope
 
 Architecture 14 owns canonical framing. This document owns the semantic fields

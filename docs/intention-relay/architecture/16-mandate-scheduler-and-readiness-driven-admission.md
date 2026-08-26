@@ -55,6 +55,20 @@ The stages have distinct authority:
    binds a new `RunId`, frozen meaning, and selected reason and transitions
    `Active -> Working`.
 
+### Readiness is operational evidence only
+
+A scheduler evaluates four independent conditions: durable reason eligibility,
+current Mandate lifecycle permission, typed technical readiness, and finite
+capacity availability. A failed or stale observation preserves the exact pending
+reason and creates no `RunId`. Restoration only wakes reevaluation. The scheduler
+never interprets readiness as semantic meaning, never repairs stale selections,
+and never owns effect reconciliation.
+
+Effect reconciliation is coordinated by the owning Mandate lifecycle transaction:
+executors report attempt facts, verifiers may provide explicit authority, and the
+scheduler only observes the resulting eligibility after reconciliation.
+
+
 ## Readiness and capacity evidence
 
 Readiness is credential-free, typed live operational evidence from the owner of
@@ -97,6 +111,15 @@ the Mandate `Active`, creates no `RunId`, consumes no reason, and creates no
 reservation, retry counter, escalation threshold, or product ceiling. Repeated
 identical observations are coalesced by observation identity rather than causing
 unbounded durable outcome facts.
+
+### Handoff invariant
+
+Candidate selection is deterministic and scheduler-owned, but fresh admission is
+lifecycle-owned. The scheduler hands an eligible candidate to architecture 13,
+which atomically revalidates reason, revision, meaning, lifecycle, and readiness,
+creates the fresh `RunId`, and commits the binding before dispatch. No child
+message, summary, verdict, wakeup, or readiness observation directly launches work.
+
 
 ## Candidate eligibility and ordering
 

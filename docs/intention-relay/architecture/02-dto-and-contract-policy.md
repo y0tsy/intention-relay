@@ -28,6 +28,21 @@ A DTO is a stable contract, not merely any serializable struct.
 
 ## Type rules
 
+### UUID roles and non-conversion
+
+UUID is an encoding/value representation, not authority. Every public UUID value
+uses a domain newtype whose owner defines generation, scope, validation,
+serialization, and idempotency behavior. UUID equality never establishes
+semantic identity across Session, Run, Mandate, activity, lineage, graph,
+operation, or diagnostic domains.
+
+Deterministic UUIDv5 is permitted only where the owner freezes its namespace and
+name derivation. Daemon-assigned/random UUIDs and deterministic UUIDv5 values are
+not interchangeable. Historical UUID bytes and meanings remain unchanged and
+cannot be normalized into future records. UUIDs, canonical semantic digests,
+operation identities, sequences, and diagnostic correlation IDs are distinct
+classes and must not be converted or used as authority substitutes.
+
 ### IDs
 
 All IDs are domain newtypes. No public cross-boundary API accepts an identifier as a bare `String`, integer, or UUID primitive.

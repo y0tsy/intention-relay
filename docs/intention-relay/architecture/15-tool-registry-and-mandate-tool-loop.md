@@ -71,6 +71,20 @@ The selection excludes all unexposed slots, credentials, raw schemas/JSON, execu
 
 An admission, replay, retry, recovery, fork, audit, or later package may not rebuild a missing selection from current registry/descriptors, configuration, model/provider name, driver availability, hook pipeline, workspace, ancestry, MCP discovery, bridge/kernel state, logs, or UI state. Unknown, corrupt, or unsupported nested selections block dependent work before effect while unrelated readable history remains available.
 
+## Validation ownership and limit classification
+
+Validation is layered: transport owns wire shape and negotiation; this package
+owns fixed slots, descriptor revisions, selection ordering, and direct admission;
+architecture 14 owns canonical bytes and semantic digests; runtime/application
+owns live readiness and mode preconditions; each primitive owner validates typed
+inputs/outputs; storage owns persistence constraints. No layer may bypass or
+replace another layer's authority.
+
+Every numeric value is classified before activation as an intrinsic
+representation/protocol bound, typed capacity availability, ordinary/historical
+product policy, or deferred. A future Mandate product ceiling, retry budget,
+reservation, or successful-result truncation is not permitted.
+
 ## Mandate direct admission and WorkspaceRoot
 
 For a future Mandate call, direct admission is legal only when the run's frozen selection includes the exact active descriptor; the descriptor, owner, and revisions agree; typed input is valid; the immutable model-capability and mode relations are satisfied; required hooks and workspace context are valid; idempotency and intrinsic bounds pass; and required live implementation/runtime resources are available.

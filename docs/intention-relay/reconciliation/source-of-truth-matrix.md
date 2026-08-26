@@ -211,7 +211,7 @@ contradiction register.
 
 ## Coverage ledger
 
-The selected concept headings listed in [Concept Supersession Index](concept-supersession-index.md) map to exactly one topic family. Detailed DTO field inventories, numeric bounds, and test-case lists remain in later owner documents rather than duplicating the research document here.
+The selected concept headings listed in [Concept Supersession Index](concept-supersession-index.md) are tracked as mapped, context-only, or unresolved. Topic ranges are summaries only and do not claim claim-level completeness until every topic has an exact source anchor, owner section, disposition, and evidence status. Detailed DTO field inventories and test-case lists remain in owner documents; planned evidence is not verification.
 
 ## Goals, Skills, context, memory, and compaction topics
 

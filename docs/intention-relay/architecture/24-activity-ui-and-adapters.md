@@ -1,5 +1,14 @@
 # Activity, UI, and Adapters
 
+### Historical projections and limits
+
+Compatibility-only M3/M4 activity projections, where supported, are read-only
+views computed without synthetic activity identity, journal, message,
+notification, or acknowledgement state. Numeric values retained in research are
+not implementation limits for this package until an activating M6 specification
+classifies them as intrinsic bounds, capacity availability, or ordinary policy.
+
+
 ## Status and scope
 
 **Approved future architecture, documentation-only.** This document is the sole
