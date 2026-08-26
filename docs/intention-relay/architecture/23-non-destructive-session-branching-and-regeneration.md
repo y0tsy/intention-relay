@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 23.
+- Decision record: [`0015`](../decisions/0015-non-destructive-session-branching-and-regeneration.md).
+- Reconciliation topics: `FRK-001..018`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future ordinary Session branching, conversation lineage,
 frozen fork context, regeneration, lineage audit, and branch presentation. It

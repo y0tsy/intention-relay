@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 19.
+- Decision record: [`0011`](../decisions/0011-mandate-gateway-rlm-bridge.md).
+- Reconciliation topics: `BRG-001..014`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future Mandate Gateway/RLM attachment, ephemeral bridge grant,
 ingress operation correlation, safe bridge-visible delivery, and bridge recovery.

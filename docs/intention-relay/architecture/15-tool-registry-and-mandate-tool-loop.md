@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 15.
+- Decision record: [`0007`](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
+- Reconciliation topics: `TLS-002..009, MTL-001..004`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole detailed authority for the future unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate-scoped `WorkspaceRoot` semantics, model-to-tool-to-model loop, and tool-effect recovery boundary. It does not authorize a crate, schema migration, wire implementation, runtime, or production tool execution.
 
 It applies only to future `Mandate` execution. `VerifierMandate` does not inherit this admission policy until its later target-scoped authority package defines that relationship. M3/M4 and ordinary execution retain their recorded WorkspaceRoot containment, Plan/Build policy, confirmation behavior, tool-call denial, replay, and recovery semantics.

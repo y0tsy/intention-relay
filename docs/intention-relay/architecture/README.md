@@ -177,35 +177,6 @@ Run `Running`. WorkspaceRoot, modes, hooks, gateways, and audit are logical
 product controls in a trusted-local process, not OS sandbox or privilege
 boundaries.
 
-### Cross-domain identity and sequence summary
-
-Architecture 14 is the sole owner of byte-level canonical framing and digest
-encoding. Architecture 02 owns the common UUID/newtype rules; architectures
-13–24 own their domain-specific identity payloads. UUID equality never creates
-cross-domain identity, and no digest, sequence, cursor, or correlation ID may be
-converted into authority.
-
-| Domain | Owner | Identity/sequence boundary |
-| --- | --- | --- |
-| Session/Run and historical config | architecture 04 | preserve recorded IDs, events, cursors and bytes |
-| Mandate/reason | architecture 13 | Mandate-local identity and lifecycle sequence |
-| execution meaning | architecture 14 | canonical semantic bytes and tagged digest |
-| tools/MCP/provider/kernel selections | architectures 15, 18, 20, 22 | immutable semantic references, never live resources |
-| child/verifier | architecture 17 | graph edges, authority and target baselines |
-| Session lineage | architecture 23 | independent conversation tree and lineage sequence |
-| Activity/notifications | architecture 24 | daemon-assigned activity identity, tree-local journal, separate notification cursor |
-
-Semantic metadata (identity, revision, canonicalization, selections, digests,
-and baselines) is frozen before dependent work. Operational metadata (readiness,
-capacity, processes, handles, endpoints, catalogs, wakeups, grants, and
-publication) may defer or reject fresh work but cannot repair, reroute,
-reinterpret, or replace semantic metadata. All sequence domains remain
-independent; ordering in one domain never authorizes conversion to another.
-
-
-See [Post-M4 Authority Reconciliation](../reconciliation/README.md) for the
-matrix, compatibility register, contradiction register, and dependency map.
-
 ### Cross-domain identity and sequencing invariants
 
 The following table is normative at the role level. Architecture 14 remains the

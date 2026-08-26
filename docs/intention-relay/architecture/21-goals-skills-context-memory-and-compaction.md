@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 21.
+- Decision record: [`0013`](../decisions/0013-goals-skills-context-memory-and-compaction.md).
+- Reconciliation topics: `GOL/SKL/CTX/MEM/CMP`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future Goal scope and evidence, Skill selection and safe
 disclosure, context-source manifests, model-step projections, typed memory

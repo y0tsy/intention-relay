@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 18.
+- Decision record: [`0010`](../decisions/0010-mandate-mcp-capability-lifecycle.md).
+- Reconciliation topics: `MCP-001..016`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole detailed owner for future Mandate MCP source proposals, discovery, normalized capabilities, run-local capability selections, invocation, safe projections, disposal, recovery, and compatibility. It does not authorize an MCP client, network connection, local process, crate, schema migration, wire implementation, feature profile, UI, or production MCP work.
 
 It applies only to future Mandate execution through the fixed `mcp` `ToolId`. M3/M4 bytes, IDs, UUIDs, digests, queues, provider behavior, replay, recovery, snapshots, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics. Retained bounded user connection/catalog research remains historical provenance and is not future Mandate capability state.

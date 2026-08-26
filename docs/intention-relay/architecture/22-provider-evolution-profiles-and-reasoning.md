@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 22.
+- Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
+- Reconciliation topics: `PRV-001..012, RSN-001..006`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future provider kinds, profiles and catalog lifecycle,
 provider/model-capability selections, endpoint and credential-transport

@@ -9,7 +9,7 @@ contradiction register.
 
 ## Foundation topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GOV-001 | Research concepts do not reopen closed M4 or authorize implementation. | all | Adopt | architecture README | M4 meaning and evidence remain unchanged. | Foundation | documentation review |
 | GOV-002 | Every adopted future rule has exactly one primary owner; mirrors state only local consequences. | all | Adopt | architecture README | Duplicate or missing ownership blocks later delivery. | Foundation | architecture review |
@@ -31,6 +31,10 @@ contradiction register.
 
 ## Later topic families
 
+Family rows are navigation summaries only. Atomic topic rows below are the
+claim-level inventory; each future row must eventually carry an exact immutable
+concept anchor and an evidence status from the controlled vocabulary.
+
 | Family | Concept anchor family | Disposition | Owner/delivery bucket |
 | --- | --- | --- | --- |
 | TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Adopt for future Mandate execution; ordinary behavior preserved | `15-tool-registry-and-mandate-tool-loop.md` |
@@ -48,7 +52,7 @@ contradiction register.
 
 ## Tool registry and Mandate-loop topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TLS-002 | The registry has fourteen canonical slots with immutable intended owners. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | Missing, reordered, reassigned, or duplicate slots block before effect. | Tool-loop | canonical goldens planned |
 | TLS-003 | Only composition assembles active descriptors into the one daemon-owned capability path. | future Mandate | Adopt | `15-tool-registry-and-mandate-tool-loop.md` | A private registry or direct primitive bypass fails before effect. | Tool-loop | architecture fixture planned |
@@ -65,7 +69,7 @@ contradiction register.
 
 ## Gateway/RLM bridge topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | BRG-001 | One daemon-owned Gateway/RLM bridge is the only future facade/direct-model ingress. | future Mandate | Adopt | architecture 19 | A second registry, gateway, listener, daemon, or primitive bypass fails before effect. | Gateway/RLM bridge | architecture fixture planned |
 | BRG-002 | Attachment uses negotiated capability and daemon-issued ephemeral grant. | future Mandate | Adopt | architecture 19 | Unsupported or stale attachment fails closed before partial future state. | Gateway/RLM bridge | negotiation fixture planned |
@@ -84,7 +88,7 @@ contradiction register.
 
 ## Run-scoped IPython kernel topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | KER-001 | Kernel is a private daemon-managed sidecar, not a second daemon, registry, store, scheduler, or authority. | future Mandate | Adopt | architecture 20 | Second capability path or authority fails before effect. | Kernel lifecycle | architecture fixture planned |
 | KER-002 | One live kernel epoch belongs to one admitted RunId. | future Mandate | Adopt | architecture 20 | No cross-run, child, verifier, session, project, or daemon sharing. | Kernel lifecycle | scope fixture planned |
@@ -107,7 +111,7 @@ contradiction register.
 
 ## Scheduler and readiness topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | SCH-001 | One daemon-owned logical scheduler coordinates durable Mandate reasons; it is not a second runtime or authority. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Wakeups/task state cannot mutate lifecycle directly. | Trigger scheduler | architecture fixture planned |
 | SCH-002 | Scheduler candidates derive only from durable eligible reasons and current Mandate state. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | No synthetic queue item or current-state reconstruction. | Trigger scheduler | candidate fixture planned |
@@ -124,7 +128,7 @@ contradiction register.
 
 ## Child graph and verifier topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | CHD-001 | `sub_agent` creates a durable child Mandate, not a child run or queue item. | future Mandate | Adopt | architecture 17 | No ordinary queue or retained RLM reinterpretation. | Child/verifier | creation outcome planned |
 | CHD-002 | Child creation atomically binds Mandate, edge, delegation, result, projections, events, snapshots, and idempotency. | future Mandate | Adopt | architecture 17 | Commit all or nothing; publish after reread. | Child/verifier | fault injection planned |
@@ -152,7 +156,7 @@ contradiction register.
 
 ## MCP capability topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | MCP-001 | `mcp` is the sole fixed MCP ToolId and one daemon-owned Rust capability path. | future Mandate | Adopt | architecture 18 | A second ToolId, registry, gateway, or bypass fails before effect. | MCP lifecycle | slot fixture planned |
 | MCP-002 | A typed Mandate source proposal may initiate acquisition without a retained user catalog. | future Mandate | Adopt | architecture 18 | Raw URL, command, headers, credentials, and maps cannot cross the boundary. | MCP lifecycle | source fixture planned |
@@ -173,7 +177,7 @@ contradiction register.
 
 ## Session branching topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | FRK-001 | A fork creates an independent child Session and never rewrites source history. | future ordinary Session | Adopt | architecture 23 | Rewind never truncates or rolls back effects. | Session branching | outcome fixture planned |
 | FRK-002 | Tree/root/parent/boundary/operation identities are immutable typed lineage. | future ordinary Session | Adopt | architecture 23 | Child never derives or substitutes a root identity. | Session branching | canonical fixture planned |
@@ -196,7 +200,7 @@ contradiction register.
 
 ## Activity, UI, and adapter topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ACT-001 | Activity identity is daemon-assigned and distinct from Session/fork/Run identity. | future projections | Adopt | architecture 24 | No identity or sequence conversion/inference. | M6 activity/UI | canonical fixture planned |
 | ACT-002 | Direct parent/child pairs use closed message kinds and directions. | future Mandate | Adopt | architecture 24 | Invalid relative/direction/order fails pre-publication. | M6 activity/UI | pair fixture planned |
@@ -215,7 +219,7 @@ The selected concept headings listed in [Concept Supersession Index](concept-sup
 
 ## Goals, Skills, context, memory, and compaction topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GOL-001 | Goals are immutable user-managed acceptance/evidence records, never Mandate authority. | future Mandate | Adopt | architecture 21 | Goal cannot create RunId, reason, lifecycle, scheduler, tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation authority. | Context package | authority fixture planned |
 | GOL-002 | Goals are project- or session-scoped; project applicability uses an explicit immutable session link. | future Mandate | Adopt | architecture 21 | No implicit inheritance or cross-session reconstruction. | Context package | scope fixture planned |
@@ -231,7 +235,7 @@ The selected concept headings listed in [Concept Supersession Index](concept-sup
 
 ## Provider evolution and reasoning topics
 
-| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PRV-001 | Future canonical Responses kind is `responses`; `openai` is parse-time-only normalization. | future Mandate | Adopt | architecture 22 | Alias never persists; unrepresentable input fails before provider work. | Provider evolution | alias fixture planned |
 | PRV-002 | Model identifiers never select provider kind, endpoint, driver, capability, profile, or execution kind. | future/historical | Adopt | architecture 22 | No routing or fallback from `gpt-*`, `o*`, `codex*`, or any model ID. | Provider evolution | no-routing fixture planned |

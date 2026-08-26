@@ -11,6 +11,15 @@ classifies them as intrinsic bounds, capacity availability, or ordinary policy.
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 24.
+- Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
+- Reconciliation topics: `ACT-001..010`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future activity trees, direct-pair communication, activity and
 notification journals, acknowledgement projections, safe UI projections, and

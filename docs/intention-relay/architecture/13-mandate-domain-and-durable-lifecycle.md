@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 13.
+- Decision record: [`0006`](../decisions/0006-mandate-lifecycle-and-admission-boundary.md).
+- Reconciliation topics: `MAN-001..006`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the
 normative owner for the future Mandate aggregate, lifecycle, triggers,
 fresh-run admission, uncertainty, and recovery boundary. It does not authorize

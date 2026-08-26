@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+## Traceability
+
+- Normative owner: architecture 20.
+- Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
+- Reconciliation topics: `KER-001..018`.
+- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+
+
 **Approved future architecture, documentation-only.** This document is the sole
 detailed owner for future run-scoped IPython kernel epochs, foreground cells,
 namespace checkpoints, kernel-local background work, safe kernel projections,
