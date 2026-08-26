@@ -160,9 +160,10 @@ M3 event payloads are closed, explicit facts: `SessionCreated`,
 `ReasoningDeltaRecorded`, `UsageRecorded`, `ToolCallRecorded`, `Finished`, and
 `Failed`. Every M4 fact is a typed `DomainEventDto` payload with its dedicated
 per-run cursor; no raw JSON payload is an event boundary.
-`ConfigurationRevisionAccepted` and `PlanStatusChanged` are reserved typed
-taxonomy for their later workflows; M3 does not claim they are emitted by an
-accepted configuration edit or plan action.
+`ConfigurationRevisionAccepted`, `PlanStatusChanged`, `PlanApproved`,
+`BuildContinuationRequested`, and `BuildRunStartedFromPlan` are reserved typed
+taxonomy for the Plan/Build workflow. Their activation must preserve M3/M4
+historical event bytes and use additive versioned records.
 
 - Domain events are ordered per session with `SessionEventSequenceDto`.
 - Event IDs provide deduplication; sequence provides ordering.

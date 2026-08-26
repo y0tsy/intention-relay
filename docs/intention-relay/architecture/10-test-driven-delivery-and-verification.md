@@ -78,7 +78,8 @@ The following are mandatory candidates for automated architecture tests:
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |
 | Workspace boundary | File-oriented tool invocations require `WorkspaceRootDto`. |
 | Hook boundaries | VFR/Headroom attach through declared hook APIs, not base-tool private coupling. |
-| Plan integrity | Model-visible plan reads cannot expose frontmatter; Plan writes cannot target project paths. |
+| Plan integrity | Model-visible plan reads cannot expose frontmatter; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
+| Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
 The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests are executed through `make architecture`; the complete reproducible acceptance gate is `make verify` and CI invokes `make ci` only.
@@ -185,6 +186,23 @@ behavior remain focused daemon-host unit evidence. The fixture uses no network
 or real credential.
 
 ## Result-oriented acceptance scenarios
+
+### G. Plan-to-Build Autopilot continuity
+
+1. Create a Plan-mode session and a physical plan revision.
+2. Use `execute` for an investigation command and verify Plan policy audit.
+3. Approve the exact plan revision.
+4. Verify approval and fresh Build-run binding are durable and ordered.
+5. Verify the same `SessionId`, a new `RunId`, pinned plan digest, and retained conversation context.
+6. Verify Build Autopilot performs configured actions without per-action confirmation.
+7. Verify Plan project `write/edit` remains hard-denied.
+
+### H. Optional implementation handoff
+
+1. Approve a plan and request a new implementation Session.
+2. Verify the target Session receives the full available safe context, plan revision, and execution prompt as a frozen snapshot.
+3. Verify source history is unchanged and no live runtime resource, credential, grant, queue, or unfinished effect transfers.
+4. Verify optional auto-start creates a fresh Build run or leaves an idle target on start failure.
 
 The following scenarios must become executable before the corresponding capability is accepted:
 

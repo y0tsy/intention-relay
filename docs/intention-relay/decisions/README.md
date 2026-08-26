@@ -34,3 +34,5 @@ provenance.
 | [0014](0014-provider-evolution-profiles-and-reasoning.md) | Accepted | Provider evolution, profiles, and reasoning |
 | [0015](0015-non-destructive-session-branching-and-regeneration.md) | Accepted | Non-destructive session branching and regeneration |
 | [0016](0016-activity-ui-and-adapters.md) | Accepted | Activity, UI, and adapters |
+| [0017](0017-build-autopilot-and-plan-focus-continuity.md) | Accepted | Build Autopilot and Plan focus continuity |
+| [0018](0018-plan-build-autopilot-activation-scope.md) | Accepted | Plan/Build Autopilot activation scope |

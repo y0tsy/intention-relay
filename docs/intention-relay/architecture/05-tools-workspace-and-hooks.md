@@ -152,7 +152,11 @@ The following must remain distinct:
 
 ## Trusted workspace boundary
 
-v1 does not sandbox tools or containerize processes. `WorkspaceRoot` prevents accidental path drift and tool-level filesystem escape, but a shell command can still interact with the wider user environment. This limitation is explicit, especially in Plan mode.
+v1 does not sandbox tools or containerize processes. `WorkspaceRoot` prevents
+accidental path drift and tool-level filesystem escape for regular typed path
+operations, but a shell command can still interact with the wider user
+environment. This limitation is explicit in Plan and Build Autopilot. Plan's
+advisory instruction is not a technical boundary.
 
 ## Required tests and outcomes
 
@@ -174,17 +178,21 @@ Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocki
 
 - exact symlink policy for paths whose resolved target leaves a workspace;
 - which core tools ship in the first vertical slice;
-- exact tool capability taxonomy;
-- risk categories and confirmation policy for `execute`, network, and destructive file actions.
+- exact capability taxonomy and audit policy for `execute`, network, and
+  destructive file actions. Build Autopilot does not use per-action
+  confirmation; Plan `execute` is advisory-guided and trusted-local.
 
-## Post-M4 Mandate tool boundary
+## Autopilot and Mandate tool boundary
 
-The v1 ordinary containment and confirmation rules above remain authoritative
-for ordinary/M3/M4 behavior. Future Mandate execution intentionally differs:
+Existing M3/M4 containment and confirmation behavior remains historical. The
+accepted Build Autopilot policy intentionally removes per-action confirmation
+for the configured Build surface. Future Mandate execution also differs:
 WorkspaceRoot is a required default base/CWD with safe observation, not a path
 containment authority, and compatible frozen active descriptors admit without
 ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
 recreate discretionary Mandate authorization. The fixed registry, descriptor
 revisions, direct admission, and loop details are owned by [Tool registry and
 direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
-not change current tools or activate future slots.
+not create a second registry or bypass path. Plan `execute` remains available
+under advisory focus guidance and is not a sandbox; ordinary Plan `write` and
+`edit` remain denied.

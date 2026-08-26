@@ -382,15 +382,19 @@ persistent run-scoped replay and live delivery.
 - no Tauri crate imports application/runtime/storage implementation APIs;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
-## Milestone 7: Plan/Build policies and physical plans
+## Milestone 7: Plan/Build policies, physical plans, and Build Autopilot
 
 ### Deliver
 
 - Plan/Build run policy;
+- Build Autopilot as the single user-authorized unrestricted Build policy;
 - plan allocation, AppData structure, zero-based numbers, YAML frontmatter and revisions;
 - model-safe body projection;
 - plan submission/approval/rejection state flow;
-- Plan-mode normal filesystem mutation restrictions.
+- Plan-mode normal filesystem mutation restrictions;
+- Plan `execute` availability with advisory focus instruction and trusted-local audit;
+- automatic same-Session fresh Build start after approval;
+- optional full-context implementation handoff to a new Session.
 
 ### Tests first
 
@@ -398,12 +402,18 @@ persistent run-scoped replay and live delivery.
 - frontmatter hidden/model-capture test;
 - Plan write/edit deny/allow tests;
 - lifecycle transition and durable approval tests;
+- Plan `execute` focus/audit tests;
+- same-Session approval-to-fresh-Build tests with new `RunId` and pinned plan revision;
+- optional handoff snapshot, lineage, redaction, and no-live-state-transfer tests;
 - Tier B coverage fixtures for plan policy and artifact integrity.
 
 ### Acceptance outcomes
 
 - a Plan-mode agent can iteratively edit its physical plan body;
 - it cannot use ordinary write/edit tools to modify a project file;
+- Plan `execute` remains available and is not represented as a sandbox;
+- approving a plan starts Build Autopilot in the same Session with a new `RunId`;
+- optional handoff creates an independent Session from a safe frozen context;
 - model context excludes plan frontmatter;
 - plan policy/artifact crates meet Tier B coverage with mandatory captured-context and denial scenarios.
 
@@ -476,7 +486,9 @@ is `Planned` unless an exact artifact and observed result is cited. The immutabl
 `m4plus_concept2.md` is research provenance and is not edited or used as an
 implementation acceptance target.
 
-The ordinary M5-M9 delivery track remains unchanged. Future Mandate packages
+The ordinary M5-M9 delivery track remains the historical delivery sequence.
+Its Plan/Build policy wording is superseded by ADR 0017/0018 for the accepted
+Autopilot transition. Future Mandate packages
 are a separate activation track requiring an approved implementation
 specification and atomic updates to crate ownership, DTO/wire/storage versions,
 quality policy, feature profiles, migration declarations, and evidence. The
@@ -489,6 +501,14 @@ baseline and precedes any separate M4+ implementation authorization. It does
 not renumber, replace, or claim delivery of Milestones 5–9. Current M5–M9 remain
 the ordinary v1 roadmap until a later approved roadmap reconciliation changes
 them explicitly.
+
+The accepted Autopilot direction is recorded by ADR 0017 and ADR 0018. It
+supersedes the future Plan/Build policy wording only: Plan is a focus mode with
+available advisory-guided `execute`, Build Autopilot is unrestricted by
+per-action confirmation, and plan approval starts a fresh Build run in the same
+Session by default. This documentation update does not activate production
+implementation; the ordinary M5-M9 track remains governed by its own activation
+and evidence requirements.
 
 ### Deliver
 

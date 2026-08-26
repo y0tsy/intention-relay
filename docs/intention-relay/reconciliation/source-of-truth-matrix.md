@@ -1,3 +1,13 @@
+# Autopilot transition authority note
+
+For Plan/Build transition behavior, consult ADR 0017 and ADR 0018 together with
+architecture 07. The current authoritative direction is: Plan `execute` is
+available and advisory-guided, ordinary Plan project `write`/`edit` is denied,
+Build Autopilot is unrestricted by per-action confirmation, plan approval starts
+a fresh Build run in the same Session by default, and optional handoff creates a
+separate frozen-context Session. Existing M3/M4 and recovery semantics remain
+unchanged until implementation evidence is recorded.
+
 # Source-of-Truth Matrix
 
 ## Status vocabulary

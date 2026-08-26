@@ -209,6 +209,14 @@ a persisted meaning.
 
 ### Future DTO families
 
+The Plan/Build Autopilot transition adds versioned typed families for plan
+approval, same-Session Build continuation, and optional implementation
+handoff. Approval binds an exact plan revision and digest; same-Session
+continuation preserves `SessionId` but creates a fresh `RunId`; handoff creates
+an independent Session from a bounded safe snapshot. These DTOs must not carry
+credentials, raw transcripts, provider continuation state, live handles,
+processes, grants, or unfinished effects.
+
 Future Mandate work requires typed IDs and values for Mandate identity/revision,
 trigger reason, disposition, execution meaning, verified checkpoint reference,
 external-attempt phase/evidence, capacity outcome, and explicit verifier

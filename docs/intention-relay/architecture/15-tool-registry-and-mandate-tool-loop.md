@@ -13,7 +13,13 @@
 
 **Approved future architecture, documentation-only.** This document is the sole detailed authority for the future unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate-scoped `WorkspaceRoot` semantics, model-to-tool-to-model loop, and tool-effect recovery boundary. It does not authorize a crate, schema migration, wire implementation, runtime, or production tool execution.
 
-It applies only to future `Mandate` execution. `VerifierMandate` does not inherit this admission policy until its later target-scoped authority package defines that relationship. M3/M4 and ordinary execution retain their recorded WorkspaceRoot containment, Plan/Build policy, confirmation behavior, tool-call denial, replay, and recovery semantics.
+It applies to future `Mandate` execution and the accepted Build Autopilot
+execution policy. `VerifierMandate` does not inherit this admission policy until
+its later target-scoped authority package defines that relationship. M3/M4
+historical behavior remains unchanged. Build Autopilot and Mandate execution
+use direct admission without per-action confirmation; Plan still denies
+ordinary project `write`/`edit`, while Plan `execute` is advisory-guided and
+non-sandboxed.
 
 ## Ownership and one capability path
 

@@ -39,6 +39,14 @@ scheduler reason, bridge grant, kernel epoch, MCP selection, or authority.
 
 ## Branch identity and user workflow
 
+The Plan/Build workflow may optionally use this ordinary Session lineage for an
+implementation handoff after plan approval. The default path is same-Session
+continuation and is not a fork. An opted-in handoff creates an independent
+child Session from the approved plan and full available safe conversational
+context, then may start a fresh Build Autopilot run. It must not transfer live
+runtime state, credentials, grants, queues, provider requests, or unfinished
+effects. The source Session remains unchanged.
+
 History is append-only. A user fork creates a new independent child `SessionId`
 and leaves the source unchanged. “Rewind” is explanatory language only: it never
 truncates, replaces, deletes, rolls back, or switches the source history or an

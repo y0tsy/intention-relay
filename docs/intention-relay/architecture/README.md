@@ -48,7 +48,8 @@ flowchart TD
 | **WorkspaceRoot** | The required directory boundary and process CWD for every session tool that touches the filesystem or launches a process. |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Hook** | A typed, ordered extension point around tool execution and result processing. |
-| **Plan** | A physical, revisioned artifact written by the agent in Plan mode, with metadata hidden from the model. |
+| **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
+| **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |
 | **Projection** | A normalized current-state representation derived and stored for efficient queries. |
 | **TTD** | Test-driven delivery. Each milestone starts from executable contracts and observable outcomes, not only structural design. |
 | **Quality gate** | A reproducible, blocking Makefile pipeline that verifies formatting, linting, feature profiles, tests, documentation, architecture, coverage, and supply-chain policy. |
@@ -144,9 +145,9 @@ Every plan in this directory must:
 
 ## v1 boundary
 
-v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot enforcement, Plan/Build modes, VFR, and Headroom/CCR.
+v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot enforcement, Plan/Build modes, Build Autopilot, VFR, and Headroom/CCR.
 
-v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container execution, automatic run resumption, and a direct MCP administration interface.
+v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container execution, automatic run resumption, and a direct MCP administration interface. Build Autopilot is trusted-local and does not claim shell isolation; Plan `execute` is advisory-guided rather than technically read-only.
 
 ## Post-M4 authority foundation
 

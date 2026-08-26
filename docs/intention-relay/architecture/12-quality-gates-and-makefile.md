@@ -314,6 +314,14 @@ M0 is accepted because its implementation establishes that:
 
 ## Post-M4 documentation-only reconciliation policy
 
+ADR 0017 and ADR 0018 define the accepted Plan-focus and Build Autopilot
+direction. The implementation activation remains subject to the normal
+crate/test/coverage/feature/storage/wire declarations and `make verify` gate.
+Plan `execute` is intentionally not a sandbox; Build Autopilot intentionally
+does not use per-action confirmation. The required evidence must prove these
+claims without weakening DTO, redaction, transaction, recovery, or historical
+compatibility checks.
+
 The Post-M4 authority reconciliation package is documentation-only. It does not
 weaken, replace, or extend the implemented Makefile gate, and it does not
 activate a production crate, coverage tier, feature combination, quality tool,

@@ -2,6 +2,14 @@
 
 ## Status
 
+The accepted transition direction is recorded in [ADR 0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md)
+and [ADR 0018](../decisions/0018-plan-build-autopilot-activation-scope.md).
+These records supersede only the identified future Plan/Build clauses: Plan is
+planning focus with available advisory-guided `execute`, and Build Autopilot is
+the single unrestricted trusted-local execution policy. Existing M3/M4 history,
+typed Plan `write`/`edit` denial, fresh-run recovery, and no-resume semantics
+remain preserved.
+
 **Approved documentation-only planning package.** This directory coordinates the
 post-M4 reconciliation of selected research into future authoritative
 architecture. It does not authorize runtime, storage, protocol, crate, Cargo,
