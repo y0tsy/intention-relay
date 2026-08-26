@@ -269,3 +269,6 @@ provider facts.
 Architecture 23 owns ordinary Session forks. Retained RLM child/session identity
 is not conversation lineage without an explicit user fork, and no bridge grant
 or operation crosses it.
+
+Architecture 24 owns activity/UI projections. Bridge grants, operations, and
+resources never become activity authority or public activity payload.

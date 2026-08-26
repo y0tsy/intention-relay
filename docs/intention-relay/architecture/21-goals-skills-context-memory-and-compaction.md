@@ -245,3 +245,7 @@ Architecture 22 owns provider kind/profile/capability/reasoning normalization.
 Provider may declare compatible reasoning input requirements, but only this
 document selects sources, audiences, disclosures, and model-step context
 projections; provider cannot scan or inject historical context.
+
+Architecture 24 owns activity/UI projections. Context records may be referenced
+only through safe selected provenance and cannot become activity authority or
+a hidden presentation disclosure channel.

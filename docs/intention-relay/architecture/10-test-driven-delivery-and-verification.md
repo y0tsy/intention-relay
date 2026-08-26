@@ -385,3 +385,9 @@ negative fixtures; boundary/context/anchor tests; transaction fault injection;
 additive migration byte preservation; negotiation and bounded tree-page tests;
 authority/no-resume/no-current-state-reconstruction matrices; redaction; and
 Linux/Windows fork/regeneration outcomes. These are future obligations only.
+## Activity, UI, and adapter evidence
+
+Before implementation, architecture 24 requires activity/message/journal/
+notification/acknowledgement canonical and negative fixtures; transaction and
+sequence isolation; negotiated replay/resync; redaction; no-resume; Tauri/TUI/REPL
+parity; and Linux/Windows outcome evidence. These are future obligations only.

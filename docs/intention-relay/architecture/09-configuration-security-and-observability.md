@@ -218,3 +218,9 @@ Future fork snapshots and lineage projections are credential-free safe records.
 They exclude raw provider/tool/kernel data, workspace contents, implementation
 resources, and secrets. Lineage audit remains separate from Session/Run events
 and cannot be used to infer rollback or external-effect proof.
+## Post-M4 activity and notification observability consequence
+
+Architecture 24 owns safe activity, notification, and acknowledgement projections.
+They remain credential-free and exclude raw prompt/provider/tool/MCP/path/grant/
+resource data. Notifications are durable presentation evidence, not authority,
+read-state by cursor, or operational diagnostics.

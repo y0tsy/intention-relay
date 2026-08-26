@@ -364,8 +364,9 @@ persistent run-scoped replay and live delivery.
 ### Deliver
 
 - `intention-tauri` bootstrap/native bridge using only `intention-client`;
-- minimal Svelte UI to create/open a session, send a turn, render streamed state, and reconnect;
+- minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render safe activity/notification/acknowledgement projections;
 - TUI/REPL remains a contract-equivalent client.
+- post-M4 activity/UI implementation remains separately activated after architecture 24 declares exact DTO, storage, protocol, and quality boundaries.
 
 ### Tests first
 
@@ -828,3 +829,31 @@ feature profile, quality-policy target, or implementation milestone.
 - ordinary fork ceilings never become Mandate quotas or child-graph limits; and
 - storage, protocol, UI, clone/rebind, destructive retention, and activation
   remain excluded pending a later approved specification.
+
+
+## Post-M4 activity, UI, and adapters package
+
+**Documentation-only package extending M6 planning.** It depends on transport,
+execution meaning, child/verifier, MCP, bridge, kernel, context, provider, and
+Session branching contracts. It creates [the authoritative activity/UI
+contract](24-activity-ui-and-adapters.md) and decision 0016, but activates no
+crate, schema, migration, protocol implementation, feature profile, quality-policy
+target, or implementation milestone.
+
+### Deliver
+
+- daemon-owned activity identity, direct-pair messages, safe journals,
+  notification summaries, acknowledgement projections, and replay/resync;
+- shared-client Tauri/TUI/REPL presentation boundaries and historical
+  compatibility-only projections; and
+- reconciliation ownership, compatibility, contradiction, dependency, and
+  evidence updates.
+
+### Exit criteria
+
+- ACT-001..010 have one owner and compatibility/failure rule;
+- activity and notification state cannot become lifecycle, scheduler, tool,
+  child, verifier, provider, fork, or reconciliation authority;
+- M3/M4 bytes, streams, replay, recovery, and tool denial remain unchanged; and
+- production M6 activation still requires exact crate/test/coverage/feature/
+  storage/wire declarations and a separate approved implementation specification.

@@ -39,7 +39,7 @@ contradiction register.
 | BRG-001..014 | Gateway/RLM bridge | Adopt for future Mandate execution; historical bridge/RLM preserved | `19-mandate-gateway-rlm-bridge.md` |
 | KER-001..018 | Run-scoped IPython kernel lifecycle | Adopt for future Mandate execution; retained IPython/RLM preserved | `20-ipython-kernel-lifecycle.md` |
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
-| ACT-001..010 | general activity and notifications | Defer | later activity/UI package |
+| ACT-001..010 | general activity and notifications | Adopt for future projections; historical M3/M4 compatibility only | `24-activity-ui-and-adapters.md` |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Adopt for future Mandate execution; historical context preserved | `21-goals-skills-context-memory-and-compaction.md` |
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Adopt for future Mandate execution; M3/M4 provider behavior preserved | `22-provider-evolution-profiles-and-reasoning.md` |
@@ -193,6 +193,21 @@ contradiction register.
 | FRK-016 | Forks copy no active work, grant, request, queue, or unfinished effect. | future/all | Adopt | architecture 23 | Recovery never resumes transferred work. | Session branching | recovery matrix planned |
 | FRK-017 | Child runs bind their own provider meaning; default is non-authorizing. | future ordinary Session | Adopt | architecture 23 | No credential/client/request continuation or model-name routing. | Session branching | selection fixture planned |
 | FRK-018 | Historical records gain no synthetic fork execution state. | historical-only | Adopt | architecture 23 | Preserve readable ordinary history. | Session branching | compatibility fixture planned |
+
+## Activity, UI, and adapter topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| ACT-001 | Activity identity is daemon-assigned and distinct from Session/fork/Run identity. | future projections | Adopt | architecture 24 | No identity or sequence conversion/inference. | M6 activity/UI | canonical fixture planned |
+| ACT-002 | Direct parent/child pairs use closed message kinds and directions. | future Mandate | Adopt | architecture 24 | Invalid relative/direction/order fails pre-publication. | M6 activity/UI | pair fixture planned |
+| ACT-003 | Messages carry bounded safe text and typed provenance only. | future projections | Adopt | architecture 24 | No raw sensitive body or authority transfer. | M6 activity/UI | redaction fixture planned |
+| ACT-004 | Activity journal is append-only, tree-local, and separately sequenced. | future projections | Adopt | architecture 24 | No Session/Run cursor reuse or global order. | M6 activity/UI | sequence fixture planned |
+| ACT-005 | Activity transitions atomically commit safe projections and publish after reread. | future projections | Adopt | architecture 24 | Fault commits nothing; no external effect in transaction. | M6 activity/UI | fault fixture planned |
+| ACT-006 | Activity archive/projections are read-only and non-authorizing. | future projections | Adopt | architecture 24 | Archive never deletes, restores authority, or starts work. | M6 activity/UI | lifecycle fixture planned |
+| ACT-007 | Activity replay is negotiated, bounded, history-before-live, and resync-safe. | future projections | Adopt | architecture 24 | Old peers fail closed; reconnect has zero effect. | M6 activity/UI | protocol fixture planned |
+| ACT-008 | Notifications are separate local-user safe journals with urgent priority. | future projections | Adopt | architecture 24 | No inbox/account/raw alert replay or work initiation. | M6 activity/UI | notification fixture planned |
+| ACT-009 | Acknowledgement is separate durable presentation state, not cursor/fact mutation. | future projections | Adopt | architecture 24 | Cannot authorize, schedule, or rewrite journal facts. | M6 activity/UI | acknowledgement fixture planned |
+| ACT-010 | Tauri/TUI/REPL use shared-client daemon projections; historical M3/M4 is compatibility-only. | future/historical | Adopt | architecture 24 | No adapter authority or synthetic historical state. | M6 activity/UI | parity fixture planned |
 
 ## Coverage ledger
 

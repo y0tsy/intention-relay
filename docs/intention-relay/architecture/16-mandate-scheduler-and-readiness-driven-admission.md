@@ -257,3 +257,6 @@ a reason, reservation, retry budget, RunId, or direct admission.
 
 Architecture 23 owns ordinary Session forks. Fork creation and ordinary
 regeneration create no Mandate reason, readiness observation, or admission.
+
+Architecture 24 activity and notification observations are non-authorizing. They
+cannot create reasons, candidates, readiness, reservations, or fresh admission.

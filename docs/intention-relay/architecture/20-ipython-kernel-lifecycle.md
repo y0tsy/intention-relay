@@ -253,3 +253,6 @@ continuation, or carry private provider clients/resources.
 
 Architecture 23 owns ordinary Session forks. No live kernel epoch, grant, task,
 process, namespace, checkpoint authority, or unfinished effect crosses a fork.
+
+Architecture 24 may expose safe kernel outcome provenance only. It cannot create
+a kernel, restore a checkpoint, issue a grant, or disclose live kernel state.

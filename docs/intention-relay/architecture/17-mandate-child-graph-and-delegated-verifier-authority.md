@@ -191,3 +191,7 @@ provider selection.
 Architecture 23 owns user-visible ordinary Session lineage. A conversation fork
 never derives from or creates a Mandate child edge, verifier authority, target
 set, parent control, or graph terminalization fact.
+
+Architecture 24 owns safe activity/UI projections and direct-pair presentation.
+They cannot create or widen a child edge, parent control, verifier authority,
+target set, terminalization, or target mutation.
