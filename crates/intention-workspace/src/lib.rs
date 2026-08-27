@@ -296,10 +296,6 @@ mod tests {
     #[test]
     fn rejects_invalid_new_file_paths_and_outside_parents() {
         let root = temp_root();
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
         assert_eq!(
             WorkspaceRelativePathDto::parse(".")
                 .expect_err("invalid path")
@@ -312,7 +308,10 @@ mod tests {
         fs::create_dir_all(&outside).expect("outside parent");
         #[cfg(unix)]
         {
-            let ws = &ws;
+            let ws = WorkspaceRoot::resolve(
+                &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+            )
+            .expect("workspace");
             std::os::unix::fs::symlink(&outside, root.join("outside")).expect("symlink");
             let path = WorkspaceRelativePathDto::parse("outside/new.txt").expect("path");
             // The parent is a symbolic link, so resolution must reject it
