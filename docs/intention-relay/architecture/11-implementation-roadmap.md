@@ -337,6 +337,11 @@ persistent run-scoped replay and live delivery.
 
 ## Milestone 5: Typed tools, WorkspaceRoot, and hooks
 
+Current worktree evidence is recorded in [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
+The focused M5 package tests pass, but full `make verify` and the required
+Linux/Windows CI matrix remain unrecorded; M5 must not be treated as fully
+closed until those gates are run at an immutable implementation baseline.
+
 ### Deliver
 
 - typed core tool registry and first read/search/write/edit/execute contracts as appropriate;
