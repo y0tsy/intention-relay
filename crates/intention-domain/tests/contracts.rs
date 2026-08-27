@@ -1,5 +1,6 @@
 #![allow(
     clippy::expect_used,
+    clippy::unwrap_used,
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
@@ -69,4 +70,127 @@ fn domain_events_round_trip_with_typed_identity_and_mode() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, event);
+}
+
+#[test]
+fn domain_constructors_and_accessors_cover_all_basic_shapes() {
+    use intention_domain::{
+        CreateSessionCommandDto, PlanStatusDto, QueuedTurnProjectionDto,
+        RemoveQueuedTurnCommandDto, RunProjectionDto, RunStatusDto,
+    };
+    use intention_types::{ConfigRevisionId, QueuePositionDto};
+    let project = ProjectId::new();
+    let session = SessionId::new();
+    let workspace = WorkspaceId::new();
+    let turn = TurnId::new();
+    let root = workspace_root();
+    for mode in [RunModeDto::Plan, RunModeDto::Build] {
+        let c = CreateSessionCommandDto::new(project, session, workspace, root.clone(), mode);
+        assert_eq!(
+            (
+                c.project_id(),
+                c.session_id(),
+                c.workspace_id(),
+                c.workspace_root(),
+                c.mode()
+            ),
+            (project, session, workspace, &root, mode)
+        );
+    }
+    let remove = RemoveQueuedTurnCommandDto::new(session, turn);
+    assert_eq!((remove.session_id(), remove.turn_id()), (session, turn));
+    let queued =
+        QueuedTurnProjectionDto::new(session, turn, "hello", QueuePositionDto::new(2)).unwrap();
+    assert_eq!(
+        (
+            queued.session_id(),
+            queued.turn_id(),
+            queued.content(),
+            queued.position().value()
+        ),
+        (session, turn, "hello", 2)
+    );
+    assert!(
+        serde_json::from_value::<QueuedTurnProjectionDto>(
+            serde_json::json!({"session_id":session,"turn_id":turn,"content":" ","position":0})
+        )
+        .is_err()
+    );
+    let run = RunProjectionDto::new(
+        session,
+        intention_types::RunId::new(),
+        turn,
+        RunStatusDto::Running,
+        ConfigRevisionId::new(),
+    );
+    assert_eq!(
+        (run.session_id(), run.turn_id(), run.status()),
+        (session, turn, RunStatusDto::Running)
+    );
+    let _ = [
+        PlanStatusDto::Drafting,
+        PlanStatusDto::Revising,
+        PlanStatusDto::Submitted,
+        PlanStatusDto::Approved,
+        PlanStatusDto::Rejected,
+        PlanStatusDto::Superseded,
+        PlanStatusDto::Abandoned,
+    ];
+}
+
+#[test]
+fn run_status_matrix_and_terminal_classification_are_complete() {
+    use intention_domain::{RunStatusDto as S, validate_run_status_transition as v};
+    let allowed = [
+        (S::Queued, S::Starting),
+        (S::Queued, S::Cancelled),
+        (S::Queued, S::Interrupted),
+        (S::Starting, S::Running),
+        (S::Starting, S::Cancelling),
+        (S::Starting, S::Failed),
+        (S::Starting, S::Interrupted),
+        (S::Running, S::WaitingInput),
+        (S::Running, S::Completing),
+        (S::Running, S::Cancelling),
+        (S::Running, S::Failed),
+        (S::Running, S::Interrupted),
+        (S::WaitingInput, S::Running),
+        (S::WaitingInput, S::Cancelling),
+        (S::WaitingInput, S::Failed),
+        (S::WaitingInput, S::Interrupted),
+        (S::Completing, S::Completed),
+        (S::Completing, S::Failed),
+        (S::Completing, S::Interrupted),
+        (S::Cancelling, S::Cancelled),
+        (S::Cancelling, S::Failed),
+        (S::Cancelling, S::Interrupted),
+    ];
+    for (a, b) in allowed {
+        assert!(v(a, b).is_ok());
+    }
+    let all = [
+        S::Queued,
+        S::Starting,
+        S::Running,
+        S::WaitingInput,
+        S::Completing,
+        S::Cancelling,
+        S::Completed,
+        S::Cancelled,
+        S::Failed,
+        S::Interrupted,
+    ];
+    for a in all {
+        for b in all {
+            if !allowed.contains(&(a, b)) {
+                assert!(v(a, b).is_err());
+            }
+        }
+    }
+    for s in all {
+        assert_eq!(
+            s.is_terminal(),
+            matches!(s, S::Completed | S::Cancelled | S::Failed | S::Interrupted)
+        );
+    }
 }

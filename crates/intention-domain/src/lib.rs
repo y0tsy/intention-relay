@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, QueuePositionDto, RunId,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -744,6 +744,192 @@ pub enum DomainEventDto {
     ConfigurationRevisionAccepted(ConfigurationRevisionAcceptedEventDto),
     /// A plan status changed through a later plan policy workflow.
     PlanStatusChanged(PlanStatusChangedEventDto),
+    /// A typed local tool lifecycle fact was recorded.
+    ToolLifecycle(ToolLifecycleEventDto),
+}
+
+/// The durable lifecycle state of one ordinary local tool call.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolLifecycleStatusDto {
+    Admitted,
+    Rejected,
+    Started,
+    Completed,
+    Failed,
+    Cancelled,
+    ExternalEffectUnknown,
+}
+
+/// Validates one local tool lifecycle transition.
+///
+/// # Errors
+///
+/// Returns a conflict error when the requested transition is not permitted.
+pub fn validate_tool_lifecycle_transition(
+    from: Option<&ToolLifecycleStatusDto>,
+    to: &ToolLifecycleStatusDto,
+) -> DtoResult<()> {
+    let allowed = matches!(
+        (from, to),
+        (None, ToolLifecycleStatusDto::Admitted)
+            | (
+                Some(ToolLifecycleStatusDto::Admitted),
+                ToolLifecycleStatusDto::Cancelled
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Admitted),
+                ToolLifecycleStatusDto::Started
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Admitted),
+                ToolLifecycleStatusDto::Rejected
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Started),
+                ToolLifecycleStatusDto::Completed
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Started),
+                ToolLifecycleStatusDto::Failed
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Started),
+                ToolLifecycleStatusDto::Cancelled
+            )
+            | (
+                Some(ToolLifecycleStatusDto::Started),
+                ToolLifecycleStatusDto::ExternalEffectUnknown
+            )
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(ErrorDto::new(
+            "invalid_tool_lifecycle_transition",
+            intention_types::ErrorCategoryDto::Conflict,
+            "tool lifecycle transition is not permitted",
+            intention_types::ErrorRetryDto::Never,
+            None,
+        )?)
+    }
+}
+
+/// Validates a plan lifecycle transition.
+///
+/// # Errors
+///
+/// Returns a conflict error when the requested transition is not permitted.
+pub fn validate_plan_status_transition(
+    from: Option<PlanStatusDto>,
+    to: PlanStatusDto,
+) -> DtoResult<()> {
+    let allowed = matches!(
+        (from, to),
+        (None, PlanStatusDto::Drafting)
+            | (
+                Some(PlanStatusDto::Drafting),
+                PlanStatusDto::Revising | PlanStatusDto::Submitted | PlanStatusDto::Abandoned
+            )
+            | (
+                Some(PlanStatusDto::Revising),
+                PlanStatusDto::Revising | PlanStatusDto::Submitted | PlanStatusDto::Abandoned
+            )
+            | (
+                Some(PlanStatusDto::Submitted),
+                PlanStatusDto::Approved | PlanStatusDto::Rejected | PlanStatusDto::Abandoned
+            )
+            | (
+                Some(PlanStatusDto::Rejected),
+                PlanStatusDto::Revising | PlanStatusDto::Abandoned
+            )
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(ErrorDto::new(
+            "invalid_plan_status_transition",
+            intention_types::ErrorCategoryDto::Conflict,
+            "plan status transition is not permitted",
+            intention_types::ErrorRetryDto::Never,
+            None,
+        )?)
+    }
+}
+
+/// Safe, session-ordered evidence for one local tool call.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolLifecycleEventDto {
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    tool_id: String,
+    status: ToolLifecycleStatusDto,
+    detail: String,
+    occurred_at: TimestampDto,
+}
+
+impl ToolLifecycleEventDto {
+    /// Creates safe tool lifecycle evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the tool identifier or safe detail is invalid.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: impl Into<String>,
+        status: ToolLifecycleStatusDto,
+        detail: impl Into<String>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Self> {
+        let tool_id = tool_id.into();
+        let detail = detail.into();
+        if tool_id.trim().is_empty() || detail.len() > 4096 || detail.contains('\0') {
+            return Err(ErrorDto::validation(
+                "invalid_tool_lifecycle",
+                "tool lifecycle evidence is invalid",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            status,
+            detail,
+            occurred_at,
+        })
+    }
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    #[must_use]
+    pub const fn call_id(&self) -> ToolCallId {
+        self.call_id
+    }
+    #[must_use]
+    pub fn tool_id(&self) -> &str {
+        &self.tool_id
+    }
+    #[must_use]
+    pub const fn status(&self) -> &ToolLifecycleStatusDto {
+        &self.status
+    }
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
 }
 
 /// The fact that one user turn was durably accepted.
@@ -1272,6 +1458,77 @@ mod tests {
             let encoded = serde_json::to_string(&envelope).expect("event serialization succeeds");
             let _: intention_types::EventEnvelopeDto<DomainEventDto> =
                 serde_json::from_str(&encoded).expect("event parsing succeeds");
+        }
+    }
+
+    #[test]
+    fn tool_lifecycle_transitions_cover_initial_and_all_allowed_edges() {
+        let admitted = ToolLifecycleStatusDto::Admitted;
+        let started = ToolLifecycleStatusDto::Started;
+        let terminal = [
+            ToolLifecycleStatusDto::Completed,
+            ToolLifecycleStatusDto::Failed,
+            ToolLifecycleStatusDto::Cancelled,
+            ToolLifecycleStatusDto::ExternalEffectUnknown,
+        ];
+
+        assert!(validate_tool_lifecycle_transition(None, &admitted).is_ok());
+        for successor in [
+            ToolLifecycleStatusDto::Started,
+            ToolLifecycleStatusDto::Rejected,
+        ] {
+            assert!(validate_tool_lifecycle_transition(Some(&admitted), &successor).is_ok());
+        }
+        for successor in &terminal {
+            assert!(validate_tool_lifecycle_transition(Some(&started), successor).is_ok());
+        }
+    }
+
+    #[test]
+    fn tool_lifecycle_transitions_reject_duplicates_invalid_initial_and_terminal_edges() {
+        let statuses = [
+            ToolLifecycleStatusDto::Admitted,
+            ToolLifecycleStatusDto::Rejected,
+            ToolLifecycleStatusDto::Started,
+            ToolLifecycleStatusDto::Completed,
+            ToolLifecycleStatusDto::Failed,
+            ToolLifecycleStatusDto::Cancelled,
+            ToolLifecycleStatusDto::ExternalEffectUnknown,
+        ];
+
+        for status in &statuses {
+            assert!(validate_tool_lifecycle_transition(Some(status), status).is_err());
+        }
+        for status in &statuses {
+            let expected_initial = matches!(status, ToolLifecycleStatusDto::Admitted);
+            assert_eq!(
+                validate_tool_lifecycle_transition(None, status).is_ok(),
+                expected_initial
+            );
+        }
+        for from in &statuses {
+            for to in &statuses {
+                let allowed = matches!(
+                    (from, to),
+                    (
+                        ToolLifecycleStatusDto::Admitted,
+                        ToolLifecycleStatusDto::Started
+                            | ToolLifecycleStatusDto::Rejected
+                            | ToolLifecycleStatusDto::Cancelled
+                    ) | (
+                        ToolLifecycleStatusDto::Started,
+                        ToolLifecycleStatusDto::Completed
+                            | ToolLifecycleStatusDto::Failed
+                            | ToolLifecycleStatusDto::Cancelled
+                            | ToolLifecycleStatusDto::ExternalEffectUnknown
+                    )
+                );
+                assert_eq!(
+                    validate_tool_lifecycle_transition(Some(from), to).is_ok(),
+                    allowed,
+                    "unexpected tool transition: {from:?} -> {to:?}"
+                );
+            }
         }
     }
 }

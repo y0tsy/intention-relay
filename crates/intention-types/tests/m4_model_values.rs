@@ -29,3 +29,35 @@ fn model_values_are_owned_by_types_and_preserve_the_contract() {
     assert_eq!(error.correlation_id(), Some(correlation));
     assert_eq!(error.to_string(), "provider_unavailable");
 }
+
+#[test]
+fn model_values_reject_invalid_and_decode_valid_wire_forms() {
+    assert!(ToolCallDto::new(ToolCallId::new(), " ", "{}").is_err());
+    assert!(ToolCallDto::new(ToolCallId::new(), "inspect", "not-json").is_err());
+    let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("valid call");
+    let decoded: ToolCallDto =
+        serde_json::from_str(&serde_json::to_string(&call).expect("call serializes"))
+            .expect("call decodes");
+    assert_eq!(decoded.arguments_json(), "{}");
+    assert!(
+        serde_json::from_str::<ToolCallDto>(
+            r#"{"call_id":"bad","name":"x","arguments_json":"{}"}"#
+        )
+        .is_err()
+    );
+
+    assert_eq!(
+        serde_json::from_str::<UsageDto>(r#"{"state":"not_reported"}"#).expect("state decodes"),
+        UsageDto::NotReported
+    );
+    assert!(
+        serde_json::from_str::<UsageDto>(
+            r#"{"state":"reported","input_tokens":2,"output_tokens":3,"total_tokens":4}"#
+        )
+        .is_err()
+    );
+
+    let error = ProviderErrorDto::unavailable("failed", false, None).expect("valid error");
+    assert_eq!(error.retry(), ErrorRetryDto::Never);
+    assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
+}
