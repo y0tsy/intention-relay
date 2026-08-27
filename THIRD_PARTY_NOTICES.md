@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 116 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 117 dependency entries
 - [MIT License](#MIT), used by 41 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 19 dependency entries
 - [ISC License](#ISC), used by 3 dependency entries
@@ -498,7 +498,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [zerocopy 0.8.55](https://github.com/google/zerocopy)
+- [zerocopy 0.8.56](https://github.com/google/zerocopy)
 
 ```text
                                  Apache License
@@ -1147,7 +1147,7 @@ PERFORMANCE OF THIS SOFTWARE.
 - [futures-sink 0.3.34](https://github.com/rust-lang/futures-rs)
 - [futures-task 0.3.34](https://github.com/rust-lang/futures-rs)
 - [futures-util 0.3.34](https://github.com/rust-lang/futures-rs)
-- [futures 0.3.33](https://github.com/rust-lang/futures-rs)
+- [futures 0.3.34](https://github.com/rust-lang/futures-rs)
 
 ```text
                               Apache License
@@ -2412,16 +2412,17 @@ limitations under the License.
 - [backoff 0.4.0](https://github.com/ihrwein/backoff)
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
 - [bitflags 2.13.1](https://github.com/bitflags/bitflags)
-- [cc 1.4.0](https://github.com/rust-lang/cc-rs)
+- [cc 1.4.4](https://github.com/rust-lang/cc-rs)
 - [cfg-if 1.0.4](https://github.com/rust-lang/cfg-if)
 - [displaydoc 0.2.7](https://github.com/yaahc/displaydoc)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
 - [fastrand 2.5.0](https://github.com/smol-rs/fastrand)
-- [find-msvc-tools 0.1.9](https://github.com/rust-lang/cc-rs)
+- [find-msvc-tools 0.1.11](https://github.com/rust-lang/cc-rs)
 - [fnv 1.0.7](https://github.com/servo/rust-fnv)
 - [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
 - [fs4 1.1.0](https://github.com/al8n/fs4)
 - [futures-timer 3.0.4](https://github.com/async-rs/futures-timer)
+- [glob 0.3.4](https://github.com/rust-lang/glob)
 - [hashbrown 0.17.1](https://github.com/rust-lang/hashbrown)
 - [httparse 1.10.1](https://github.com/seanmonstar/httparse)
 - [hyper-rustls 0.27.9](https://github.com/rustls/hyper-rustls)
@@ -2429,14 +2430,14 @@ limitations under the License.
 - [idna_adapter 1.2.2](https://github.com/hsivonen/idna_adapter)
 - [linux-raw-sys 0.12.1](https://github.com/sunfishcode/linux-raw-sys)
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
-- [log 0.4.33](https://github.com/rust-lang/log)
+- [log 0.4.34](https://github.com/rust-lang/log)
 - [mime 0.3.17](https://github.com/hyperium/mime)
 - [once_cell 1.21.4](https://github.com/matklad/once_cell)
 - [openssl-probe 0.2.1](https://github.com/rustls/openssl-probe)
 - [parking_lot 0.12.5](https://github.com/Amanieu/parking_lot)
 - [parking_lot_core 0.9.12](https://github.com/Amanieu/parking_lot)
 - [percent-encoding 2.3.2](https://github.com/servo/rust-url/)
-- [pkg-config 0.3.33](https://github.com/rust-lang/pkg-config-rs)
+- [pkg-config 0.3.34](https://github.com/rust-lang/pkg-config-rs)
 - [ring 0.17.14](https://github.com/briansmith/ring)
 - [rustix 1.1.4](https://github.com/bytecodealliance/rustix)
 - [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
@@ -3709,11 +3710,11 @@ limitations under the License.
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
 - [proc-macro2 1.0.107](https://github.com/dtolnay/proc-macro2)
 - [quote 1.0.47](https://github.com/dtolnay/quote)
-- [rand 0.8.7](https://github.com/rust-random/rand)
+- [rand 0.8.8](https://github.com/rust-random/rand)
 - [rand 0.9.5](https://github.com/rust-random/rand)
 - [rand_chacha 0.9.0](https://github.com/rust-random/rand)
-- [ref-cast-impl 1.0.26](https://github.com/dtolnay/ref-cast)
-- [ref-cast 1.0.26](https://github.com/dtolnay/ref-cast)
+- [ref-cast-impl 1.0.27](https://github.com/dtolnay/ref-cast)
+- [ref-cast 1.0.27](https://github.com/dtolnay/ref-cast)
 - [reqwest-eventsource 0.6.0](https://github.com/jpopesculian/reqwest-eventsource)
 - [rusqlite_migration 2.6.0](https://github.com/cljoly/rusqlite_migration)
 - [ryu 1.0.23](https://github.com/dtolnay/ryu)
@@ -3725,12 +3726,12 @@ limitations under the License.
 - [serde_urlencoded 0.7.1](https://github.com/nox/serde_urlencoded)
 - [shlex 2.0.1](https://github.com/comex/rust-shlex)
 - [syn 2.0.119](https://github.com/dtolnay/syn)
-- [syn 3.0.3](https://github.com/dtolnay/syn)
+- [syn 3.0.4](https://github.com/dtolnay/syn)
 - [sync_wrapper 1.0.2](https://github.com/Actyx/sync_wrapper)
 - [thiserror-impl 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror-impl 2.0.19](https://github.com/dtolnay/thiserror)
+- [thiserror-impl 2.0.20](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror 2.0.19](https://github.com/dtolnay/thiserror)
+- [thiserror 2.0.20](https://github.com/dtolnay/thiserror)
 - [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
 - [widestring 1.2.1](https://github.com/VoidStarKat/widestring-rs)
 
@@ -4005,7 +4006,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [rustls-webpki 0.103.13](https://github.com/rustls/webpki)
+- [rustls-webpki 0.103.15](https://github.com/rustls/webpki)
 
 ```text
 Except as otherwise noted, this project is licensed under the following
@@ -4427,7 +4428,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### Used by
 
-- [http-body-util 0.1.4](https://github.com/hyperium/http-body)
+- [http-body-util 0.1.5](https://github.com/hyperium/http-body)
 - [http-body 1.1.0](https://github.com/hyperium/http-body)
 
 ```text
@@ -4891,24 +4892,24 @@ authorization of the copyright holder.
 
 #### Used by
 
-- [icu_collections 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_locale_core 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_normalizer 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_normalizer_data 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_properties 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_properties_data 2.2.0](https://github.com/unicode-org/icu4x)
-- [icu_provider 2.2.0](https://github.com/unicode-org/icu4x)
-- [litemap 0.8.2](https://github.com/unicode-org/icu4x)
-- [potential_utf 0.1.5](https://github.com/unicode-org/icu4x)
-- [tinystr 0.8.3](https://github.com/unicode-org/icu4x)
-- [writeable 0.6.3](https://github.com/unicode-org/icu4x)
+- [icu_collections 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_locale_core 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_normalizer 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_normalizer_data 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_properties 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_properties_data 2.3.0](https://github.com/unicode-org/icu4x)
+- [icu_provider 2.3.1](https://github.com/unicode-org/icu4x)
+- [litemap 0.8.3](https://github.com/unicode-org/icu4x)
+- [potential_utf 0.1.6](https://github.com/unicode-org/icu4x)
+- [tinystr 0.8.4](https://github.com/unicode-org/icu4x)
+- [writeable 0.6.4](https://github.com/unicode-org/icu4x)
 - [yoke-derive 0.8.2](https://github.com/unicode-org/icu4x)
 - [yoke 0.8.3](https://github.com/unicode-org/icu4x)
 - [zerofrom-derive 0.1.7](https://github.com/unicode-org/icu4x)
 - [zerofrom 0.1.8](https://github.com/unicode-org/icu4x)
-- [zerotrie 0.2.4](https://github.com/unicode-org/icu4x)
-- [zerovec-derive 0.11.3](https://github.com/unicode-org/icu4x)
-- [zerovec 0.11.6](https://github.com/unicode-org/icu4x)
+- [zerotrie 0.2.5](https://github.com/unicode-org/icu4x)
+- [zerovec-derive 0.11.6](https://github.com/unicode-org/icu4x)
+- [zerovec 0.11.8](https://github.com/unicode-org/icu4x)
 
 ```text
 UNICODE LICENSE V3
