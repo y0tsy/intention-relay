@@ -17,6 +17,7 @@ mod file;
 mod search;
 
 #[cfg(test)]
+#[allow(clippy::expect_used, reason = "deterministic timeout fixture setup")]
 mod timeout_tests {
     use super::*;
     use std::process::Command;
