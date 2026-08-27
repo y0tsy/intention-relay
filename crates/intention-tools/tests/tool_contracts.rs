@@ -1152,3 +1152,33 @@ fn all_descriptor_metadata_values_are_verified() {
         assert!(!descriptor.description().is_empty());
     }
 }
+
+#[test]
+fn bounded_text_accepts_boundary_and_rejects_nul_or_oversize() {
+    assert_eq!(BoundedText::new("ok").unwrap().as_str(), "ok");
+    assert!(BoundedText::new("\0").is_err());
+    assert!(BoundedText::new("x".repeat(1_048_577)).is_err());
+    assert!(BoundedText::new("x".repeat(1_048_576)).is_ok());
+}
+
+#[test]
+fn dispatch_covers_each_tool_input_variant() {
+    let dir = fixture_dir("dispatch-variants");
+    std::fs::write(dir.path().join("a.txt"), "needle").unwrap();
+    let root = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(root);
+    let path = WorkspaceRelativePathDto::parse("a.txt").unwrap();
+    let calls = [
+        ToolInput::Read(ReadInput { path: path.clone() }),
+        ToolInput::Glob(GlobInput { pattern: BoundedText::new("*.txt").unwrap() }),
+        ToolInput::Grep(GrepInput { pattern: BoundedText::new("needle").unwrap(), path: Some(path.clone()) }),
+        ToolInput::Write(WriteInput { path: WorkspaceRelativePathDto::parse("b.txt").unwrap(), content: BoundedText::new("b").unwrap() }),
+        ToolInput::Edit(EditInput { path, old: BoundedText::new("needle").unwrap(), new: BoundedText::new("changed").unwrap() }),
+    ];
+    for input in calls {
+        assert!(service.dispatch(ToolCallId::new(), input).is_ok());
+    }
+}
