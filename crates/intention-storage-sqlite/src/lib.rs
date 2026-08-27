@@ -12,14 +12,15 @@ use intention_domain::{
     ModelRunProjectionDto, QueuedTurnProjectionDto, QueuedTurnRemovedEventDto, RunEventCursorDto,
     RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStartedEventDto,
     RunStatusChangedEventDto, RunStatusDto, SessionCreatedEventDto, SessionProjectionDto,
-    UserTurnAcceptedEventDto, UserTurnQueuedEventDto, validate_run_status_transition,
+    ToolLifecycleStatusDto, UserTurnAcceptedEventDto, UserTurnQueuedEventDto,
+    validate_run_status_transition, validate_tool_lifecycle_transition,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
-    AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    TransitionRunInputDto,
+    AppendModelRunFactsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
+    CreateSessionInputDto, ModelContextMessageDto, ModelContextRoleDto,
+    RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StartingRunModelContextDto,
+    StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
@@ -560,6 +561,54 @@ macro_rules! immediate_transaction {
 }
 
 impl StorageRepositoryDto for SqliteStorageRepository {
+    fn append_tool_lifecycle_event(
+        &self,
+        input: AppendToolLifecycleEventInputDto,
+    ) -> DtoResult<EventEnvelopeDto<DomainEventDto>> {
+        let event = input.event().clone();
+        let session_id = event.session_id();
+        immediate_transaction!(self, |tx| {
+            let run = load_scoped_run(&tx, session_id, event.run_id())?;
+            let prior_status = latest_tool_lifecycle_status(&tx, session_id, event.call_id())?;
+            validate_tool_lifecycle_transition(prior_status.as_ref(), event.status())?;
+            if prior_status.as_ref() == Some(event.status()) {
+                return Err(ErrorDto::new(
+                    "duplicate_tool_lifecycle",
+                    ErrorCategoryDto::Conflict,
+                    "duplicate tool lifecycle status",
+                    ErrorRetryDto::Never,
+                    None,
+                )?);
+            }
+            let position = sequence(&tx, session_id)?;
+            let events = Self::append(
+                &tx,
+                session_id,
+                position,
+                vec![EventDraft::new(
+                    Some(event.run_id()),
+                    Some(run.turn_id()),
+                    event.occurred_at(),
+                    DomainEventDto::ToolLifecycle(event),
+                )],
+            )?;
+            let committed = events
+                .into_iter()
+                .next()
+                .ok_or_else(|| codec_error("tool lifecycle event was not appended"))?;
+            // Tool lifecycle facts are ordinary session state changes: refresh
+            // the session/run projections and snapshots in the same transaction
+            // as the event, rather than leaving journal-only evidence behind.
+            let projection = Self::project(&tx, session_id)?;
+            self.fault(FaultPoint::Projection)?;
+            Self::snapshot(&tx, &projection)?;
+            self.fault(FaultPoint::Snapshot)?;
+            self.fault(FaultPoint::Events)?;
+            tx.commit().map_err(storage_error)?;
+            Ok(committed)
+        })
+    }
+
     fn create_session(&self, input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
         let command = input.command();
         let session_id = command.session_id();
@@ -1276,8 +1325,35 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     }
 }
 
+fn latest_tool_lifecycle_status(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    call_id: intention_types::ToolCallId,
+) -> DtoResult<Option<ToolLifecycleStatusDto>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT envelope_json FROM domain_events WHERE session_id=?1 ORDER BY sequence DESC",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(storage_error)?;
+    for row in rows {
+        let encoded = row.map_err(storage_error)?;
+        let envelope: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(codec_error)?;
+        if let DomainEventDto::ToolLifecycle(item) = envelope.payload()
+            && envelope.session_id() == session_id
+            && item.call_id() == call_id
+        {
+            return Ok(Some(item.status().clone()));
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FaultPoint {
+pub enum FaultPoint {
     Events,
     ModelFacts,
     Projection,
