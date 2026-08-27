@@ -16,6 +16,38 @@ mod execute;
 mod file;
 mod search;
 
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn timeout_is_classified_as_unknown_effect_without_waiting_thirty_seconds() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("ping");
+            command.args(["-n", "40", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "trap '' TERM; sleep 30"]);
+            command
+        };
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().expect("spawn timeout fixture");
+        let started = Instant::now();
+        let result = bounded_output_with_timeout(
+            child,
+            CancellationSignal::new(),
+            Duration::from_millis(25),
+        );
+        assert!(matches!(
+            result,
+            Err("tool_execute_external_effect_unknown")
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_GLOB_MATCHES: usize = 10_000;
