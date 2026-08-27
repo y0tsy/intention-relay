@@ -6,5 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+intention-types = { path = "../intention-types", version = "=0.0.0" }
+intention-tools = { path = "../intention-tools", version = "=0.0.0" }
+
 [lints]
 workspace = true
