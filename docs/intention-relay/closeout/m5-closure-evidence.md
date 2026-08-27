@@ -2,25 +2,24 @@
 
 ## Status and purpose
 
-M5 is recorded as a **worktree evidence closeout** at the current repository
-revision (`12217d96e1a2ec51c3cd13f59520a14a56a54878`). No immutable M4+ concept
-document is changed by this closeout. The implementation activates typed core
-tools, fail-closed `WorkspaceRoot` resolution, and typed deterministic hooks.
+M5 is recorded against implementation baseline `b969546` (the current clean
+HEAD). No immutable M4+ concept document is changed by this closeout. The
+implementation activates typed core tools, fail-closed `WorkspaceRoot`
+resolution, and typed deterministic hooks.
 
-This document records only observed evidence from the current worktree. It does
-not claim a committed M5 implementation baseline or a completed full quality
-gate.
+This document records observed evidence from the clean implementation baseline.
 
 | Item | Value |
 | --- | --- |
-| Evidence revision | `12217d96e1a2ec51c3cd13f59520a14a56a54878` (`docs(autopilot): define trusted build continuity`) |
+| Implementation baseline | `b969546` (`chore(deps): update uuid to 1.26.0`) |
 | Focused verification | `cargo test -p intention-tools -p intention-workspace -p intention-hooks` — exit status `0`, executed 2026-08-26 in the current worktree |
 | Focused result | 32 tests passed, 0 failed, 0 ignored; all three package doctest suites passed |
 | Documentation verification | `make docs-check` — exit status `0`, executed 2026-08-26; Rust docs passed for default, no-default-features, and all-features profiles, and Markdown/Mermaid/navigation/secret checks passed |
-| Full required gate | Not run for this closeout; no `make verify` or CI result is claimed |
+| Full required gate | `make verify` — exit status `0`, completed on clean HEAD `b969546` |
 | Environment | Linux `7.1.8-200.fc44.x86_64`, `x86_64` GNU/Linux; repository reports stable Rust toolchain via `rust-toolchain.toml` |
-| Full-environment deviation | The required full Linux/Windows matrix and complete `make verify` evidence are unavailable in this worktree record; Windows behavior is therefore not independently evidenced here |
-| Coverage policy exception | `intention-tools` and `intention-hooks` have explicit 80% overrides, with an 80% approved floor and rationale/owner/review metadata; all other crate tiers and branch requirements remain unchanged |
+| Coverage scope and result | `default`, `no_default`, and `all` feature profiles; each reports the same per-crate totals. Region coverage ranges from 84.62% (`intention-transport`) to 98.42% (`intention-workspace`); tools 89.02%, workspace 98.42%, hooks 96.91%. Function coverage for the profiles ranges from 68.10% to 100%; line coverage ranges from 86.39% to 98.16%. Threshold evaluation passed with the configured profile scope. |
+| Coverage policy exception | `intention-tools` and `intention-hooks` each have an explicitly approved 80% floor override. Tools: M5 tool-boundary transition floor; owner `intention-tools`; reviewer M5 quality council; reviewed 2026-08-26. Hooks: M5 hook-boundary transition floor; owner `intention-hooks`; reviewer M5 quality council; reviewed 2026-08-26. Ordering, rejection, short-circuit, policy-denial, and workspace-path semantic tests remain mandatory; all other crate tiers and branch requirements remain unchanged. |
+| CI matrix | Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) has not been run for this closeout; Windows behavior is therefore not independently evidenced. |
 | Immutable documents | `m4plus_concept2.md` and other immutable documents were not edited |
 
 ## Acceptance evidence
@@ -35,11 +34,8 @@ gate.
 
 ## Known limitations and follow-up
 
-- `make verify` must be run before treating M5 as fully accepted. That gate is
-  required to establish formatting, lint, architecture, feature-profile,
-  coverage, documentation, and supply-chain evidence.
 - Required `ubuntu-24.04` and `windows-2025` `make ci` results are not recorded
-  for this M5 worktree. In particular, Windows named-pipe/filesystem behavior
+  for this M5 baseline. In particular, Windows named-pipe/filesystem behavior
   remains outside this evidence run.
 - The current worktree already contained unrelated or parent-agent changes;
   this closeout does not stage, commit, or normalize them.
@@ -48,7 +44,7 @@ gate.
 
 ## Closeout rule
 
-This is a documentation-only evidence record for the observed worktree and
-focused tests. A future implementation baseline should record its exact commit
-SHA, complete `make verify` output, CI matrix links, coverage artifacts, and any
-approved policy exceptions before M5 is declared fully closed.
+This is a documentation-only evidence record for implementation baseline
+`b969546`. The complete local quality gate and coverage/profile results are
+recorded above; the Linux/Windows CI matrix remains a follow-up before M5 is
+declared fully closed across supported platforms.
