@@ -252,31 +252,31 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
             &self,
             _: CreateSessionInputDto,
         ) -> intention_types::DtoResult<CommittedChangeDto> {
-            panic!()
+            unreachable!()
         }
         fn accept_user_turn(
             &self,
             _: AcceptUserTurnInputDto,
         ) -> intention_types::DtoResult<CommittedChangeDto> {
-            panic!()
+            unreachable!()
         }
         fn remove_queued_turn(
             &self,
             _: RemoveQueuedTurnInputDto,
         ) -> intention_types::DtoResult<CommittedChangeDto> {
-            panic!()
+            unreachable!()
         }
         fn transition_run(
             &self,
             _: TransitionRunInputDto,
         ) -> intention_types::DtoResult<CommittedChangeDto> {
-            panic!()
+            unreachable!()
         }
         fn recover_unfinished_runs(
             &self,
             _: RecoverUnfinishedRunsInputDto,
         ) -> intention_types::DtoResult<Vec<CommittedChangeDto>> {
-            panic!()
+            unreachable!()
         }
         fn load_session_snapshot(
             &self,

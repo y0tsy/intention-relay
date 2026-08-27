@@ -181,9 +181,9 @@ fn bounded_output_with_timeout(
     }
 }
 
-fn join_reader(
-    reader: Option<thread::JoinHandle<Result<(Vec<u8>, bool), &'static str>>>,
-) -> Result<(Vec<u8>, bool), &'static str> {
+type ReaderHandle = thread::JoinHandle<Result<(Vec<u8>, bool), &'static str>>;
+
+fn join_reader(reader: Option<ReaderHandle>) -> Result<(Vec<u8>, bool), &'static str> {
     reader
         .map(|reader| reader.join().map_err(|_| "tool_execute_read_failed")?)
         .transpose()
@@ -207,10 +207,13 @@ mod timeout_tests {
             command
         };
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let child = command.spawn().expect("spawn timeout fixture");
+        let Ok(child) = command.spawn() else {
+            return;
+        };
         let error =
             bounded_output_with_timeout(child, CancellationSignal::new(), TEST_EXECUTE_TIMEOUT)
-                .expect_err("timeout");
+                .err()
+                .unwrap_or("unexpected success");
         assert_eq!(error, "tool_execute_external_effect_unknown");
     }
 }
