@@ -12,7 +12,10 @@ pub(super) fn edit(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResu
     super::edit_tool(root, input)
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "keeps helper references available for testable tool wiring"
+)]
 fn _keep_helpers_visible(_: &[u8]) {
     let _ = (bounded_lossy, bounded_text);
 }
