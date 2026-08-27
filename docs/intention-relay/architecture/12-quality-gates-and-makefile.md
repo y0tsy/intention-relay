@@ -137,15 +137,10 @@ M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov`
 
 Branch coverage is reported. Critical safety and recovery branches are not excused by a passing line threshold. Those branches remain independently mandatory in the scenario tests defined by [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md).
 
-M5 approves explicit, metadata-backed 80% line-coverage overrides only for
-`intention-tools` and `intention-hooks`. The separately declared approved floor
-is 80%; overrides are valid only for active production crates, must be numeric
-from 0 through 100, and require exact rationale, owner, and auditable review
-metadata (reviewer and date or an explicit decision reference). No tier classification,
-branch-metric requirement, semantic safety test, or threshold for any other
-crate is changed. The M5 tools/workspace/hooks evidence retains policy-denial,
-workspace-boundary, ordering, rejection, and short-circuit tests; the override
-does not excuse those outcomes.
+All Tier B crates, including `intention-tools` and `intention-hooks`, require at
+least 90% line coverage. M5 has no coverage override. Branch metrics and all
+semantic safety, workspace-boundary, ordering, rejection, and short-circuit
+tests remain mandatory independently of the line threshold.
 
 ### Coverage constraints
 

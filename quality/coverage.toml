@@ -68,24 +68,6 @@ adapter_crates = ["intention-tauri", "intention-tui"]
 "intention-workspace" = "B"
 "intention-hooks" = "B"
 
-# Approved M5 exception: these newly activated boundary crates have an 80%
-# floor while their semantic safety contracts remain mandatory. The override
-# floor is separately documented in architecture/12-quality-gates-and-makefile.md.
-[coverage_overrides]
-approved_floor = 80.0
-
-[coverage_overrides.crates.intention-tools]
-threshold = 80.0
-rationale = "M5 tool boundary activation has an approved 80% transition floor while policy-denial and workspace-path semantic tests remain mandatory."
-owner = "intention-tools"
-review = "Reviewer: M5 quality council; date: 2026-08-26; decision: M5-approved transition floor; revisit before the next milestone gate."
-
-[coverage_overrides.crates.intention-hooks]
-threshold = 80.0
-rationale = "M5 hook boundary activation has an approved 80% transition floor while ordering, rejection, and short-circuit semantic tests remain mandatory."
-owner = "intention-hooks"
-review = "Reviewer: M5 quality council; date: 2026-08-26; decision: M5-approved transition floor; revisit before the next milestone gate."
-
 [[exclusions]]
 enabled = true
 path = "crates/intention-daemon/src/main.rs"

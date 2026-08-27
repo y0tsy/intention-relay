@@ -76,7 +76,7 @@ Provider credentials may be stored in TOML in open text by explicit product deci
 
 - configuration files have user-only permissions where the platform supports them, such as `0600` on Unix;
 - creation and update code warns or refuses unsafe permissions according to a documented platform policy;
-- secrets are excluded from transport DTOs, domain events, run snapshots, plan frontmatter, UI DTOs, tool results, and normal logs;
+- secrets are excluded from transport DTOs, domain events, run snapshots, plan frontmatter, UI DTOs, tool results, and normal logs. `execute` is trusted-local and may inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
 - test fixtures use fake credentials only.
