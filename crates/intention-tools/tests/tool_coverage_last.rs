@@ -1,7 +1,6 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
-    BoundedText, EditInput, GlobInput, GrepInput, GrepScope, ReadInput, ToolInput, ToolResult,
-    ToolService, WriteInput,
+    BoundedText, GlobInput, GrepInput, GrepScope, ToolInput, ToolResult, ToolService,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -27,6 +26,7 @@ fn fixture() -> TempDir {
 #[cfg(unix)]
 #[test]
 fn rejects_read_write_edit_symlinks() {
+    use intention_tools::{EditInput, ReadInput, WriteInput};
     use std::os::unix::fs::symlink;
     let dir = fixture();
     let target = dir.path().join("target");

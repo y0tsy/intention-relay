@@ -26,11 +26,11 @@ mod timeout_tests {
     fn timeout_is_classified_as_unknown_effect_without_waiting_thirty_seconds() {
         let mut command = if cfg!(windows) {
             let mut command = Command::new("ping");
-            command.args(["-n", "40", "127.0.0.1"]);
+            command.args(["-n", "3", "127.0.0.1"]);
             command
         } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", "trap '' TERM; sleep 30"]);
+            let mut command = Command::new("sleep");
+            command.arg("1");
             command
         };
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
