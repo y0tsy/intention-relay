@@ -21,6 +21,23 @@ pub struct CreateSessionInputDto {
     occurred_at: TimestampDto,
 }
 
+/// Input for atomically recording one local tool lifecycle event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendToolLifecycleEventInputDto {
+    event: intention_domain::ToolLifecycleEventDto,
+}
+
+impl AppendToolLifecycleEventInputDto {
+    #[must_use]
+    pub const fn new(event: intention_domain::ToolLifecycleEventDto) -> Self {
+        Self { event }
+    }
+    #[must_use]
+    pub const fn event(&self) -> &intention_domain::ToolLifecycleEventDto {
+        &self.event
+    }
+}
+
 impl CreateSessionInputDto {
     /// Creates typed session-creation storage input.
     #[must_use]
@@ -555,6 +572,21 @@ impl StartingRunModelContextDto {
 
 /// The DTO-only repository contract implemented by future durable backends.
 pub trait StorageRepositoryDto {
+    /// Atomically appends one tool lifecycle event to the session event stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the backend cannot append the event or the run scope is invalid.
+    fn append_tool_lifecycle_event(
+        &self,
+        input: AppendToolLifecycleEventInputDto,
+    ) -> DtoResult<EventEnvelopeDto<DomainEventDto>> {
+        let _ = input;
+        Err(ErrorDto::unavailable(
+            "tool_lifecycle_unavailable",
+            "tool lifecycle storage is unavailable",
+        ))
+    }
     /// Creates a session and returns its committed projection and events.
     ///
     /// # Errors
