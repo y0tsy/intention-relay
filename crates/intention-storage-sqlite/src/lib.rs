@@ -582,6 +582,9 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let session_id = event.session_id();
         immediate_transaction!(self, |tx| {
             let run = load_scoped_run(&tx, session_id, event.run_id())?;
+            if run.status().is_terminal() {
+                return Err(terminal_run_tool_lifecycle());
+            }
             let prior_status = latest_tool_lifecycle_status(&tx, session_id, event.call_id())?;
             validate_tool_lifecycle_transition(prior_status.as_ref(), event.status())?;
             if prior_status.as_ref() == Some(event.status()) {
@@ -612,6 +615,10 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             // Typed result evidence commits inside this same transaction, so it
             // is atomic with the lifecycle event, projection, and snapshots.
             if let Some(evidence) = input.result() {
+                // Terminal result evidence is mandatory for terminal lifecycle
+                // facts. Keeping this invariant here (as well as in the DTO
+                // builder) prevents backend callers from ever committing a
+                // terminal event without its typed durable result.
                 tx.execute(
                     "INSERT INTO tool_results(run_id, session_id, call_id, event_id, kind, content, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     sqlite::params![
@@ -1878,6 +1885,17 @@ fn invalid_run_cursor() -> ErrorDto {
     .unwrap_or_else(|_| unavailable())
 }
 
+fn terminal_run_tool_lifecycle() -> ErrorDto {
+    ErrorDto::new(
+        "terminal_run_tool_lifecycle",
+        ErrorCategoryDto::Conflict,
+        "tool lifecycle effects are not accepted for a terminal or interrupted run",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
+}
+
 fn cursor_conflict() -> ErrorDto {
     ErrorDto::new(
         "run_event_cursor_conflict",
@@ -2567,5 +2585,89 @@ mod tests {
                 .code(),
             "tool_result_not_found"
         );
+    }
+
+    #[test]
+    fn every_tool_result_fault_stage_rolls_back_all_durable_evidence() {
+        for point in [
+            FaultPoint::Events,
+            FaultPoint::ToolResult,
+            FaultPoint::Projection,
+            FaultPoint::Snapshot,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            let session_id = create_fixture_session(&repository);
+            let run_id = RunId::new();
+            accept_fixture_turn(&repository, session_id, TurnId::new(), run_id, "active");
+            let call_id = ToolCallId::new();
+            for status in [
+                ToolLifecycleStatusDto::Admitted,
+                ToolLifecycleStatusDto::Started,
+            ] {
+                repository
+                    .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                        ToolLifecycleEventDto::new(
+                            session_id,
+                            run_id,
+                            call_id,
+                            "read",
+                            status,
+                            "prior",
+                            fixture_time(3),
+                        )
+                        .expect("event is valid"),
+                    ))
+                    .expect("prior lifecycle event commits");
+            }
+            let baseline = repository
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("baseline loads");
+            let result = ToolResultEvidenceDto::new(
+                session_id,
+                run_id,
+                call_id,
+                ToolResultKindDto::Read,
+                "{\"ok\":true}",
+                fixture_time(4),
+            )
+            .expect("result is valid");
+            repository.arm_fault(point);
+            let error = repository
+                .append_tool_lifecycle_event(
+                    AppendToolLifecycleEventInputDto::new(
+                        ToolLifecycleEventDto::new(
+                            session_id,
+                            run_id,
+                            call_id,
+                            "read",
+                            ToolLifecycleStatusDto::Completed,
+                            "done",
+                            fixture_time(4),
+                        )
+                        .expect("event is valid"),
+                    )
+                    .with_result(result)
+                    .expect("result attaches"),
+                )
+                .expect_err("fault aborts transaction");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+            assert_eq!(
+                reopened
+                    .load_tail(session_id, SessionEventSequenceDto::new(0))
+                    .expect("tail loads"),
+                baseline
+            );
+            assert_eq!(
+                reopened
+                    .load_tool_result(session_id, run_id, call_id)
+                    .expect_err("result rolls back")
+                    .code(),
+                "tool_result_not_found"
+            );
+        }
     }
 }

@@ -490,6 +490,7 @@ fn local_tool_covers_all_typed_tool_id_branches() {
             ToolInput::Grep(intention_tools::GrepInput {
                 pattern: intention_tools::BoundedText::new("x").expect("pattern"),
                 path: None,
+                scope: Some(intention_tools::GrepScope::Workspace),
             }),
         ),
         (

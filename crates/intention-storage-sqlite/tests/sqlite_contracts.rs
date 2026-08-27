@@ -289,6 +289,80 @@ fn tool_lifecycle_rejects_invalid_initial_status_and_terminal_successor() {
 }
 
 #[test]
+fn tool_lifecycle_guard_rejects_terminal_and_interrupted_runs_but_accepts_active_runs() {
+    for status in [
+        RunStatusDto::Completed,
+        RunStatusDto::Cancelled,
+        RunStatusDto::Failed,
+        RunStatusDto::Interrupted,
+    ] {
+        let (_directory, store) = repository();
+        let session = create(&store);
+        let run = RunId::new();
+        accept(&store, session, TurnId::new(), run, "run");
+        if status == RunStatusDto::Cancelled {
+            store
+                .transition_run(TransitionRunInputDto::new(
+                    session,
+                    run,
+                    RunStatusDto::Cancelling,
+                    time(3),
+                ))
+                .expect("cancellation begins");
+        }
+        if status == RunStatusDto::Completed {
+            store
+                .transition_run(TransitionRunInputDto::new(
+                    session,
+                    run,
+                    RunStatusDto::Running,
+                    time(3),
+                ))
+                .expect("run starts");
+            store
+                .transition_run(TransitionRunInputDto::new(
+                    session,
+                    run,
+                    RunStatusDto::Completing,
+                    time(4),
+                ))
+                .expect("run begins completion");
+        }
+        store
+            .transition_run(TransitionRunInputDto::new(session, run, status, time(5)))
+            .expect("run reaches terminal state");
+        let error = store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                tool_event_with_status(
+                    session,
+                    run,
+                    ToolLifecycleStatusDto::Admitted,
+                    "late effect",
+                    5,
+                ),
+            ))
+            .expect_err("terminal run rejects tool effects");
+        assert_eq!(error.code(), "terminal_run_tool_lifecycle");
+    }
+
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "active");
+    store
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+            tool_event_with_status(
+                session,
+                run,
+                ToolLifecycleStatusDto::Admitted,
+                "active effect",
+                3,
+            ),
+        ))
+        .expect("active run accepts tool effect");
+}
+
+#[test]
 fn create_accept_queue_idempotence_removal_snapshots_and_tail_are_durable() {
     let (_directory, store) = repository();
     let session = create(&store);
@@ -966,6 +1040,59 @@ fn tool_result_evidence_commits_with_its_lifecycle_event_and_rereads_durably() {
             .load_tool_result(session, run, call)
             .expect("durable evidence rereads after reopen"),
         evidence
+    );
+}
+
+#[test]
+fn terminal_tool_lifecycle_rejects_mismatched_typed_result_evidence() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let call = intention_types::ToolCallId::new();
+    for status in [
+        ToolLifecycleStatusDto::Admitted,
+        ToolLifecycleStatusDto::Started,
+    ] {
+        store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                ToolLifecycleEventDto::new(session, run, call, "read", status, "phase", time(3))
+                    .expect("lifecycle event is valid"),
+            ))
+            .expect("non-terminal lifecycle event commits");
+    }
+    let terminal = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "read",
+        ToolLifecycleStatusDto::Completed,
+        "completed",
+        time(4),
+    )
+    .expect("terminal event is valid");
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        intention_types::ToolCallId::new(),
+        ToolResultKindDto::Read,
+        r#"{"result":"read"}"#,
+        time(4),
+    )
+    .expect("mismatched evidence is structurally valid");
+    assert_eq!(
+        AppendToolLifecycleEventInputDto::new(terminal)
+            .with_result(evidence)
+            .expect_err("mismatched evidence is rejected at attachment")
+            .code(),
+        "invalid_tool_result"
+    );
+    assert_eq!(
+        store
+            .load_tail(session, SessionEventSequenceDto::new(0))
+            .expect("tail loads")
+            .len(),
+        5
     );
 }
 

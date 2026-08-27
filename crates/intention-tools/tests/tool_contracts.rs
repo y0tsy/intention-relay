@@ -7,9 +7,10 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
-    GrepResult, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput, TOOL_DESCRIPTOR_REVISION,
-    TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput, ToolProcessStatus, ToolProjectedContent,
-    ToolResult, ToolResultProjection, ToolService, WriteInput, WriteResult, registry,
+    GrepResult, GrepScope, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
+    TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput,
+    ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection, ToolService,
+    WriteInput, WriteResult, registry,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -227,7 +228,10 @@ fn tool_service_covers_successful_empty_search() {
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("absent").expect("pattern"),
-                path: Some(path)
+                path: Some(path),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap()
+                }),
             })
         ),
         Ok(ToolResult::Grep(_))
@@ -275,8 +279,12 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: 3,
-                run_id: 4,
+                session_id: intention_types::SessionId::parse(
+                    "00000000-0000-4000-8000-000000000003",
+                )
+                .unwrap(),
+                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000004")
+                    .unwrap(),
                 call_id,
             },
             input: nonzero_input(),
@@ -389,17 +397,19 @@ fn glob_and_grep_cover_empty_and_invalid_search_paths() {
         ),
         Ok(ToolResult::Glob(_))
     ));
-    assert!(
-        service
-            .dispatch(
-                ToolCallId::new(),
-                ToolInput::Grep(GrepInput {
-                    pattern: BoundedText::new("x").expect("pattern"),
-                    path: None
-                })
-            )
-            .is_err()
-    );
+    let result = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("x").expect("pattern"),
+                path: None,
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
+                }),
+            }),
+        )
+        .expect("valid file scope with no matches");
+    assert!(matches!(result, ToolResult::Grep(value) if value.matches.is_empty()));
 }
 
 #[test]
@@ -433,6 +443,9 @@ fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("file.txt").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
+                }),
             }),
         )
         .unwrap();
@@ -537,6 +550,9 @@ fn grep_does_not_follow_symlinks_or_search_directories() {
                 ToolInput::Grep(GrepInput {
                     pattern: BoundedText::new("needle").unwrap(),
                     path: Some(WorkspaceRelativePathDto::parse(path).unwrap()),
+                    scope: Some(GrepScope::File {
+                        path: WorkspaceRelativePathDto::parse(path).unwrap(),
+                    }),
                 }),
             )
             .unwrap_err();
@@ -667,7 +683,10 @@ fn file_tools_execute_against_the_declared_workspace() {
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").expect("pattern"),
-                path: Some(path.clone())
+                path: Some(path.clone()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap()
+                }),
             })
         ),
         Ok(ToolResult::Grep(_))
@@ -768,7 +787,8 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").expect("pattern"),
-                path: Some(path),
+                path: Some(path.clone()),
+                scope: Some(GrepScope::File { path }),
             }),
         )
         .expect("grep");
@@ -909,6 +929,9 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").expect("pattern"),
                 path: Some(WorkspaceRelativePathDto::parse("z.txt").expect("path")),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("z.txt").expect("path"),
+                }),
             }),
         )
         .expect("grep");
@@ -997,6 +1020,9 @@ fn glob_empty_and_grep_read_failure_are_typed() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("x").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("missing").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("missing").unwrap(),
+                }),
             }),
         )
         .unwrap_err();
@@ -1048,8 +1074,9 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
         );
     }
     let context = ToolContext {
-        session_id: 1,
-        run_id: 2,
+        session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+            .unwrap(),
+        run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
         call_id: ToolCallId::new(),
     };
     let envelope = ToolResultEnvelope {
@@ -1081,8 +1108,9 @@ fn invocation_call_identity_is_validated() {
     let invocation = intention_tools::ToolInvocation {
         schema_version: TOOL_SCHEMA_VERSION,
         context: intention_tools::ToolContext {
-            session_id: 1,
-            run_id: 2,
+            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+                .unwrap(),
+            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
             call_id: id,
         },
         input: ToolInput::Glob(GlobInput {
@@ -1171,7 +1199,8 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("x").unwrap(),
-                path: Some(path),
+                path: Some(path.clone()),
+                scope: Some(GrepScope::File { path }),
             }),
         )
         .unwrap();
@@ -1216,8 +1245,12 @@ fn execute_success_reports_stderr_and_typed_success_status() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: 9,
-                run_id: 10,
+                session_id: intention_types::SessionId::parse(
+                    "00000000-0000-4000-8000-000000000009",
+                )
+                .unwrap(),
+                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000010")
+                    .unwrap(),
                 call_id: ToolCallId::new(),
             },
             input: input(),
@@ -1350,13 +1383,15 @@ fn tool_invocation_round_trips_with_optional_grep_path() {
     let invocation = intention_tools::ToolInvocation {
         schema_version: TOOL_SCHEMA_VERSION,
         context: intention_tools::ToolContext {
-            session_id: 10,
-            run_id: 20,
+            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000010")
+                .unwrap(),
+            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000020").unwrap(),
             call_id: ToolCallId::new(),
         },
         input: ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").unwrap(),
             path: None,
+            scope: None,
         }),
     };
     let encoded = serde_json::to_string(&invocation).unwrap();
@@ -1398,8 +1433,12 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
         .invoke_enveloped(intention_tools::ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: intention_tools::ToolContext {
-                session_id: 5,
-                run_id: 6,
+                session_id: intention_types::SessionId::parse(
+                    "00000000-0000-4000-8000-000000000005",
+                )
+                .unwrap(),
+                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000006")
+                    .unwrap(),
                 call_id: ToolCallId::new(),
             },
             input: signal_input(),
@@ -1435,7 +1474,8 @@ fn read_and_grep_bound_large_content() {
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
-                path: Some(path),
+                path: Some(path.clone()),
+                scope: Some(GrepScope::File { path }),
             }),
         )
         .unwrap();
@@ -1474,6 +1514,9 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("large.txt").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("large.txt").unwrap(),
+                }),
             }),
         )
         .unwrap();
@@ -1558,6 +1601,9 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("x").unwrap(),
                 path: Some(WorkspaceRelativePathDto::parse("missing").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("missing").unwrap(),
+                }),
             }),
         )
         .unwrap_err();
@@ -1614,6 +1660,7 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("changed").expect("pattern"),
                 path: Some(file.clone()),
+                scope: Some(GrepScope::File { path: file.clone() }),
             }),
         )
         .expect("grep");
@@ -1777,6 +1824,7 @@ fn dispatch_covers_each_tool_input_variant() {
         ToolInput::Grep(GrepInput {
             pattern: BoundedText::new("needle").unwrap(),
             path: Some(path.clone()),
+            scope: Some(GrepScope::File { path: path.clone() }),
         }),
         ToolInput::Write(WriteInput {
             path: WorkspaceRelativePathDto::parse("b.txt").unwrap(),
@@ -1808,8 +1856,12 @@ fn enveloped_invocation_preserves_identity_and_records_metadata() {
         .invoke_enveloped(ToolInvocation {
             schema_version: TOOL_SCHEMA_VERSION,
             context: ToolContext {
-                session_id: 7,
-                run_id: 8,
+                session_id: intention_types::SessionId::parse(
+                    "00000000-0000-4000-8000-000000000007",
+                )
+                .unwrap(),
+                run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000008")
+                    .unwrap(),
                 call_id,
             },
             input: ToolInput::Glob(GlobInput {
@@ -1875,7 +1927,8 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
         (
             ToolInput::Grep(GrepInput {
                 pattern: BoundedText::new("needle").unwrap(),
-                path: Some(path),
+                path: Some(path.clone()),
+                scope: Some(GrepScope::File { path }),
             }),
             ToolId::Grep,
             "data.txt",
@@ -1905,8 +1958,12 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             .invoke_enveloped(intention_tools::ToolInvocation {
                 schema_version: TOOL_SCHEMA_VERSION,
                 context: intention_tools::ToolContext {
-                    session_id: 11,
-                    run_id: 12,
+                    session_id: intention_types::SessionId::parse(
+                        "00000000-0000-4000-8000-000000000011",
+                    )
+                    .unwrap(),
+                    run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000012")
+                        .unwrap(),
                     call_id: ToolCallId::new(),
                 },
                 input,
@@ -2041,8 +2098,9 @@ fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
     let envelope = intention_tools::ToolResultEnvelope {
         schema_version: TOOL_SCHEMA_VERSION,
         context: ToolContext {
-            session_id: 1,
-            run_id: 2,
+            session_id: intention_types::SessionId::parse("00000000-0000-4000-8000-000000000001")
+                .unwrap(),
+            run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000002").unwrap(),
             call_id: ToolCallId::new(),
         },
         result: ToolResult::Read(TextResult {

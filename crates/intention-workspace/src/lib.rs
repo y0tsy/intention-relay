@@ -177,7 +177,13 @@ fn contains_symlink_component(path: &Path, root: &Path) -> bool {
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => return true,
             Ok(_) => {}
-            Err(_) => return false,
+            Err(_) => {
+                // An absent final component is valid for new-file resolution;
+                // existing components are canonicalized below. A dangling
+                // symlink, however, is detectable by metadata on the link
+                // itself and must fail closed.
+                return false;
+            }
         }
     }
     false

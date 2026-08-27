@@ -16,6 +16,7 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only `intention` may select either concrete provider.
 - M4 durable model facts remain domain-owned: domain, storage, and protocol never depend on `intention-model`; SQLite stores typed domain-event envelopes and indexes them by dedicated per-run cursor. `intention-runtime` depends on the provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete provider nor exposes an async runtime resource.
 - M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
+- M5 activates the typed tool/workspace/hook path. The composition root (`intention`) owns assembly of the six active tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
 ## Planned crates
 
@@ -100,6 +101,12 @@ flowchart BT
 - workspace, plan, VFR, and Headroom hook registrations;
 - application facade and runtime actor factories;
 - a daemon application facade that `intention-daemon` hosts over transport.
+
+For M5, this is also the ownership boundary for the active six-tool registry,
+`WorkspaceRoot`, and the typed hook dispatcher. Base tools remain primitive
+implementations; application owns lifecycle/result persistence and publication,
+while hooks transform or reject typed context without committing storage or
+publishing independently.
 
 `intention-daemon` depends on this composition facade, never the reverse. Its M4
 private host may also consume DTO/application/runtime/model contracts to own the

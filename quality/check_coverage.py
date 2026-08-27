@@ -75,6 +75,23 @@ def line_totals(files: list[dict[str, object]]) -> tuple[int, int]:
     return covered, count
 
 
+def production_files(
+    root: Path,
+    files: list[dict[str, object]],
+    production_crates: set[str],
+    source_roots: dict[str, Path],
+) -> list[dict[str, object]]:
+    return [
+        item
+        for item in files
+        if isinstance(item.get("filename"), str)
+        and any(
+            is_under(coverage_path(root, item["filename"]), source_roots.get(crate, root / "__missing__"))
+            for crate in production_crates
+        )
+    ]
+
+
 def is_under(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -161,7 +178,6 @@ def main() -> None:
     tiers = policy.get("tiers")
     policy_state = policy.get("policy")
     classifications = policy.get("crate_tiers")
-    overrides = policy.get("coverage_overrides", {})
     exclusions = policy.get("exclusions", [])
     if not isinstance(tiers, dict) or not isinstance(policy_state, dict) or not isinstance(classifications, dict):
         fail("coverage policy is missing required tables")
@@ -173,30 +189,10 @@ def main() -> None:
     if not isinstance(production_crates, list) or not all(isinstance(crate, str) for crate in production_crates):
         fail("production_crates must be a string list")
     production_set = set(production_crates)
-    if not isinstance(overrides, dict):
-        fail("coverage_overrides must be a table")
-    floor = overrides.get("approved_floor")
-    if not isinstance(floor, (int, float)) or not 0 <= floor <= 100:
-        fail("coverage override approved_floor must be numeric from 0 through 100")
-    override_crates = overrides.get("crates", {})
-    if not isinstance(override_crates, dict):
-        fail("coverage_overrides.crates must be a table")
-    for crate, override in override_crates.items():
-        if crate not in production_set:
-            fail(f"coverage override crate {crate!r} is not an active production crate")
-        if not isinstance(override, dict):
-            fail(f"coverage override for {crate} must be a table")
-        threshold = override.get("threshold")
-        if not isinstance(threshold, (int, float)) or not 0 <= threshold <= 100:
-            fail(f"coverage override for {crate} must be numeric from 0 through 100")
-        if threshold < floor:
-            fail(f"coverage override for {crate} cannot be below approved floor {floor:.2f}")
-        for field in ("rationale", "owner", "review"):
-            if not isinstance(override.get(field), str) or not override[field].strip():
-                fail(f"coverage override for {crate} requires {field} metadata")
-        review = override["review"]
-        if not ("reviewer:" in review.lower() and "date:" in review.lower()) and "decision:" not in review.lower():
-            fail(f"coverage override for {crate} requires auditable reviewer/date or decision metadata")
+    # Thresholds come directly from each crate's declared tier.  The approved
+    # policy intentionally has no coverage override mechanism.
+    if "coverage_overrides" in policy:
+        fail("coverage policy must not define coverage_overrides")
     if arguments.crate is not None:
         if arguments.crate not in production_set:
             fail(f"coverage crate {arguments.crate!r} is not an active production crate")
@@ -205,15 +201,20 @@ def main() -> None:
     files = report_files(report)
     require_branch_metrics(files)
     if arguments.workspace_aggregate:
-        # Aggregate reports are an execution/completeness guard. Per-crate
-        # reports remain authoritative for thresholds and exclusions.
-        if not any(
-            isinstance(item.get("filename"), str)
-            and any(is_under(coverage_path(root, item["filename"]), source_roots.get(crate, root / "__missing__")) for crate in production_set)
-            for item in files
-        ):
+        # Aggregate reports intentionally contain production source files from
+        # every crate. Validate their aggregate line metric and exclusion
+        # declarations, while leaving per-crate thresholds to crate reports.
+        aggregate_files = production_files(root, files, production_set, source_roots)
+        if not aggregate_files:
             fail("workspace aggregate report contains no production source files")
-        print("coverage-check: workspace aggregate contains production source files")
+        excluded_paths = enabled_exclusion_paths(root, exclusions, production_set, source_roots, files)
+        covered, count = line_totals(
+            [item for item in aggregate_files if coverage_path(root, item["filename"]) not in excluded_paths]
+        )
+        if count == 0:
+            fail("workspace aggregate has no reportable non-excluded source lines")
+        observed = 100.0 * covered / count
+        print(f"coverage-check: workspace aggregate line coverage {observed:.3f}% ({covered}/{count})")
         return
     # An isolated package report legitimately cannot contain exclusions owned by
     # another package. Validate only exclusions relevant to the report's crate.
@@ -242,7 +243,7 @@ def main() -> None:
         if count == 0:
             fail(f"production crate {crate!r} has no reportable non-excluded source lines")
         observed = 100.0 * covered / count
-        required = float(override_crates.get(crate, {}).get("threshold", tiers[tier]))
+        required = float(tiers[tier])
         if observed < required:
             fail(f"{crate} line coverage {observed:.2f}% is below required {required:.2f}%")
         print(f"coverage-check: {crate} line coverage {observed:.2f}% satisfies tier {tier}")

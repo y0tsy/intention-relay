@@ -18,6 +18,11 @@ Tools are domain/runtime capabilities, not UI commands. An adapter only renders 
 
 ## Core tool contract
 
+M5 activates six executable registry entries: `read`, `write`, `edit`,
+`execute`, `glob`, and `grep`. `fetch_url`, `ask_user`, `todo`, `retrieve`,
+`plan_submit`, `sub_agent`, `expand`, and `mcp` remain reserved slots with no
+input/output contract or executor and are not active tools.
+
 Every tool has:
 
 ```text
@@ -70,7 +75,7 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
 - all relative paths resolve from `workspace_root`;
 - tools must not use process `pwd` as a fallback;
 - absolute paths are normalized and rejected if outside the allowed root;
-- symbolic-link and path traversal behavior must be explicitly verified before access;
+- symbolic-link and path traversal behavior must be explicitly verified before access. The proven v1 policy allows symlinks only when their resolved target is proven to remain within `workspace_root`; outward, unprovable, and dangling symlinks are rejected fail-closed;
 - `execute` always starts with `cwd = workspace_root` and inherits the
   invoking process environment without name-based filtering. WorkspaceRoot is
   a filesystem and CWD boundary, not an environment or privilege boundary.
@@ -78,6 +83,11 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
+
+This check is necessarily subject to a TOCTOU residual risk: validation and the
+subsequent filesystem operation are separate OS operations. M5 narrows that
+risk with repeated symlink metadata checks and fail-closed errors, but does not
+claim atomic filesystem confinement or sandbox/privilege isolation.
 
 ### Safe missing-path outcome
 
@@ -127,6 +137,14 @@ AfterToolResultPublished
 - hook failures are classified as fail-closed or fail-open per phase and policy, not by incidental error handling;
 - hooks cannot directly commit storage or publish a competing event;
 - hook execution itself is observable with safe metadata.
+
+### M5 ownership and execution order
+
+The composition root registers the workspace and hook services. The
+application owns the pipeline and durable lifecycle/result persistence; the
+dispatcher owns typed ordering and short-circuit outcomes; base tools perform
+only primitive work. VFR, Headroom, and Plan owners are not active M5
+implementations merely because their hook phases exist.
 
 ### Required initial hooks
 
@@ -178,8 +196,6 @@ Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocki
 
 ## Open decisions
 
-- exact symlink policy for paths whose resolved target leaves a workspace;
-- which core tools ship in the first vertical slice;
 - exact capability taxonomy and audit policy for `execute`, network, and
   destructive file actions. Build Autopilot does not use per-action
   confirmation; Plan `execute` is advisory-guided and trusted-local.

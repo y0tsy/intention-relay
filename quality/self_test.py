@@ -25,6 +25,13 @@ def command_environment(cwd: Path) -> dict[str, str] | None:
     return None
 
 
+def architecture_check_command(policy: Path | None = None) -> list[str]:
+    command = [sys.executable, "quality/check_architecture.py"]
+    if policy is not None:
+        command.extend(["--policy", str(policy)])
+    return command
+
+
 def run(
     command: list[str],
     *,
@@ -161,7 +168,7 @@ def test_missing_crate_metadata(root: Path) -> None:
     with modified(policy):
         replace_once(policy, 'test_target = "dto and validation tests"', 'test_target = ""')
         run(
-            [sys.executable, "quality/check_architecture.py", "--policy", str(policy)],
+            architecture_check_command(policy),
             cwd=root,
             expect_success=False,
         )
@@ -186,7 +193,8 @@ def test_m2_dependency_boundary(root: Path) -> None:
 def test_workspace_dependency_cycle(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     manifest = root / "crates/intention-types/Cargo.toml"
-    with modified(policy), modified(manifest):
+    lockfile = root / "Cargo.lock"
+    with modified(policy), modified(manifest), modified(lockfile):
         replace_once(policy, '"intention-types" = []', '"intention-types" = ["intention-protocol"]')
         manifest.write_text(
             manifest.read_text(encoding="utf-8").replace(
@@ -196,8 +204,11 @@ def test_workspace_dependency_cycle(root: Path) -> None:
             ),
             encoding="utf-8",
         )
+        # The fixture is intentionally cyclic, so Cargo's locked metadata
+        # query must not be allowed to fail before the checker reports it.
+        lockfile.unlink()
         run(
-            [sys.executable, "quality/check_architecture.py"],
+            [sys.executable, "quality/check_architecture.py", "--policy", str(policy)],
             cwd=root,
             expect_success=False,
             expected_output="workspace dependency cycle:",
@@ -305,7 +316,11 @@ def test_m5_activation_policy(root: Path) -> None:
             expected_output="M5 active production crates must equal the roadmap crate set",
         )
     with modified(policy):
-        replace_once(policy, 'test_targets = ["tool_contracts"]', 'test_targets = []')
+        replace_once(
+            policy,
+            'test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
+            'test_targets = []',
+        )
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -566,6 +581,18 @@ def test_adapter_isolation_boundary(root: Path) -> None:
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
 
 
+def test_adapter_dto_boundary(root: Path) -> None:
+    source = root / "crates/intention-tui/src/lib.rs"
+    with modified(source):
+        source.write_text("pub struct Leaked { value: serde_json::Value }\n", encoding="utf-8")
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="serde_json::Value",
+        )
+
+
 def test_adapter_production_dependency_boundary(root: Path) -> None:
     manifest = root / "crates/intention-tui/Cargo.toml"
     with modified(manifest):
@@ -585,6 +612,25 @@ def test_adapter_production_dependency_boundary(root: Path) -> None:
         )
 
 
+def test_adapter_test_dependency_boundary(root: Path) -> None:
+    manifest = root / "crates/intention-tui/Cargo.toml"
+    with modified(manifest):
+        original = manifest.read_text(encoding="utf-8")
+        marker = "[dev-dependencies]\n"
+        if marker not in original:
+            raise RuntimeError("TUI fixture requires dev-dependencies table")
+        manifest.write_text(
+            original.replace(marker, marker + "intention-storage = { path = \"../intention-storage\", version = \"=0.0.0\" }\n", 1),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-tui: adapter test workspace dependencies",
+        )
+
+
 def test_protocol_isolation_boundary(root: Path) -> None:
     source = root / "crates/intention-protocol/src/lib.rs"
     with modified(source):
@@ -598,8 +644,36 @@ def test_protocol_isolation_boundary(root: Path) -> None:
 def test_composition_ownership_boundary(root: Path) -> None:
     source = root / "crates/intention-daemon/src/lib.rs"
     with modified(source):
-        source.write_text("use intention_storage_sqlite::SqliteRepository;\n", encoding="utf-8")
+        source.write_text("use intention_storage_sqlite::SqliteStorageRepository;\n", encoding="utf-8")
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+
+
+def test_composition_selection_ownership_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, '  "SqliteStorageRepository",', '  "MissingSelection",')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="composition root must own concrete selection",
+        )
+
+
+def test_tools_workspace_dependency_boundary(root: Path) -> None:
+    manifest = root / "crates/intention-tools/Cargo.toml"
+    with modified(manifest), modified(root / "Cargo.lock"):
+        replace_once(
+            manifest,
+            'intention-workspace = { path = "../intention-workspace", version = "=0.0.0" }',
+            'intention-domain = { path = "../intention-domain", version = "=0.0.0" }',
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-tools: workspace dependencies must equal",
+        )
 
 
 def test_provider_sdk_public_contract_boundary(root: Path) -> None:
@@ -645,15 +719,14 @@ def test_coverage_failures(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/coverage-low.json"
     with modified(policy), modified(report):
-        policy.write_text(
-            policy.read_text(encoding="utf-8").replace(
-                '"intention-types" = "A"', '"intention-types" = "B"', 1
-            ),
-            encoding="utf-8",
-        )
-        run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
         report.write_text(
-            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 1)]),
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 1),
+                    ("crates/intention-daemon/src/main.rs", 1, 1),
+                ],
+            ),
             encoding="utf-8",
         )
         run(
@@ -661,26 +734,6 @@ def test_coverage_failures(root: Path) -> None:
             cwd=root,
             expect_success=False,
         )
-
-
-def test_coverage_override_validation(root: Path) -> None:
-    policy = root / "quality/coverage.toml"
-    report = root / "quality/fixtures/coverage-low.json"
-    with modified(policy), modified(report):
-        report.write_text(coverage_report(root, [("crates/intention-tools/src/lib.rs", 100, 100)]), encoding="utf-8")
-        original = policy.read_text(encoding="utf-8")
-        invalids = [
-            ("approved_floor = 101.0", "approved_floor must be numeric from 0 through 100"),
-            ('[coverage_overrides.crates.intention-tools]', '[coverage_overrides.crates.missing]'),
-            ('threshold = 80.0', 'threshold = 79.0'),
-            ('review = "M5 quality review; revisit before the next milestone gate."', 'review = ""'),
-            ('review = "Reviewer: M5 quality council; date: 2026-08-26; decision: M5-approved transition floor; revisit before the next milestone gate."', 'review = "M5 quality review"'),
-        ]
-        for old, expected in invalids:
-            policy.write_text(original.replace(old, expected if old.startswith("approved") else old.replace("80.0", "79.0") if "threshold" in old else old.replace("M5 quality review; revisit before the next milestone gate.", "")), encoding="utf-8")
-            run([sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)], cwd=root, expect_success=False)
-
-
 def test_coverage_exclusion_semantics(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/m1plus-coverage.json"
@@ -845,14 +898,39 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
     report = root / "quality/fixtures/coverage-low.json"
     with modified(report):
         report.write_text(
-            coverage_report(root, [("crates/intention-types/src/lib.rs", 1, 0)]),
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 1, 0),
+                    ("crates/intention-daemon/src/main.rs", 1, 0),
+                ],
+            ),
             encoding="utf-8",
         )
         run(
             [sys.executable, "quality/check_coverage.py", "--report", str(report), "--workspace-aggregate"],
             cwd=root,
             expect_success=True,
-            expected_output="workspace aggregate contains production source files",
+            expected_outputs=(
+                "excluding crates/intention-daemon/src/main.rs from intention-daemon denominator",
+                "workspace aggregate line coverage 0.000% (0/1)",
+            ),
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 1),
+                    ("crates/intention-daemon/src/main.rs", 100, 100),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_coverage.py", "--report", str(report), "--workspace-aggregate"],
+            cwd=root,
+            expect_success=True,
+            expected_output="workspace aggregate line coverage 1.000% (1/100)",
         )
 
 
@@ -1006,9 +1084,13 @@ def main() -> None:
         test_forbidden_source_boundary,
         test_test_only_source_patterns_are_cfg_scoped,
         test_adapter_isolation_boundary,
+        test_adapter_dto_boundary,
         test_adapter_production_dependency_boundary,
+        test_adapter_test_dependency_boundary,
         test_protocol_isolation_boundary,
         test_composition_ownership_boundary,
+        test_composition_selection_ownership_policy,
+        test_tools_workspace_dependency_boundary,
         test_provider_sdk_public_contract_boundary,
         test_error_detail_and_correlation_validation,
         test_coverage_failures,

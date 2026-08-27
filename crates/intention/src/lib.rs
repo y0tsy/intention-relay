@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
     ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationInputDto, ToolResultPublicationPort,
+    ToolResultPublicationInputDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 #[cfg(test)]
 use intention_config::ConfigPathDto;
@@ -26,6 +26,9 @@ use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_domain::{
     DomainEventDto, GetSessionSnapshotQueryDto, RunEventCursorDto, RunReplayDto, RunStatusDto,
     ToolLifecycleStatusDto,
+};
+use intention_hooks::{
+    Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
 use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
@@ -202,6 +205,45 @@ trait PostCommitPublisher: Send + Sync {
 
 struct NoopPostCommitPublisher;
 
+struct SafeWorkspaceBoundary;
+impl WorkspaceBoundaryPort for SafeWorkspaceBoundary {
+    fn resolve(&self, _workspace: &WorkspaceRoot) -> DtoResult<()> {
+        // WorkspaceRoot::resolve has already performed canonical resolution
+        // and directory validation before this application boundary is called.
+        Ok(())
+    }
+}
+
+struct SafeObserverHook;
+impl Hook for SafeObserverHook {
+    fn id(&self) -> &'static str {
+        "safe-production-observer"
+    }
+    fn phases(&self) -> &'static [Phase] {
+        static P: [Phase; 1] = [Phase::BeforeToolInvocation];
+        &P
+    }
+    fn priority(&self) -> u32 {
+        0
+    }
+    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
+        Ok(HookOutcome::Continue)
+    }
+}
+
+fn production_hooks() -> DtoResult<HookRegistry> {
+    let mut registry = HookRegistry::new();
+    registry
+        .register(Box::new(SafeObserverHook))
+        .map_err(|_error| {
+            ErrorDto::validation(
+                "production_hook_registration_failed",
+                "production hook registration failed",
+            )
+        })?;
+    Ok(registry)
+}
+
 impl PostCommitPublisher for NoopPostCommitPublisher {
     fn publish(&self, _change: &CommittedChangeDto) -> DtoResult<()> {
         Ok(())
@@ -301,20 +343,24 @@ impl DaemonApplicationFacade {
             publisher: self.inner.publisher.as_ref(),
             after_sequence,
         };
-        let result = intention_application::ApplicationService::new(&self.inner.repository)
-            .invoke_local_tool_with_publication(
-                InvokeLocalToolInputDto::new(
-                    workspace,
-                    session_id,
-                    run_id,
-                    call_id,
-                    tool_id,
-                    input,
-                    now()?,
-                )
-                .with_cancellation(cancellation),
-                &publisher,
-            );
+        let result = intention_application::ApplicationService::with_hooks(
+            &self.inner.repository,
+            production_hooks()?,
+        )
+        .with_workspace_boundary(SafeWorkspaceBoundary)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                workspace,
+                session_id,
+                run_id,
+                call_id,
+                tool_id,
+                input,
+                now()?,
+            )
+            .with_cancellation(cancellation),
+            &publisher,
+        );
         self.release_local_tool_cancellation(session_id, run_id);
         result
     }
