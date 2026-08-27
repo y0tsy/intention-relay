@@ -12,6 +12,10 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod execute;
+mod file;
+mod search;
+
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
@@ -491,53 +495,12 @@ impl ToolService {
             ));
         }
         match input {
-            ToolInput::Read(i) => read_tool(&self.root, i),
-            ToolInput::Write(i) => write_tool(&self.root, i),
-            ToolInput::Edit(i) => edit_tool(&self.root, i),
-            ToolInput::Glob(i) => glob_tool(&self.root, i),
-            ToolInput::Grep(i) => grep_tool(&self.root, i),
-            ToolInput::Execute(i) => {
-                let mut command = Command::new(i.program.as_str());
-                command.args(i.args.iter().map(BoundedText::as_str));
-                command.current_dir(self.root.execute_cwd());
-                command.envs(std::env::vars());
-                command.stdout(Stdio::piped()).stderr(Stdio::piped());
-                let child = command.spawn().map_err(|_| {
-                    intention_types::ErrorDto::validation(
-                        "tool_execute_spawn_failed",
-                        "unable to spawn workspace command",
-                    )
-                })?;
-                let output = bounded_output(child, cancellation).map_err(|code| {
-                    intention_types::ErrorDto::validation(
-                        code,
-                        "workspace command execution failed",
-                    )
-                })?;
-                let (stdout, _) = bounded_lossy(&output.stdout);
-                let (stderr, _) = bounded_lossy(&output.stderr);
-                let stdout_truncated = output.stdout_truncated;
-                let stderr_truncated = output.stderr_truncated;
-                let text = format!(
-                    "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}{}",
-                    output.status.code().unwrap_or(-1),
-                    if stdout_truncated || stderr_truncated {
-                        "\n[truncated]"
-                    } else {
-                        ""
-                    }
-                );
-                if !output.status.success() {
-                    return Err(intention_types::ErrorDto::validation(
-                        "tool_execute_nonzero",
-                        "workspace command exited unsuccessfully",
-                    ));
-                }
-                Ok(ToolResult::Execute(TextResult {
-                    text: BoundedText::new(text)?,
-                    truncated: stdout_truncated || stderr_truncated,
-                }))
-            }
+            ToolInput::Read(i) => file::read(&self.root, i),
+            ToolInput::Write(i) => file::write(&self.root, i),
+            ToolInput::Edit(i) => file::edit(&self.root, i),
+            ToolInput::Glob(i) => search::glob(&self.root, i),
+            ToolInput::Grep(i) => search::grep(&self.root, i),
+            ToolInput::Execute(i) => execute::run(&self.root, i, cancellation),
         }
     }
 
@@ -565,6 +528,45 @@ fn read_tool(root: &WorkspaceRoot, input: ReadInput) -> DtoResult<ToolResult> {
     Ok(ToolResult::Read(TextResult {
         text: bounded_text(text)?,
         truncated: truncated || source_truncated,
+    }))
+}
+
+fn execute_tool(
+    root: &WorkspaceRoot,
+    input: ExecuteInput,
+    cancellation: CancellationSignal,
+) -> DtoResult<ToolResult> {
+    let mut command = Command::new(input.program.as_str());
+    command.args(input.args.iter().map(BoundedText::as_str));
+    command.current_dir(root.execute_cwd());
+    command.envs(std::env::vars());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = command.spawn().map_err(|_| {
+        intention_types::ErrorDto::validation(
+            "tool_execute_spawn_failed",
+            "unable to spawn workspace command",
+        )
+    })?;
+    let output = bounded_output(child, cancellation).map_err(|code| {
+        intention_types::ErrorDto::validation(code, "workspace command execution failed")
+    })?;
+    let (stdout, _) = bounded_lossy(&output.stdout);
+    let (stderr, _) = bounded_lossy(&output.stderr);
+    let truncated = output.stdout_truncated || output.stderr_truncated;
+    let text = format!(
+        "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}{}",
+        output.status.code().unwrap_or(-1),
+        if truncated { "\n[truncated]" } else { "" }
+    );
+    if !output.status.success() {
+        return Err(intention_types::ErrorDto::validation(
+            "tool_execute_nonzero",
+            "workspace command exited unsuccessfully",
+        ));
+    }
+    Ok(ToolResult::Execute(TextResult {
+        text: BoundedText::new(text)?,
+        truncated,
     }))
 }
 
@@ -848,7 +850,10 @@ mod tests {
             envelope
         );
         assert_eq!(descriptor.schema_version(), TOOL_SCHEMA_VERSION);
-        assert_eq!(descriptor.description(), "Read bounded text from a workspace file.");
+        assert_eq!(
+            descriptor.description(),
+            "Read bounded text from a workspace file."
+        );
     }
 
     #[test]
@@ -870,7 +875,10 @@ mod tests {
     #[test]
     fn bounded_lossy_preserves_short_input_and_empty_boundary() {
         assert_eq!(bounded_lossy(b"hello"), ("hello".to_owned(), false));
-        assert_eq!(bounded_lossy(&vec![b'x'; MAX_TOOL_OUTPUT_BYTES]), ("x".repeat(MAX_TOOL_OUTPUT_BYTES), false));
+        assert_eq!(
+            bounded_lossy(&vec![b'x'; MAX_TOOL_OUTPUT_BYTES]),
+            ("x".repeat(MAX_TOOL_OUTPUT_BYTES), false)
+        );
         let mut invalid = vec![b'x'; MAX_TOOL_OUTPUT_BYTES + 1];
         invalid[MAX_TOOL_OUTPUT_BYTES] = 0xff;
         let (value, truncated) = bounded_lossy(&invalid);
@@ -890,24 +898,79 @@ mod tests {
     fn service() -> (ToolService, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("intention-tools-{}", ToolCallId::new()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
-        let root = WorkspaceRoot::resolve(&intention_domain::WorkspaceRootDto::parse(dir.to_string_lossy()).unwrap()).unwrap();
+        let root = WorkspaceRoot::resolve(
+            &intention_domain::WorkspaceRootDto::parse(dir.to_string_lossy()).unwrap(),
+        )
+        .unwrap();
         (ToolService::new(root), dir)
     }
 
     #[test]
     fn dispatches_read_write_edit_glob_and_grep_paths() {
         let (service, dir) = service();
-        let write = service.dispatch(ToolCallId::new(), ToolInput::Write(WriteInput {
-            path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(), content: text("needle\nother"),
-        })).unwrap();
-        assert!(matches!(write, ToolResult::Write(WriteResult { bytes: 12 })));
-        let read = service.dispatch(ToolCallId::new(), ToolInput::Read(ReadInput { path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap() })).unwrap();
-        assert!(matches!(read, ToolResult::Read(TextResult { truncated: false, .. })));
-        let grep = service.dispatch(ToolCallId::new(), ToolInput::Grep(GrepInput { pattern: text("needle"), path: Some(WorkspaceRelativePathDto::parse("src/a.txt").unwrap()) })).unwrap();
-        assert!(matches!(grep, ToolResult::Grep(TextResult { text: _, truncated: false })));
-        let glob = service.dispatch(ToolCallId::new(), ToolInput::Glob(GlobInput { pattern: text("src/*.txt") })).unwrap();
+        let write = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Write(WriteInput {
+                    path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(),
+                    content: text("needle\nother"),
+                }),
+            )
+            .unwrap();
+        assert!(matches!(
+            write,
+            ToolResult::Write(WriteResult { bytes: 12 })
+        ));
+        let read = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Read(ReadInput {
+                    path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(),
+                }),
+            )
+            .unwrap();
+        assert!(matches!(
+            read,
+            ToolResult::Read(TextResult {
+                truncated: false,
+                ..
+            })
+        ));
+        let grep = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Grep(GrepInput {
+                    pattern: text("needle"),
+                    path: Some(WorkspaceRelativePathDto::parse("src/a.txt").unwrap()),
+                }),
+            )
+            .unwrap();
+        assert!(matches!(
+            grep,
+            ToolResult::Grep(TextResult {
+                text: _,
+                truncated: false
+            })
+        ));
+        let glob = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Glob(GlobInput {
+                    pattern: text("src/*.txt"),
+                }),
+            )
+            .unwrap();
         assert!(matches!(glob, ToolResult::Glob(PathsResult { paths }) if paths.len() == 1));
-        let edit = service.dispatch(ToolCallId::new(), ToolInput::Edit(EditInput { path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(), old: text("other"), new: text("changed") })).unwrap();
+        let edit = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Edit(EditInput {
+                    path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(),
+                    old: text("other"),
+                    new: text("changed"),
+                }),
+            )
+            .unwrap();
         assert!(matches!(edit, ToolResult::Edit(_)));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -915,15 +978,71 @@ mod tests {
     #[test]
     fn dispatch_errors_and_execute_branches_are_safe() {
         let (service, dir) = service();
-        let cancelled = service.dispatch_with_cancellation(ToolCallId::new(), ToolInput::Glob(GlobInput { pattern: text("*") }), CancellationSignal::cancelled());
+        let cancelled = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput { pattern: text("*") }),
+            CancellationSignal::cancelled(),
+        );
         assert_eq!(cancelled.unwrap_err().code(), "tool_cancelled");
-        let missing = service.dispatch(ToolCallId::new(), ToolInput::Read(ReadInput { path: WorkspaceRelativePathDto::parse("missing").unwrap() }));
+        let missing = service.dispatch(
+            ToolCallId::new(),
+            ToolInput::Read(ReadInput {
+                path: WorkspaceRelativePathDto::parse("missing").unwrap(),
+            }),
+        );
         assert_eq!(missing.unwrap_err().code(), "workspace_path_unavailable");
-        let execute = |program: &str, args: &[&str]| service.dispatch(ToolCallId::new(), ToolInput::Execute(ExecuteInput { program: text(program), args: args.iter().map(|a| text(a)).collect() }));
-        assert!(matches!(execute(if cfg!(windows) { "cmd" } else { "sh" }, if cfg!(windows) { &["/C", "echo ok"][..] } else { &["-c", "printf ok"][..] }).unwrap(), ToolResult::Execute(_)));
-        assert_eq!(execute("definitely-not-a-program", &[]).unwrap_err().code(), "tool_execute_spawn_failed");
-        assert_eq!(service.dispatch(ToolCallId::new(), ToolInput::Grep(GrepInput { pattern: text("x"), path: None })).unwrap_err().code(), "invalid_tool_path");
-        assert_eq!(service.dispatch(ToolCallId::new(), ToolInput::Edit(EditInput { path: WorkspaceRelativePathDto::parse("missing").unwrap(), old: text("x"), new: text("y") })).unwrap_err().code(), "workspace_path_unavailable");
+        let execute = |program: &str, args: &[&str]| {
+            service.dispatch(
+                ToolCallId::new(),
+                ToolInput::Execute(ExecuteInput {
+                    program: text(program),
+                    args: args.iter().map(|a| text(a)).collect(),
+                }),
+            )
+        };
+        assert!(matches!(
+            execute(
+                if cfg!(windows) { "cmd" } else { "sh" },
+                if cfg!(windows) {
+                    &["/C", "echo ok"][..]
+                } else {
+                    &["-c", "printf ok"][..]
+                }
+            )
+            .unwrap(),
+            ToolResult::Execute(_)
+        ));
+        assert_eq!(
+            execute("definitely-not-a-program", &[]).unwrap_err().code(),
+            "tool_execute_spawn_failed"
+        );
+        assert_eq!(
+            service
+                .dispatch(
+                    ToolCallId::new(),
+                    ToolInput::Grep(GrepInput {
+                        pattern: text("x"),
+                        path: None
+                    })
+                )
+                .unwrap_err()
+                .code(),
+            "invalid_tool_path"
+        );
+        assert_eq!(
+            service
+                .dispatch(
+                    ToolCallId::new(),
+                    ToolInput::Edit(EditInput {
+                        path: WorkspaceRelativePathDto::parse("missing").unwrap(),
+                        old: text("x"),
+                        new: text("y")
+                    })
+                )
+                .unwrap_err()
+                .code(),
+            "workspace_path_unavailable"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
