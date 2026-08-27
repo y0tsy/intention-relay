@@ -254,6 +254,9 @@ def check_dependency_subset(
     ]
 
 
+test_only_patterns: set[str] = set()
+
+
 def check_source_patterns(
     package_name: str,
     package: dict[str, object],
@@ -265,14 +268,38 @@ def check_source_patterns(
     for path in source_files_for_package(package):
         text = texts[path]
         for pattern in patterns:
-            if package_name == "intention-workspace" and "tests" in path.parts and pattern in {
-                "std::env::current_dir",
-                "std::env::set_current_dir",
-            }:
+            if pattern in test_only_patterns and only_test_code(text, pattern):
                 continue
             if pattern in text:
                 failures.append(f"{path}: {package_name} {boundary} forbids {pattern!r}")
     return failures
+
+
+def only_test_code(text: str, pattern: str) -> bool:
+    """Return whether every occurrence is lexically within test-only Rust code."""
+    occurrences = list(re.finditer(re.escape(pattern), text))
+    if not occurrences:
+        return False
+
+    # A preceding attribute is only an anchor for the item immediately
+    # following it. Track module/function braces so a test module's complete
+    # body is exempt, while production code elsewhere remains forbidden.
+    test_ranges: list[tuple[int, int]] = []
+    attribute = re.compile(r"#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|test)\s*\]")
+    for match in attribute.finditer(text):
+        brace = text.find("{", match.end())
+        if brace < 0:
+            continue
+        depth = 0
+        for index in range(brace, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    test_ranges.append((brace, index + 1))
+                    break
+    return all(any(start <= occurrence.start() < end for start, end in test_ranges) for occurrence in occurrences)
 
 
 def check_phase_policy(
@@ -335,6 +362,8 @@ def check_phase_policy(
         fail("adapter boundary table is required")
     adapter_set = set(string_list(adapters, "packages"))
     non_production_test = set(string_list(state, "non_production_test_crates"))
+    if adapter_set & skeleton_set:
+        fail(f"an {phase.upper()} adapter cannot be both an adapter and a skeleton")
     if non_production_test & (active_set | skeleton_set | adapter_set):
         fail("non-production test crates cannot be active, skeleton, or adapters")
     if phase == "m1":
@@ -343,7 +372,10 @@ def check_phase_policy(
     else:
         if active_set & adapter_set:
             fail(f"{phase.upper()} adapters cannot be active production crates")
-        if active_set | skeleton_set | adapter_set | non_production_test != expected_names:
+        quality_harness = state.get("quality_harness")
+        if not isinstance(quality_harness, str):
+            fail("quality_harness must be a crate name")
+        if active_set | skeleton_set | adapter_set | non_production_test | {quality_harness} != actual_names:
             fail(f"{phase.upper()} active, skeleton, adapter, and test-support crates must cover the declared workspace")
     if state.get("quality_harness") not in actual_names:
         fail("quality harness must remain a workspace member")
@@ -622,6 +654,15 @@ def main() -> None:
     metadata = cargo_metadata(root)
     packages = packages_by_name(metadata)
     texts = source_texts(root)
+
+    # Boundary scans below consult test_only_patterns while classifying
+    # forbidden occurrences, so the declaration must be loaded before they run.
+    forbidden = policy.get("forbidden")
+    if not isinstance(forbidden, dict):
+        fail("missing [forbidden] table")
+    global test_only_patterns
+    test_only_patterns = set(string_list(forbidden, "test_only_source_patterns"))
+
     failures = check_phase_policy(policy, packages, texts)
     failures.extend(check_workspace_dependency_cycles(packages))
     failures.extend(check_declared_boundaries(policy, packages, texts))
@@ -634,21 +675,24 @@ def main() -> None:
     patterns = string_list(forbidden, "source_patterns")
     string_list(forbidden, "public_resource_patterns")
 
+    # Test-only patterns are forbidden everywhere except lexically inside
+    # cfg(test)/#[test] code; source patterns stay unconditionally forbidden.
+    scan_patterns = list(dict.fromkeys([*patterns, *string_list(forbidden, "test_only_source_patterns")]))
     for path, text in texts.items():
-        for pattern in patterns:
-            if "tests" in path.parts and path.parts[path.parts.index("crates") + 1] == "intention-workspace" and pattern in {
-                "std::env::current_dir",
-                "std::env::set_current_dir",
-            }:
+        if "tests" in path.parts:
+            continue
+        for pattern in scan_patterns:
+            if pattern not in text:
                 continue
-            if pattern in text:
-                if pattern == "std::process::exit" and re.search(
-                    r"#!?\[allow\([^]]*clippy::exit[^]]*reason\s*=\s*\"[^\"]+\"[^]]*\)\]",
-                    text,
-                    re.DOTALL,
-                ):
-                    continue
-                failures.append(f"{path}: forbidden source pattern {pattern!r}")
+            if pattern in test_only_patterns and only_test_code(text, pattern):
+                continue
+            if pattern == "std::process::exit" and re.search(
+                r"#!?\[allow\([^]]*clippy::exit[^]]*reason\s*=\s*\"[^\"]+\"[^]]*\)\]",
+                text,
+                re.DOTALL,
+            ):
+                continue
+            failures.append(f"{path}: forbidden source pattern {pattern!r}")
         failures.extend(check_reasoned_lints(path, text))
 
     active = policy["policy"]["active_production_crates"]

@@ -7,8 +7,9 @@ use std::cell::RefCell;
 use std::fs;
 
 use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
-    ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
+    ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
+    InvokeLocalToolInputDto, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
+    ToolResultPublicationInputDto, ToolResultPublicationPort,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -19,14 +20,16 @@ use intention_domain::{
     RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto,
     SessionProjectionDto, WorkspaceRootDto,
 };
-use intention_hooks::{Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry};
+use intention_hooks::{
+    FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
+};
 use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
     RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
-    TransitionRunInputDto,
+    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_tools::{ReadInput, ToolInput};
 use intention_types::ToolCallId;
@@ -248,8 +251,11 @@ struct FakeRepository {
     loaded_snapshot: RefCell<Option<SessionProjectionDto>>,
     loaded_replay: RefCell<Option<RunReplayDto>>,
     tool_events: RefCell<Vec<intention_domain::ToolLifecycleEventDto>>,
+    result_evidence: RefCell<Vec<Option<ToolResultEvidenceDto>>>,
     tool_error: RefCell<Option<ErrorDto>>,
     tool_error_after: RefCell<Option<ErrorDto>>,
+    append_calls: RefCell<usize>,
+    append_failures: RefCell<Vec<usize>>,
 }
 
 impl FakeRepository {
@@ -263,8 +269,11 @@ impl FakeRepository {
             loaded_snapshot: RefCell::new(None),
             loaded_replay: RefCell::new(None),
             tool_events: RefCell::new(Vec::new()),
+            result_evidence: RefCell::new(Vec::new()),
             tool_error: RefCell::new(None),
             tool_error_after: RefCell::new(None),
+            append_calls: RefCell::new(0),
+            append_failures: RefCell::new(Vec::new()),
         }
     }
 }
@@ -282,8 +291,22 @@ impl StorageRepositoryDto for FakeRepository {
         {
             return Err(error);
         }
+        let call = {
+            let mut calls = self.append_calls.borrow_mut();
+            *calls += 1;
+            *calls
+        };
+        if self.append_failures.borrow().contains(&call) {
+            return Err(ErrorDto::unavailable(
+                "append_unavailable",
+                "append refused at the selected call",
+            ));
+        }
         let event = input.event().clone();
         self.tool_events.borrow_mut().push(event.clone());
+        self.result_evidence
+            .borrow_mut()
+            .push(input.result().cloned());
         Ok(intention_types::EventEnvelopeDto::new(
             intention_types::EventMetadataDto::new(
                 SchemaVersionDto::new(1, 0),
@@ -474,6 +497,7 @@ fn local_tool_covers_all_typed_tool_id_branches() {
             ToolInput::Write(intention_tools::WriteInput {
                 path: intention_types::WorkspaceRelativePathDto::parse("x").expect("path"),
                 content: intention_tools::BoundedText::new("x").expect("content"),
+                expected_content: None,
             }),
         ),
         (
@@ -482,6 +506,7 @@ fn local_tool_covers_all_typed_tool_id_branches() {
                 path: intention_types::WorkspaceRelativePathDto::parse("x").expect("path"),
                 old: intention_tools::BoundedText::new("x").expect("old"),
                 new: intention_tools::BoundedText::new("y").expect("new"),
+                expected_content: None,
             }),
         ),
     ];
@@ -500,6 +525,68 @@ fn local_tool_covers_all_typed_tool_id_branches() {
             ));
     }
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_details_redact_secret_content_and_absolute_workspace_root() {
+    let root = std::env::temp_dir().join(format!("intention-redaction-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &WorkspaceRoot::resolve(
+                &WorkspaceRootDto::parse(root.to_string_lossy()).expect("workspace"),
+            )
+            .expect("resolved workspace"),
+            "missing",
+        ))
+        .expect_err("read must fail");
+    let details = repository
+        .tool_events
+        .borrow()
+        .iter()
+        .map(|event| event.detail().to_owned())
+        .collect::<Vec<_>>();
+    let rendered = format!("{error:?} {details:?}");
+    assert!(!rendered.contains("FAKE_SECRET_9f3a"));
+    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
+    assert!(!rendered.contains("No such file or directory"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lifecycle_events_preserve_exact_correlation_identity_across_terminal_outcome() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool(InvokeLocalToolInputDto::new(
+            WorkspaceRoot::resolve(
+                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
+                    .expect("workspace"),
+            )
+            .expect("workspace"),
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            ToolInput::Read(ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("missing").expect("path"),
+            }),
+            fixture_time(),
+        ))
+        .expect_err("missing file fails");
+    assert_eq!(error.code(), "workspace_path_unavailable");
+    let events = repository.tool_events.borrow();
+    assert!(events.len() >= 3);
+    assert!(events.iter().all(|event| {
+        event.session_id() == session_id && event.run_id() == run_id && event.call_id() == call_id
+    }));
+    assert!(matches!(
+        events.last().expect("terminal event").status(),
+        intention_domain::ToolLifecycleStatusDto::Failed
+    ));
 }
 
 #[test]
@@ -815,6 +902,234 @@ fn public_dto_constructors_and_schedule_validation_cover_mismatch_paths() {
         scheduled.safe_config().resolved().provider().model(),
         "fixture"
     );
+
+    // A matching run identity whose model disagrees with the durable
+    // selection is rejected through the other validation operand.
+    let wrong_model_request = ModelRequestDto::new(
+        matching_run,
+        "other",
+        vec![ModelMessageDto::new(ModelRoleDto::Assistant, "answer").expect("message")],
+        None,
+        None,
+    )
+    .expect("request is valid");
+    let error = ScheduleModelRunDto::new(
+        command.session_id(),
+        matching_run,
+        wrong_model_request,
+        snapshot(),
+    )
+    .expect_err("model mismatch is rejected");
+    assert_eq!(error.code(), "invalid_model_run_schedule");
+}
+
+#[test]
+fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase() {
+    for phase in [
+        Phase::BeforeToolInvocation,
+        Phase::BeforeWorkspaceResolution,
+        Phase::AfterWorkspaceResolution,
+        Phase::BeforeToolExecution,
+    ] {
+        // Operational hook failures fail closed and record a durable rejection
+        // without starting execution.
+        let root = hello_tool_root("matrix-error");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(DispatchErrorHook { phase }))
+            .expect("hook registers");
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "hello.txt",
+            ))
+            .expect_err("hook dispatch errors fail closed");
+        assert_eq!(error.code(), "hook_failed");
+        let _ = fs::remove_dir_all(root);
+
+        // Input transformations reroute the invocation to an existing file and
+        // the tool executes with the transformed input.
+        let root = hello_tool_root("matrix-input");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(PhaseOutcomeHook {
+                phase,
+                id: "matrix-input",
+                outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                        .expect("path"),
+                })),
+            }))
+            .expect("hook registers");
+        let result = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "missing-before-transform.txt",
+            ))
+            .expect("transformed input is executed");
+        assert_eq!(result, hello_read_result());
+        let _ = fs::remove_dir_all(root);
+
+        // Result transformations are incompatible before execution: the hook
+        // registry fails closed before the invocation starts and the tolerated
+        // typed failure is durably recorded as a rejection.
+        let root = hello_tool_root("matrix-result");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(PhaseOutcomeHook {
+                phase,
+                id: "matrix-result",
+                outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
+                    intention_tools::TextResult {
+                        text: intention_tools::BoundedText::new("changed").expect("text"),
+                        truncated: false,
+                    },
+                )),
+            }))
+            .expect("hook registers");
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "hello.txt",
+            ))
+            .expect_err("result transformations before execution are invalid");
+        assert_eq!(error.code(), "invalid_hook_outcome");
+        assert_eq!(
+            error.message(),
+            "hook outcome is incompatible with its phase"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn executed_phase_hook_outcomes_cover_invalid_input_and_error_paths() {
+    let root = hello_tool_root("executed-invalid");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(PhaseOutcomeHook {
+            phase: Phase::AfterToolExecution,
+            id: "executed-invalid-input",
+            outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("other.txt").expect("path"),
+            })),
+        }))
+        .expect("hook registers");
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
+        ))
+        .expect_err("input transformations after execution are invalid");
+    assert_eq!(error.code(), "invalid_hook_outcome");
+    assert_eq!(
+        error.message(),
+        "input transformation is incompatible with its phase"
+    );
+    let events = repository.tool_events.borrow();
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Failed
+    );
+    drop(events);
+    let _ = fs::remove_dir_all(root);
+
+    let root = hello_tool_root("executed-error");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(DispatchErrorHook {
+            phase: Phase::AfterToolExecution,
+        }))
+        .expect("hook registers");
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
+        ))
+        .expect_err("post-execution hook errors fail closed");
+    assert_eq!(error.code(), "hook_failed");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn post_execution_result_phases_cover_rejection_and_invalid_input() {
+    for phase in [
+        Phase::BeforeToolResultPersist,
+        Phase::BeforeToolResultModelContext,
+    ] {
+        // Hook rejections after execution durably record the failure without a
+        // completed terminal event.
+        let root = hello_tool_root("post-reject");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(PhaseOutcomeHook {
+                phase,
+                id: "post-reject",
+                outcome: HookOutcome::Reject(ErrorDto::validation(
+                    "result_phase_blocked",
+                    "hook blocks the committed result",
+                )),
+            }))
+            .expect("hook registers");
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "hello.txt",
+            ))
+            .expect_err("post-execution rejections surface");
+        assert_eq!(error.code(), "result_phase_blocked");
+        let events = repository.tool_events.borrow();
+        assert_eq!(
+            events.last().expect("terminal event").status(),
+            &intention_domain::ToolLifecycleStatusDto::Failed
+        );
+        drop(events);
+        let _ = fs::remove_dir_all(root);
+
+        // Input transformations remain invalid for result phases.
+        let root = hello_tool_root("post-input");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(PhaseOutcomeHook {
+                phase,
+                id: "post-input",
+                outcome: HookOutcome::TransformInput(ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("other.txt")
+                        .expect("path"),
+                })),
+            }))
+            .expect("hook registers");
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "hello.txt",
+            ))
+            .expect_err("input transformations in result phases are invalid");
+        assert_eq!(error.code(), "invalid_hook_outcome");
+        assert_eq!(
+            error.message(),
+            "input transformation is incompatible with its phase"
+        );
+        let events = repository.tool_events.borrow();
+        assert_eq!(
+            events.last().expect("terminal event").status(),
+            &intention_domain::ToolLifecycleStatusDto::Failed
+        );
+        drop(events);
+        let _ = fs::remove_dir_all(root);
+    }
 }
 
 #[test]
@@ -1155,7 +1470,6 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
     for phase in [
         Phase::BeforeToolResultPersist,
         Phase::BeforeToolResultModelContext,
-        Phase::AfterToolResultPublished,
     ] {
         let repository =
             FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -1188,6 +1502,30 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             .expect("transformed result");
         assert!(matches!(result, intention_tools::ToolResult::Read(_)));
     }
+
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(PhaseOutcomeHook {
+            phase: Phase::AfterToolResultPublished,
+            id: "published-continue",
+            outcome: HookOutcome::Continue,
+        }))
+        .expect("hook");
+    let result = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(InvokeLocalToolInputDto::new(
+            workspace,
+            SessionId::new(),
+            RunId::new(),
+            ToolCallId::new(),
+            "read",
+            ToolInput::Read(ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
+            }),
+            fixture_time(),
+        ))
+        .expect("published Continue is valid");
+    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1419,4 +1757,1109 @@ fn local_tool_covers_execution_and_result_hook_invalid_outcomes() {
         .invoke_local_tool(invoke_read_input("missing"))
         .expect_err("execution invalid result");
     assert_eq!(error.code(), "invalid_hook_outcome");
+}
+
+#[test]
+fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool(
+            InvokeLocalToolInputDto::new(
+                WorkspaceRoot::resolve(
+                    &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy())
+                        .expect("workspace dto"),
+                )
+                .expect("workspace"),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new("sh").expect("program"),
+                    args: vec![
+                        intention_tools::BoundedText::new("-c").expect("arg"),
+                        intention_tools::BoundedText::new("sleep 5").expect("arg"),
+                    ],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+        )
+        .expect_err("cancelled invocation fails safely");
+    assert_eq!(error.code(), "tool_cancelled");
+
+    let events = repository.tool_events.borrow();
+    assert!(
+        !events.is_empty(),
+        "admission is durable before cancellation"
+    );
+    assert!(events.iter().all(|event| event.session_id() == session_id));
+    assert!(events.iter().all(|event| event.run_id() == run_id));
+    assert!(events.iter().all(|event| event.call_id() == call_id));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event.status(),
+                intention_domain::ToolLifecycleStatusDto::Completed
+            ))
+            .count(),
+        0,
+        "cancellation cannot produce a duplicate completion"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event.status(),
+        intention_domain::ToolLifecycleStatusDto::Cancelled
+            | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+            | intention_domain::ToolLifecycleStatusDto::Failed
+    )));
+}
+
+struct FailOpenFailingHook {
+    hook_id: &'static str,
+    revision: u32,
+}
+impl Hook for FailOpenFailingHook {
+    fn id(&self) -> &'static str {
+        self.hook_id
+    }
+    fn registration_revision(&self) -> u32 {
+        self.revision
+    }
+    fn phases(&self) -> &'static [Phase] {
+        &[Phase::BeforeWorkspaceResolution]
+    }
+    fn priority(&self) -> u32 {
+        0
+    }
+    fn failure_policy(&self, _: Phase) -> FailurePolicy {
+        FailurePolicy::FailOpen
+    }
+    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
+        Err(ErrorDto::validation(
+            "fail_open_failure",
+            "FAKE_SECRET_9f3a workspace detail",
+        ))
+    }
+}
+
+struct RecordingObserver {
+    observations: RefCell<Vec<HookObservability>>,
+}
+impl HookObservationPort for RecordingObserver {
+    fn observe_hook_failure(&self, observation: HookObservability) {
+        self.observations.borrow_mut().push(observation);
+    }
+}
+
+#[test]
+fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata() {
+    let root = std::env::temp_dir().join(format!("intention-app-failopen-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    fs::write(root.join("hello.txt"), "hello").expect("file");
+    let workspace =
+        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
+            .expect("workspace");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(FailOpenFailingHook {
+            hook_id: "fail-open-alpha",
+            revision: 5,
+        }))
+        .expect("hook registers");
+    hooks
+        .register(Box::new(FailOpenFailingHook {
+            hook_id: "fail-open-beta",
+            revision: 7,
+        }))
+        .expect("hook registers");
+    let observer = RecordingObserver {
+        observations: RefCell::new(Vec::new()),
+    };
+    let result = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool_with_observation(
+            InvokeLocalToolInputDto::new(
+                workspace,
+                SessionId::new(),
+                RunId::new(),
+                ToolCallId::new(),
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &observer,
+        )
+        .expect("fail-open failures continue execution");
+    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
+
+    // Metadata is not discarded: every tolerated failure reaches the boundary
+    // with its exact safe identity, in registry-deterministic order.
+    let observations = observer.observations.borrow();
+    assert_eq!(
+        *observations,
+        vec![
+            HookObservability {
+                hook_id: "fail-open-alpha",
+                registration_revision: 5,
+                phase: Phase::BeforeWorkspaceResolution,
+                failure_policy: FailurePolicy::FailOpen,
+            },
+            HookObservability {
+                hook_id: "fail-open-beta",
+                registration_revision: 7,
+                phase: Phase::BeforeWorkspaceResolution,
+                failure_policy: FailurePolicy::FailOpen,
+            },
+        ]
+    );
+    // Observations stay redacted: hook payloads, error codes, secrets, and
+    // local filesystem details never cross the application boundary.
+    let rendered = format!("{observations:?}");
+    assert!(!rendered.contains("FAKE_SECRET"));
+    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
+    assert!(!rendered.contains("fail_open_failure"));
+
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        events[2].status(),
+        intention_domain::ToolLifecycleStatusDto::Completed
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn inert_boundaries_preserve_the_existing_fail_open_lifecycle() {
+    let root = std::env::temp_dir().join(format!("intention-app-inert-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    fs::write(root.join("hello.txt"), "hello").expect("file");
+    let workspace =
+        WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
+            .expect("workspace");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(FailOpenFailingHook {
+            hook_id: "fail-open-only",
+            revision: 1,
+        }))
+        .expect("hook registers");
+    let result = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(InvokeLocalToolInputDto::new(
+            workspace,
+            SessionId::new(),
+            RunId::new(),
+            ToolCallId::new(),
+            "read",
+            ToolInput::Read(ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("hello.txt").expect("path"),
+            }),
+            fixture_time(),
+        ))
+        .expect("no-op publication and observation boundaries stay fail-open");
+    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
+    let events = repository.tool_events.borrow();
+    assert!(matches!(
+        events.last().expect("terminal event").status(),
+        intention_domain::ToolLifecycleStatusDto::Completed
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
+struct CapturingPublisher {
+    publications: RefCell<Vec<ToolResultPublicationInputDto>>,
+    failure: RefCell<Option<ErrorDto>>,
+}
+
+impl CapturingPublisher {
+    const fn recording() -> Self {
+        Self {
+            publications: RefCell::new(Vec::new()),
+            failure: RefCell::new(None),
+        }
+    }
+
+    const fn failing(error: ErrorDto) -> Self {
+        Self {
+            publications: RefCell::new(Vec::new()),
+            failure: RefCell::new(Some(error)),
+        }
+    }
+
+    fn published(&self) -> Vec<ToolResultPublicationInputDto> {
+        self.publications.borrow().clone()
+    }
+}
+
+impl ToolResultPublicationPort for CapturingPublisher {
+    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
+        self.publications.borrow_mut().push(input.clone());
+        self.failure
+            .borrow()
+            .as_ref()
+            .map_or(Ok(()), |error| Err(error.clone()))
+    }
+}
+
+struct FailOpenPublishedHook;
+
+impl Hook for FailOpenPublishedHook {
+    fn id(&self) -> &'static str {
+        "fail-open-published"
+    }
+    fn phases(&self) -> &'static [Phase] {
+        &[Phase::AfterToolResultPublished]
+    }
+    fn priority(&self) -> u32 {
+        0
+    }
+    fn failure_policy(&self, _: Phase) -> FailurePolicy {
+        FailurePolicy::FailOpen
+    }
+    fn run(&self, _: &PhaseContext) -> DtoResult<HookOutcome> {
+        Err(ErrorDto::validation(
+            "fail_open_published",
+            "post-publish tolerated failure",
+        ))
+    }
+}
+
+fn hello_tool_root(tag: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("intention-publish-{tag}-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    fs::write(root.join("hello.txt"), "hello").expect("hello fixture");
+    root
+}
+
+fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
+    WorkspaceRoot::resolve(&WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"))
+        .expect("workspace")
+}
+
+fn hello_read_result() -> intention_tools::ToolResult {
+    intention_tools::ToolResult::Read(intention_tools::TextResult {
+        text: intention_tools::BoundedText::new("hello").expect("text"),
+        truncated: false,
+    })
+}
+
+fn completed_terminal_event_count(repository: &FakeRepository) -> usize {
+    repository
+        .tool_events
+        .borrow()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.status(),
+                intention_domain::ToolLifecycleStatusDto::Completed
+            )
+        })
+        .count()
+}
+
+#[test]
+fn publication_failure_propagates_after_the_durable_completed_commit() {
+    let root = hello_tool_root("failure");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = CapturingPublisher::failing(ErrorDto::unavailable(
+        "publication_unavailable",
+        "publication boundary refused the committed result",
+    ));
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
+            &publisher,
+        )
+        .expect_err("publication failure must surface");
+    assert_eq!(error.code(), "publication_unavailable");
+
+    // The committed result reached the boundary exactly once even though the
+    // caller sees the publication error.
+    assert_eq!(publisher.published().len(), 1);
+    // Terminal completion stays durable; no extra failure event is appended.
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Completed
+    );
+    drop(events);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn publication_boundary_receives_exact_committed_identity_and_payload() {
+    let root = hello_tool_root("identity");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = CapturingPublisher::recording();
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+    ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &publisher,
+        )
+        .expect("committed result is published");
+
+    let publications = publisher.publications.borrow();
+    assert_eq!(publications.len(), 1);
+    assert_eq!(publications[0].session_id(), session_id);
+    assert_eq!(publications[0].run_id(), run_id);
+    assert_eq!(publications[0].call_id(), call_id);
+    assert_eq!(publications[0].result(), &hello_read_result());
+    drop(publications);
+    assert_eq!(completed_terminal_event_count(&repository), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn after_publish_hook_rejection_surfaces_after_the_completed_commit() {
+    let root = hello_tool_root("reject");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(PhaseOutcomeHook {
+            phase: Phase::AfterToolResultPublished,
+            id: "published-reject",
+            outcome: HookOutcome::Reject(ErrorDto::validation(
+                "after_publish_blocked",
+                "hook refuses after publication",
+            )),
+        }))
+        .expect("hook registers");
+    let publisher = CapturingPublisher::recording();
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool_with_publication(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
+            &publisher,
+        )
+        .expect_err("post-publish rejection surfaces");
+    assert_eq!(error.code(), "after_publish_blocked");
+    assert_eq!(error.message(), "hook refuses after publication");
+    // Publication already happened before the post-publish hook ran.
+    assert_eq!(publisher.published().len(), 1);
+    // The completed commit is preserved and not duplicated as a failure.
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Completed
+    );
+    drop(events);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
+    // Result transformations reach the application boundary and are refused
+    // after publication; input transformations are already refused by the hook
+    // registry as incompatible with the published phase. Both stay fail-closed
+    // without appending any post-completion lifecycle record.
+    let outcomes = [
+        (
+            HookOutcome::TransformResult(intention_tools::ToolResult::Read(
+                intention_tools::TextResult {
+                    text: intention_tools::BoundedText::new("changed").expect("text"),
+                    truncated: false,
+                },
+            )),
+            "published result cannot be transformed",
+        ),
+        (
+            HookOutcome::TransformInput(ToolInput::Read(ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("elsewhere").expect("path"),
+            })),
+            "input transformation is incompatible with its phase",
+        ),
+    ];
+    for (outcome, expected_message) in outcomes {
+        let root = hello_tool_root("transform");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        let mut hooks = Registry::new();
+        hooks
+            .register(Box::new(PhaseOutcomeHook {
+                phase: Phase::AfterToolResultPublished,
+                id: "published-transform",
+                outcome,
+            }))
+            .expect("hook registers");
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool_with_publication(
+                invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
+                &(),
+            )
+            .expect_err("published results cannot be transformed");
+        assert_eq!(error.code(), "invalid_hook_outcome");
+        assert_eq!(error.message(), expected_message);
+        // Completion stays durable and exactly one terminal record exists.
+        let events = repository.tool_events.borrow();
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events.last().expect("terminal event").status(),
+            &intention_domain::ToolLifecycleStatusDto::Completed
+        );
+        drop(events);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn after_publish_hook_error_fails_closed_on_the_completed_commit() {
+    let root = hello_tool_root("dispatch-error");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(DispatchErrorHook {
+            phase: Phase::AfterToolResultPublished,
+        }))
+        .expect("hook registers");
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool_with_publication(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
+            &(),
+        )
+        .expect_err("post-publish dispatch error surfaces");
+    assert_eq!(error.code(), "hook_failed");
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Completed
+    );
+    drop(events);
+    assert_eq!(completed_terminal_event_count(&repository), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn fail_open_failures_in_the_published_phase_reach_the_observer() {
+    let root = hello_tool_root("observation");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(FailOpenPublishedHook))
+        .expect("hook registers");
+    let observer = RecordingObserver {
+        observations: RefCell::new(Vec::new()),
+    };
+    let result = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool_with_observation(
+            invoke_read_input_in_workspace(&hello_workspace(&root), "hello.txt"),
+            &observer,
+        )
+        .expect("fail-open failures after publication stay tolerated");
+    assert_eq!(result, hello_read_result());
+    // The tolerated post-publish failure is forwarded with safe identity only.
+    assert_eq!(
+        *observer.observations.borrow(),
+        vec![HookObservability {
+            hook_id: "fail-open-published",
+            registration_revision: 1,
+            phase: Phase::AfterToolResultPublished,
+            failure_policy: FailurePolicy::FailOpen,
+        }]
+    );
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Completed
+    );
+    drop(events);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cancelled_results_never_reach_the_publication_boundary() {
+    let root = hello_tool_root("cancelled");
+    let workspace = hello_workspace(&root);
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = CapturingPublisher::recording();
+    let signal = intention_tools::CancellationSignal::cancelled();
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                workspace,
+                SessionId::new(),
+                RunId::new(),
+                ToolCallId::new(),
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new("sh").expect("program"),
+                    args: vec![],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(signal),
+            &publisher,
+        )
+        .expect_err("cancelled invocation fails");
+    assert_eq!(error.code(), "tool_cancelled");
+    // Terminal cancellation is never treated as a publishable result.
+    assert!(publisher.published().is_empty());
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 3);
+    assert_eq!(
+        events.last().expect("terminal event").status(),
+        &intention_domain::ToolLifecycleStatusDto::Cancelled
+    );
+    drop(events);
+    let _ = fs::remove_dir_all(root);
+}
+
+enum MatrixHook {
+    None,
+    DispatchError(Phase),
+    Reject(Phase),
+}
+
+#[test]
+fn selected_append_failures_propagate_from_each_lifecycle_commit_point() {
+    let scenarios: Vec<(&str, usize, MatrixHook, usize)> = vec![
+        (
+            "invocation-dispatch-error",
+            2,
+            MatrixHook::DispatchError(Phase::BeforeToolInvocation),
+            1,
+        ),
+        (
+            "invocation-rejection",
+            2,
+            MatrixHook::Reject(Phase::BeforeToolInvocation),
+            1,
+        ),
+        (
+            "workspace-resolution-dispatch-error",
+            2,
+            MatrixHook::DispatchError(Phase::BeforeWorkspaceResolution),
+            1,
+        ),
+        (
+            "workspace-resolution-rejection",
+            2,
+            MatrixHook::Reject(Phase::BeforeWorkspaceResolution),
+            1,
+        ),
+        (
+            "workspace-resolved-dispatch-error",
+            2,
+            MatrixHook::DispatchError(Phase::AfterWorkspaceResolution),
+            1,
+        ),
+        (
+            "workspace-resolved-rejection",
+            2,
+            MatrixHook::Reject(Phase::AfterWorkspaceResolution),
+            1,
+        ),
+        ("started-commit", 2, MatrixHook::None, 1),
+        (
+            "executed-dispatch-error",
+            3,
+            MatrixHook::DispatchError(Phase::AfterToolExecution),
+            2,
+        ),
+        (
+            "persist-dispatch-error",
+            3,
+            MatrixHook::DispatchError(Phase::BeforeToolResultPersist),
+            2,
+        ),
+        (
+            "model-context-dispatch-error",
+            3,
+            MatrixHook::DispatchError(Phase::BeforeToolResultModelContext),
+            2,
+        ),
+        (
+            "persist-rejection",
+            3,
+            MatrixHook::Reject(Phase::BeforeToolResultPersist),
+            2,
+        ),
+        (
+            "model-context-rejection",
+            3,
+            MatrixHook::Reject(Phase::BeforeToolResultModelContext),
+            2,
+        ),
+        ("completed-commit", 3, MatrixHook::None, 2),
+    ];
+    for (label, failing_call, hook, expected_events) in scenarios {
+        let root = hello_tool_root("append-failure");
+        let repository =
+            FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+        *repository.append_failures.borrow_mut() = vec![failing_call];
+        let mut hooks = Registry::new();
+        match hook {
+            MatrixHook::None => {}
+            MatrixHook::DispatchError(phase) => {
+                hooks
+                    .register(Box::new(DispatchErrorHook { phase }))
+                    .expect("hook registers");
+            }
+            MatrixHook::Reject(phase) => {
+                hooks
+                    .register(Box::new(PhaseOutcomeHook {
+                        phase,
+                        id: "append-failure-reject",
+                        outcome: HookOutcome::Reject(ErrorDto::validation(
+                            "append_scenario_blocked",
+                            "blocked",
+                        )),
+                    }))
+                    .expect("hook registers");
+            }
+        }
+        let error = ApplicationService::with_hooks(&repository, hooks)
+            .invoke_local_tool(invoke_read_input_in_workspace(
+                &hello_workspace(&root),
+                "hello.txt",
+            ))
+            .expect_err("the selected append failure must propagate");
+        assert_eq!(error.code(), "append_unavailable", "scenario {label}");
+        assert_eq!(
+            repository.tool_events.borrow().len(),
+            expected_events,
+            "scenario {label}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+/// Publication probe that records the durable evidence length at publish time.
+struct TerminalOrderingProbe<'a> {
+    repository: &'a FakeRepository,
+    publications: RefCell<Vec<ToolResultPublicationInputDto>>,
+    evidence_at_publish: RefCell<Vec<usize>>,
+}
+
+impl<'a> TerminalOrderingProbe<'a> {
+    const fn new(repository: &'a FakeRepository) -> Self {
+        Self {
+            repository,
+            publications: RefCell::new(Vec::new()),
+            evidence_at_publish: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl ToolResultPublicationPort for TerminalOrderingProbe<'_> {
+    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
+        self.evidence_at_publish
+            .borrow_mut()
+            .push(self.repository.tool_events.borrow().len());
+        self.publications.borrow_mut().push(input.clone());
+        Ok(())
+    }
+}
+
+/// Asserts exactly one terminal event exists, is last, and correlates exactly.
+fn assert_single_terminal_event(
+    repository: &FakeRepository,
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    status: &intention_domain::ToolLifecycleStatusDto,
+) {
+    let events = repository.tool_events.borrow();
+    let terminal = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.status(),
+                intention_domain::ToolLifecycleStatusDto::Completed
+                    | intention_domain::ToolLifecycleStatusDto::Failed
+                    | intention_domain::ToolLifecycleStatusDto::Cancelled
+                    | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal.len(), 1, "exactly one terminal event is persisted");
+    let terminal = terminal[0];
+    assert_eq!(events.last(), Some(terminal), "terminal evidence is last");
+    assert_eq!(terminal.status(), status);
+    assert_eq!(terminal.session_id(), session_id);
+    assert_eq!(terminal.run_id(), run_id);
+    assert_eq!(terminal.call_id(), call_id);
+}
+
+#[test]
+fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
+    let root = hello_tool_root("terminal-matrix");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+
+    // A successful outcome publishes only after its terminal Completed commit.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &publisher,
+        )
+        .expect("read succeeds");
+    assert_eq!(result, hello_read_result());
+    assert_single_terminal_event(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        &intention_domain::ToolLifecycleStatusDto::Completed,
+    );
+    // Three events are durable (admitted, started, completed) when publication
+    // runs, proving the terminal commit precedes the publication boundary.
+    assert_eq!(*publisher.evidence_at_publish.borrow(), vec![3]);
+    let publications = publisher.publications.borrow();
+    assert_eq!(publications.len(), 1);
+    assert_eq!(publications[0].session_id(), session_id);
+    assert_eq!(publications[0].run_id(), run_id);
+    assert_eq!(publications[0].call_id(), call_id);
+    assert_eq!(publications[0].result(), &hello_read_result());
+    drop(publications);
+    drop(publisher);
+    drop(repository);
+
+    // A failed outcome persists correlated Failed evidence and never publishes.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &publisher,
+        )
+        .expect_err("missing file fails");
+    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_single_terminal_event(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        &intention_domain::ToolLifecycleStatusDto::Failed,
+    );
+    assert!(publisher.publications.borrow().is_empty());
+    assert!(publisher.evidence_at_publish.borrow().is_empty());
+    drop(publisher);
+    drop(repository);
+
+    // A cancelled outcome persists correlated Cancelled evidence and never
+    // reaches the publication boundary.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new("sh").expect("program"),
+                    args: vec![],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+            &publisher,
+        )
+        .expect_err("cancelled invocation fails");
+    assert_eq!(error.code(), "tool_cancelled");
+    assert_single_terminal_event(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        &intention_domain::ToolLifecycleStatusDto::Cancelled,
+    );
+    assert!(publisher.publications.borrow().is_empty());
+    assert!(publisher.evidence_at_publish.borrow().is_empty());
+    drop(publisher);
+    drop(repository);
+
+    // An unknown external-effect outcome persists correlated evidence that
+    // never reaches the publication boundary either.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let signal = intention_tools::CancellationSignal::new();
+    let cancellation = signal.clone();
+    let canceller = std::thread::spawn(move || {
+        // Keep the child alive long enough for spawn and for the execution
+        // poller to observe it, while avoiding a race with a short command.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cancellation.cancel();
+    });
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new(if cfg!(windows) {
+                        "ping"
+                    } else {
+                        "sh"
+                    })
+                    .expect("program"),
+                    args: vec![
+                        intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
+                            .expect("arg"),
+                        intention_tools::BoundedText::new(if cfg!(windows) {
+                            "10"
+                        } else {
+                            "sleep 5"
+                        })
+                        .expect("arg"),
+                        #[cfg(windows)]
+                        intention_tools::BoundedText::new("127.0.0.1").expect("arg"),
+                    ],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(signal),
+            &publisher,
+        )
+        .expect_err("external effect is unknown");
+    canceller.join().expect("cancellation helper completes");
+    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    assert_single_terminal_event(
+        &repository,
+        session_id,
+        run_id,
+        call_id,
+        &intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown,
+    );
+    assert!(publisher.publications.borrow().is_empty());
+    assert!(publisher.evidence_at_publish.borrow().is_empty());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn terminal_commits_carry_typed_result_evidence_before_publication() {
+    let root = hello_tool_root("evidence");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = ToolCallId::new();
+
+    // Success: the terminal Completed commit atomically carries the typed
+    // result document with the exact invocation identity.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &publisher,
+        )
+        .expect("read succeeds");
+    let evidence = repository.result_evidence.borrow();
+    assert_eq!(evidence.len(), 3);
+    assert!(evidence[..2].iter().all(Option::is_none));
+    let completed = evidence[2]
+        .as_ref()
+        .expect("terminal evidence commits atomically");
+    assert_eq!(completed.session_id(), session_id);
+    assert_eq!(completed.run_id(), run_id);
+    assert_eq!(completed.call_id(), call_id);
+    assert_eq!(completed.kind(), ToolResultKindDto::Read);
+    assert_eq!(
+        completed.content(),
+        "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
+    );
+    assert_eq!(completed.occurred_at(), fixture_time());
+    drop(evidence);
+    // The evidence-carrying terminal commit is durable before publication.
+    assert_eq!(*publisher.evidence_at_publish.borrow(), vec![3]);
+    drop(publisher);
+    drop(repository);
+
+    // Failure: the terminal Failed commit classifies the safe error code.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                ToolInput::Read(ReadInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
+                        .expect("path"),
+                }),
+                fixture_time(),
+            ),
+            &publisher,
+        )
+        .expect_err("missing file fails");
+    assert_eq!(error.code(), "workspace_path_unavailable");
+    let evidence = repository.result_evidence.borrow();
+    assert!(evidence[..2].iter().all(Option::is_none));
+    let failed = evidence[2]
+        .as_ref()
+        .expect("failed evidence commits atomically");
+    assert_eq!(failed.kind(), ToolResultKindDto::Read);
+    assert_eq!(
+        failed.content(),
+        "{\"result\":\"failed\",\"value\":{\"code\":\"workspace_path_unavailable\"}}"
+    );
+    drop(evidence);
+    assert!(publisher.publications.borrow().is_empty());
+    drop(publisher);
+    drop(repository);
+
+    // Cancellation: the terminal Cancelled commit classifies the cancellation.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new("sh").expect("program"),
+                    args: vec![],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(intention_tools::CancellationSignal::cancelled()),
+            &publisher,
+        )
+        .expect_err("cancelled invocation fails");
+    assert_eq!(error.code(), "tool_cancelled");
+    let evidence = repository.result_evidence.borrow();
+    let cancelled = evidence[2]
+        .as_ref()
+        .expect("cancelled evidence commits atomically");
+    assert_eq!(cancelled.kind(), ToolResultKindDto::Execute);
+    assert_eq!(
+        cancelled.content(),
+        "{\"result\":\"cancelled\",\"value\":{\"code\":\"tool_cancelled\"}}"
+    );
+    drop(evidence);
+    assert!(publisher.publications.borrow().is_empty());
+    drop(publisher);
+    drop(repository);
+
+    // Unknown external effect: the terminal commit classifies the uncertainty.
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let publisher = TerminalOrderingProbe::new(&repository);
+    let signal = intention_tools::CancellationSignal::new();
+    let cancellation = signal.clone();
+    let canceller = std::thread::spawn(move || {
+        // Keep the child alive long enough for spawn and for the execution
+        // poller to observe it, while avoiding a race with a short command.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        cancellation.cancel();
+    });
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool_with_publication(
+            InvokeLocalToolInputDto::new(
+                hello_workspace(&root),
+                session_id,
+                run_id,
+                call_id,
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new(if cfg!(windows) {
+                        "ping"
+                    } else {
+                        "sh"
+                    })
+                    .expect("program"),
+                    args: vec![
+                        intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
+                            .expect("arg"),
+                        intention_tools::BoundedText::new(if cfg!(windows) {
+                            "10"
+                        } else {
+                            "sleep 5"
+                        })
+                        .expect("arg"),
+                        #[cfg(windows)]
+                        intention_tools::BoundedText::new("127.0.0.1").expect("arg"),
+                    ],
+                }),
+                fixture_time(),
+            )
+            .with_cancellation(signal),
+            &publisher,
+        )
+        .expect_err("external effect is unknown");
+    canceller.join().expect("cancellation helper completes");
+    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    let evidence = repository.result_evidence.borrow();
+    let unknown = evidence[2]
+        .as_ref()
+        .expect("unknown-effect evidence commits atomically");
+    assert_eq!(unknown.kind(), ToolResultKindDto::Execute);
+    assert_eq!(
+        unknown.content(),
+        "{\"result\":\"external_effect_unknown\",\"value\":{\"code\":\"tool_execute_external_effect_unknown\"}}"
+    );
+    drop(evidence);
+    assert!(publisher.publications.borrow().is_empty());
+
+    let _ = fs::remove_dir_all(root);
 }

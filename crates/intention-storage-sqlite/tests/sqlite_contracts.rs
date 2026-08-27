@@ -13,7 +13,7 @@ use intention_domain::{
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
     CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
+    StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -741,4 +741,264 @@ fn migration_rejects_future_schema_and_config_snapshot_is_safe_to_persist() {
     store
         .accept_configuration_revision(snapshot())
         .expect("safe snapshot persists");
+}
+
+#[test]
+fn completed_result_evidence_is_durable_across_reopen_with_redacted_payload() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    // Commit the exact terminal lifecycle evidence the application pipeline
+    // writes for one successful invocation: admitted, started, completed.
+    let call = intention_types::ToolCallId::new();
+    for (index, (status, detail)) in [
+        (
+            ToolLifecycleStatusDto::Admitted,
+            "local tool invocation admitted",
+        ),
+        (
+            ToolLifecycleStatusDto::Started,
+            "local tool invocation started",
+        ),
+        (
+            ToolLifecycleStatusDto::Completed,
+            "local tool invocation completed",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let appended = store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                ToolLifecycleEventDto::new(session, run, call, "read", status, detail, time(3))
+                    .expect("pipeline lifecycle event is valid"),
+            ))
+            .expect("pipeline lifecycle commit succeeds");
+        assert_eq!(appended.sequence().value(), 4 + index as u64);
+    }
+
+    // A restart drops the handle and reopens the exact durable location.
+    drop(store);
+    let reopened = SqliteStorageRepository::open(
+        SqliteDatabaseLocationDto::new(
+            directory
+                .path()
+                .join("storage.sqlite")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("reopened location is absolute"),
+    )
+    .expect("durable database reopens after restart");
+
+    let tail = reopened
+        .load_tail(session, SessionEventSequenceDto::new(0))
+        .expect("durable tail reloads after reopen");
+    let lifecycle = tail
+        .iter()
+        .filter_map(|event| match event.payload() {
+            DomainEventDto::ToolLifecycle(item) => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(lifecycle.len(), 3);
+    assert_eq!(lifecycle[0].status(), &ToolLifecycleStatusDto::Admitted);
+    assert_eq!(lifecycle[0].detail(), "local tool invocation admitted");
+    assert_eq!(lifecycle[1].status(), &ToolLifecycleStatusDto::Started);
+    assert_eq!(lifecycle[1].detail(), "local tool invocation started");
+    assert_eq!(lifecycle[2].status(), &ToolLifecycleStatusDto::Completed);
+    assert_eq!(lifecycle[2].detail(), "local tool invocation completed");
+    assert!(lifecycle.iter().all(|item| {
+        item.session_id() == session && item.run_id() == run && item.call_id() == call
+    }));
+
+    // The terminal commit refreshed the session snapshot in its transaction.
+    let projection = reopened
+        .load_session_snapshot(session)
+        .expect("recovered session snapshot loads");
+    assert_eq!(
+        projection.at_sequence(),
+        tail.last().expect("tail has events").sequence()
+    );
+
+    // The reopened terminal evidence round-trips without secret or root-path
+    // material in its durable payload.
+    let terminal = tail.last().expect("terminal envelope is durable");
+    let encoded = serde_json::to_string(terminal).expect("terminal evidence serializes");
+    let decoded: intention_types::EventEnvelopeDto<DomainEventDto> =
+        serde_json::from_str(&encoded).expect("terminal evidence round-trips");
+    assert_eq!(&decoded, terminal);
+    assert!(!encoded.contains("credential"));
+    assert!(!encoded.contains("fixture-secret"));
+    let fixture_root = std::env::temp_dir()
+        .join("intention-storage-sqlite-contracts")
+        .join("storage-contract");
+    assert!(!encoded.contains(fixture_root.to_string_lossy().as_ref()));
+
+    // The durable terminal guard survives the restart: a completed call can
+    // never be re-driven to another terminal state after recovery.
+    let late = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "read",
+        ToolLifecycleStatusDto::Failed,
+        "late failure after completion",
+        time(4),
+    )
+    .expect("late event is valid");
+    assert_eq!(
+        reopened
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(late))
+            .expect_err("terminal guard survives the restart")
+            .code(),
+        "invalid_tool_lifecycle_transition"
+    );
+
+    // Recovery leaves the store writable at the correct next sequence for a
+    // fresh invocation.
+    let next_call = intention_types::ToolCallId::new();
+    let next = reopened
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+            ToolLifecycleEventDto::new(
+                session,
+                run,
+                next_call,
+                "read",
+                ToolLifecycleStatusDto::Admitted,
+                "local tool invocation admitted",
+                time(5),
+            )
+            .expect("next invocation event is valid"),
+        ))
+        .expect("a fresh invocation admits after recovery");
+    assert_eq!(next.sequence().value(), 7);
+}
+
+#[test]
+fn tool_result_evidence_commits_with_its_lifecycle_event_and_rereads_durably() {
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let call = intention_types::ToolCallId::new();
+    let admitted = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "read",
+        ToolLifecycleStatusDto::Admitted,
+        "admitted",
+        time(3),
+    )
+    .expect("tool event is valid");
+    store
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(admitted))
+        .expect("admitted event commits without evidence");
+    let started = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "read",
+        ToolLifecycleStatusDto::Started,
+        "started",
+        time(3),
+    )
+    .expect("tool event is valid");
+    store
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(started))
+        .expect("started event commits without evidence");
+    let evidence = ToolResultEvidenceDto::new(
+        session,
+        run,
+        call,
+        ToolResultKindDto::Read,
+        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
+        time(4),
+    )
+    .expect("tool result evidence is valid");
+    let completed = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "read",
+        ToolLifecycleStatusDto::Completed,
+        "completed",
+        time(4),
+    )
+    .expect("tool event is valid");
+    let committed = store
+        .append_tool_lifecycle_event(
+            AppendToolLifecycleEventInputDto::new(completed)
+                .with_result(evidence.clone())
+                .expect("terminal evidence attaches"),
+        )
+        .expect("terminal event and evidence commit atomically");
+    assert_eq!(committed.sequence().value(), 6);
+    assert!(
+        matches!(committed.payload(), DomainEventDto::ToolLifecycle(value) if value.status() == &ToolLifecycleStatusDto::Completed)
+    );
+    assert_eq!(
+        store
+            .load_tool_result(session, run, call)
+            .expect("typed evidence rereads"),
+        evidence
+    );
+    let projection = store
+        .load_session_snapshot(session)
+        .expect("snapshot stays coherent with the commit");
+    assert_eq!(projection.at_sequence().value(), 6);
+    drop(store);
+    let reopened = SqliteStorageRepository::open(
+        SqliteDatabaseLocationDto::new(
+            directory
+                .path()
+                .join("storage.sqlite")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("temp location is absolute"),
+    )
+    .expect("database reopens");
+    assert_eq!(
+        reopened
+            .load_tool_result(session, run, call)
+            .expect("durable evidence rereads after reopen"),
+        evidence
+    );
+}
+
+#[test]
+fn tool_result_reread_is_typed_not_found_without_durably_committed_evidence() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let call = intention_types::ToolCallId::new();
+    for status in [
+        ToolLifecycleStatusDto::Admitted,
+        ToolLifecycleStatusDto::Started,
+    ] {
+        let event =
+            ToolLifecycleEventDto::new(session, run, call, "read", status, "phase", time(3))
+                .expect("tool event is valid");
+        store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
+            .expect("non-terminal event commits without evidence");
+    }
+    assert_eq!(
+        store
+            .load_tool_result(session, run, call)
+            .expect_err("no evidence was durably committed")
+            .code(),
+        "tool_result_not_found"
+    );
+    assert_eq!(
+        store
+            .load_tool_result(SessionId::new(), run, call)
+            .expect_err("cross-session identity finds no evidence")
+            .code(),
+        "tool_result_not_found"
+    );
 }

@@ -352,6 +352,18 @@ def test_m5_exact_active_crate_policy(root: Path) -> None:
         )
 
 
+def test_configured_quality_harness_partition_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, 'quality_harness = "quality-harness"', 'quality_harness = "intention-test-support"')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="M5 active, skeleton, adapter, and test-support crates must cover",
+        )
+
+
 def test_m4_sdk_ownership_and_public_contract_boundaries(root: Path) -> None:
     forbidden_owner = root / "crates/intention-model/src/lib.rs"
     with modified(forbidden_owner):
@@ -523,6 +535,28 @@ def test_forbidden_source_boundary(root: Path) -> None:
     with modified(source):
         source.write_text("use rusqlite::Connection;\n", encoding="utf-8")
         run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=False)
+
+
+def test_test_only_source_patterns_are_cfg_scoped(root: Path) -> None:
+    source = root / "crates/intention-workspace/src/lib.rs"
+    with modified(source):
+        original = source.read_text(encoding="utf-8")
+        source.write_text(
+            original + "\n#[cfg(test)]\nmod regression {\n    fn fixture() { let _ = std::env::current_dir(); }\n}\n",
+            encoding="utf-8",
+        )
+        run([sys.executable, "quality/check_architecture.py"], cwd=root, expect_success=True)
+    with modified(source):
+        source.write_text(
+            source.read_text(encoding="utf-8") + "\npub fn production() { let _ = std::env::current_dir(); }\n",
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="std::env::current_dir",
+        )
 
 
 def test_adapter_isolation_boundary(root: Path) -> None:
@@ -960,6 +994,7 @@ def main() -> None:
         test_m5_activation_policy,
         test_m5_skeleton_drift_policy,
         test_m5_exact_active_crate_policy,
+        test_configured_quality_harness_partition_policy,
         test_m4_sdk_ownership_and_public_contract_boundaries,
         test_m3_daemon_test_dependency_policy,
         test_m3_non_production_test_target_policy,
@@ -969,6 +1004,7 @@ def main() -> None:
         test_m2_public_resource_leak,
         test_m2_secret_projection,
         test_forbidden_source_boundary,
+        test_test_only_source_patterns_are_cfg_scoped,
         test_adapter_isolation_boundary,
         test_adapter_production_dependency_boundary,
         test_protocol_isolation_boundary,

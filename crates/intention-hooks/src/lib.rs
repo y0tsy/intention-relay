@@ -1,4 +1,15 @@
 //! Typed, deterministic hook registration and dispatch contracts.
+//!
+//! The two workspace phases are the mandatory workspace boundary: the
+//! `intention-workspace` owner resolves and validates the authorized root
+//! between [`Phase::BeforeWorkspaceResolution`] and
+//! [`Phase::AfterWorkspaceResolution`]. Phase contexts may identify a
+//! workspace only through safe identity — the [`ToolCallId`] plus typed
+//! relative input today, and the daemon-owned
+//! [`intention_types::WorkspaceId`] once the application wires it into these
+//! contexts — never a canonical or absolute workspace path. Hooks remain
+//! persistence- and publication-free: they observe typed contexts and return
+//! typed outcomes that the caller alone applies.
 
 use intention_tools::{ToolInput, ToolResult};
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
@@ -29,6 +40,8 @@ pub enum FailurePolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HookObservability {
     pub hook_id: &'static str,
+    /// Stable contract revision for this registered hook implementation.
+    pub registration_revision: u32,
     pub phase: Phase,
     pub failure_policy: FailurePolicy,
 }
@@ -47,10 +60,15 @@ pub enum PhaseContext {
         call: ToolCallId,
         input: ToolInput,
     },
+    /// Mandatory workspace boundary before root resolution. Carries only the
+    /// safe call identity and typed relative input, never a workspace path.
     WorkspaceResolution {
         call: ToolCallId,
         input: ToolInput,
     },
+    /// Mandatory workspace boundary after the authorized root resolved. The
+    /// same safe-identity rule holds: the root itself never enters the
+    /// context, and only the daemon-owned workspace identity may name it.
     WorkspaceResolved {
         call: ToolCallId,
         input: ToolInput,
@@ -103,6 +121,26 @@ pub enum Outcome {
     TransformResult(ToolResult),
 }
 
+const fn outcome_is_compatible(phase: Phase, outcome: &Outcome) -> bool {
+    match outcome {
+        Outcome::TransformInput(_) => matches!(
+            phase,
+            Phase::BeforeToolInvocation
+                | Phase::BeforeWorkspaceResolution
+                | Phase::AfterWorkspaceResolution
+                | Phase::BeforeToolExecution
+        ),
+        Outcome::TransformResult(_) => matches!(
+            phase,
+            Phase::AfterToolExecution
+                | Phase::BeforeToolResultPersist
+                | Phase::BeforeToolResultModelContext
+                | Phase::AfterToolResultPublished
+        ),
+        Outcome::Continue | Outcome::Reject(_) => true,
+    }
+}
+
 impl Outcome {
     /// Applies this decision to the current result, preserving transform chaining.
     fn apply_result(self, current: &mut Option<ToolResult>) -> DtoResult<()> {
@@ -150,6 +188,10 @@ pub trait Hook: Send + Sync {
     fn id(&self) -> &'static str;
     fn phases(&self) -> &'static [Phase];
     fn priority(&self) -> u32;
+    /// Stable revision of this hook's registration contract.
+    fn registration_revision(&self) -> u32 {
+        1
+    }
     /// Returns the failure policy for each declared phase.
     fn failure_policy(&self, _: Phase) -> FailurePolicy {
         FailurePolicy::FailClosed
@@ -158,6 +200,7 @@ pub trait Hook: Send + Sync {
     fn observability(&self, phase: Phase) -> HookObservability {
         HookObservability {
             hook_id: self.id(),
+            registration_revision: self.registration_revision(),
             phase,
             failure_policy: self.failure_policy(phase),
         }
@@ -185,14 +228,32 @@ impl Registry {
     ///
     /// Returns an error when the hook identifier is already registered.
     pub fn register(&mut self, hook: Box<dyn Hook>) -> DtoResult<()> {
+        if hook.id().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_hook_id",
+                "hook identifier must not be empty",
+            ));
+        }
         if self.hooks.iter().any(|h| h.id() == hook.id()) {
             return Err(ErrorDto::validation(
                 "duplicate_hook",
                 "hook identifier is already registered",
             ));
         }
+        let phases = hook.phases();
+        if phases
+            .iter()
+            .enumerate()
+            .any(|(index, phase)| phases[..index].contains(phase))
+        {
+            return Err(ErrorDto::validation(
+                "duplicate_hook_phase",
+                "hook declares a phase more than once",
+            ));
+        }
         self.hooks.push(hook);
-        self.hooks.sort_by_key(|h| (h.priority(), h.id()));
+        self.hooks
+            .sort_by_key(|h| (h.priority(), h.registration_revision(), h.id()));
         Ok(())
     }
     /// Runs hooks for a phase in deterministic order.
@@ -236,8 +297,27 @@ impl Registry {
                             failures,
                         });
                     }
-                    Outcome::TransformInput(input) => current = replace_input(current, input)?,
-                    outcome => outcome.apply_result(&mut current_result)?,
+                    Outcome::TransformInput(input) => {
+                        if !outcome_is_compatible(
+                            current.phase(),
+                            &Outcome::TransformInput(input.clone()),
+                        ) {
+                            return Err(ErrorDto::validation(
+                                "invalid_hook_outcome",
+                                "input transformation is incompatible with its phase",
+                            ));
+                        }
+                        current = replace_input(current, input)?;
+                    }
+                    outcome => {
+                        if !outcome_is_compatible(current.phase(), &outcome) {
+                            return Err(ErrorDto::validation(
+                                "invalid_hook_outcome",
+                                "hook outcome is incompatible with its phase",
+                            ));
+                        }
+                        outcome.apply_result(&mut current_result)?;
+                    }
                 }
             }
         }
@@ -297,17 +377,21 @@ mod tests {
         }
     }
     fn ctx() -> PhaseContext {
-        PhaseContext::Execution {
+        PhaseContext::Executed {
             call: ToolCallId::new(),
             input: ToolInput::Execute(ExecuteInput {
                 program: BoundedText::new("x").unwrap(),
                 args: vec![],
             }),
+            result: ToolResult::Execute(intention_tools::TextResult {
+                text: BoundedText::new("x").unwrap(),
+                truncated: false,
+            }),
         }
     }
     #[test]
     fn orders_duplicates_rejects_and_chains_transforms() {
-        static P: [Phase; 1] = [Phase::BeforeToolExecution];
+        static P: [Phase; 1] = [Phase::AfterToolExecution];
         let mut r = Registry::default();
         r.register(Box::new(H {
             id: "b",
@@ -343,11 +427,31 @@ mod tests {
             Outcome::TransformResult(_)
         ));
     }
+
+    #[test]
+    fn rejects_non_adjacent_duplicate_phases() {
+        static P: [Phase; 3] = [
+            Phase::BeforeToolExecution,
+            Phase::AfterToolExecution,
+            Phase::BeforeToolExecution,
+        ];
+        let mut registry = Registry::new();
+        let error_code = registry
+            .register(Box::new(H {
+                id: "duplicate-phase",
+                priority: 0,
+                outcome: Outcome::Continue,
+                phases: &P,
+            }))
+            .err()
+            .map(|error| error.code().to_string());
+        assert_eq!(error_code.as_deref(), Some("duplicate_hook_phase"));
+    }
     #[test]
     fn empty_pipeline_continues_and_rejection_stops() {
         let mut r = Registry::default();
         assert_eq!(r.dispatch(&ctx()).unwrap(), Outcome::Continue);
-        static P: [Phase; 1] = [Phase::BeforeToolExecution];
+        static P: [Phase; 1] = [Phase::AfterToolExecution];
         r.register(Box::new(H {
             id: "reject",
             priority: 0,
@@ -374,14 +478,14 @@ mod tests {
                 self.id
             }
             fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::BeforeToolExecution];
+                static P: [Phase; 1] = [Phase::AfterToolExecution];
                 &P
             }
             fn priority(&self) -> u32 {
                 self.priority
             }
             fn run(&self, context: &PhaseContext) -> DtoResult<Outcome> {
-                if let PhaseContext::Execution { input, .. } = context {
+                if let PhaseContext::Executed { input, .. } = context {
                     self.seen
                         .lock()
                         .unwrap()
@@ -582,14 +686,7 @@ mod tests {
                 phases: &P,
             }))
             .unwrap();
-        let context = PhaseContext::Executed {
-            call: ToolCallId::new(),
-            input: ctx_input(),
-            result: ToolResult::Execute(intention_tools::TextResult {
-                text: BoundedText::new("ok").unwrap(),
-                truncated: false,
-            }),
-        };
+        let context = ctx();
         assert!(registry.dispatch(&context).is_err());
 
         struct F;
@@ -598,7 +695,7 @@ mod tests {
                 "failure"
             }
             fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::BeforeToolExecution];
+                static P: [Phase; 1] = [Phase::AfterToolExecution];
                 &P
             }
             fn priority(&self) -> u32 {
@@ -630,6 +727,7 @@ mod tests {
             hook.observability(Phase::BeforeToolExecution),
             HookObservability {
                 hook_id: "observe",
+                registration_revision: 1,
                 phase: Phase::BeforeToolExecution,
                 failure_policy: FailurePolicy::FailClosed,
             }
@@ -709,7 +807,7 @@ mod tests {
                 "open"
             }
             fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::BeforeToolExecution];
+                static P: [Phase; 1] = [Phase::AfterToolExecution];
                 &P
             }
             fn priority(&self) -> u32 {
@@ -730,7 +828,8 @@ mod tests {
             result.failures,
             vec![HookObservability {
                 hook_id: "open",
-                phase: Phase::BeforeToolExecution,
+                registration_revision: 1,
+                phase: Phase::AfterToolExecution,
                 failure_policy: FailurePolicy::FailOpen,
             }]
         );
@@ -748,7 +847,7 @@ mod tests {
                 self.id
             }
             fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::BeforeToolExecution];
+                static P: [Phase; 1] = [Phase::AfterToolExecution];
                 &P
             }
             fn priority(&self) -> u32 {
@@ -788,8 +887,16 @@ mod tests {
                 outcome: Ok(Outcome::Reject(ErrorDto::validation("blocked", "blocked"))),
             }))
             .unwrap();
+        let executed = PhaseContext::Executed {
+            call: ToolCallId::new(),
+            input: ctx_input(),
+            result: result.clone(),
+        };
         assert_eq!(
-            reject.dispatch_with_observability(&ctx()).unwrap().failures,
+            reject
+                .dispatch_with_observability(&executed)
+                .unwrap()
+                .failures,
             vec![]
         );
         let mut transform = Registry::new();
@@ -801,7 +908,7 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(
-            transform.dispatch(&ctx()).unwrap(),
+            transform.dispatch(&executed).unwrap(),
             Outcome::TransformResult(result)
         );
     }
@@ -839,7 +946,14 @@ mod tests {
             outcome: Outcome::TransformInput(ctx_input()),
         }))
         .unwrap();
-        assert_eq!(same.dispatch(&ctx()).unwrap(), Outcome::Continue);
+        assert_eq!(
+            same.dispatch(&PhaseContext::Execution {
+                call: ToolCallId::new(),
+                input: ctx_input()
+            })
+            .unwrap(),
+            Outcome::Continue
+        );
         let changed = ToolInput::Execute(ExecuteInput {
             program: BoundedText::new("different").unwrap(),
             args: vec![],
@@ -854,7 +968,12 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(
-            different.dispatch(&ctx()).unwrap(),
+            different
+                .dispatch(&PhaseContext::Execution {
+                    call: ToolCallId::new(),
+                    input: ctx_input()
+                })
+                .unwrap(),
             Outcome::TransformInput(changed)
         );
     }
