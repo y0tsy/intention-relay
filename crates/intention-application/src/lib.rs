@@ -23,6 +23,7 @@ use intention_runtime::{
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
     CreateSessionInputDto, ModelContextRoleDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultKindDto,
 };
 use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
@@ -128,13 +129,80 @@ pub trait HookObservationPort {
     fn observe_hook_failure(&self, observation: HookObservability);
 }
 
+/// Publication seam invoked after the durable result has been committed.
+pub trait ToolResultPublicationPort {
+    /// Publishes the committed tool result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed error reported by the daemon-owned publication boundary.
+    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()>;
+}
+
+/// Typed identity and payload passed to the publication boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolResultPublicationInputDto {
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    result: ToolResult,
+}
+
+impl ToolResultPublicationInputDto {
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        result: ToolResult,
+    ) -> Self {
+        Self {
+            session_id,
+            run_id,
+            call_id,
+            result,
+        }
+    }
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    #[must_use]
+    pub const fn call_id(&self) -> ToolCallId {
+        self.call_id
+    }
+    #[must_use]
+    pub const fn result(&self) -> &ToolResult {
+        &self.result
+    }
+}
+
+impl ToolResultPublicationPort for () {
+    fn publish_tool_result(&self, _: &ToolResultPublicationInputDto) -> DtoResult<()> {
+        Ok(())
+    }
+}
+
 impl HookObservationPort for () {
     fn observe_hook_failure(&self, _: HookObservability) {}
 }
 
-/// Runs application hooks while retaining safe fail-open observations.
-fn dispatch_hooks(registry: &HookRegistry, context: &PhaseContext) -> DtoResult<HookOutcome> {
-    Ok(registry.dispatch_with_observability(context)?.outcome)
+/// Runs application hooks, forwarding tolerated fail-open metadata to the
+/// caller-owned observation boundary and returning only the safe outcome.
+fn dispatch_hooks<O: HookObservationPort>(
+    registry: &HookRegistry,
+    context: &PhaseContext,
+    observer: &O,
+) -> DtoResult<HookOutcome> {
+    let dispatched = registry.dispatch_with_observability(context)?;
+    for observation in dispatched.failures {
+        observer.observe_hook_failure(observation);
+    }
+    Ok(dispatched.outcome)
 }
 
 /// Complete DTO-only input for one local tool invocation.
@@ -261,6 +329,46 @@ where
     ///
     /// Returns the typed validation, storage, or tool execution error.
     pub fn invoke_local_tool(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult> {
+        self.invoke_local_tool_with_publication(input, &())
+    }
+
+    /// Executes, durably commits, publishes, then dispatches the after-publish hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed validation, storage, tool execution, publication, or
+    /// post-publish hook error.
+    pub fn invoke_local_tool_with_publication<P: ToolResultPublicationPort>(
+        &self,
+        input: InvokeLocalToolInputDto,
+        publisher: &P,
+    ) -> DtoResult<ToolResult> {
+        self.invoke_local_tool_through_ports(input, publisher, &())
+    }
+
+    /// Executes one invocation while tolerated fail-open hook failures reach the
+    /// supplied application observation boundary.
+    ///
+    /// Observations carry only safe hook identity metadata; hook payloads and
+    /// typed error content never cross this boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed validation, storage, or tool execution error.
+    pub fn invoke_local_tool_with_observation<O: HookObservationPort>(
+        &self,
+        input: InvokeLocalToolInputDto,
+        observer: &O,
+    ) -> DtoResult<ToolResult> {
+        self.invoke_local_tool_through_ports(input, &(), observer)
+    }
+
+    fn invoke_local_tool_through_ports<P: ToolResultPublicationPort, O: HookObservationPort>(
+        &self,
+        input: InvokeLocalToolInputDto,
+        publisher: &P,
+        observer: &O,
+    ) -> DtoResult<ToolResult> {
         let InvokeLocalToolInputDto {
             workspace,
             session_id,
@@ -292,7 +400,7 @@ where
             call: call_id,
             input: input.clone(),
         };
-        match dispatch_hooks(&self.hooks, &invocation) {
+        match dispatch_hooks(&self.hooks, &invocation, observer) {
             Err(error) => {
                 append_tool_rejected(
                     self.repository,
@@ -340,7 +448,7 @@ where
             call: call_id,
             input: input.clone(),
         };
-        match dispatch_hooks(&self.hooks, &workspace_context) {
+        match dispatch_hooks(&self.hooks, &workspace_context, observer) {
             Err(error) => {
                 append_tool_rejected(
                     self.repository,
@@ -388,7 +496,7 @@ where
             call: call_id,
             input: input.clone(),
         };
-        match dispatch_hooks(&self.hooks, &resolved) {
+        match dispatch_hooks(&self.hooks, &resolved, observer) {
             Err(error) => {
                 append_tool_rejected(
                     self.repository,
@@ -438,7 +546,7 @@ where
             call: call_id,
             input: input.clone(),
         };
-        let transformed_input = match dispatch_hooks(&self.hooks, &before_execution) {
+        let transformed_input = match dispatch_hooks(&self.hooks, &before_execution, observer) {
             Err(error) | Ok(HookOutcome::Reject(error)) => {
                 append_tool_rejected(
                     self.repository,
@@ -491,7 +599,7 @@ where
                     input: transformed_input,
                     result: value.clone(),
                 };
-                match dispatch_hooks(&self.hooks, &context) {
+                match dispatch_hooks(&self.hooks, &context, observer) {
                     Err(error) => {
                         append_tool_failed(
                             self.repository,
@@ -535,10 +643,9 @@ where
             for phase in [
                 intention_hooks::Phase::BeforeToolResultPersist,
                 intention_hooks::Phase::BeforeToolResultModelContext,
-                intention_hooks::Phase::AfterToolResultPublished,
             ] {
                 let context = result_phase_context(phase, call_id, &value);
-                let outcome = match dispatch_hooks(&self.hooks, &context) {
+                let outcome = match dispatch_hooks(&self.hooks, &context, observer) {
                     Ok(outcome) => outcome,
                     Err(error) => {
                         append_tool_failed(
@@ -598,6 +705,16 @@ where
                 error.code(),
             ),
         };
+        // The typed result evidence commits atomically with its terminal
+        // lifecycle event at this boundary, before any publication.
+        let evidence = durable_tool_result_evidence(
+            session_id,
+            run_id,
+            call_id,
+            &tool_id,
+            result.as_ref(),
+            occurred_at,
+        )?;
         let event = intention_domain::ToolLifecycleEventDto::new(
             session_id,
             run_id,
@@ -607,8 +724,27 @@ where
             detail,
             occurred_at,
         )?;
-        self.repository
-            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))?;
+        let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
+        self.repository.append_tool_lifecycle_event(append)?;
+        if let Ok(value) = &result {
+            let publication =
+                ToolResultPublicationInputDto::new(session_id, run_id, call_id, value.clone());
+            publisher.publish_tool_result(&publication)?;
+            let context = PhaseContext::Published {
+                call: call_id,
+                result: value.clone(),
+            };
+            match dispatch_hooks(&self.hooks, &context, observer)? {
+                HookOutcome::Continue => {}
+                HookOutcome::TransformResult(_) | HookOutcome::TransformInput(_) => {
+                    return Err(ErrorDto::validation(
+                        "invalid_hook_outcome",
+                        "published result cannot be transformed",
+                    ));
+                }
+                HookOutcome::Reject(error) => return Err(error),
+            }
+        }
         result
     }
     /// Creates an application facade around a DTO-only durable repository.
@@ -959,17 +1095,18 @@ fn append_tool_failed<R: StorageRepositoryDto>(
     e: &ErrorDto,
     at: TimestampDto,
 ) -> DtoResult<()> {
-    let event = intention_domain::ToolLifecycleEventDto::new(
-        s,
-        run,
-        call,
-        id.to_owned(),
-        intention_domain::ToolLifecycleStatusDto::Failed,
-        e.code(),
-        at,
-    )?;
-    r.append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-        .map(|_| ())
+    append_tool_terminal(
+        r,
+        ToolTerminalInput {
+            session_id: s,
+            run_id: run,
+            call_id: call,
+            tool_id: id,
+            error: e,
+            status: intention_domain::ToolLifecycleStatusDto::Failed,
+            occurred_at: at,
+        },
+    )
 }
 
 struct ToolTerminalInput<'a> {
@@ -986,6 +1123,14 @@ fn append_tool_terminal<R: StorageRepositoryDto>(
     r: &R,
     input: ToolTerminalInput<'_>,
 ) -> DtoResult<()> {
+    let evidence = durable_tool_result_evidence(
+        input.session_id,
+        input.run_id,
+        input.call_id,
+        input.tool_id,
+        Err(input.error),
+        input.occurred_at,
+    )?;
     let event = intention_domain::ToolLifecycleEventDto::new(
         input.session_id,
         input.run_id,
@@ -995,8 +1140,220 @@ fn append_tool_terminal<R: StorageRepositoryDto>(
         input.error.code(),
         input.occurred_at,
     )?;
-    r.append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-        .map(|_| ())
+    let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
+    r.append_tool_lifecycle_event(append).map(|_| ())
+}
+
+/// Durable canonical result-document ceiling; mirrors the storage evidence bound.
+const MAX_DURABLE_TOOL_RESULT_BYTES: usize = 512 * 1024;
+/// Characters reserved for closing tokens when truncating a durable document.
+const DOCUMENT_RESERVE_BYTES: usize = 64;
+/// Raw-byte share of the durable bound granted to one truncated text value.
+///
+/// Escaped control characters expand at most sixfold, so one eighth of the
+/// bound can never exceed it after escaping.
+const TRUNCATED_TEXT_BUDGET_DIVISOR: usize = 8;
+
+/// Builds the typed result evidence committed with one terminal lifecycle event.
+///
+/// Successful outcomes serialize their typed result; failed, cancelled, and
+/// unknown-effect outcomes serialize their stable terminal classification. The
+/// evidence carries the exact session/run/call identity of the invocation.
+fn durable_tool_result_evidence(
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    tool_id: &str,
+    outcome: Result<&ToolResult, &ErrorDto>,
+    occurred_at: TimestampDto,
+) -> DtoResult<ToolResultEvidenceDto> {
+    let kind = ToolResultKindDto::parse(tool_id)?;
+    let content = match outcome {
+        Ok(result) => canonical_tool_result_document(result),
+        Err(error) => canonical_failure_document(terminal_error_tag(error), error.code()),
+    };
+    ToolResultEvidenceDto::new(session_id, run_id, call_id, kind, content, occurred_at)
+}
+
+/// Maps a terminal error to its closed durable document discriminator.
+fn terminal_error_tag(error: &ErrorDto) -> &'static str {
+    match terminal_status_for_error(error) {
+        intention_domain::ToolLifecycleStatusDto::Cancelled => "cancelled",
+        intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown => {
+            "external_effect_unknown"
+        }
+        _ => "failed",
+    }
+}
+
+/// Serializes one typed terminal failure into its canonical durable document.
+fn canonical_failure_document(tag: &str, code: &str) -> String {
+    let mut document = String::new();
+    document.push_str("{\"result\":\"");
+    document.push_str(tag);
+    document.push_str("\",\"value\":{\"code\":");
+    write_json_string(&mut document, code);
+    document.push_str("}}");
+    document
+}
+
+/// Serializes one typed result into its bounded canonical durable document.
+///
+/// The document mirrors the typed result wire shape (`{"result":kind,"value":…}`).
+/// Oversized text, path lists, and match lists are cut in place with an honest
+/// `truncated` marker so the document always fits the durable bound.
+fn canonical_tool_result_document(result: &ToolResult) -> String {
+    let mut document = String::new();
+    match result {
+        ToolResult::Read(value) | ToolResult::Execute(value) => {
+            let tag = match result {
+                ToolResult::Read(_) => "read",
+                _ => "execute",
+            };
+            document.push_str("{\"result\":\"");
+            document.push_str(tag);
+            document.push_str("\",\"value\":{\"text\":");
+            let budget = MAX_DURABLE_TOOL_RESULT_BYTES
+                .saturating_sub(document.len() + DOCUMENT_RESERVE_BYTES)
+                .max(DOCUMENT_RESERVE_BYTES)
+                / TRUNCATED_TEXT_BUDGET_DIVISOR;
+            let complete = write_bounded_json_string(&mut document, value.text.as_str(), budget);
+            document.push_str(",\"truncated\":");
+            document.push_str(if value.truncated || !complete {
+                "true"
+            } else {
+                "false"
+            });
+            document.push_str("}}");
+        }
+        ToolResult::Glob(value) => {
+            document.push_str("{\"result\":\"glob\",\"value\":{\"paths\":[");
+            let mut emitted = 0_usize;
+            for path in &value.paths {
+                if !append_fitting_json_string(&mut document, path.as_str(), &mut emitted) {
+                    break;
+                }
+            }
+            finish_truncated_array(
+                &mut document,
+                value.truncated || emitted < value.paths.len(),
+            );
+        }
+        ToolResult::Grep(value) => {
+            document.push_str("{\"result\":\"grep\",\"value\":{\"matches\":[");
+            let mut emitted = 0_usize;
+            for matched in &value.matches {
+                let mut probe = String::new();
+                probe.push_str("{\"path\":");
+                write_json_string(&mut probe, matched.path.as_str());
+                probe.push_str(",\"line\":");
+                probe.push_str(&matched.line.to_string());
+                probe.push_str(",\"column\":");
+                probe.push_str(&matched.column.to_string());
+                probe.push_str(",\"fragment\":");
+                write_json_string(&mut probe, matched.fragment.as_str());
+                probe.push('}');
+                if document.len() + probe.len() + DOCUMENT_RESERVE_BYTES
+                    > MAX_DURABLE_TOOL_RESULT_BYTES
+                {
+                    break;
+                }
+                if emitted > 0 {
+                    document.push(',');
+                }
+                document.push_str(&probe);
+                emitted += 1;
+            }
+            finish_truncated_array(
+                &mut document,
+                value.truncated || emitted < value.matches.len(),
+            );
+        }
+        ToolResult::Write(value) | ToolResult::Edit(value) => {
+            let tag = match result {
+                ToolResult::Write(_) => "write",
+                _ => "edit",
+            };
+            document.push_str("{\"result\":\"");
+            document.push_str(tag);
+            document.push_str("\",\"value\":{\"bytes\":");
+            document.push_str(&value.bytes.to_string());
+            document.push_str("}}");
+        }
+    }
+    document
+}
+
+/// Closes one result array document with its honest truncation marker.
+fn finish_truncated_array(document: &mut String, truncated: bool) {
+    document.push_str("],\"truncated\":");
+    document.push_str(if truncated { "true" } else { "false" });
+    document.push_str("}}");
+}
+
+/// Appends one escaped JSON string element when it still fits the durable bound.
+///
+/// Returns whether the element was appended.
+fn append_fitting_json_string(document: &mut String, value: &str, emitted: &mut usize) -> bool {
+    let mut probe = String::new();
+    write_json_string(&mut probe, value);
+    if document.len() + probe.len() + DOCUMENT_RESERVE_BYTES > MAX_DURABLE_TOOL_RESULT_BYTES {
+        return false;
+    }
+    if *emitted > 0 {
+        document.push(',');
+    }
+    document.push_str(&probe);
+    *emitted += 1;
+    true
+}
+
+/// Writes one compact JSON string with serde-compatible escaping.
+fn write_json_string(document: &mut String, value: &str) {
+    document.push('"');
+    for character in value.chars() {
+        push_escaped_character(document, character);
+    }
+    document.push('"');
+}
+
+/// Writes one JSON string cut to the raw-byte budget at a character boundary.
+///
+/// Returns whether the entire value fit without cutting.
+fn write_bounded_json_string(document: &mut String, value: &str, raw_budget: usize) -> bool {
+    document.push('"');
+    let mut raw = 0_usize;
+    let mut complete = true;
+    for character in value.chars() {
+        if raw + character.len_utf8() > raw_budget {
+            complete = false;
+            break;
+        }
+        raw += character.len_utf8();
+        push_escaped_character(document, character);
+    }
+    document.push('"');
+    complete
+}
+
+fn push_escaped_character(document: &mut String, character: char) {
+    match character {
+        '"' => document.push_str("\\\""),
+        '\\' => document.push_str("\\\\"),
+        '\u{8}' => document.push_str("\\b"),
+        '\t' => document.push_str("\\t"),
+        '\n' => document.push_str("\\n"),
+        '\u{c}' => document.push_str("\\f"),
+        '\r' => document.push_str("\\r"),
+        control if (control as u32) < 0x20 => {
+            const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+            let code = control as u32;
+            document.push_str("\\u00");
+            document.push(HEX_DIGITS[(code >> 4) as usize] as char);
+            document.push(HEX_DIGITS[(code & 0xf) as usize] as char);
+        }
+        other => document.push(other),
+    }
 }
 
 fn started_run_committed_in(change: &intention_storage::CommittedChangeDto, run_id: RunId) -> bool {
@@ -1076,11 +1433,30 @@ fn result_phase_context(
 
 #[cfg(test)]
 mod tests {
-    use super::{expected_tool_id, result_phase_context, terminal_status_for_error};
+    use super::{
+        MAX_DURABLE_TOOL_RESULT_BYTES, canonical_failure_document, canonical_tool_result_document,
+        durable_tool_result_evidence, expected_tool_id, result_phase_context, terminal_error_tag,
+        terminal_status_for_error,
+    };
     use intention_domain::ToolLifecycleStatusDto;
     use intention_hooks::{Phase, PhaseContext};
     use intention_tools::{ToolInput, ToolResult};
-    use intention_types::{ErrorDto, ToolCallId};
+    use intention_types::{ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
+
+    fn bounded(value: &str) -> intention_tools::BoundedText {
+        intention_tools::BoundedText::new(value)
+            .unwrap_or_else(|_| unreachable!("fixture tool text is bounded"))
+    }
+
+    fn relative(value: &str) -> intention_types::WorkspaceRelativePathDto {
+        intention_types::WorkspaceRelativePathDto::parse(value)
+            .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
+    }
+
+    fn fixture_time() -> TimestampDto {
+        TimestampDto::from_unix_seconds(1)
+            .unwrap_or_else(|_| unreachable!("fixture timestamp is valid"))
+    }
 
     #[test]
     fn maps_each_typed_tool_input_to_its_id() {
@@ -1128,5 +1504,195 @@ mod tests {
             result_phase_context(Phase::AfterToolResultPublished, call, &result),
             PhaseContext::Published { .. }
         ));
+    }
+
+    #[test]
+    fn canonical_documents_cover_each_typed_result_family() {
+        let read = ToolResult::Read(intention_tools::TextResult {
+            text: bounded("hello"),
+            truncated: false,
+        });
+        assert_eq!(
+            canonical_tool_result_document(&read),
+            "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
+        );
+        let execute = ToolResult::Execute(intention_tools::TextResult {
+            text: bounded("done"),
+            truncated: true,
+        });
+        assert_eq!(
+            canonical_tool_result_document(&execute),
+            "{\"result\":\"execute\",\"value\":{\"text\":\"done\",\"truncated\":true}}"
+        );
+        let glob = ToolResult::Glob(intention_tools::PathsResult {
+            paths: vec![relative("src/a.rs"), relative("src/b.rs")],
+            truncated: false,
+        });
+        assert_eq!(
+            canonical_tool_result_document(&glob),
+            "{\"result\":\"glob\",\"value\":{\"paths\":[\"src/a.rs\",\"src/b.rs\"],\"truncated\":false}}"
+        );
+        let grep = ToolResult::Grep(intention_tools::GrepResult {
+            matches: vec![intention_tools::GrepMatch {
+                path: relative("src/a.rs"),
+                line: 3,
+                column: 5,
+                fragment: bounded("needle"),
+            }],
+            truncated: false,
+        });
+        assert_eq!(
+            canonical_tool_result_document(&grep),
+            "{\"result\":\"grep\",\"value\":{\"matches\":[{\"path\":\"src/a.rs\",\"line\":3,\"column\":5,\"fragment\":\"needle\"}],\"truncated\":false}}"
+        );
+        let write = ToolResult::Write(intention_tools::WriteResult { bytes: 17 });
+        assert_eq!(
+            canonical_tool_result_document(&write),
+            "{\"result\":\"write\",\"value\":{\"bytes\":17}}"
+        );
+        let edit = ToolResult::Edit(intention_tools::WriteResult { bytes: 2 });
+        assert_eq!(
+            canonical_tool_result_document(&edit),
+            "{\"result\":\"edit\",\"value\":{\"bytes\":2}}"
+        );
+    }
+
+    #[test]
+    fn canonical_documents_escape_json_special_characters() {
+        let read = ToolResult::Read(intention_tools::TextResult {
+            text: bounded("quote\"back\\slash\nend\u{1}"),
+            truncated: false,
+        });
+        assert_eq!(
+            canonical_tool_result_document(&read),
+            "{\"result\":\"read\",\"value\":{\"text\":\"quote\\\"back\\\\slash\\nend\\u0001\",\"truncated\":false}}"
+        );
+    }
+
+    #[test]
+    fn oversized_text_truncates_within_the_durable_bound() {
+        let read = ToolResult::Read(intention_tools::TextResult {
+            text: bounded(&"x".repeat(1024 * 1024)),
+            truncated: false,
+        });
+        let document = canonical_tool_result_document(&read);
+        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
+        assert!(document.starts_with("{\"result\":\"read\",\"value\":{\"text\":\""));
+        assert!(document.ends_with("\"truncated\":true}}"));
+    }
+
+    #[test]
+    fn oversized_path_lists_truncate_within_the_durable_bound() {
+        let paths = (0..20_000)
+            .map(|index| relative(&format!("dir-{index}/long-file-name-{index}.txt")))
+            .collect();
+        let glob = ToolResult::Glob(intention_tools::PathsResult {
+            paths,
+            truncated: false,
+        });
+        let document = canonical_tool_result_document(&glob);
+        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
+        assert!(document.starts_with("{\"result\":\"glob\",\"value\":{\"paths\":[\""));
+        assert!(document.ends_with("\"truncated\":true}}"));
+    }
+
+    #[test]
+    fn oversized_match_lists_truncate_within_the_durable_bound() {
+        let matches = (0..512)
+            .map(|index| intention_tools::GrepMatch {
+                path: relative(&format!("dir-{index}/file.rs")),
+                line: index + 1,
+                column: 1,
+                fragment: bounded(&"y".repeat(64 * 1024)),
+            })
+            .collect();
+        let grep = ToolResult::Grep(intention_tools::GrepResult {
+            matches,
+            truncated: false,
+        });
+        let document = canonical_tool_result_document(&grep);
+        assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
+        assert!(document.starts_with("{\"result\":\"grep\",\"value\":{\"matches\":[{\"path\":"));
+        assert!(document.ends_with("\"truncated\":true}}"));
+    }
+
+    #[test]
+    fn failure_documents_carry_the_terminal_discriminator_and_code() {
+        assert_eq!(
+            canonical_failure_document("failed", "workspace_path_unavailable"),
+            "{\"result\":\"failed\",\"value\":{\"code\":\"workspace_path_unavailable\"}}"
+        );
+        assert_eq!(
+            terminal_error_tag(&ErrorDto::validation("tool_cancelled", "x")),
+            "cancelled"
+        );
+        assert_eq!(
+            terminal_error_tag(&ErrorDto::validation(
+                "tool_execute_external_effect_unknown",
+                "x"
+            )),
+            "external_effect_unknown"
+        );
+        assert_eq!(
+            terminal_error_tag(&ErrorDto::validation("other", "x")),
+            "failed"
+        );
+    }
+
+    #[test]
+    fn durable_evidence_binds_exact_identity_kind_and_time() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let call_id = ToolCallId::new();
+        let read = ToolResult::Read(intention_tools::TextResult {
+            text: bounded("hello"),
+            truncated: false,
+        });
+        let evidence = durable_tool_result_evidence(
+            session_id,
+            run_id,
+            call_id,
+            "read",
+            Ok(&read),
+            fixture_time(),
+        )
+        .unwrap_or_else(|_| unreachable!("typed result evidence is valid"));
+        assert_eq!(evidence.session_id(), session_id);
+        assert_eq!(evidence.run_id(), run_id);
+        assert_eq!(evidence.call_id(), call_id);
+        assert_eq!(evidence.kind(), intention_storage::ToolResultKindDto::Read);
+        assert_eq!(
+            evidence.content(),
+            "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
+        );
+        assert_eq!(evidence.occurred_at(), fixture_time());
+        let cancelled = durable_tool_result_evidence(
+            session_id,
+            run_id,
+            call_id,
+            "execute",
+            Err(&ErrorDto::validation("tool_cancelled", "x")),
+            fixture_time(),
+        )
+        .unwrap_or_else(|_| unreachable!("failure evidence is valid"));
+        assert_eq!(
+            cancelled.kind(),
+            intention_storage::ToolResultKindDto::Execute
+        );
+        assert_eq!(
+            cancelled.content(),
+            "{\"result\":\"cancelled\",\"value\":{\"code\":\"tool_cancelled\"}}"
+        );
+        assert!(
+            durable_tool_result_evidence(
+                session_id,
+                run_id,
+                call_id,
+                "unknown",
+                Ok(&read),
+                fixture_time(),
+            )
+            .is_err()
+        );
     }
 }

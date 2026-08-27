@@ -746,6 +746,8 @@ pub enum DomainEventDto {
     PlanStatusChanged(PlanStatusChangedEventDto),
     /// A typed local tool lifecycle fact was recorded.
     ToolLifecycle(ToolLifecycleEventDto),
+    /// A normalized, bounded local tool result was recorded for durable persistence.
+    ToolResultRecorded(ToolResultRecordedEventDto),
 }
 
 /// The durable lifecycle state of one ordinary local tool call.
@@ -926,6 +928,259 @@ impl ToolLifecycleEventDto {
     pub fn detail(&self) -> &str {
         &self.detail
     }
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The maximum persisted normalized tool-result content in bytes.
+const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 4 * 1024;
+/// The maximum number of persisted structured tool-result metadata entries.
+const MAX_TOOL_RESULT_METADATA_ENTRIES: usize = 16;
+/// The maximum persisted tool-result metadata key length in bytes.
+const MAX_TOOL_RESULT_METADATA_KEY_BYTES: usize = 128;
+/// The maximum persisted tool-result metadata value length in bytes.
+const MAX_TOOL_RESULT_METADATA_VALUE_BYTES: usize = 1024;
+
+/// The terminal outcome recorded for one local tool result.
+///
+/// The taxonomy is deliberately closed to terminal outcomes: admission,
+/// rejection, and start evidence belong to [`ToolLifecycleStatusDto`] facts.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultStatusDto {
+    /// The tool completed and produced a normalized safe result.
+    Completed,
+    /// The tool reported a safe failure outcome.
+    Failed,
+    /// The tool stopped because its run was cancelled.
+    Cancelled,
+    /// The tool's external effect could not be confirmed.
+    ExternalEffectUnknown,
+}
+
+impl ToolResultStatusDto {
+    /// Returns the matching terminal local tool lifecycle status.
+    #[must_use]
+    pub const fn lifecycle_status(self) -> ToolLifecycleStatusDto {
+        match self {
+            Self::Completed => ToolLifecycleStatusDto::Completed,
+            Self::Failed => ToolLifecycleStatusDto::Failed,
+            Self::Cancelled => ToolLifecycleStatusDto::Cancelled,
+            Self::ExternalEffectUnknown => ToolLifecycleStatusDto::ExternalEffectUnknown,
+        }
+    }
+}
+
+/// One bounded, credential-free structured metadata entry of a tool result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolResultMetadataEntryDto {
+    key: String,
+    value: String,
+}
+
+impl<'de> Deserialize<'de> for ToolResultMetadataEntryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawToolResultMetadataEntryDto {
+            key: String,
+            value: String,
+        }
+
+        let raw = RawToolResultMetadataEntryDto::deserialize(deserializer)?;
+        Self::new(raw.key, raw.value).map_err(de::Error::custom)
+    }
+}
+
+impl ToolResultMetadataEntryDto {
+    /// Creates one bounded metadata entry with a non-blank key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the key is blank or either field exceeds
+    /// its documented bound or contains a NUL character.
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> DtoResult<Self> {
+        let key = key.into();
+        let value = value.into();
+        if key.trim().is_empty()
+            || key.len() > MAX_TOOL_RESULT_METADATA_KEY_BYTES
+            || value.len() > MAX_TOOL_RESULT_METADATA_VALUE_BYTES
+            || key.contains('\0')
+            || value.contains('\0')
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result_metadata",
+                "tool result metadata must be bounded with a non-blank key",
+            ));
+        }
+        Ok(Self { key, value })
+    }
+
+    /// Returns the stable metadata key.
+    #[must_use]
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Returns the bounded metadata value.
+    #[must_use]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+/// The durable record of one normalized safe local tool result.
+///
+/// The payload is typed and bounded by construction and carries no credential,
+/// configuration path, raw operating-system error, or unbounded content: it
+/// persists only the normalized safe result supplied by the tool boundary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolResultRecordedEventDto {
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    tool_id: String,
+    status: ToolResultStatusDto,
+    normalized_content: String,
+    structured_metadata: Vec<ToolResultMetadataEntryDto>,
+    occurred_at: TimestampDto,
+}
+
+impl<'de> Deserialize<'de> for ToolResultRecordedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawToolResultRecordedEventDto {
+            session_id: SessionId,
+            run_id: RunId,
+            call_id: ToolCallId,
+            tool_id: String,
+            status: ToolResultStatusDto,
+            normalized_content: String,
+            #[serde(default)]
+            structured_metadata: Vec<ToolResultMetadataEntryDto>,
+            occurred_at: TimestampDto,
+        }
+
+        let raw = RawToolResultRecordedEventDto::deserialize(deserializer)?;
+        Self::new(
+            raw.session_id,
+            raw.run_id,
+            raw.call_id,
+            raw.tool_id,
+            raw.status,
+            raw.normalized_content,
+            raw.structured_metadata,
+            raw.occurred_at,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+impl ToolResultRecordedEventDto {
+    /// Creates a bounded durable record of one safe local tool result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the tool identity is blank, the normalized
+    /// content or metadata exceeds its documented bound, or metadata keys are duplicated.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The closed M5 tool-result payload keeps one flat validating constructor."
+    )]
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        tool_id: impl Into<String>,
+        status: ToolResultStatusDto,
+        normalized_content: impl Into<String>,
+        structured_metadata: Vec<ToolResultMetadataEntryDto>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Self> {
+        let tool_id = tool_id.into();
+        let normalized_content = normalized_content.into();
+        if tool_id.trim().is_empty()
+            || normalized_content.len() > MAX_TOOL_RESULT_CONTENT_BYTES
+            || normalized_content.contains('\0')
+            || structured_metadata.len() > MAX_TOOL_RESULT_METADATA_ENTRIES
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result_record",
+                "tool result record needs a tool identity and bounded safe content",
+            ));
+        }
+        let mut seen_keys = std::collections::HashSet::with_capacity(structured_metadata.len());
+        if structured_metadata
+            .iter()
+            .any(|entry| !seen_keys.insert(entry.key()))
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result_metadata",
+                "tool result metadata keys must be unique",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            call_id,
+            tool_id,
+            status,
+            normalized_content,
+            structured_metadata,
+            occurred_at,
+        })
+    }
+
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the owning run identity.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+
+    /// Returns the durable tool-call identity of the recorded result.
+    #[must_use]
+    pub const fn call_id(&self) -> ToolCallId {
+        self.call_id
+    }
+
+    /// Returns the stable registered tool identity.
+    #[must_use]
+    pub fn tool_id(&self) -> &str {
+        &self.tool_id
+    }
+
+    /// Returns the terminal outcome recorded for the tool result.
+    #[must_use]
+    pub const fn status(&self) -> ToolResultStatusDto {
+        self.status
+    }
+
+    /// Returns the normalized safe result content.
+    #[must_use]
+    pub fn normalized_content(&self) -> &str {
+        &self.normalized_content
+    }
+
+    /// Returns the bounded structured metadata entries.
+    #[must_use]
+    pub fn structured_metadata(&self) -> &[ToolResultMetadataEntryDto] {
+        &self.structured_metadata
+    }
+
+    /// Returns the occurrence time.
     #[must_use]
     pub const fn occurred_at(&self) -> TimestampDto {
         self.occurred_at
@@ -1529,6 +1784,34 @@ mod tests {
                     "unexpected tool transition: {from:?} -> {to:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn tool_result_statuses_map_only_to_terminal_lifecycle_statuses() {
+        for (status, lifecycle) in [
+            (
+                ToolResultStatusDto::Completed,
+                ToolLifecycleStatusDto::Completed,
+            ),
+            (ToolResultStatusDto::Failed, ToolLifecycleStatusDto::Failed),
+            (
+                ToolResultStatusDto::Cancelled,
+                ToolLifecycleStatusDto::Cancelled,
+            ),
+            (
+                ToolResultStatusDto::ExternalEffectUnknown,
+                ToolLifecycleStatusDto::ExternalEffectUnknown,
+            ),
+        ] {
+            assert_eq!(status.lifecycle_status(), lifecycle);
+            assert!(
+                validate_tool_lifecycle_transition(
+                    Some(&ToolLifecycleStatusDto::Started),
+                    &status.lifecycle_status(),
+                )
+                .is_ok()
+            );
         }
     }
 }

@@ -13,7 +13,7 @@ use intention_storage::{
     AppendToolLifecycleEventInputDto, CommittedChangeDto, CreateSessionInputDto,
     ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
     RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    TransitionRunInputDto,
+    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
@@ -321,6 +321,13 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
     );
     assert_eq!(
         repository
+            .load_tool_result(session_id, run_id, intention_types::ToolCallId::new())
+            .expect_err("repository operation must be unavailable")
+            .code(),
+        "tool_result_unavailable"
+    );
+    assert_eq!(
+        repository
             .append_model_run_facts(append)
             .expect_err("repository operation must be unavailable")
             .code(),
@@ -446,4 +453,126 @@ fn storage_constructors_cover_successful_accessors_and_validation_paths() {
         RecoverUnfinishedRunsInputDto::new(time).recovered_at(),
         time
     );
+}
+
+#[test]
+fn tool_result_evidence_respects_typed_identity_and_terminal_boundaries() {
+    let time = TimestampDto::from_unix_seconds(3).expect("fixture time is valid");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let call_id = intention_types::ToolCallId::new();
+    for kind in [
+        ToolResultKindDto::Read,
+        ToolResultKindDto::Glob,
+        ToolResultKindDto::Grep,
+        ToolResultKindDto::Write,
+        ToolResultKindDto::Edit,
+        ToolResultKindDto::Execute,
+    ] {
+        assert_eq!(
+            ToolResultKindDto::parse(kind.name()).expect("known kind parses"),
+            kind
+        );
+    }
+    assert!(ToolResultKindDto::parse("unknown").is_err());
+    assert!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            ToolResultKindDto::Read,
+            " ",
+            time
+        )
+        .is_err()
+    );
+    assert!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            ToolResultKindDto::Read,
+            "nul\0byte",
+            time
+        )
+        .is_err()
+    );
+    assert!(
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            ToolResultKindDto::Read,
+            "x".repeat(512 * 1024 + 1),
+            time
+        )
+        .is_err()
+    );
+    let evidence = ToolResultEvidenceDto::new(
+        session_id,
+        run_id,
+        call_id,
+        ToolResultKindDto::Read,
+        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#,
+        time,
+    )
+    .expect("evidence is valid");
+    assert_eq!(evidence.session_id(), session_id);
+    assert_eq!(evidence.run_id(), run_id);
+    assert_eq!(evidence.call_id(), call_id);
+    assert_eq!(evidence.kind(), ToolResultKindDto::Read);
+    assert_eq!(
+        evidence.content(),
+        r#"{"result":"read","value":{"text":"hello","truncated":false}}"#
+    );
+    assert_eq!(evidence.occurred_at(), time);
+
+    let started = ToolLifecycleEventDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolLifecycleStatusDto::Started,
+        "started",
+        time,
+    )
+    .expect("started event is valid");
+    let input = AppendToolLifecycleEventInputDto::new(started);
+    assert!(input.result().is_none());
+    assert_eq!(
+        input
+            .with_result(evidence.clone())
+            .expect_err("non-terminal lifecycle status cannot carry evidence")
+            .code(),
+        "invalid_tool_result"
+    );
+    let mismatched = ToolLifecycleEventDto::new(
+        session_id,
+        RunId::new(),
+        call_id,
+        "read",
+        ToolLifecycleStatusDto::Completed,
+        "completed",
+        time,
+    )
+    .expect("completed event is valid");
+    assert!(
+        AppendToolLifecycleEventInputDto::new(mismatched)
+            .with_result(evidence.clone())
+            .is_err()
+    );
+    let completed = ToolLifecycleEventDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolLifecycleStatusDto::Completed,
+        "completed",
+        time,
+    )
+    .expect("completed event is valid");
+    let input = AppendToolLifecycleEventInputDto::new(completed)
+        .with_result(evidence.clone())
+        .expect("terminal lifecycle status carries evidence");
+    assert_eq!(input.result(), Some(&evidence));
 }

@@ -24,10 +24,9 @@ active_production_crates = [
   "intention-hooks",
 ]
 skeleton_crates = [
-  "intention-vfr",
   "intention-headroom",
   "intention-plans",
-  "intention-tauri",
+  "intention-vfr",
 ]
 
 [non_production_test_dependencies]
@@ -187,10 +186,10 @@ coverage_tier = "A"
 name = "intention-domain"
 responsibility = "Domain DTOs, value validation, domain events, and invariants."
 test_target = "domain state and invariant tests"
-test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires"]
+test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
 coverage_tier = "A"
 
-# M3 application lifecycle targets are checked against Cargo metadata.
+# Active M3 application lifecycle targets are checked against Cargo metadata.
 [[future_crates]]
 name = "intention-application"
 responsibility = "Commands, queries, use cases, and transaction orchestration."

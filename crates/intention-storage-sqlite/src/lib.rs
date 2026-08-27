@@ -20,17 +20,17 @@ use intention_storage::{
     AppendModelRunFactsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
     CreateSessionInputDto, ModelContextMessageDto, ModelContextRoleDto,
     RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StartingRunModelContextDto,
-    StorageRepositoryDto, TransitionRunInputDto,
+    StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
     EventId, EventMetadataDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use rusqlite_migration::{M, Migrations};
 use sqlite::OptionalExtension;
 
-const CURRENT_STORAGE_SCHEMA: i64 = 2;
+const CURRENT_STORAGE_SCHEMA: i64 = 3;
 const MAX_CANONICAL_FACT_BYTES: usize = 512 * 1024;
 const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
@@ -100,6 +100,19 @@ CREATE TABLE model_run_snapshots (
 );
 INSERT INTO run_cursors(run_id, session_id, cursor)
   SELECT run_id, session_id, 0 FROM runs;
+", ), M::up(
+    "
+CREATE TABLE tool_results (
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  session_id TEXT NOT NULL REFERENCES sessions(session_id),
+  call_id TEXT NOT NULL,
+  event_id TEXT NOT NULL REFERENCES domain_events(event_id),
+  kind TEXT NOT NULL CHECK(kind IN ('read','glob','grep','write','edit','execute')),
+  content TEXT NOT NULL CHECK(length(content) > 0),
+  occurred_at INTEGER NOT NULL CHECK(occurred_at >= 0),
+  PRIMARY KEY(run_id, call_id),
+  UNIQUE(event_id)
+);
 ", )])
 });
 
@@ -596,6 +609,24 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .into_iter()
                 .next()
                 .ok_or_else(|| codec_error("tool lifecycle event was not appended"))?;
+            // Typed result evidence commits inside this same transaction, so it
+            // is atomic with the lifecycle event, projection, and snapshots.
+            if let Some(evidence) = input.result() {
+                tx.execute(
+                    "INSERT INTO tool_results(run_id, session_id, call_id, event_id, kind, content, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    sqlite::params![
+                        input.event().run_id().to_string(),
+                        session_id.to_string(),
+                        input.event().call_id().to_string(),
+                        committed.event_id().to_string(),
+                        evidence.kind().name(),
+                        evidence.content(),
+                        evidence.occurred_at().unix_seconds(),
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+            self.fault(FaultPoint::ToolResult)?;
             // Tool lifecycle facts are ordinary session state changes: refresh
             // the session/run projections and snapshots in the same transaction
             // as the event, rather than leaving journal-only evidence behind.
@@ -1047,6 +1078,60 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         serde_json::from_str(&snapshot).map_err(|_| run_configuration_unavailable())
     }
 
+    fn load_tool_result(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+    ) -> DtoResult<ToolResultEvidenceDto> {
+        let row = {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT tool_results.kind, tool_results.content, tool_results.occurred_at, domain_events.envelope_json FROM tool_results JOIN domain_events ON domain_events.event_id=tool_results.event_id WHERE tool_results.run_id=?1 AND tool_results.session_id=?2 AND tool_results.call_id=?3",
+                    sqlite::params![
+                        run_id.to_string(),
+                        session_id.to_string(),
+                        call_id.to_string()
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(storage_error)?
+        };
+        let Some((kind, content, occurred_at, envelope_json)) = row else {
+            return Err(not_found(
+                "tool_result_not_found",
+                "the requested durable tool result does not exist",
+            ));
+        };
+        let envelope: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&envelope_json).map_err(codec_error)?;
+        if envelope.session_id() != session_id
+            || envelope.run_id() != Some(run_id)
+            || !matches!(envelope.payload(), DomainEventDto::ToolLifecycle(item) if item.call_id() == call_id)
+        {
+            return Err(codec_error(
+                "tool result evidence is not anchored to its lifecycle event",
+            ));
+        }
+        ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            ToolResultKindDto::parse(&kind).map_err(codec_error)?,
+            content,
+            TimestampDto::from_unix_seconds(occurred_at).map_err(codec_error)?,
+        )
+    }
+
     fn load_starting_run_model_context(
         &self,
         session_id: SessionId,
@@ -1358,6 +1443,7 @@ pub enum FaultPoint {
     ModelFacts,
     Projection,
     Snapshot,
+    ToolResult,
 }
 
 struct EventDraft {
@@ -1873,15 +1959,17 @@ mod tests {
     use super::*;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_domain::{
-        CreateSessionCommandDto, RunEventCursorDto, RunModeDto, WorkspaceRootDto,
+        CreateSessionCommandDto, RunEventCursorDto, RunModeDto, ToolLifecycleEventDto,
+        ToolLifecycleStatusDto, WorkspaceRootDto,
     };
     use intention_storage::{
-        AcceptUserTurnInputDto, AppendModelRunFactsInputDto, CreateSessionInputDto,
-        StorageRepositoryDto, TransitionRunInputDto,
+        AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendToolLifecycleEventInputDto,
+        CreateSessionInputDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
+        TransitionRunInputDto,
     };
     use intention_types::{
         ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-        TimestampDto, TurnId, UsageDto, WorkspaceId,
+        TimestampDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
     };
 
     fn fixture_time(value: i64) -> TimestampDto {
@@ -2385,5 +2473,99 @@ mod tests {
         repository.arm_fault(FaultPoint::Snapshot);
         assert!(repository.fault(FaultPoint::Snapshot).is_err());
         assert!(repository.fault(FaultPoint::Snapshot).is_ok());
+    }
+
+    #[test]
+    fn tool_result_fault_rolls_back_evidence_event_and_snapshots_durably() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        accept_fixture_turn(&repository, session_id, TurnId::new(), run_id, "active");
+        let call_id = ToolCallId::new();
+        repository
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                ToolLifecycleEventDto::new(
+                    session_id,
+                    run_id,
+                    call_id,
+                    "read",
+                    ToolLifecycleStatusDto::Admitted,
+                    "admitted",
+                    fixture_time(3),
+                )
+                .expect("admitted event is valid"),
+            ))
+            .expect("admitted event commits without evidence");
+        repository
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                ToolLifecycleEventDto::new(
+                    session_id,
+                    run_id,
+                    call_id,
+                    "read",
+                    ToolLifecycleStatusDto::Started,
+                    "started",
+                    fixture_time(3),
+                )
+                .expect("started event is valid"),
+            ))
+            .expect("started event commits without evidence");
+        let baseline_snapshot = repository
+            .load_session_snapshot(session_id)
+            .expect("baseline snapshot loads");
+        let baseline_tail = repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
+            .expect("baseline tail loads");
+        let evidence = ToolResultEvidenceDto::new(
+            session_id,
+            run_id,
+            call_id,
+            ToolResultKindDto::Read,
+            "{\"result\":\"read\"}",
+            fixture_time(4),
+        )
+        .expect("evidence is valid");
+        repository.arm_fault(FaultPoint::ToolResult);
+        let error = repository
+            .append_tool_lifecycle_event(
+                AppendToolLifecycleEventInputDto::new(
+                    ToolLifecycleEventDto::new(
+                        session_id,
+                        run_id,
+                        call_id,
+                        "read",
+                        ToolLifecycleStatusDto::Completed,
+                        "completed",
+                        fixture_time(4),
+                    )
+                    .expect("completed event is valid"),
+                )
+                .with_result(evidence)
+                .expect("terminal evidence attaches"),
+            )
+            .expect_err("injected tool result fault aborts the transaction");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+        assert_eq!(
+            reopened
+                .load_session_snapshot(session_id)
+                .expect("reopened baseline snapshot loads"),
+            baseline_snapshot
+        );
+        assert_eq!(
+            reopened
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("reopened tail loads"),
+            baseline_tail
+        );
+        assert_eq!(
+            reopened
+                .load_tool_result(session_id, run_id, call_id)
+                .expect_err("evidence rolled back with its transaction")
+                .code(),
+            "tool_result_not_found"
+        );
     }
 }

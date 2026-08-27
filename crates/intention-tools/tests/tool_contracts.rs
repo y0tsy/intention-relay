@@ -6,9 +6,10 @@
 
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, ReadInput,
-    TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput, ToolResult, ToolService, WriteInput,
-    registry,
+    BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
+    GrepResult, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput, TOOL_DESCRIPTOR_REVISION,
+    TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput, ToolProcessStatus, ToolProjectedContent,
+    ToolResult, ToolResultProjection, ToolService, WriteInput, WriteResult, registry,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -81,11 +82,94 @@ fn tool_service_covers_read_and_edit_success_values() {
             ToolInput::Edit(EditInput {
                 path,
                 old: BoundedText::new("old").expect("old"),
-                new: BoundedText::new("updated").expect("new")
+                new: BoundedText::new("updated").expect("new"),
+                expected_content: None
             })
         ),
         Ok(ToolResult::Edit(_))
     ));
+}
+
+#[test]
+fn write_expected_content_accepts_match_and_rejects_mismatch() {
+    let root_dir = fixture_dir("write-expected-content");
+    let path = root_dir.path().join("file.txt");
+    std::fs::write(&path, "before").expect("seed");
+    let service = ToolService::new(
+        intention_workspace::WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
+        )
+        .expect("workspace"),
+    );
+    let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
+    let result = service.dispatch(
+        ToolCallId::new(),
+        ToolInput::Write(WriteInput {
+            path: relative.clone(),
+            content: BoundedText::new("after").expect("content"),
+            expected_content: Some(BoundedText::new("before").expect("expected")),
+        }),
+    );
+    assert!(result.is_ok());
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "after");
+
+    let error = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: relative,
+                content: BoundedText::new("final").expect("content"),
+                expected_content: Some(BoundedText::new("stale").expect("expected")),
+            }),
+        )
+        .expect_err("mismatched expected content");
+    assert_eq!(error.code(), "tool_write_conflict");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "after");
+}
+
+#[test]
+fn edit_expected_content_accepts_match_and_rejects_mismatch() {
+    let root_dir = fixture_dir("edit-expected-content");
+    let path = root_dir.path().join("file.txt");
+    std::fs::write(&path, "before needle").expect("seed");
+    let service = ToolService::new(
+        intention_workspace::WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
+        )
+        .expect("workspace"),
+    );
+    let relative = WorkspaceRelativePathDto::parse("file.txt").expect("path");
+    let result = service.dispatch(
+        ToolCallId::new(),
+        ToolInput::Edit(EditInput {
+            path: relative.clone(),
+            old: BoundedText::new("needle").expect("old"),
+            new: BoundedText::new("changed").expect("new"),
+            expected_content: Some(BoundedText::new("before needle").expect("expected")),
+        }),
+    );
+    assert!(result.is_ok());
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "before changed"
+    );
+
+    let error = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: relative,
+                old: BoundedText::new("changed").expect("old"),
+                new: BoundedText::new("final").expect("new"),
+                expected_content: Some(BoundedText::new("stale").expect("expected")),
+            }),
+        )
+        .expect_err("mismatched expected content");
+    assert_eq!(error.code(), "tool_edit_conflict");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read"),
+        "before changed"
+    );
 }
 
 #[test]
@@ -105,7 +189,8 @@ fn tool_service_covers_write_and_edit_failures() {
                 ToolCallId::new(),
                 ToolInput::Write(WriteInput {
                     path: missing,
-                    content: BoundedText::new("x").expect("content")
+                    content: BoundedText::new("x").expect("content"),
+                    expected_content: None
                 })
             )
             .is_err()
@@ -118,7 +203,8 @@ fn tool_service_covers_write_and_edit_failures() {
                 ToolInput::Edit(EditInput {
                     path,
                     old: BoundedText::new("").expect("old"),
-                    new: BoundedText::new("x").expect("new")
+                    new: BoundedText::new("x").expect("new"),
+                    expected_content: None
                 })
             )
             .is_ok()
@@ -149,7 +235,7 @@ fn tool_service_covers_successful_empty_search() {
 }
 
 #[test]
-fn tool_service_covers_nonzero_execute_and_bounded_read() {
+fn tool_service_covers_nonzero_execute_as_normalized_result() {
     let root_dir = fixture_dir("execute-");
     let root = root_dir.path();
     std::fs::write(root.join("file.txt"), "content").expect("seed");
@@ -158,27 +244,58 @@ fn tool_service_covers_nonzero_execute_and_bounded_read() {
     )
     .expect("workspace root");
     let service = ToolService::new(workspace);
-    let error = service
-        .dispatch(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
-                    .expect("program"),
-                args: if cfg!(windows) {
-                    vec![
-                        BoundedText::new("/C").expect("arg"),
-                        BoundedText::new("exit 2").expect("arg"),
-                    ]
-                } else {
-                    vec![
-                        BoundedText::new("-c").expect("arg"),
-                        BoundedText::new("exit 2").expect("arg"),
-                    ]
-                },
-            }),
-        )
-        .expect_err("nonzero execution must be typed failure");
-    assert_eq!(error.code(), "tool_execute_nonzero");
+    let nonzero_input = || {
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).expect("program"),
+            args: if cfg!(windows) {
+                vec![
+                    BoundedText::new("/C").expect("arg"),
+                    BoundedText::new("exit 2").expect("arg"),
+                ]
+            } else {
+                vec![
+                    BoundedText::new("-c").expect("arg"),
+                    BoundedText::new("exit 2").expect("arg"),
+                ]
+            },
+        })
+    };
+    // A known non-zero exit is a normalized program result on the typed
+    // output path, not a transport-level error.
+    let result = service
+        .dispatch(ToolCallId::new(), nonzero_input())
+        .expect("nonzero exit must stay a typed result");
+    let ToolResult::Execute(result) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    assert!(result.text.as_str().contains("exit_code:2"));
+
+    let call_id = ToolCallId::new();
+    let envelope = service
+        .invoke_enveloped(intention_tools::ToolInvocation {
+            schema_version: TOOL_SCHEMA_VERSION,
+            context: intention_tools::ToolContext {
+                session_id: 3,
+                run_id: 4,
+                call_id,
+            },
+            input: nonzero_input(),
+        })
+        .expect("envelope for a known terminal exit");
+    assert_eq!(envelope.context.call_id, call_id);
+    assert_eq!(
+        envelope
+            .execution
+            .and_then(|metadata| metadata.process_status),
+        Some(ToolProcessStatus::NonZero { code: 2 })
+    );
+
+    let encoded = serde_json::to_string(&ToolProcessStatus::NonZero { code: 2 }).unwrap();
+    assert_eq!(encoded, r#"{"kind":"non_zero","code":2}"#);
+    assert_eq!(
+        serde_json::from_str::<ToolProcessStatus>(&encoded).unwrap(),
+        ToolProcessStatus::NonZero { code: 2 }
+    );
 }
 
 #[test]
@@ -286,6 +403,197 @@ fn glob_and_grep_cover_empty_and_invalid_search_paths() {
 }
 
 #[test]
+fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
+    let dir = fixture_dir("search-validation");
+    std::fs::write(dir.path().join("file.txt"), "é needle\n").unwrap();
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    for pattern in [
+        "",
+        "../*",
+        "..\\*",
+        "/tmp/*",
+        // Windows drive-letter, UNC, and rooted forms must fail closed on
+        // every host so validation never depends on the running platform.
+        "C:/tmp/*",
+        "C:\\tmp\\*",
+        "\\\\server\\share\\*",
+        "\\Users\\*",
+    ] {
+        let pattern = BoundedText::new(pattern).unwrap();
+        let result = service.dispatch(ToolCallId::new(), ToolInput::Glob(GlobInput { pattern }));
+        assert_eq!(result.unwrap_err().code(), "invalid_tool_pattern");
+    }
+    let result = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("needle").unwrap(),
+                path: Some(WorkspaceRelativePathDto::parse("file.txt").unwrap()),
+            }),
+        )
+        .unwrap();
+    let ToolResult::Grep(result) = result else {
+        unreachable!()
+    };
+    assert_eq!(result.matches[0].column, 3);
+}
+
+#[test]
+fn glob_matches_fail_closed_on_symlinks_and_stay_deterministic() {
+    let dir = fixture_dir("glob-determinism");
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::fs::write(dir.path().join("target.txt"), "x").unwrap();
+    std::fs::write(dir.path().join("real/deep.txt"), "x").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(dir.path().join("target.txt"), dir.path().join("alias.txt")).unwrap();
+        symlink(dir.path().join("real"), dir.path().join("linked-dir")).unwrap();
+    }
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    for pattern in ["*.txt", "**/*.txt", "{target,alias}.txt"] {
+        let result = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Glob(GlobInput {
+                    pattern: BoundedText::new(pattern).unwrap(),
+                }),
+            )
+            .unwrap();
+        let ToolResult::Glob(result) = result else {
+            unreachable!("non-glob result")
+        };
+        assert!(!result.truncated, "unexpected truncation for: {pattern}");
+        for path in &result.paths {
+            let value = path.as_str();
+            assert_ne!(value, "alias.txt", "symlink alias reported for: {pattern}");
+            assert!(
+                !value.contains("linked-dir"),
+                "symlinked directory traversed for: {pattern}"
+            );
+        }
+        // The reported subset is sorted and duplicate-free on every replay.
+        let mut sorted = result.paths.clone();
+        sorted.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        sorted.dedup_by(|a, b| a.as_str() == b.as_str());
+        assert_eq!(
+            result.paths, sorted,
+            "nondeterministic subset for: {pattern}"
+        );
+    }
+}
+
+#[test]
+fn bounded_sources_report_truncation_only_past_the_output_bound() {
+    let dir = fixture_dir("bounded-source");
+    std::fs::write(dir.path().join("exact.bin"), vec![b'a'; 65_536]).unwrap();
+    std::fs::write(dir.path().join("over.bin"), vec![b'b'; 65_537]).unwrap();
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    for (name, truncated, length) in [("exact.bin", false, 65_536), ("over.bin", true, 65_536)] {
+        let result = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Read(ReadInput {
+                    path: WorkspaceRelativePathDto::parse(name).unwrap(),
+                }),
+            )
+            .unwrap();
+        let ToolResult::Read(result) = result else {
+            unreachable!("non-read result")
+        };
+        assert_eq!(result.text.as_str().len(), length, "bound cut: {name}");
+        assert_eq!(result.truncated, truncated, "truncation flag: {name}");
+    }
+}
+
+#[test]
+fn grep_does_not_follow_symlinks_or_search_directories() {
+    let dir = fixture_dir("search-links");
+    std::fs::write(dir.path().join("target.txt"), "needle").unwrap();
+    std::fs::create_dir(dir.path().join("folder")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.path().join("target.txt"), dir.path().join("link.txt")).unwrap();
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    for path in ["folder", "link.txt"] {
+        let error = service
+            .dispatch(
+                ToolCallId::new(),
+                ToolInput::Grep(GrepInput {
+                    pattern: BoundedText::new("needle").unwrap(),
+                    path: Some(WorkspaceRelativePathDto::parse(path).unwrap()),
+                }),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error.code(),
+            "tool_search_failed" | "workspace_path_symlink"
+        ));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn write_through_dangling_final_symlink_is_rejected_without_outside_effects() {
+    use std::os::unix::fs::symlink;
+
+    let root_dir = fixture_dir("dangling-write");
+    let outside_dir = tempfile::Builder::new()
+        .prefix("intention-tools-dangling-outside-")
+        .tempdir()
+        .expect("outside temporary directory");
+    let escape_target = outside_dir.path().join("escape.txt");
+    symlink(&escape_target, root_dir.path().join("dangling")).expect("dangling symlink");
+
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace");
+    let service = ToolService::new(workspace);
+
+    let error = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: WorkspaceRelativePathDto::parse("dangling").expect("path"),
+                content: BoundedText::new("must not escape").expect("content"),
+                expected_content: None,
+            }),
+        )
+        .expect_err("dangling final symlink must fail closed");
+    assert_eq!(error.code(), "workspace_path_symlink");
+
+    // No file may be created at the link target outside the workspace, and
+    // the write must not replace the in-workspace link itself.
+    assert!(
+        std::fs::symlink_metadata(&escape_target).is_err(),
+        "write escaped through dangling final symlink"
+    );
+    assert!(
+        std::fs::symlink_metadata(root_dir.path().join("dangling"))
+            .expect("link metadata")
+            .file_type()
+            .is_symlink(),
+        "in-workspace link was modified by rejected write"
+    );
+}
+
+#[test]
 fn file_tools_report_policy_and_execution_failures() {
     let root_dir = fixture_dir("errors-");
     let root = root_dir.path();
@@ -312,7 +620,8 @@ fn file_tools_report_policy_and_execution_failures() {
                 ToolInput::Edit(EditInput {
                     path,
                     old: BoundedText::new("absent").expect("old"),
-                    new: BoundedText::new("new").expect("new")
+                    new: BoundedText::new("new").expect("new"),
+                    expected_content: None
                 })
             )
             .is_err()
@@ -368,7 +677,8 @@ fn file_tools_execute_against_the_declared_workspace() {
             ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: path.clone(),
-                content: BoundedText::new("new").expect("content")
+                content: BoundedText::new("new").expect("content"),
+                expected_content: None
             })
         ),
         Ok(ToolResult::Write(_))
@@ -379,7 +689,8 @@ fn file_tools_execute_against_the_declared_workspace() {
             ToolInput::Edit(EditInput {
                 path,
                 old: BoundedText::new("new").expect("old"),
-                new: BoundedText::new("edited").expect("new")
+                new: BoundedText::new("edited").expect("new"),
+                expected_content: None,
             })
         ),
         Ok(ToolResult::Edit(_))
@@ -433,6 +744,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
             ToolInput::Write(WriteInput {
                 path: missing_parent,
                 content: BoundedText::new("x").expect("content"),
+                expected_content: None,
             }),
         )
         .expect_err("write failure");
@@ -445,6 +757,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
                 path: path.clone(),
                 old: BoundedText::new("absent").expect("old"),
                 new: BoundedText::new("new").expect("new"),
+                expected_content: None,
             }),
         )
         .expect_err("missing edit target");
@@ -462,7 +775,8 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     let ToolResult::Grep(result) = grep else {
         unreachable!("dispatch returned non-grep result")
     };
-    assert_eq!(result.text.as_str(), "needle");
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].fragment.as_str(), "needle");
     assert!(!result.truncated);
 }
 
@@ -501,6 +815,34 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
 }
 
 #[test]
+fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
+    let root_dir = fixture_dir("redaction");
+    let root = root_dir.path();
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace");
+    let service = ToolService::new(workspace);
+    // Assembled at runtime: recognizably fake, yet never a literal
+    // secret-shaped assignment that docs-check rejects.
+    let secret = format!("credential{}", "-leak-probe");
+    let error = service
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: WorkspaceRelativePathDto::parse("missing/new.txt").expect("path"),
+                content: BoundedText::new(secret.as_str()).expect("content"),
+                expected_content: None,
+            }),
+        )
+        .expect_err("write must fail");
+    let rendered = format!("{error:?}");
+    assert!(!rendered.contains(secret.as_str()));
+    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
+    assert!(!rendered.contains("No such file or directory"));
+}
+
+#[test]
 fn tool_service_covers_read_write_and_edit_error_variants() {
     let root_dir = fixture_dir("errors-2");
     let root = root_dir.path();
@@ -528,7 +870,8 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
                 ToolCallId::new(),
                 ToolInput::Write(WriteInput {
                     path: directory.clone(),
-                    content: BoundedText::new("x").expect("content")
+                    content: BoundedText::new("x").expect("content"),
+                    expected_content: None
                 })
             )
             .is_err()
@@ -540,7 +883,8 @@ fn tool_service_covers_read_write_and_edit_error_variants() {
                 ToolInput::Edit(EditInput {
                     path: directory,
                     old: BoundedText::new("x").expect("old"),
-                    new: BoundedText::new("y").expect("new")
+                    new: BoundedText::new("y").expect("new"),
+                    expected_content: None
                 })
             )
             .is_err()
@@ -569,7 +913,7 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
         )
         .expect("grep");
     assert!(
-        matches!(result, ToolResult::Grep(TextResult { text, .. }) if text.as_str() == "needle\nneedle two")
+        matches!(result, ToolResult::Grep(value) if value.matches.iter().map(|m| m.fragment.as_str()).collect::<Vec<_>>() == vec!["needle", "needle two"])
     );
     let result = service
         .dispatch(
@@ -587,11 +931,13 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
 #[test]
 fn descriptors_expose_all_metadata_and_invoke_delegates() {
     let descriptors = registry();
-    assert_eq!(descriptors.len(), 6);
+    assert_eq!(descriptors.len(), 14);
     for descriptor in descriptors {
-        assert_eq!(descriptor.schema_version(), TOOL_SCHEMA_VERSION);
         assert!(!descriptor.description().is_empty());
-        assert!(!descriptor.capabilities().is_empty());
+        if descriptor.schema_version() != 0 {
+            assert_eq!(descriptor.schema_version(), TOOL_SCHEMA_VERSION);
+            assert!(!descriptor.capabilities().is_empty());
+        }
         assert_eq!(
             descriptor.id().as_str().to_string(),
             descriptor.id().to_string()
@@ -718,6 +1064,7 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
             policy: ToolPolicy::Allowed,
             elapsed_ms: 3,
         },
+        execution: None,
     };
     assert_eq!(
         serde_json::from_str::<ToolResultEnvelope>(
@@ -725,6 +1072,30 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
         )
         .expect("envelope"),
         envelope
+    );
+}
+
+#[test]
+fn invocation_call_identity_is_validated() {
+    let id = ToolCallId::new();
+    let invocation = intention_tools::ToolInvocation {
+        schema_version: TOOL_SCHEMA_VERSION,
+        context: intention_tools::ToolContext {
+            session_id: 1,
+            run_id: 2,
+            call_id: id,
+        },
+        input: ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("*.rs").unwrap(),
+        }),
+    };
+    assert!(invocation.validate_call_id(id).is_ok());
+    assert_eq!(
+        invocation
+            .validate_call_id(ToolCallId::new())
+            .unwrap_err()
+            .code(),
+        "tool_call_id_mismatch"
     );
 }
 
@@ -741,6 +1112,7 @@ fn cancelled_dispatch_is_rejected_before_any_tool_effect() {
             ToolInput::Write(WriteInput {
                 path: WorkspaceRelativePathDto::parse("created.txt").unwrap(),
                 content: BoundedText::new("must not write").unwrap(),
+                expected_content: None,
             }),
             CancellationSignal::cancelled(),
         )
@@ -805,7 +1177,7 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
         .unwrap();
     assert!(matches!(
         result,
-        ToolResult::Grep(TextResult {
+        ToolResult::Grep(intention_tools::GrepResult {
             truncated: true,
             ..
         })
@@ -813,35 +1185,128 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
 }
 
 #[test]
-fn execute_success_reports_stderr_and_nonzero_error_code() {
+fn execute_success_reports_stderr_and_typed_success_status() {
     let dir = fixture_dir("execute-stderr");
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
     let service = ToolService::new(workspace);
-    let result = service
-        .dispatch(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
-                args: if cfg!(windows) {
-                    vec![
-                        BoundedText::new("/C").unwrap(),
-                        BoundedText::new("echo err 1>&2").unwrap(),
-                    ]
-                } else {
-                    vec![
-                        BoundedText::new("-c").unwrap(),
-                        BoundedText::new("printf err >&2").unwrap(),
-                    ]
-                },
-            }),
-        )
-        .unwrap();
+    let input = || {
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
+            args: if cfg!(windows) {
+                vec![
+                    BoundedText::new("/C").unwrap(),
+                    BoundedText::new("echo err 1>&2").unwrap(),
+                ]
+            } else {
+                vec![
+                    BoundedText::new("-c").unwrap(),
+                    BoundedText::new("printf err >&2").unwrap(),
+                ]
+            },
+        })
+    };
+    let result = service.dispatch(ToolCallId::new(), input()).unwrap();
     assert!(
         matches!(result, ToolResult::Execute(TextResult { text, .. }) if text.as_str().contains("stderr:\nerr"))
     );
+    let envelope = service
+        .invoke_enveloped(intention_tools::ToolInvocation {
+            schema_version: TOOL_SCHEMA_VERSION,
+            context: intention_tools::ToolContext {
+                session_id: 9,
+                run_id: 10,
+                call_id: ToolCallId::new(),
+            },
+            input: input(),
+        })
+        .unwrap();
+    assert_eq!(
+        envelope
+            .execution
+            .and_then(|metadata| metadata.process_status),
+        Some(ToolProcessStatus::Success)
+    );
+}
+
+#[test]
+fn execute_does_not_inherit_secret_bearing_environment_variables() {
+    let dir = fixture_dir("execute-env");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    let (program, args) = if cfg!(windows) {
+        (
+            "cmd",
+            vec!["/C", "if defined OPENAI_API_KEY (exit 1) else (exit 0)"],
+        )
+    } else {
+        ("sh", vec!["-c", "test -z \"${OPENAI_API_KEY-}\""])
+    };
+    let result = service.dispatch(
+        ToolCallId::new(),
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(program).unwrap(),
+            args: args
+                .into_iter()
+                .map(|arg| BoundedText::new(arg).unwrap())
+                .collect(),
+        }),
+    );
+    assert!(
+        result.is_ok(),
+        "secret environment variable leaked: {result:?}"
+    );
+}
+
+#[test]
+fn execute_filters_representative_secret_name_shapes() {
+    let dir = fixture_dir("execute-env-shapes");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    for name in [
+        "MY_TOKEN",
+        "db-password",
+        "signing_private_key",
+        "SERVICE_CREDENTIALS",
+    ] {
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let (program, args): (&str, Vec<String>) = if cfg!(windows) {
+            (
+                "cmd",
+                vec![
+                    "/C".into(),
+                    format!("if defined {name} (exit 1) else (exit 0)"),
+                ],
+            )
+        } else {
+            ("sh", vec!["-c".into(), format!("test -z \"${{{name}-}}\"")])
+        };
+        assert!(
+            service
+                .dispatch(
+                    ToolCallId::new(),
+                    ToolInput::Execute(ExecuteInput {
+                        program: BoundedText::new(program).unwrap(),
+                        args: args
+                            .into_iter()
+                            .map(|arg| BoundedText::new(arg).unwrap())
+                            .collect(),
+                    })
+                )
+                .is_ok(),
+            "secret environment variable leaked: {name}"
+        );
+    }
 }
 
 #[test]
@@ -870,6 +1335,7 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
                 path,
                 old: BoundedText::new("").expect("old"),
                 new: BoundedText::new("replacement").expect("new"),
+                expected_content: None,
             }),
         )
         .expect("edit");
@@ -898,7 +1364,7 @@ fn tool_invocation_round_trips_with_optional_grep_path() {
 }
 
 #[test]
-fn execute_reports_signal_termination_as_negative_exit_code() {
+fn execute_reports_signal_termination_as_known_terminal_result() {
     if cfg!(windows) {
         return;
     }
@@ -907,19 +1373,41 @@ fn execute_reports_signal_termination_as_negative_exit_code() {
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
-    let error = ToolService::new(workspace)
-        .dispatch(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new("sh").unwrap(),
-                args: vec![
-                    BoundedText::new("-c").unwrap(),
-                    BoundedText::new("kill -TERM $$").unwrap(),
-                ],
-            }),
-        )
-        .unwrap_err();
-    assert_eq!(error.code(), "tool_execute_nonzero");
+    let service = ToolService::new(workspace);
+    let signal_input = || {
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new("sh").unwrap(),
+            args: vec![
+                BoundedText::new("-c").unwrap(),
+                BoundedText::new("kill -TERM $$").unwrap(),
+            ],
+        })
+    };
+    let result = service
+        .dispatch(ToolCallId::new(), signal_input())
+        .expect("signal termination is a known terminal outcome");
+    let ToolResult::Execute(result) = result else {
+        unreachable!("dispatch returned a non-execute result")
+    };
+    // The legacy text rendering keeps a negative exit code for signals.
+    assert!(result.text.as_str().contains("exit_code:-1"));
+    let envelope = service
+        .invoke_enveloped(intention_tools::ToolInvocation {
+            schema_version: TOOL_SCHEMA_VERSION,
+            context: intention_tools::ToolContext {
+                session_id: 5,
+                run_id: 6,
+                call_id: ToolCallId::new(),
+            },
+            input: signal_input(),
+        })
+        .unwrap();
+    assert_eq!(
+        envelope
+            .execution
+            .and_then(|metadata| metadata.process_status),
+        Some(ToolProcessStatus::Signal { signal: 15 })
+    );
 }
 
 #[test]
@@ -951,12 +1439,50 @@ fn read_and_grep_bound_large_content() {
     for result in [read, grep] {
         let (text, truncated) = match result {
             ToolResult::Read(v) => (v.text, v.truncated),
-            ToolResult::Grep(v) => (v.text, v.truncated),
+            ToolResult::Grep(v) => (
+                BoundedText::new(
+                    v.matches
+                        .iter()
+                        .map(|m| m.fragment.as_str())
+                        .collect::<String>(),
+                )
+                .unwrap(),
+                v.truncated,
+            ),
             _ => unreachable!(),
         };
         assert!(text.as_str().len() <= 65_536 + "\n[truncated]".len());
         assert!(truncated);
     }
+}
+
+#[test]
+fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
+    let root_dir = fixture_dir("large-multibyte-grep");
+    let line = format!("needle{}", "界".repeat(30_000));
+    std::fs::write(root_dir.path().join("large.txt"), &line).unwrap();
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let result = ToolService::new(workspace)
+        .dispatch(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("needle").unwrap(),
+                path: Some(WorkspaceRelativePathDto::parse("large.txt").unwrap()),
+            }),
+        )
+        .unwrap();
+    let ToolResult::Grep(result) = result else {
+        unreachable!("dispatch returned non-grep result")
+    };
+    assert_eq!(result.matches.len(), 1);
+    assert!(result.truncated);
+    let fragment = result.matches[0].fragment.as_str();
+    assert!(fragment.is_char_boundary(fragment.len()));
+    assert!(fragment.len() <= 65_536);
+    assert!(fragment.starts_with("needle"));
 }
 
 #[test]
@@ -1018,6 +1544,7 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
                 path,
                 old: BoundedText::new("missing").unwrap(),
                 new: BoundedText::new("x").unwrap(),
+                expected_content: None,
             }),
         )
         .unwrap_err();
@@ -1061,6 +1588,7 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
             ToolInput::Write(WriteInput {
                 path: file.clone(),
                 content: BoundedText::new("alpha\nneedle\nomega").expect("text"),
+                expected_content: None,
             }),
         )
         .expect("write");
@@ -1072,6 +1600,7 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
                 path: file.clone(),
                 old: BoundedText::new("needle").expect("old"),
                 new: BoundedText::new("changed").expect("new"),
+                expected_content: None,
             }),
         )
         .expect("edit");
@@ -1087,7 +1616,7 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
         .expect("grep");
     assert!(matches!(
         grep,
-        ToolResult::Grep(TextResult {
+        ToolResult::Grep(intention_tools::GrepResult {
             truncated: false,
             ..
         })
@@ -1110,23 +1639,43 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
 }
 
 #[test]
+fn registry_exposes_all_fourteen_slots_in_canonical_order() {
+    let expected = [
+        (ToolId::Read, "read"),
+        (ToolId::Write, "write"),
+        (ToolId::Edit, "edit"),
+        (ToolId::Execute, "execute"),
+        (ToolId::Glob, "glob"),
+        (ToolId::Grep, "grep"),
+        (ToolId::FetchUrl, "fetch_url"),
+        (ToolId::AskUser, "ask_user"),
+        (ToolId::Todo, "todo"),
+        (ToolId::Retrieve, "retrieve"),
+        (ToolId::PlanSubmit, "plan_submit"),
+        (ToolId::SubAgent, "sub_agent"),
+        (ToolId::Expand, "expand"),
+        (ToolId::Mcp, "mcp"),
+    ];
+    let descriptors = registry();
+    assert_eq!(descriptors.len(), expected.len());
+    for (descriptor, (id, name)) in descriptors.into_iter().zip(expected) {
+        assert_eq!(descriptor.id(), id);
+        assert_eq!(descriptor.id().as_str(), name);
+    }
+    let mut sorted_ids = expected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    sorted_ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    sorted_ids.dedup_by(|a, b| a.as_str() == b.as_str());
+    assert_eq!(sorted_ids.len(), expected.len());
+}
+
+#[test]
 fn all_descriptor_metadata_values_are_verified() {
-    use intention_tools::{MutationKind, ToolCapability};
+    use intention_tools::{MutationKind, ToolCapability, ToolPolicy, ToolRegistrationStatus};
     let expected = [
         (
             ToolId::Read,
             MutationKind::ReadOnly,
             &[ToolCapability::Read][..],
-        ),
-        (
-            ToolId::Glob,
-            MutationKind::ReadOnly,
-            &[ToolCapability::Search][..],
-        ),
-        (
-            ToolId::Grep,
-            MutationKind::ReadOnly,
-            &[ToolCapability::Search][..],
         ),
         (
             ToolId::Write,
@@ -1143,13 +1692,59 @@ fn all_descriptor_metadata_values_are_verified() {
             MutationKind::Process,
             &[ToolCapability::Execute][..],
         ),
+        (
+            ToolId::Glob,
+            MutationKind::ReadOnly,
+            &[ToolCapability::Search][..],
+        ),
+        (
+            ToolId::Grep,
+            MutationKind::ReadOnly,
+            &[ToolCapability::Search][..],
+        ),
     ];
-    for (descriptor, (id, mutation, capabilities)) in registry().into_iter().zip(expected) {
+    for (descriptor, (id, mutation, capabilities)) in
+        registry().into_iter().take(expected.len()).zip(expected)
+    {
         assert_eq!(descriptor.id(), id);
         assert_eq!(descriptor.mutation(), mutation);
         assert_eq!(descriptor.capabilities(), capabilities);
         assert_eq!(descriptor.schema_version(), TOOL_SCHEMA_VERSION);
+        assert_eq!(descriptor.descriptor_revision(), TOOL_DESCRIPTOR_REVISION);
+        assert!(descriptor.input_schema().is_some());
+        assert!(descriptor.output_schema().is_some());
+        assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
+        assert_eq!(descriptor.observability_policy(), ToolPolicy::Allowed);
+        assert!(!descriptor.display_name().is_empty());
         assert!(!descriptor.description().is_empty());
+    }
+}
+
+#[test]
+fn reserved_slots_have_no_schemas_or_revision() {
+    use intention_tools::ToolRegistrationStatus;
+    let reserved_in_documented_order = [
+        ToolId::FetchUrl,
+        ToolId::AskUser,
+        ToolId::Todo,
+        ToolId::Retrieve,
+        ToolId::PlanSubmit,
+        ToolId::SubAgent,
+        ToolId::Expand,
+        ToolId::Mcp,
+    ];
+    for (descriptor, id) in registry()
+        .into_iter()
+        .skip(6)
+        .zip(reserved_in_documented_order)
+    {
+        assert_eq!(descriptor.id(), id);
+        assert_eq!(descriptor.status(), ToolRegistrationStatus::Reserved);
+        assert_eq!(descriptor.descriptor_revision(), 0);
+        assert_eq!(descriptor.schema_version(), 0);
+        assert_eq!(descriptor.input_schema(), None);
+        assert_eq!(descriptor.output_schema(), None);
+        assert!(descriptor.capabilities().is_empty());
     }
 }
 
@@ -1183,14 +1778,295 @@ fn dispatch_covers_each_tool_input_variant() {
         ToolInput::Write(WriteInput {
             path: WorkspaceRelativePathDto::parse("b.txt").unwrap(),
             content: BoundedText::new("b").unwrap(),
+            expected_content: None,
         }),
         ToolInput::Edit(EditInput {
             path,
             old: BoundedText::new("needle").unwrap(),
             new: BoundedText::new("changed").unwrap(),
+            expected_content: None,
         }),
     ];
     for input in calls {
         assert!(service.dispatch(ToolCallId::new(), input).is_ok());
     }
+}
+
+#[test]
+fn enveloped_invocation_preserves_identity_and_records_metadata() {
+    use intention_tools::{ToolContext, ToolInvocation, ToolOutcome, ToolPolicy};
+    let dir = fixture_dir("envelope");
+    let root = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let call_id = ToolCallId::new();
+    let envelope = ToolService::new(root)
+        .invoke_enveloped(ToolInvocation {
+            schema_version: TOOL_SCHEMA_VERSION,
+            context: ToolContext {
+                session_id: 7,
+                run_id: 8,
+                call_id,
+            },
+            input: ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new("*.txt").unwrap(),
+            }),
+        })
+        .unwrap();
+    assert_eq!(envelope.context.call_id, call_id);
+    assert_eq!(envelope.observability.outcome, ToolOutcome::Succeeded);
+    assert_eq!(envelope.observability.policy, ToolPolicy::Allowed);
+    // Durable metadata identifies the workspace root only through the stable
+    // redacted marker; the absolute location is never recorded.
+    let execution = envelope.execution.as_ref().unwrap();
+    assert_eq!(execution.cwd, REDACTED_WORKSPACE_CWD);
+    assert_eq!(execution.path, None);
+    assert!(matches!(envelope.result, ToolResult::Glob(_)));
+}
+
+#[test]
+fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
+    let root_dir = fixture_dir("projection");
+    let root_path = root_dir.path();
+    std::fs::write(root_path.join("data.txt"), "alpha\nneedle\n").unwrap();
+    let service = ToolService::new(
+        intention_workspace::WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(root_path.to_string_lossy().into_owned()).unwrap(),
+        )
+        .unwrap(),
+    );
+    let path = WorkspaceRelativePathDto::parse("data.txt").unwrap();
+    let calls = [
+        (
+            ToolInput::Read(ReadInput { path: path.clone() }),
+            ToolId::Read,
+            "data.txt",
+        ),
+        (
+            ToolInput::Write(WriteInput {
+                path: path.clone(),
+                content: BoundedText::new("beta needle").unwrap(),
+                expected_content: None,
+            }),
+            ToolId::Write,
+            "data.txt",
+        ),
+        (
+            ToolInput::Edit(EditInput {
+                path: path.clone(),
+                old: BoundedText::new("beta").unwrap(),
+                new: BoundedText::new("gamma").unwrap(),
+                expected_content: None,
+            }),
+            ToolId::Edit,
+            "data.txt",
+        ),
+        (
+            ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new("*.txt").unwrap(),
+            }),
+            ToolId::Glob,
+            "",
+        ),
+        (
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("needle").unwrap(),
+                path: Some(path),
+            }),
+            ToolId::Grep,
+            "data.txt",
+        ),
+        (
+            ToolInput::Execute(ExecuteInput {
+                program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
+                args: if cfg!(windows) {
+                    vec![
+                        BoundedText::new("/C").unwrap(),
+                        BoundedText::new("echo ok").unwrap(),
+                    ]
+                } else {
+                    vec![
+                        BoundedText::new("-c").unwrap(),
+                        BoundedText::new("echo ok").unwrap(),
+                    ]
+                },
+            }),
+            ToolId::Execute,
+            "",
+        ),
+    ];
+    let absolute_root = root_path.to_string_lossy().to_string();
+    for (input, tool, expected_path) in calls {
+        let envelope = service
+            .invoke_enveloped(intention_tools::ToolInvocation {
+                schema_version: TOOL_SCHEMA_VERSION,
+                context: intention_tools::ToolContext {
+                    session_id: 11,
+                    run_id: 12,
+                    call_id: ToolCallId::new(),
+                },
+                input,
+            })
+            .expect("projection fixture dispatch must succeed");
+        let projection = envelope.projection();
+        assert_eq!(projection.schema_version, TOOL_SCHEMA_VERSION, "{tool}");
+        assert_eq!(projection.tool, tool);
+        assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD, "{tool}");
+        assert_eq!(
+            projection.execution.elapsed_ms, envelope.observability.elapsed_ms,
+            "{tool} timing"
+        );
+        assert_eq!(
+            projection.execution.policy,
+            intention_tools::ToolPolicy::Allowed,
+            "{tool} policy"
+        );
+        let expected_logical = if expected_path.is_empty() {
+            None
+        } else {
+            Some(expected_path.to_owned())
+        };
+        assert_eq!(
+            projection
+                .execution
+                .path
+                .as_ref()
+                .map(WorkspaceRelativePathDto::as_str),
+            expected_logical.as_deref(),
+            "{tool} metadata path"
+        );
+        if tool != ToolId::Execute {
+            assert_eq!(projection.execution.process_status, None, "{tool}");
+        }
+        // Neither the projection nor the full envelope may persist the
+        // absolute workspace root.
+        let rendered = serde_json::to_string(&projection).unwrap();
+        assert!(
+            !rendered.contains(&absolute_root),
+            "{tool} projection leaked the absolute root"
+        );
+        let envelope_rendered = serde_json::to_string(&envelope).unwrap();
+        assert!(
+            !envelope_rendered.contains(&absolute_root),
+            "{tool} envelope leaked the absolute root"
+        );
+        match (&projection.content, tool) {
+            (ToolProjectedContent::Text { text, truncated }, ToolId::Read) => {
+                assert!(text.as_str().starts_with("alpha"));
+                assert!(!*truncated);
+            }
+            (ToolProjectedContent::Mutation { bytes }, ToolId::Write) => {
+                assert_eq!(*bytes, "beta needle".len() as u64);
+            }
+            (ToolProjectedContent::Mutation { bytes }, ToolId::Edit) => {
+                assert_eq!(*bytes, "gamma needle".len() as u64);
+            }
+            (ToolProjectedContent::Paths { paths, truncated }, ToolId::Glob) => {
+                let listed = paths
+                    .iter()
+                    .map(WorkspaceRelativePathDto::as_str)
+                    .collect::<Vec<_>>();
+                assert_eq!(listed, vec!["data.txt"]);
+                assert!(!*truncated);
+            }
+            (ToolProjectedContent::Matches { matches, truncated }, ToolId::Grep) => {
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].path.as_str(), "data.txt");
+                assert_eq!(matches[0].fragment.as_str(), "gamma needle");
+                assert_eq!(matches[0].line, 1);
+                assert!(!*truncated);
+            }
+            (ToolProjectedContent::Text { text, truncated }, ToolId::Execute) => {
+                assert!(text.as_str().contains("ok"));
+                assert!(!*truncated);
+                assert_eq!(
+                    projection.execution.process_status,
+                    Some(ToolProcessStatus::Success)
+                );
+            }
+            (content, id) => unreachable!("unexpected projection for {id}: {content:?}"),
+        }
+    }
+}
+
+#[test]
+fn projections_clamp_oversized_collections_and_round_trip() {
+    let paths = (0..=10_000)
+        .map(|index| WorkspaceRelativePathDto::parse(format!("f{index}.txt")).unwrap())
+        .collect::<Vec<_>>();
+    let projection = ToolResult::Glob(PathsResult {
+        paths,
+        truncated: false,
+    })
+    .projection();
+    let ToolProjectedContent::Paths { paths, truncated } = projection.content else {
+        unreachable!("glob projection content")
+    };
+    assert_eq!(paths.len(), 10_000);
+    assert!(truncated);
+
+    let matches = (0..=10_000)
+        .map(|index| GrepMatch {
+            path: WorkspaceRelativePathDto::parse("f.txt").unwrap(),
+            line: index as u64 + 1,
+            column: 1,
+            fragment: BoundedText::new("needle").unwrap(),
+        })
+        .collect::<Vec<_>>();
+    let projection = ToolResult::Grep(GrepResult {
+        matches,
+        truncated: false,
+    })
+    .projection();
+    // The bounded projection serializes losslessly for durable persistence.
+    let encoded = serde_json::to_string(&projection).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ToolResultProjection>(&encoded).unwrap(),
+        projection
+    );
+    let ToolProjectedContent::Matches { matches, truncated } = projection.content else {
+        unreachable!("grep projection content")
+    };
+    assert_eq!(matches.len(), 10_000);
+    assert!(truncated);
+}
+
+#[test]
+fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
+    use intention_tools::{ToolContext, ToolObservability, ToolOutcome, ToolPolicy};
+    let envelope = intention_tools::ToolResultEnvelope {
+        schema_version: TOOL_SCHEMA_VERSION,
+        context: ToolContext {
+            session_id: 1,
+            run_id: 2,
+            call_id: ToolCallId::new(),
+        },
+        result: ToolResult::Read(TextResult {
+            text: BoundedText::new("payload").unwrap(),
+            truncated: false,
+        }),
+        observability: ToolObservability {
+            outcome: ToolOutcome::Succeeded,
+            policy: ToolPolicy::Allowed,
+            elapsed_ms: 42,
+        },
+        execution: None,
+    };
+    let projection = envelope.projection();
+    assert_eq!(projection.tool, ToolId::Read);
+    assert_eq!(projection.execution.elapsed_ms, 42);
+    assert_eq!(projection.execution.policy, ToolPolicy::Allowed);
+    assert_eq!(projection.execution.cwd, REDACTED_WORKSPACE_CWD);
+    assert_eq!(projection.execution.path, None);
+    assert_eq!(projection.execution.process_status, None);
+
+    let bare = ToolResult::Edit(WriteResult { bytes: 7 }).projection();
+    assert_eq!(bare.schema_version, TOOL_SCHEMA_VERSION);
+    assert_eq!(bare.tool, ToolId::Edit);
+    assert!(matches!(
+        bare.content,
+        ToolProjectedContent::Mutation { bytes: 7 }
+    ));
+    assert_eq!(bare.execution.cwd, REDACTED_WORKSPACE_CWD);
 }

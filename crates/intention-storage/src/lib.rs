@@ -11,7 +11,7 @@ use intention_domain::{
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, QueuePositionDto, RunId,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId,
+    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId,
 };
 
 /// Inputs required to create one durable session at an explicit event time.
@@ -25,16 +25,196 @@ pub struct CreateSessionInputDto {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppendToolLifecycleEventInputDto {
     event: intention_domain::ToolLifecycleEventDto,
+    result: Option<ToolResultEvidenceDto>,
 }
 
 impl AppendToolLifecycleEventInputDto {
     #[must_use]
     pub const fn new(event: intention_domain::ToolLifecycleEventDto) -> Self {
-        Self { event }
+        Self {
+            event,
+            result: None,
+        }
+    }
+    /// Attaches typed result evidence committed in the same durable transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the evidence identity does not match the
+    /// lifecycle event or the event status cannot carry durable result evidence.
+    pub fn with_result(mut self, result: ToolResultEvidenceDto) -> DtoResult<Self> {
+        if result.session_id() != self.event.session_id()
+            || result.run_id() != self.event.run_id()
+            || result.call_id() != self.event.call_id()
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "tool result evidence must match its lifecycle event identity",
+            ));
+        }
+        if !is_terminal_tool_lifecycle_status(self.event.status()) {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "tool result evidence requires a terminal lifecycle status",
+            ));
+        }
+        self.result = Some(result);
+        Ok(self)
     }
     #[must_use]
     pub const fn event(&self) -> &intention_domain::ToolLifecycleEventDto {
         &self.event
+    }
+    /// Returns the typed result evidence committed with this event, when any.
+    #[must_use]
+    pub const fn result(&self) -> Option<&ToolResultEvidenceDto> {
+        self.result.as_ref()
+    }
+}
+
+/// Whether one tool lifecycle status ends its call and may carry result evidence.
+const fn is_terminal_tool_lifecycle_status(
+    status: &intention_domain::ToolLifecycleStatusDto,
+) -> bool {
+    matches!(
+        status,
+        intention_domain::ToolLifecycleStatusDto::Rejected
+            | intention_domain::ToolLifecycleStatusDto::Completed
+            | intention_domain::ToolLifecycleStatusDto::Failed
+            | intention_domain::ToolLifecycleStatusDto::Cancelled
+            | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+    )
+}
+
+/// The maximum durable canonical tool result content size in bytes.
+const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
+
+/// Closed durable discriminator for one committed local tool result family.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ToolResultKindDto {
+    Read,
+    Glob,
+    Grep,
+    Write,
+    Edit,
+    Execute,
+}
+
+impl ToolResultKindDto {
+    /// Returns the stable durable discriminator name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Glob => "glob",
+            Self::Grep => "grep",
+            Self::Write => "write",
+            Self::Edit => "edit",
+            Self::Execute => "execute",
+        }
+    }
+    /// Parses the stable durable discriminator name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an unknown discriminator name.
+    pub fn parse(name: &str) -> DtoResult<Self> {
+        match name {
+            "read" => Ok(Self::Read),
+            "glob" => Ok(Self::Glob),
+            "grep" => Ok(Self::Grep),
+            "write" => Ok(Self::Write),
+            "edit" => Ok(Self::Edit),
+            "execute" => Ok(Self::Execute),
+            _ => Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "tool result kind is not a known durable discriminator",
+            )),
+        }
+    }
+}
+
+/// Typed durable evidence of one committed local tool result.
+///
+/// `content` carries the bounded canonical projection of the typed result as
+/// selected by the caller; it never carries credentials, absolute workspace
+/// roots, or backend resources.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolResultEvidenceDto {
+    session_id: SessionId,
+    run_id: RunId,
+    call_id: ToolCallId,
+    kind: ToolResultKindDto,
+    content: String,
+    occurred_at: TimestampDto,
+}
+
+impl ToolResultEvidenceDto {
+    /// Creates typed tool result evidence with bounded canonical content.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the content is blank, oversized, or
+    /// contains interior NUL bytes.
+    pub fn new(
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: ToolCallId,
+        kind: ToolResultKindDto,
+        content: impl Into<String>,
+        occurred_at: TimestampDto,
+    ) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() || content.contains('\0') {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "tool result content must be non-empty and free of NUL bytes",
+            ));
+        }
+        if content.len() > MAX_TOOL_RESULT_CONTENT_BYTES {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result",
+                "tool result content exceeds the durable canonical size limit",
+            ));
+        }
+        Ok(Self {
+            session_id,
+            run_id,
+            call_id,
+            kind,
+            content,
+            occurred_at,
+        })
+    }
+    /// Returns the owning durable session.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the run that executed the tool call.
+    #[must_use]
+    pub const fn run_id(&self) -> RunId {
+        self.run_id
+    }
+    /// Returns the identified tool invocation.
+    #[must_use]
+    pub const fn call_id(&self) -> ToolCallId {
+        self.call_id
+    }
+    /// Returns the closed durable result discriminator.
+    #[must_use]
+    pub const fn kind(&self) -> ToolResultKindDto {
+        self.kind
+    }
+    /// Returns the bounded canonical durable result content.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+    /// Returns the durable evidence event time.
+    #[must_use]
+    pub const fn occurred_at(&self) -> TimestampDto {
+        self.occurred_at
     }
 }
 
@@ -585,6 +765,25 @@ pub trait StorageRepositoryDto {
         Err(ErrorDto::unavailable(
             "tool_lifecycle_unavailable",
             "tool lifecycle storage is unavailable",
+        ))
+    }
+    /// Loads typed evidence durably recorded with one terminal tool lifecycle event.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tool_result_not_found` when no durable evidence exists for the
+    /// supplied identity, or `tool_result_unavailable` when durable evidence
+    /// cannot be read. No partial evidence, credentials, or backend resources
+    /// cross this DTO-only boundary on failure.
+    fn load_tool_result(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+        _call_id: ToolCallId,
+    ) -> DtoResult<ToolResultEvidenceDto> {
+        Err(ErrorDto::unavailable(
+            "tool_result_unavailable",
+            "tool result storage is unavailable",
         ))
     }
     /// Creates a session and returns its committed projection and events.

@@ -4,6 +4,7 @@
 //! database resources, locations, configuration text, and committed-event
 //! publication stay private.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
     ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
+    ToolResultPublicationInputDto, ToolResultPublicationPort,
 };
 #[cfg(test)]
 use intention_config::ConfigPathDto;
@@ -21,7 +23,10 @@ use intention_config::{
 };
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
-use intention_domain::{GetSessionSnapshotQueryDto, RunEventCursorDto, RunReplayDto, RunStatusDto};
+use intention_domain::{
+    DomainEventDto, GetSessionSnapshotQueryDto, RunEventCursorDto, RunReplayDto, RunStatusDto,
+    ToolLifecycleStatusDto,
+};
 use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
 #[cfg(any(test, feature = "test-support"))]
 use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
@@ -43,10 +48,10 @@ use intention_runtime::{
 };
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_tools::{ToolInput, ToolResult};
+use intention_tools::{CancellationSignal, ToolInput, ToolResult};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, RunId,
+    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
 };
 #[cfg(test)]
 use intention_types::{ProjectId, WorkspaceId};
@@ -70,6 +75,7 @@ struct FacadeInner {
     dispatch: PrivateModelRunDispatch,
     publisher: Box<dyn PostCommitPublisher>,
     command_gate: Mutex<()>,
+    tool_cancellations: Mutex<HashMap<(SessionId, RunId), LocalToolCancellationEntry>>,
 }
 
 enum SelectedProvider {
@@ -202,11 +208,76 @@ impl PostCommitPublisher for NoopPostCommitPublisher {
     }
 }
 
+/// Publishes one committed tool result after an independent durable reread.
+///
+/// The reread is scoped to the invoking session's exact pre-invocation durable
+/// position and must contain `Completed` typed evidence for the exact invocation
+/// identity before the retained post-commit publisher seam fires. Publication
+/// therefore follows commit plus a scoped reread, and the application dispatches
+/// `AfterToolResultPublished` only after this publication succeeds.
+struct DurableToolResultPublisher<'a> {
+    repository: &'a SqliteStorageRepository,
+    publisher: &'a dyn PostCommitPublisher,
+    after_sequence: SessionEventSequenceDto,
+}
+
+impl ToolResultPublicationPort for DurableToolResultPublisher<'_> {
+    fn publish_tool_result(&self, input: &ToolResultPublicationInputDto) -> DtoResult<()> {
+        let events = self
+            .repository
+            .load_tail(input.session_id(), self.after_sequence)?;
+        committed_tool_result_evidence(&events, input)?;
+        let projection = self.repository.load_session_snapshot(input.session_id())?;
+        let position = projection.at_sequence();
+        let committed = CommittedChangeDto::new(projection, position, events, None)?;
+        self.publisher.publish(&committed)
+    }
+}
+
+/// Verifies that a scoped durable reread contains committed `Completed` typed
+/// evidence for the exact invocation identity.
+fn committed_tool_result_evidence(
+    events: &[EventEnvelopeDto<DomainEventDto>],
+    input: &ToolResultPublicationInputDto,
+) -> DtoResult<()> {
+    let correlated = events
+        .iter()
+        .rev()
+        .find_map(|envelope| match envelope.payload() {
+            DomainEventDto::ToolLifecycle(event)
+                if event.session_id() == input.session_id()
+                    && event.run_id() == input.run_id()
+                    && event.call_id() == input.call_id() =>
+            {
+                Some(event.status() == &ToolLifecycleStatusDto::Completed)
+            }
+            _ => None,
+        });
+    match correlated {
+        Some(true) => Ok(()),
+        Some(false) | None => Err(ErrorDto::unavailable(
+            "tool_result_evidence_unavailable",
+            "committed tool result evidence is unavailable",
+        )),
+    }
+}
+
+/// Run-scoped cancellation shared between daemon-host stops and admitted local tools.
+struct LocalToolCancellationEntry {
+    signal: CancellationSignal,
+    /// Local invocations currently executing against this exact run.
+    inflight: usize,
+}
+
 impl DaemonApplicationFacade {
     /// Executes one explicit local tool call through the durable lifecycle path.
     ///
-    /// The M4 model `ToolCallRecorded` fact remains denial-only; this API is an
-    /// internal, caller-admitted single invocation and never starts a loop.
+    /// Publication independently rereads the committed typed result evidence for
+    /// the exact invocation before the post-commit publisher seam fires, and the
+    /// application dispatches `AfterToolResultPublished` only after that
+    /// publication succeeds. The M4 model `ToolCallRecorded` fact remains
+    /// denial-only; this API is an internal, caller-admitted single invocation
+    /// and never starts a loop.
     #[doc(hidden)]
     pub fn invoke_local_tool_for_daemon(
         &self,
@@ -217,28 +288,78 @@ impl DaemonApplicationFacade {
         input: ToolInput,
         workspace: WorkspaceRoot,
     ) -> DtoResult<ToolResult> {
+        // The publication reread is scoped to this exact pre-invocation durable
+        // position, so it can only observe this invocation's committed evidence.
+        let after_sequence = self
+            .inner
+            .repository
+            .load_session_snapshot(session_id)?
+            .at_sequence();
+        let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
+        let publisher = DurableToolResultPublisher {
+            repository: &self.inner.repository,
+            publisher: self.inner.publisher.as_ref(),
+            after_sequence,
+        };
         let result = intention_application::ApplicationService::new(&self.inner.repository)
-            .invoke_local_tool(InvokeLocalToolInputDto::new(
-                workspace,
-                session_id,
-                run_id,
-                call_id,
-                tool_id,
-                input,
-                now()?,
-            ));
-        // Publication is intentionally after both lifecycle commits and an
-        // independent durable reread; the existing publisher is the seam.
-        if result.is_ok() {
-            let _ = self.publish_after_durable_read(
-                session_id,
-                self.inner
-                    .repository
-                    .load_session_snapshot(session_id)?
-                    .at_sequence(),
+            .invoke_local_tool_with_publication(
+                InvokeLocalToolInputDto::new(
+                    workspace,
+                    session_id,
+                    run_id,
+                    call_id,
+                    tool_id,
+                    input,
+                    now()?,
+                )
+                .with_cancellation(cancellation),
+                &publisher,
             );
-        }
+        self.release_local_tool_cancellation(session_id, run_id);
         result
+    }
+
+    /// Binds one local invocation to its run's shared cancellation signal.
+    ///
+    /// A previously stopped run yields an already-cancelled signal so later
+    /// invocations fail before any new effect occurs.
+    fn bind_local_tool_cancellation(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<CancellationSignal> {
+        let mut registry = self.inner.tool_cancellations.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        let entry =
+            registry
+                .entry((session_id, run_id))
+                .or_insert_with(|| LocalToolCancellationEntry {
+                    signal: CancellationSignal::new(),
+                    inflight: 0,
+                });
+        entry.inflight += 1;
+        let signal = entry.signal.clone();
+        drop(registry);
+        Ok(signal)
+    }
+
+    /// Releases one finished local invocation from its run's shared signal.
+    ///
+    /// Completed invocations drop their binding; a cancelled marker stays until
+    /// terminalization so follow-on effects remain fenced for that exact run.
+    fn release_local_tool_cancellation(&self, session_id: SessionId, run_id: RunId) {
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock()
+            && let Some(entry) = registry.get_mut(&(session_id, run_id))
+        {
+            entry.inflight = entry.inflight.saturating_sub(1);
+            if entry.inflight == 0 && !entry.signal.is_cancelled() {
+                registry.remove(&(session_id, run_id));
+            }
+        }
     }
     /// Loads platform configuration, opens platform state storage, and recovers before ready.
     ///
@@ -400,10 +521,24 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        ApplicationService::new(&self.inner.repository).stop_run(
+        let accepted = ApplicationService::new(&self.inner.repository).stop_run(
             intention_domain::StopRunCommandDto::new(session_id, run_id),
             RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
-        )
+        )?;
+        // After the durable Cancelling commit, reach any local tool execution
+        // bound to this exact run and fence later invocations. Durable model
+        // cancellation semantics remain two-step and unchanged.
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
+            registry
+                .entry((session_id, run_id))
+                .or_insert_with(|| LocalToolCancellationEntry {
+                    signal: CancellationSignal::cancelled(),
+                    inflight: 0,
+                })
+                .signal
+                .cancel();
+        }
+        Ok(accepted)
     }
 
     /// Terminalizes an exact durable `Cancelling` run for the daemon task registry.
@@ -434,6 +569,9 @@ impl DaemonApplicationFacade {
             RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
         )
         .complete_terminal(session_id, run_id, RunStatusDto::Cancelled)?;
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
+            registry.remove(&(session_id, run_id));
+        }
         Ok(())
     }
 
@@ -541,6 +679,7 @@ impl DaemonApplicationFacade {
                 dispatch: PrivateModelRunDispatch::default(),
                 publisher,
                 command_gate: Mutex::new(()),
+                tool_cancellations: Mutex::new(HashMap::new()),
             }),
         };
         facade.recover_before_ready()?;
@@ -1024,6 +1163,49 @@ mod tests {
             ),
         ));
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+    }
+
+    /// Creates a workspace directory containing one named file.
+    fn workspace_fixture(name: &str, content: &str) -> (TempDir, WorkspaceRoot) {
+        let directory = TempDir::new().expect("temporary directory exists");
+        fs::write(directory.path().join(name), content).expect("workspace fixture writes");
+        let root = WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(directory.path().to_string_lossy().into_owned())
+                .expect("fixture workspace dto is absolute"),
+        )
+        .expect("fixture workspace resolves");
+        (directory, root)
+    }
+
+    /// Builds the read input for the shared `hello.txt` workspace fixture.
+    fn read_hello_input() -> ToolInput {
+        ToolInput::Read(intention_tools::ReadInput {
+            path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                .expect("fixture path is valid"),
+        })
+    }
+
+    /// Builds an in-memory read result used only to fabricate publication inputs.
+    fn hello_read_result() -> ToolResult {
+        ToolResult::Read(intention_tools::TextResult {
+            text: intention_tools::BoundedText::new("hello").expect("fixture text"),
+            truncated: false,
+        })
+    }
+
+    /// Starts one durable run through a direct user turn and returns its identity.
+    fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId, label: &str) -> RunId {
+        let accepted = send_user_turn(facade, session_id, label);
+        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
+            unreachable!("fixture turn is accepted")
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+            unreachable!("fixture turn has user-turn evidence")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
+            unreachable!("first fixture turn starts")
+        };
+        run_id
     }
 
     fn send_user_turn(
@@ -1936,5 +2118,387 @@ mod tests {
             ModelCancellationSignal::new(),
         );
         futures_util::pin_mut!(stream);
+    }
+
+    #[test]
+    fn daemon_stop_blocks_later_local_invocation_before_any_new_effect() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = started_run(&facade, session_id, "stop first");
+        let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
+
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling");
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling,
+            "durable model cancellation semantics stay two-step"
+        );
+
+        let error = facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                intention_types::ToolCallId::new(),
+                "write",
+                ToolInput::Write(intention_tools::WriteInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("late.txt")
+                        .expect("fixture path is valid"),
+                    content: intention_tools::BoundedText::new("late").expect("fixture content"),
+                    expected_content: None,
+                }),
+                workspace,
+            )
+            .expect_err("a stopped run cannot admit new local effects");
+        assert_eq!(error.code(), "tool_cancelled");
+        assert!(
+            !workspace_directory.path().join("late.txt").exists(),
+            "no workspace effect may occur after the stop"
+        );
+    }
+
+    #[test]
+    fn daemon_stop_reaches_in_flight_execute_and_classifies_unknown_external_effect() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = started_run(&facade, session_id, "in flight stop");
+        let (workspace_directory, workspace) = workspace_fixture("keep.txt", "kept");
+        let sentinel = workspace_directory.path().join("sentinel.txt");
+        let worker_facade = facade.clone();
+        let worker_session = session_id;
+        let worker_run = run_id;
+
+        let worker = std::thread::spawn(move || {
+            worker_facade.invoke_local_tool_for_daemon(
+                worker_session,
+                worker_run,
+                intention_types::ToolCallId::new(),
+                "execute",
+                ToolInput::Execute(intention_tools::ExecuteInput {
+                    program: intention_tools::BoundedText::new(if cfg!(windows) {
+                        "cmd"
+                    } else {
+                        "sh"
+                    })
+                    .expect("fixture program"),
+                    args: if cfg!(windows) {
+                        vec![
+                            intention_tools::BoundedText::new("/C").expect("arg"),
+                            intention_tools::BoundedText::new(
+                                "echo started> sentinel.txt & ping -n 30 127.0.0.1",
+                            )
+                            .expect("arg"),
+                        ]
+                    } else {
+                        vec![
+                            intention_tools::BoundedText::new("-c").expect("arg"),
+                            intention_tools::BoundedText::new("printf x > sentinel.txt; sleep 30")
+                                .expect("arg"),
+                        ]
+                    },
+                }),
+                workspace,
+            )
+        });
+
+        // The sentinel proves the child was spawned and running, so the stop
+        // can only land while execution is in flight.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !sentinel.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "execute child never produced its start sentinel"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling while execute runs");
+
+        let error = worker
+            .join()
+            .expect("worker completes")
+            .expect_err("in-flight execution observes the stop");
+        assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling,
+            "the host stop persists only the durable Cancelling step"
+        );
+    }
+
+    #[test]
+    fn committed_tool_results_survive_a_late_stop_which_then_fences_new_effects() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = started_run(&facade, session_id, "late stop");
+        let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
+
+        for _ in 0..2 {
+            let result = facade
+                .invoke_local_tool_for_daemon(
+                    session_id,
+                    run_id,
+                    intention_types::ToolCallId::new(),
+                    "read",
+                    ToolInput::Read(intention_tools::ReadInput {
+                        path: intention_types::WorkspaceRelativePathDto::parse("hello.txt")
+                            .expect("fixture path is valid"),
+                    }),
+                    workspace.clone(),
+                )
+                .expect("reads complete before any stop");
+            match result {
+                ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
+                _ => unreachable!("read dispatch returns a read result"),
+            }
+        }
+
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling after completed effects");
+
+        let error = facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                intention_types::ToolCallId::new(),
+                "write",
+                ToolInput::Write(intention_tools::WriteInput {
+                    path: intention_types::WorkspaceRelativePathDto::parse("late.txt")
+                        .expect("fixture path is valid"),
+                    content: intention_tools::BoundedText::new("late").expect("fixture content"),
+                    expected_content: None,
+                }),
+                workspace,
+            )
+            .expect_err("follow-on effects stay fenced after the stop");
+        assert_eq!(error.code(), "tool_cancelled");
+        assert!(
+            !workspace_directory.path().join("late.txt").exists(),
+            "the committed read results stand; no late effect occurs"
+        );
+
+        facade
+            .terminalize_cancelling_run_for_daemon(session_id, run_id)
+            .expect("terminalization clears the fenced run marker");
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelled replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelled
+        );
+    }
+
+    #[test]
+    fn local_tool_publication_publishes_only_independently_reread_evidence() {
+        let recorder = Arc::new(RecordingPublisher::default());
+        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = started_run(&facade, session_id, "publication reread");
+        let records_before = recorder.records();
+        assert_eq!(
+            records_before.len(),
+            2,
+            "create and turn published once each"
+        );
+        let committed_through = records_before[1].position();
+        let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
+
+        let call_id = intention_types::ToolCallId::new();
+        let result = facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                read_hello_input(),
+                workspace.clone(),
+            )
+            .expect("read completes before any stop");
+        match result {
+            ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
+            _ => unreachable!("read dispatch returns a read result"),
+        }
+
+        let records = recorder.records();
+        assert_eq!(records.len(), 3, "one publication follows the invocation");
+        let published = &records[2];
+        let durable_tail = facade
+            .inner
+            .repository
+            .load_tail(session_id, committed_through)
+            .expect("independent durable read sees the committed invocation");
+        assert_eq!(
+            published.events(),
+            durable_tail.as_slice(),
+            "publication carries exactly the independently reread committed scope"
+        );
+        for envelope in published.events() {
+            assert!(
+                matches!(
+                    envelope.payload(),
+                    intention_domain::DomainEventDto::ToolLifecycle(event)
+                        if event.session_id() == session_id
+                            && event.run_id() == run_id
+                            && event.call_id() == call_id
+                ),
+                "every published event is this exact call's lifecycle evidence"
+            );
+        }
+        match published
+            .events()
+            .last()
+            .expect("committed scope is non-empty")
+            .payload()
+        {
+            intention_domain::DomainEventDto::ToolLifecycle(event) => {
+                assert_eq!(
+                    event.status(),
+                    &intention_domain::ToolLifecycleStatusDto::Completed,
+                    "the committed typed result evidence completed"
+                );
+            }
+            _ => unreachable!("final committed evidence is the completed result"),
+        }
+
+        let second_call = intention_types::ToolCallId::new();
+        facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                second_call,
+                "read",
+                read_hello_input(),
+                workspace,
+            )
+            .expect("second read completes");
+        let records = recorder.records();
+        assert_eq!(records.len(), 4, "each committed invocation publishes once");
+        let second_publication = &records[3];
+        let second_tail = facade
+            .inner
+            .repository
+            .load_tail(session_id, records[2].position())
+            .expect("independent durable read sees the second invocation");
+        assert_eq!(
+            second_publication.events(),
+            second_tail.as_slice(),
+            "each publication is scoped to its own invocation"
+        );
+        assert!(
+            second_publication.events().iter().all(|envelope| matches!(
+                envelope.payload(),
+                intention_domain::DomainEventDto::ToolLifecycle(event)
+                    if event.call_id() == second_call
+            )),
+            "the second publication never repeats the first call's evidence"
+        );
+    }
+
+    #[test]
+    fn tool_result_publication_requires_evidence_for_the_exact_committed_call() {
+        let recorder = Arc::new(RecordingPublisher::default());
+        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = started_run(&facade, session_id, "exact correlation");
+        let committed_through = recorder
+            .records()
+            .last()
+            .expect("the started turn published once")
+            .position();
+        let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
+
+        let call_id = intention_types::ToolCallId::new();
+        facade
+            .invoke_local_tool_for_daemon(
+                session_id,
+                run_id,
+                call_id,
+                "read",
+                read_hello_input(),
+                workspace,
+            )
+            .expect("read completes");
+        let records_after_invocation = recorder.records().len();
+
+        let publisher = DurableToolResultPublisher {
+            repository: &facade.inner.repository,
+            publisher: &recorder,
+            after_sequence: committed_through,
+        };
+        let uncommitted = ToolResultPublicationInputDto::new(
+            session_id,
+            run_id,
+            intention_types::ToolCallId::new(),
+            hello_read_result(),
+        );
+        let error = publisher
+            .publish_tool_result(&uncommitted)
+            .expect_err("an uncommitted call identity cannot publish");
+        assert_eq!(error.code(), "tool_result_evidence_unavailable");
+
+        let cross_run = ToolResultPublicationInputDto::new(
+            session_id,
+            RunId::new(),
+            call_id,
+            hello_read_result(),
+        );
+        let error = publisher
+            .publish_tool_result(&cross_run)
+            .expect_err("a cross-run identity cannot publish");
+        assert_eq!(error.code(), "tool_result_evidence_unavailable");
+
+        let current_position = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
+        let drained = DurableToolResultPublisher {
+            repository: &facade.inner.repository,
+            publisher: &recorder,
+            after_sequence: current_position,
+        };
+        let exact =
+            ToolResultPublicationInputDto::new(session_id, run_id, call_id, hello_read_result());
+        let error = drained
+            .publish_tool_result(&exact)
+            .expect_err("a reread window after the commit contains no evidence");
+        assert_eq!(error.code(), "tool_result_evidence_unavailable");
+        assert_eq!(
+            recorder.records().len(),
+            records_after_invocation,
+            "refused correlations never publish"
+        );
+
+        publisher
+            .publish_tool_result(&exact)
+            .expect("the exact committed identity correlates");
+        assert_eq!(
+            recorder.records().len(),
+            records_after_invocation + 1,
+            "exact correlation publishes once"
+        );
     }
 }

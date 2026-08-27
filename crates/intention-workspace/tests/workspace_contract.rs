@@ -8,7 +8,7 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
-use intention_types::WorkspaceRelativePathDto;
+use intention_types::{ErrorDetailDto, WorkspaceRelativePathDto};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 struct TempDir(std::path::PathBuf);
@@ -79,6 +79,10 @@ fn missing_path_is_safe_and_cwd_changes_do_not_escape_root() {
     let missing = WorkspaceRelativePathDto::parse("missing.txt").expect("path");
     let error = workspace.resolve_path(&missing).expect_err("missing path");
     assert_eq!(error.code(), "workspace_path_unavailable");
+    assert!(matches!(
+        error.detail(),
+        Some(ErrorDetailDto::MissingWorkspacePath { path }) if path == &missing
+    ));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -141,4 +145,58 @@ fn symlink_to_outside_is_rejected() {
     assert!(workspace.resolve_path(&path).is_err());
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(outside);
+}
+
+#[cfg(unix)]
+#[test]
+fn sibling_prefix_and_dangling_final_symlink_fail_closed() {
+    let root = TempDir::new("boundary");
+    let sibling = root.path().with_file_name(format!(
+        "{}-other",
+        root.path().file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::create_dir_all(&sibling).expect("sibling");
+    std::fs::write(sibling.join("file.txt"), "x").expect("sibling file");
+    std::os::unix::fs::symlink(root.path().join("missing"), root.path().join("dangling"))
+        .expect("dangling symlink");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace");
+    assert!(std::fs::canonicalize(sibling.join("file.txt")).is_ok());
+    let dangling = WorkspaceRelativePathDto::parse("dangling").expect("path");
+    assert_eq!(
+        workspace
+            .resolve_path(&dangling)
+            .expect_err("dangling")
+            .code(),
+        "workspace_path_symlink"
+    );
+    assert_eq!(
+        workspace
+            .resolve_new_file_path(&dangling)
+            .expect_err("dangling final symlink")
+            .code(),
+        "workspace_path_symlink"
+    );
+}
+
+#[test]
+fn unavailable_path_errors_do_not_disclose_the_absolute_root() {
+    let root = TempDir::new("safe-errors");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace");
+    let missing = WorkspaceRelativePathDto::parse("missing/leaf.txt").expect("path");
+    let path_error = workspace.resolve_path(&missing).expect_err("missing path");
+    let new_file_error = workspace
+        .resolve_new_file_path(&missing)
+        .expect_err("missing parent");
+    // Safe missing-path outcome: the rendered error carries only the logical
+    // relative path and fixed safe text, never the absolute workspace root.
+    let root_text = root.path().to_string_lossy().into_owned();
+    for error in [path_error, new_file_error] {
+        assert!(!format!("{error:?}").contains(&root_text));
+    }
 }
