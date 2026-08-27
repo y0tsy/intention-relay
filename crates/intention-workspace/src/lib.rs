@@ -239,14 +239,15 @@ mod tests {
         ));
         let outside = std::env::temp_dir().join("outside-intention");
         fs::write(&outside, "x").expect("outside file");
-        let link = root.join("link");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-        #[cfg(unix)]
-        assert!(
-            ws.resolve_path(&WorkspaceRelativePathDto::parse("link").expect("link path"))
-                .is_err()
-        );
+        {
+            let link = root.join("link");
+            std::os::unix::fs::symlink(&outside, &link).expect("symlink");
+            assert!(
+                ws.resolve_path(&WorkspaceRelativePathDto::parse("link").expect("link path"))
+                    .is_err()
+            );
+        }
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
@@ -310,9 +311,9 @@ mod tests {
             std::env::temp_dir().join(format!("intention-workspace-parent-{}", std::process::id()));
         fs::create_dir_all(&outside).expect("outside parent");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, root.join("outside")).expect("symlink");
-        #[cfg(unix)]
         {
+            let ws = &ws;
+            std::os::unix::fs::symlink(&outside, root.join("outside")).expect("symlink");
             let path = WorkspaceRelativePathDto::parse("outside/new.txt").expect("path");
             // The parent is a symbolic link, so resolution must reject it
             // before it can be followed out of the root.
