@@ -886,4 +886,44 @@ mod tests {
         assert!(signal.is_cancelled());
         assert_eq!(ToolId::Execute.to_string(), "execute");
     }
+
+    fn service() -> (ToolService, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("intention-tools-{}", ToolCallId::new()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let root = WorkspaceRoot::resolve(&intention_domain::WorkspaceRootDto::parse(dir.to_string_lossy()).unwrap()).unwrap();
+        (ToolService::new(root), dir)
+    }
+
+    #[test]
+    fn dispatches_read_write_edit_glob_and_grep_paths() {
+        let (service, dir) = service();
+        let write = service.dispatch(ToolCallId::new(), ToolInput::Write(WriteInput {
+            path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(), content: text("needle\nother"),
+        })).unwrap();
+        assert!(matches!(write, ToolResult::Write(WriteResult { bytes: 12 })));
+        let read = service.dispatch(ToolCallId::new(), ToolInput::Read(ReadInput { path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap() })).unwrap();
+        assert!(matches!(read, ToolResult::Read(TextResult { truncated: false, .. })));
+        let grep = service.dispatch(ToolCallId::new(), ToolInput::Grep(GrepInput { pattern: text("needle"), path: Some(WorkspaceRelativePathDto::parse("src/a.txt").unwrap()) })).unwrap();
+        assert!(matches!(grep, ToolResult::Grep(TextResult { text: _, truncated: false })));
+        let glob = service.dispatch(ToolCallId::new(), ToolInput::Glob(GlobInput { pattern: text("src/*.txt") })).unwrap();
+        assert!(matches!(glob, ToolResult::Glob(PathsResult { paths }) if paths.len() == 1));
+        let edit = service.dispatch(ToolCallId::new(), ToolInput::Edit(EditInput { path: WorkspaceRelativePathDto::parse("src/a.txt").unwrap(), old: text("other"), new: text("changed") })).unwrap();
+        assert!(matches!(edit, ToolResult::Edit(_)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dispatch_errors_and_execute_branches_are_safe() {
+        let (service, dir) = service();
+        let cancelled = service.dispatch_with_cancellation(ToolCallId::new(), ToolInput::Glob(GlobInput { pattern: text("*") }), CancellationSignal::cancelled());
+        assert_eq!(cancelled.unwrap_err().code(), "tool_cancelled");
+        let missing = service.dispatch(ToolCallId::new(), ToolInput::Read(ReadInput { path: WorkspaceRelativePathDto::parse("missing").unwrap() }));
+        assert_eq!(missing.unwrap_err().code(), "workspace_path_unavailable");
+        let execute = |program: &str, args: &[&str]| service.dispatch(ToolCallId::new(), ToolInput::Execute(ExecuteInput { program: text(program), args: args.iter().map(|a| text(a)).collect() }));
+        assert!(matches!(execute(if cfg!(windows) { "cmd" } else { "sh" }, if cfg!(windows) { &["/C", "echo ok"][..] } else { &["-c", "printf ok"][..] }).unwrap(), ToolResult::Execute(_)));
+        assert_eq!(execute("definitely-not-a-program", &[]).unwrap_err().code(), "tool_execute_spawn_failed");
+        assert_eq!(service.dispatch(ToolCallId::new(), ToolInput::Grep(GrepInput { pattern: text("x"), path: None })).unwrap_err().code(), "invalid_tool_path");
+        assert_eq!(service.dispatch(ToolCallId::new(), ToolInput::Edit(EditInput { path: WorkspaceRelativePathDto::parse("missing").unwrap(), old: text("x"), new: text("y") })).unwrap_err().code(), "workspace_path_unavailable");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
