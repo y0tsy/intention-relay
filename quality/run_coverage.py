@@ -42,14 +42,14 @@ def main() -> None:
     REPORTS.mkdir(parents=True, exist_ok=True)
     for crate in coverage_crates:
         for name, flags in combinations:
-            report = REPORTS / f"coverage-{name}-{crate}.json"
+            report = (REPORTS / f"coverage-{name}-{crate}.json").resolve()
             # `cargo llvm-cov nextest --package` instruments the package's
             # integration binaries, but nextest's workspace execution model
             # does not reliably merge the package library test harness.  The
             # latter is especially important for boundary crates whose
             # implementation lives in lib.rs. Cargo test executes both the
             # library harness and integration targets in one coverage run.
-            coverage_command = "test"
+            coverage_command = "test" if crate == "intention-daemon" else "nextest"
             coverage_flags = [*flags]
             if crate == "intention-daemon" and "--all-features" not in coverage_flags:
                 coverage_flags.append("--all-features")
