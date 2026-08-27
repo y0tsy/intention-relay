@@ -552,6 +552,7 @@ def check_declared_boundaries(
 
     root_package = composition.get("root_package")
     concrete = string_list(composition, "concrete_implementation_crates")
+    owned_selection_patterns = string_list(composition, "owned_selection_patterns")
     if not isinstance(root_package, str) or root_package not in packages:
         fail("composition boundary requires an existing root_package")
     concrete_set = set(concrete)
@@ -572,6 +573,11 @@ def check_declared_boundaries(
                 [namespace],
                 f"composition ownership outside {root_package}",
             ))
+    root_sources = source_files_for_package(packages[root_package])
+    root_text = "\n".join(texts[path] for path in root_sources)
+    for selection in owned_selection_patterns:
+        if selection not in root_text:
+            failures.append(f"{root_package}: composition root must own concrete selection {selection!r}")
 
     sdk_patterns = string_list(public_contracts, "provider_sdk_resource_patterns")
     active = string_list(policy["policy"], "active_production_crates")

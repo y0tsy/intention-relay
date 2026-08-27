@@ -76,7 +76,7 @@ public_resource_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
-"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
+"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
 "intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-types", "intention-workspace"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
@@ -115,7 +115,7 @@ public_resource_patterns = [
 packages = ["intention-tauri", "intention-tui"]
 allowed_workspace_dependencies = ["intention-client", "intention-protocol", "intention-transport", "intention-types"]
 allowed_test_workspace_dependencies = ["intention-daemon", "intention-domain", "intention-test-support"]
-allowed_external_dependencies = []
+allowed_external_dependencies = ["serde_json"]
 forbidden_source_patterns = [
   "intention_application::",
   "intention_runtime::",
@@ -150,6 +150,11 @@ concrete_implementation_crates = [
   "intention-vfr",
   "intention-headroom",
   "intention-plans",
+]
+owned_selection_patterns = [
+  "SqliteStorageRepository",
+  "OpenRouterDriver",
+  "GenericChatDriver",
 ]
 
 [public_contracts]
@@ -250,7 +255,7 @@ coverage_tier = "C"
 name = "intention-tools"
 responsibility = "Typed tool registry and core tool contracts."
 test_target = "tool invocation and policy tests"
-test_targets = ["tool_contracts"]
+test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
 coverage_tier = "B"
 
 [[future_crates]]

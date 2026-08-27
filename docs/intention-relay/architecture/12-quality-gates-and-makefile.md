@@ -319,6 +319,11 @@ M0 is accepted because its implementation establishes that:
 
 ## Post-M4 documentation-only reconciliation policy
 
+M5's focused tool, workspace, hook, and typed-result tests are not a substitute
+for the unrun full gates. Any M5 closeout must identify `make verify`, CI,
+coverage, and supply-chain results separately and mark them pending when not
+executed against the stated baseline.
+
 ADR 0017 and ADR 0018 define the accepted Plan-focus and Build Autopilot
 direction. The implementation activation remains subject to the normal
 crate/test/coverage/feature/storage/wire declarations and `make verify` gate.

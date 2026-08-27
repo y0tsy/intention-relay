@@ -1,4 +1,4 @@
-use crate::{EditInput, ReadInput, ToolResult, WriteInput, bounded_lossy, bounded_text};
+use crate::{EditInput, ReadInput, ToolResult, WriteInput};
 use intention_types::DtoResult;
 use intention_workspace::WorkspaceRoot;
 
@@ -10,12 +10,4 @@ pub fn write(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> {
 }
 pub fn edit(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
     super::edit_tool(root, input)
-}
-
-#[allow(
-    dead_code,
-    reason = "keeps helper references available for testable tool wiring"
-)]
-const fn _keep_helpers_visible(_: &[u8]) {
-    let _ = (bounded_lossy, bounded_text);
 }

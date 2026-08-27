@@ -191,6 +191,24 @@ impl HookObservationPort for () {
     fn observe_hook_failure(&self, _: HookObservability) {}
 }
 
+/// Composition-owned boundary that resolves the authorized workspace before
+/// the post-resolution hook phase. Canonical paths never enter hook contexts.
+pub trait WorkspaceBoundaryPort {
+    /// Resolves the authorized workspace before post-resolution hooks run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed workspace-resolution error when the workspace cannot be
+    /// authorized or prepared for the invocation.
+    fn resolve(&self, workspace: &intention_workspace::WorkspaceRoot) -> DtoResult<()>;
+}
+
+impl WorkspaceBoundaryPort for () {
+    fn resolve(&self, _: &intention_workspace::WorkspaceRoot) -> DtoResult<()> {
+        Ok(())
+    }
+}
+
 /// Runs application hooks, forwarding tolerated fail-open metadata to the
 /// caller-owned observation boundary and returning only the safe outcome.
 fn dispatch_hooks<O: HookObservationPort>(
@@ -317,6 +335,7 @@ impl ScheduleModelRunDto {
 pub struct ApplicationService<'a, Repository> {
     repository: &'a Repository,
     hooks: HookRegistry,
+    workspace_boundary: Box<dyn WorkspaceBoundaryPort + 'a>,
 }
 
 impl<'a, Repository> ApplicationService<'a, Repository>
@@ -330,6 +349,18 @@ where
     /// Returns the typed validation, storage, or tool execution error.
     pub fn invoke_local_tool(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult> {
         self.invoke_local_tool_with_publication(input, &())
+    }
+
+    /// Executes one local tool through the supplied workspace-rooted tool
+    /// service and lifecycle hooks. This remains a single invocation: it does
+    /// not admit model work or enter a mandate loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed validation, storage, workspace, or tool execution
+    /// error.
+    pub fn invoke_local_tool_once(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult> {
+        self.invoke_local_tool(input)
     }
 
     /// Executes, durably commits, publishes, then dispatches the after-publish hook.
@@ -448,6 +479,19 @@ where
             call: call_id,
             input: input.clone(),
         };
+        self.workspace_boundary
+            .resolve(&workspace)
+            .inspect_err(|error| {
+                let _ = append_tool_rejected(
+                    self.repository,
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    error,
+                    occurred_at,
+                );
+            })?;
         match dispatch_hooks(&self.hooks, &workspace_context, observer) {
             Err(error) => {
                 append_tool_rejected(
@@ -749,17 +793,28 @@ where
     }
     /// Creates an application facade around a DTO-only durable repository.
     #[must_use]
-    pub const fn new(repository: &'a Repository) -> Self {
+    pub fn new(repository: &'a Repository) -> Self {
         Self {
             repository,
             hooks: HookRegistry::new(),
+            workspace_boundary: Box::new(()),
         }
     }
 
     /// Creates an application facade with the supplied lifecycle hooks.
     #[must_use]
-    pub const fn with_hooks(repository: &'a Repository, hooks: HookRegistry) -> Self {
-        Self { repository, hooks }
+    pub fn with_hooks(repository: &'a Repository, hooks: HookRegistry) -> Self {
+        Self {
+            repository,
+            hooks,
+            workspace_boundary: Box::new(()),
+        }
+    }
+
+    #[must_use]
+    pub fn with_workspace_boundary<B: WorkspaceBoundaryPort + 'a>(mut self, boundary: B) -> Self {
+        self.workspace_boundary = Box::new(boundary);
+        self
     }
 
     /// Creates a durable session and maps its committed evidence for protocol use.

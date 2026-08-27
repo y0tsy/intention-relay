@@ -364,6 +364,12 @@ closed until those gates are run at an immutable implementation baseline.
 - hook rejection prevents base tool execution and produces typed durable evidence;
 - applicable Tier B crates meet 90% coverage without excluding policy or boundary logic.
 
+The implemented M5 registry has six active tools (`read`, `write`, `edit`,
+`execute`, `glob`, `grep`); other fixed slots remain reserved. Composition
+owns registry/workspace/hook assembly, application owns durable lifecycle and
+result persistence/publication, and the hook dispatcher owns deterministic
+typed ordering and short-circuiting.
+
 ## Milestone 6: Tauri bridge and primary desktop UI
 
 ### Deliver

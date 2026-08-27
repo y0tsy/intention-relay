@@ -193,6 +193,12 @@ WorkspaceRoot scopes filesystem resolution and child CWD, not environment
 visibility or process privileges. Environment values remain excluded from
 durable lifecycle evidence, logs, protocol DTOs, and published projections.
 
+M5 fixes the active tool surface at six executable tools: `read`, `write`,
+`edit`, `execute`, `glob`, and `grep`; remaining registry slots are reserved.
+Workspace symlink handling is proven fail-closed, while TOCTOU between
+validation and use remains an explicit residual risk rather than a sandbox
+guarantee.
+
 ## Result-oriented acceptance scenarios
 
 ### G. Plan-to-Build Autopilot continuity

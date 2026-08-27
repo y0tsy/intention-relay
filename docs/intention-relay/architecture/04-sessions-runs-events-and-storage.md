@@ -153,6 +153,12 @@ only credential-free replay, event, snapshot, and error representations.
 
 ## Event taxonomy, snapshots, and event sequences
 
+M5 adds tool lifecycle/result evidence to the durable taxonomy. Tool
+admission, start, and exactly one terminal outcome are correlated by
+`SessionId`, `RunId`, and `ToolCallId`; the terminal record may carry the
+bounded, redacted typed `ToolResultEvidenceDto`. Result evidence is distinct
+from model facts and is persisted before publication.
+
 M3 event payloads are closed, explicit facts: `SessionCreated`,
 `UserTurnAccepted`, `UserTurnQueued`, `QueuedTurnRemoved`, `RunStarted`, and
 `RunStatusChanged`. M4 adds typed durable model facts: `ProviderAttemptStarted`,

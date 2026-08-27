@@ -1,6 +1,6 @@
 //! Typed, bounded contracts for workspace tools.
 
-use intention_types::{DtoResult, ToolCallId, WorkspaceRelativePathDto};
+use intention_types::{DtoResult, RunId, SessionId, ToolCallId, WorkspaceRelativePathDto};
 use intention_workspace::WorkspaceRoot;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -162,8 +162,8 @@ pub struct ToolObservability {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolContext {
-    pub session_id: u128,
-    pub run_id: u128,
+    pub session_id: SessionId,
+    pub run_id: RunId,
     pub call_id: ToolCallId,
 }
 
@@ -301,9 +301,40 @@ fn bounded_output_with_timeout(
                 let _ = child.wait();
                 let _ = join_reader(stdout);
                 let _ = join_reader(stderr);
-                return Err("tool_execute_wait_failed");
+                return Err("tool_execute_external_effect_unknown");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod process_failure_tests {
+    use super::*;
+    use std::io::{self, Read};
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("injected read failure"))
+        }
+    }
+
+    #[test]
+    fn read_failure_is_classified_as_read_failure() {
+        let mut output = Vec::new();
+        assert_eq!(
+            read_bounded(&mut FailingReader, &mut output),
+            Err("tool_execute_read_failed")
+        );
+    }
+
+    #[test]
+    fn reader_join_failure_is_classified_as_read_failure() {
+        let reader = thread::spawn(|| -> Result<(Vec<u8>, bool), &'static str> {
+            Err("tool_execute_read_failed")
+        });
+        assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
     }
 }
 
@@ -384,17 +415,6 @@ impl ToolId {
             Self::Write => "write",
             Self::Edit => "edit",
             Self::Execute => "execute",
-        }
-    }
-
-    const fn from_input(input: &ToolInput) -> Self {
-        match input {
-            ToolInput::Read(_) => Self::Read,
-            ToolInput::Glob(_) => Self::Glob,
-            ToolInput::Grep(_) => Self::Grep,
-            ToolInput::Write(_) => Self::Write,
-            ToolInput::Edit(_) => Self::Edit,
-            ToolInput::Execute(_) => Self::Execute,
         }
     }
 }
@@ -721,6 +741,22 @@ impl ToolInvocation {
         invocation.validate_call_id(expected_call)?;
         Ok(invocation)
     }
+
+    /// Validates the invocation schema against the active tool contract.
+    /// # Errors
+    ///
+    /// Returns a validation error when the invocation schema version differs
+    /// from the active tool schema.
+    pub fn validate_schema_version(&self) -> DtoResult<()> {
+        if self.schema_version == TOOL_SCHEMA_VERSION {
+            Ok(())
+        } else {
+            Err(intention_types::ErrorDto::validation(
+                "tool_schema_mismatch",
+                "tool invocation schema version does not match the active schema",
+            ))
+        }
+    }
 }
 
 impl ToolInvocation {
@@ -751,7 +787,18 @@ pub struct GlobInput {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GrepInput {
     pub pattern: BoundedText,
+    #[serde(default)]
+    pub scope: Option<GrepScope>,
+    #[serde(default)]
     pub path: Option<WorkspaceRelativePathDto>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GrepScope {
+    File { path: WorkspaceRelativePathDto },
+    Directory { path: WorkspaceRelativePathDto },
+    Workspace,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WriteInput {
@@ -1016,25 +1063,6 @@ impl ToolService {
         input: ToolInput,
         cancellation: CancellationSignal,
     ) -> DtoResult<ExecutedTool> {
-        let tool_id = ToolId::from_input(&input);
-        let descriptor = registry()
-            .into_iter()
-            .find(|descriptor| descriptor.id() == tool_id)
-            .ok_or_else(|| {
-                intention_types::ErrorDto::validation("tool_unavailable", "tool is not registered")
-            })?;
-        if descriptor.status() != ToolRegistrationStatus::Active {
-            return Err(intention_types::ErrorDto::validation(
-                "tool_unavailable",
-                "tool is reserved and unavailable",
-            ));
-        }
-        if descriptor.schema_version() != TOOL_SCHEMA_VERSION {
-            return Err(intention_types::ErrorDto::validation(
-                "tool_schema_mismatch",
-                "tool schema version does not match the active registry",
-            ));
-        }
         let _ = call;
         // Keep the identity on the real dispatch path: adapters cannot execute
         // a call while silently substituting another call id.
@@ -1105,6 +1133,7 @@ impl ToolService {
         invocation: ToolInvocation,
         cancellation: CancellationSignal,
     ) -> DtoResult<ToolResultEnvelope> {
+        invocation.validate_schema_version()?;
         let call_id = invocation.context.call_id;
         invocation.validate_call_id(call_id)?;
         let logical_path = invocation.input.logical_path().cloned();
@@ -1161,7 +1190,9 @@ fn execute_tool(
     command.current_dir(root.execute_cwd());
     // Execute with the caller's environment. WorkspaceRoot scopes filesystem
     // path resolution and the child CWD, not the process environment.
-    command.envs(std::env::vars());
+    // Preserve the caller environment without requiring every inherited key
+    // and value to be valid Unicode. `vars()` panics on such entries.
+    command.envs(std::env::vars_os());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = command.spawn().map_err(|_| {
         intention_types::ErrorDto::validation(
@@ -1350,6 +1381,9 @@ fn contains_symlink_component(root: &std::path::Path, path: &std::path::Path) ->
 
 fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
     validate_search_pattern(input.pattern.as_str())?;
+    if input.scope.is_some() {
+        return grep_scoped(root, input);
+    }
     let path = input
         .path
         .as_ref()
@@ -1378,6 +1412,7 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let text = String::from_utf8_lossy(&bytes);
+    let lossy_truncated = std::str::from_utf8(&bytes).is_err();
     let logical = input
         .path
         .as_ref()
@@ -1389,7 +1424,7 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         })?
         .clone();
     let mut matches = Vec::new();
-    let mut truncated = source_truncated;
+    let mut truncated = source_truncated || lossy_truncated;
     for (line_index, line) in text.lines().enumerate() {
         let Some(column) = line.find(input.pattern.as_str()) else {
             continue;
@@ -1420,6 +1455,113 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
     Ok(ToolResult::Grep(GrepResult { matches, truncated }))
 }
 
+fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
+    let scope = input.scope.ok_or_else(|| {
+        intention_types::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
+    })?;
+    let (base, single) = match scope {
+        GrepScope::File { path } => (root.resolve_path(&path)?, Some(path)),
+        GrepScope::Directory { path } => (root.resolve_path(&path)?, None),
+        GrepScope::Workspace => (root.canonical_path().to_path_buf(), None),
+    };
+    let metadata = std::fs::symlink_metadata(&base).map_err(|_| {
+        intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+    })?;
+    if metadata.file_type().is_symlink() || (single.is_some() && !metadata.is_file()) {
+        return Err(intention_types::ErrorDto::validation(
+            "tool_search_failed",
+            "workspace search failed",
+        ));
+    }
+    let mut files = Vec::new();
+    if metadata.is_file() && !metadata.file_type().is_symlink() {
+        files.push(base);
+    } else if metadata.is_dir() {
+        let mut pending = vec![base];
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            let mut children = entries.filter_map(Result::ok).collect::<Vec<_>>();
+            children.sort_by_key(|entry| entry.file_name());
+            for entry in children.into_iter().rev() {
+                let path = entry.path();
+                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if metadata.file_type().is_symlink() {
+                    continue;
+                }
+                if metadata.is_dir() {
+                    pending.push(path);
+                } else if metadata.is_file()
+                    && !contains_symlink_component(root.canonical_path(), &path)
+                {
+                    files.push(path);
+                } else {
+                    continue;
+                }
+            }
+        }
+    } else {
+        return Err(intention_types::ErrorDto::validation(
+            "tool_search_failed",
+            "workspace search failed",
+        ));
+    }
+    files.sort();
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    for path in files {
+        let bytes = std::fs::read(&path).map_err(|_| {
+            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        })?;
+        let text = String::from_utf8_lossy(&bytes);
+        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
+        if lossy_truncated {
+            truncated = true;
+        }
+        let logical = single.clone().or_else(|| {
+            path.strip_prefix(root.canonical_path()).ok().and_then(|p| {
+                WorkspaceRelativePathDto::parse(p.to_string_lossy().replace('\\', "/")).ok()
+            })
+        });
+        let Some(logical) = logical else { continue };
+        for (line_index, line) in text.lines().enumerate() {
+            let Some(column) = line.find(input.pattern.as_str()) else {
+                continue;
+            };
+            if matches.len() >= MAX_GREP_MATCHES {
+                truncated = true;
+                break;
+            }
+            let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
+                truncated = true;
+                let end = line
+                    .char_indices()
+                    .take_while(|(index, _)| *index < MAX_TOOL_OUTPUT_BYTES)
+                    .map(|(index, _)| index)
+                    .last()
+                    .unwrap_or(0);
+                line[..end].to_owned()
+            } else {
+                line.to_owned()
+            };
+            matches.push(GrepMatch {
+                path: logical.clone(),
+                line: line_index as u64 + 1,
+                column: line[..column].chars().count() as u64 + 1,
+                fragment: bounded_text(fragment)?,
+            });
+        }
+        if matches.len() >= MAX_GREP_MATCHES {
+            truncated = true;
+            break;
+        }
+    }
+    Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+}
+
 fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
     // Absoluteness must not depend on the host platform: Windows drive-letter
     // and UNC roots are rejected everywhere so search patterns stay strictly
@@ -1442,6 +1584,58 @@ fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod coverage_helpers {
+    use super::*;
+    use std::io::{self, Read};
+
+    struct PanicReader;
+    impl Read for PanicReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            std::panic::resume_unwind(Box::new("injected reader panic"))
+        }
+    }
+
+    #[test]
+    fn bounded_lossy_handles_invalid_utf8_at_boundary() {
+        let mut bytes = vec![b'a'; MAX_TOOL_OUTPUT_BYTES];
+        bytes[MAX_TOOL_OUTPUT_BYTES - 1] = 0xff;
+        let (text, truncated) = bounded_lossy(&[bytes, vec![b'b']].concat());
+        assert!(truncated);
+        assert!(text.ends_with("\n[truncated]"));
+        assert!(!text.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn reader_panic_is_join_error() {
+        let handle = thread::spawn(|| {
+            let mut reader = PanicReader;
+            let mut output = Vec::new();
+            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+        });
+        assert!(matches!(
+            join_reader(Some(handle)),
+            Err("tool_execute_read_failed")
+        ));
+    }
+
+    #[test]
+    fn symlink_component_rejects_outside_and_missing_paths() {
+        let root = std::env::temp_dir().join(format!("tools-coverage-{}", std::process::id()));
+        assert!(std::fs::create_dir_all(&root).is_ok());
+        assert!(contains_symlink_component(&root, &root.join("missing")));
+        assert!(contains_symlink_component(&root, &root.join("outside")));
+        assert!(std::fs::remove_dir_all(root).is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_empty_nul_and_windows_patterns() {
+        for pattern in ["", "a\0b", "C:/x", "\\\\server\\share", "../x", "/x", "\\x"] {
+            assert!(validate_search_pattern(pattern).is_err(), "{pattern:?}");
+        }
+    }
 }
 
 /// Private execution boundary; adapters implement this without leaking erased values.
