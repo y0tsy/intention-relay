@@ -590,6 +590,56 @@ fn admission_failure_returns_its_typed_error_without_dispatch_or_failure_append(
     assert!(repository.appends.borrow().is_empty());
 }
 
+#[test]
+fn schedule_starting_run_maps_context_into_dispatch_dto() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let repository = FakeRepository::new(
+        Err(unused()),
+        Ok(context(session_id, run_id, config.clone())),
+        RunStatusDto::Starting,
+    );
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id)
+        .expect("starting context schedules");
+    assert_eq!(scheduled.session_id(), session_id);
+    assert_eq!(scheduled.run_id(), run_id);
+    assert_eq!(scheduled.safe_config(), &config);
+    assert_eq!(scheduled.request().messages().len(), 3);
+}
+
+#[test]
+fn schedule_starting_run_propagates_context_load_error() {
+    let repository = FakeRepository::new(
+        Err(unused()),
+        Err(ErrorDto::unavailable("context_down", "context unavailable")),
+        RunStatusDto::Starting,
+    );
+    let error = ApplicationService::new(&repository)
+        .schedule_starting_run(SessionId::new(), RunId::new())
+        .expect_err("context error is propagated");
+    assert_eq!(error.code(), "context_down");
+}
+
+#[test]
+fn schedule_starting_run_rejects_context_that_cannot_form_a_request() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let context = context(session_id, run_id, config.clone());
+    let repository = FakeRepository::new(Err(unused()), Ok(context), RunStatusDto::Starting);
+
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id)
+        .expect("context schedules");
+    assert_eq!(scheduled.session_id(), session_id);
+    assert_eq!(scheduled.run_id(), run_id);
+    assert_eq!(scheduled.safe_config(), &config);
+    assert_eq!(scheduled.request().messages().len(), 3);
+}
+
 fn unused() -> ErrorDto {
     ErrorDto::unavailable("fixture_unused", "unused")
 }
