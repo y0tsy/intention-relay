@@ -1576,4 +1576,267 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn all_protocol_accessors_and_envelope_variants_are_exercised() {
+        let schema = SchemaVersionDto::new(1, 0);
+        let version = ProtocolVersionDto::new(3, 4);
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let cursor = RunEventCursorDto::new(9);
+        let run_sub = SubscribeRunCommandDto::new(schema, session_id, run_id, Some(cursor));
+        assert_eq!(run_sub.schema_version(), schema);
+        assert_eq!(run_sub.session_id(), session_id);
+        assert_eq!(run_sub.run_id(), run_id);
+        assert_eq!(run_sub.after_cursor(), Some(cursor));
+
+        let resync = RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap);
+        assert_eq!(resync.session_id(), session_id);
+        assert_eq!(resync.run_id(), run_id);
+        assert_eq!(resync.reason(), RunResyncReasonDto::CursorGap);
+
+        let frame = RunStreamFrameDto::Resync(resync);
+        let response = RunSubscriptionResponseDto::Resync(resync);
+        let request = RunSubscriptionRequestEnvelopeDto::new(
+            version,
+            CorrelationIdDto::new(),
+            ProtocolMessageDto::new(schema, run_sub),
+        );
+        assert_eq!(request.protocol_version(), version);
+        assert!(request.correlation_id() == request.correlation_id());
+        assert_eq!(request.message().schema_version(), schema);
+        assert_eq!(request.message().payload().run_id(), run_id);
+        let decoded_frame: RunStreamFrameDto =
+            serde_json::from_value(serde_json::to_value(frame).expect("frame serializes"))
+                .expect("frame decodes");
+        let decoded_response: RunSubscriptionResponseDto =
+            serde_json::from_value(serde_json::to_value(response).expect("response serializes"))
+                .expect("response decodes");
+        assert!(matches!(decoded_frame, RunStreamFrameDto::Resync(_)));
+        assert!(matches!(
+            decoded_response,
+            RunSubscriptionResponseDto::Resync(_)
+        ));
+
+        let query = ProtocolQueryDto::GetDaemonHealth;
+        let response_payload =
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(resync));
+        let envelope = ProtocolResponseEnvelopeDto::new(
+            version,
+            CorrelationIdDto::new(),
+            ProtocolMessageDto::new(schema, response_payload),
+        );
+        assert_eq!(envelope.protocol_version(), version);
+        assert_eq!(envelope.message().schema_version(), schema);
+        assert!(matches!(query, ProtocolQueryDto::GetDaemonHealth));
+        let _ = envelope.message().payload();
+    }
+
+    #[test]
+    fn protocol_capabilities_readiness_and_acceptance_accessors_cover_all_variants() {
+        let version = ProtocolVersionDto::new(1, 0);
+        let capabilities = [
+            ProtocolCapabilityDto::SessionSubscriptions,
+            ProtocolCapabilityDto::CorrelatedRequests,
+            ProtocolCapabilityDto::DaemonHealth,
+            ProtocolCapabilityDto::RunStreamSubscriptions,
+        ];
+        let hello =
+            ProtocolHelloDto::new(version, capabilities.to_vec(), "adapter").expect("valid hello");
+        assert_eq!(hello.capabilities(), capabilities);
+
+        for readiness in [
+            DaemonReadinessDto::Starting,
+            DaemonReadinessDto::Ready,
+            DaemonReadinessDto::Draining,
+            DaemonReadinessDto::Unavailable,
+        ] {
+            assert_eq!(
+                DaemonHealthDto::new(SchemaVersionDto::new(1, 0), version, readiness).readiness(),
+                readiness
+            );
+        }
+
+        let session = SessionId::new();
+        let turn = TurnId::new();
+        let started = SendUserTurnAcceptedDto::new(
+            session,
+            turn,
+            SessionEventSequenceDto::new(1),
+            SendUserTurnOutcomeDto::Started {
+                run_id: RunId::new(),
+                config_revision_id: ConfigRevisionId::new(),
+            },
+        );
+        let queued = SendUserTurnAcceptedDto::new(
+            session,
+            turn,
+            SessionEventSequenceDto::new(2),
+            SendUserTurnOutcomeDto::Queued {
+                queue_position: QueuePositionDto::new(1),
+            },
+        );
+        assert_eq!(started.session_id(), session);
+        assert_eq!(started.turn_id(), turn);
+        assert_eq!(
+            started.committed_sequence(),
+            SessionEventSequenceDto::new(1)
+        );
+        assert!(matches!(
+            started.outcome(),
+            SendUserTurnOutcomeDto::Started { .. }
+        ));
+        assert!(matches!(
+            queued.outcome(),
+            SendUserTurnOutcomeDto::Queued { .. }
+        ));
+    }
+
+    #[test]
+    fn acceptance_evidence_and_payload_accessors_preserve_values() {
+        let session = SessionId::new();
+        let run = RunId::new();
+        let project = ProjectId::new();
+        let workspace = WorkspaceId::new();
+        let seq = SessionEventSequenceDto::new(7);
+        let created = CreateSessionAcceptedDto::new(project, workspace, session, seq);
+        assert_eq!(created.project_id(), project);
+        assert_eq!(created.workspace_id(), workspace);
+        assert_eq!(created.session_id(), session);
+        assert_eq!(created.committed_sequence(), seq);
+        let removed = RemoveQueuedTurnAcceptedDto::new(session, TurnId::new(), seq);
+        assert_eq!(removed.session_id(), session);
+        assert_eq!(removed.committed_sequence(), seq);
+        let stopped = StopRunAcceptedDto::new(session, run, seq);
+        assert_eq!(stopped.session_id(), session);
+        assert_eq!(stopped.run_id(), run);
+        assert_eq!(stopped.committed_sequence(), seq);
+
+        let correlation = CorrelationIdDto::new();
+        let accepted = ProtocolAcceptedDto::with_result(
+            correlation,
+            ProtocolAcceptedResultDto::CreateSession(created),
+        );
+        assert_eq!(accepted.correlation_id(), correlation);
+        assert!(matches!(
+            accepted.result(),
+            Some(ProtocolAcceptedResultDto::CreateSession(_))
+        ));
+    }
+
+    #[test]
+    fn protocol_round_trip_covers_all_closed_enum_shapes() {
+        let session = SessionId::new();
+        let run = RunId::new();
+        let schema = SchemaVersionDto::new(1, 0);
+        let commands = vec![
+            ProtocolCommandDto::CreateSession(CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session,
+                WorkspaceId::new(),
+                intention_domain::WorkspaceRootDto::parse("/workspace").expect("root"),
+                RunModeDto::Build,
+            )),
+            ProtocolCommandDto::RemoveQueuedTurn(RemoveQueuedTurnCommandDto::new(
+                session,
+                TurnId::new(),
+            )),
+        ];
+        for value in commands {
+            let wire = serde_json::to_vec(&value).expect("command encodes");
+            assert_eq!(
+                serde_json::from_slice::<ProtocolCommandDto>(&wire).expect("command decodes"),
+                value
+            );
+        }
+        for value in [
+            ProtocolQueryDto::GetDaemonHealth,
+            ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session)),
+        ] {
+            let wire = serde_json::to_vec(&value).expect("query encodes");
+            assert_eq!(
+                serde_json::from_slice::<ProtocolQueryDto>(&wire).expect("query decodes"),
+                value
+            );
+        }
+        let error = ErrorDto::validation("rejected", "rejected");
+        for value in [
+            ProtocolCommandResultDto::Rejected(error.clone()),
+            ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::new(CorrelationIdDto::new())),
+        ] {
+            let wire = serde_json::to_vec(&value).expect("result encodes");
+            let _: ProtocolCommandResultDto =
+                serde_json::from_slice(&wire).expect("result decodes");
+        }
+        for value in [
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
+                error.clone(),
+            )),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
+                error.clone(),
+            )),
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(error)),
+        ] {
+            let wire = serde_json::to_vec(&value).expect("payload encodes");
+            let _: ProtocolResponsePayloadDto =
+                serde_json::from_slice(&wire).expect("payload decodes");
+        }
+        let _ = (schema, run);
+    }
+
+    #[test]
+    fn remaining_constructor_and_deserialization_error_paths_are_checked() {
+        let schema = SchemaVersionDto::new(1, 0);
+        let session = SessionId::new();
+        let run = RunId::new();
+        let bad_tail = serde_json::json!({
+            "schema_version": {"major": 1, "minor": 0},
+            "session_id": session,
+            "after_sequence": 4,
+            "events": [{
+                "metadata": {
+                    "schema_version": {"major": 1, "minor": 0},
+                    "event_id": EventId::new(), "session_id": SessionId::new(),
+                    "run_id": null, "turn_id": null, "sequence": 5,
+                    "occurred_at": 1
+                },
+                "payload": {"kind": "run_status_changed", "data": {
+                    "session_id": session, "run_id": run, "status": "running", "occurred_at": 1
+                }}
+            }]
+        });
+        assert!(serde_json::from_value::<SessionEventTailBatchDto>(bad_tail).is_err());
+
+        let snapshot = SessionSnapshotDto::new(schema, session, SessionEventSequenceDto::new(1));
+        let tail = SessionEventTailBatchDto::new(
+            schema,
+            SessionId::new(),
+            snapshot.at_sequence(),
+            Vec::new(),
+        )
+        .expect("empty tail fixture");
+        assert!(SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail).is_err());
+
+        let batch = RunLiveBatchDto::new(
+            session,
+            run,
+            RunEventCursorDto::new(u64::MAX),
+            vec![],
+            RunEventCursorDto::new(u64::MAX),
+        );
+        assert!(batch.is_err());
+        assert!(
+            serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<RunSubscriptionResponseDto>(r#"{"kind":"unknown","data":{}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<SessionSubscriptionResponseDto>(
+                r#"{"kind":"unknown","data":{}}"#
+            )
+            .is_err()
+        );
+    }
 }
