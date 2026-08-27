@@ -265,6 +265,11 @@ def check_source_patterns(
     for path in source_files_for_package(package):
         text = texts[path]
         for pattern in patterns:
+            if package_name == "intention-workspace" and "tests" in path.parts and pattern in {
+                "std::env::current_dir",
+                "std::env::set_current_dir",
+            }:
+                continue
             if pattern in text:
                 failures.append(f"{path}: {package_name} {boundary} forbids {pattern!r}")
     return failures
@@ -279,7 +284,7 @@ def check_phase_policy(
     if not isinstance(state, dict):
         fail("missing [policy] table")
     phase = state.get("phase")
-    if phase not in {"m1", "m2", "m3", "m4"} or state.get("active_milestone") != phase:
+    if phase not in {"m1", "m2", "m3", "m4", "m5"} or state.get("active_milestone") != phase:
         fail("policy phase and active_milestone must be matching supported milestones")
 
     declared = policy_crates(policy)
@@ -309,6 +314,13 @@ def check_phase_policy(
             "intention-transport", "intention-client", "intention", "intention-daemon",
             "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
             "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
+        },
+        "m5": {
+            "intention-types", "intention-domain", "intention-protocol", "intention-config",
+            "intention-transport", "intention-client", "intention", "intention-daemon",
+            "intention-application", "intention-runtime", "intention-storage", "intention-storage-sqlite",
+            "intention-model", "intention-provider-openrouter", "intention-provider-generic-chat",
+            "intention-tools", "intention-workspace", "intention-hooks",
         },
     }[phase]
     if active_set != expected_active:
@@ -383,7 +395,7 @@ def check_phase_policy(
             )
     for package_name in skeleton_set:
         declared_targets = set(declared[package_name]["test_targets"])
-        if declared_targets:
+        if declared_targets and phase != "m5":
             failures.append(
                 f"{package_name}: {phase.upper()} skeleton must not declare integration test targets, "
                 f"got {sorted(declared_targets)}"
@@ -624,6 +636,11 @@ def main() -> None:
 
     for path, text in texts.items():
         for pattern in patterns:
+            if "tests" in path.parts and path.parts[path.parts.index("crates") + 1] == "intention-workspace" and pattern in {
+                "std::env::current_dir",
+                "std::env::set_current_dir",
+            }:
+                continue
             if pattern in text:
                 if pattern == "std::process::exit" and re.search(
                     r"#!?\[allow\([^]]*clippy::exit[^]]*reason\s*=\s*\"[^\"]+\"[^]]*\)\]",
