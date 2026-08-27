@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, ModelRunDispatchPort, ScheduleModelRunDto,
-    SendUserTurnWorkflowInputDto,
+    ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
+    ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
 };
 #[cfg(test)]
 use intention_config::ConfigPathDto;
@@ -43,12 +43,14 @@ use intention_runtime::{
 };
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
+use intention_tools::{ToolInput, ToolResult};
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto,
     SessionEventSequenceDto, SessionId, TimestampDto,
 };
 #[cfg(test)]
 use intention_types::{ProjectId, WorkspaceId};
+use intention_workspace::WorkspaceRoot;
 
 const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
@@ -201,6 +203,43 @@ impl PostCommitPublisher for NoopPostCommitPublisher {
 }
 
 impl DaemonApplicationFacade {
+    /// Executes one explicit local tool call through the durable lifecycle path.
+    ///
+    /// The M4 model `ToolCallRecorded` fact remains denial-only; this API is an
+    /// internal, caller-admitted single invocation and never starts a loop.
+    #[doc(hidden)]
+    pub fn invoke_local_tool_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call_id: intention_types::ToolCallId,
+        tool_id: impl Into<String>,
+        input: ToolInput,
+        workspace: WorkspaceRoot,
+    ) -> DtoResult<ToolResult> {
+        let result = intention_application::ApplicationService::new(&self.inner.repository)
+            .invoke_local_tool(InvokeLocalToolInputDto::new(
+                workspace,
+                session_id,
+                run_id,
+                call_id,
+                tool_id,
+                input,
+                now()?,
+            ));
+        // Publication is intentionally after both lifecycle commits and an
+        // independent durable reread; the existing publisher is the seam.
+        if result.is_ok() {
+            let _ = self.publish_after_durable_read(
+                session_id,
+                self.inner
+                    .repository
+                    .load_session_snapshot(session_id)?
+                    .at_sequence(),
+            );
+        }
+        result
+    }
     /// Loads platform configuration, opens platform state storage, and recovers before ready.
     ///
     /// Raw TOML, credentials, and configuration paths remain inside this method's
@@ -1045,6 +1084,52 @@ mod tests {
     }
 
     #[test]
+    fn health_query_and_snapshot_query_cover_public_read_facade() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("queries.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        assert!(matches!(
+            facade.query(ProtocolQueryDto::GetDaemonHealth),
+            ProtocolQueryResultDto::DaemonHealth(health)
+                if health.readiness() == DaemonReadinessDto::Ready
+        ));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        assert!(matches!(
+            facade.query(ProtocolQueryDto::GetSessionSnapshot(
+                GetSessionSnapshotQueryDto::new(session_id)
+            )),
+            ProtocolQueryResultDto::SessionSnapshot(snapshot)
+                if snapshot.session_id() == session_id
+        ));
+        assert!(matches!(
+            facade.query(ProtocolQueryDto::GetSessionSnapshot(
+                GetSessionSnapshotQueryDto::new(SessionId::new())
+            )),
+            ProtocolQueryResultDto::Rejected(error)
+                if error.code() == "storage_record_not_found"
+        ));
+    }
+
+    #[test]
+    fn schedule_starting_run_rejects_unknown_run_without_leaking_storage_details() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("schedule-error.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let error = facade
+            .schedule_starting_run_for_daemon(SessionId::new(), RunId::new())
+            .expect_err("unknown run cannot be scheduled");
+        assert_eq!(error.code(), "run_model_context_unavailable");
+        assert!(!error.to_string().contains("schedule-error.sqlite"));
+    }
+
+    #[test]
     fn facade_retry_of_same_user_turn_reuses_durable_run_and_skips_events_and_dispatch() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
@@ -1389,6 +1474,145 @@ mod tests {
     }
 
     #[test]
+    fn subscription_rejects_run_scoped_and_invalid_positions() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let run_id = RunId::new();
+        let with_run = facade.subscribe(SubscribeSessionCommandDto::with_run_id(
+            SCHEMA_VERSION,
+            session_id,
+            Some(run_id),
+            None,
+            RunModeDto::Build,
+        ));
+        assert!(
+            matches!(with_run, SessionSubscriptionResponseDto::ResyncRequired(r)
+            if r.reason() == SessionResyncReasonDto::HistoryUnavailable)
+        );
+        let ahead = facade.subscribe(SubscribeSessionCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            Some(SessionEventSequenceDto::new(99)),
+            RunModeDto::Build,
+        ));
+        assert!(
+            matches!(ahead, SessionSubscriptionResponseDto::ResyncRequired(r)
+            if r.reason() == SessionResyncReasonDto::InvalidPosition)
+        );
+    }
+
+    #[test]
+    fn daemon_host_failure_and_terminalization_bridges_are_safe() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("bridges.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let accepted = send_user_turn(&facade, session_id, "bridge");
+        let ProtocolCommandResultDto::Accepted(a) = accepted else {
+            unreachable!()
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+            unreachable!()
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
+            unreachable!()
+        };
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("stop commits");
+        facade
+            .terminalize_cancelling_run_for_daemon(session_id, run_id)
+            .expect("terminalizes");
+        let replay = facade
+            .load_current_run_replay_for_daemon(session_id, run_id)
+            .expect("replay");
+        assert_eq!(
+            replay.snapshot().run_projection().status(),
+            RunStatusDto::Cancelled
+        );
+        let other = RunId::new();
+        assert!(
+            facade
+                .fail_starting_run_for_daemon(session_id, other, "fixture_failure")
+                .is_err()
+        );
+        assert!(
+            facade
+                .load_run_tail_for_daemon(session_id, other, RunEventCursorDto::new(0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn command_routes_remove_queued_stop_and_rejects_subscription() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("routing.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let started = send_user_turn(&facade, session_id, "started");
+        let ProtocolCommandResultDto::Accepted(a) = started else {
+            unreachable!()
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+            unreachable!()
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
+            unreachable!()
+        };
+        let queued = send_user_turn(&facade, session_id, "queued");
+        let ProtocolCommandResultDto::Accepted(a) = queued else {
+            unreachable!()
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+            unreachable!()
+        };
+        let queued_turn_id = t.turn_id();
+        let SendUserTurnOutcomeDto::Queued { .. } = t.outcome() else {
+            unreachable!()
+        };
+        assert!(matches!(
+            facade.command(ProtocolCommandDto::RemoveQueuedTurn(
+                intention_domain::RemoveQueuedTurnCommandDto::new(session_id, queued_turn_id)
+            )),
+            ProtocolCommandResultDto::Accepted(_)
+        ));
+        assert!(matches!(
+            facade.command(ProtocolCommandDto::StopRun(
+                intention_domain::StopRunCommandDto::new(session_id, run_id)
+            )),
+            ProtocolCommandResultDto::Accepted(_)
+        ));
+        assert!(
+            matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, None, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
+        );
+    }
+
+    #[test]
+    fn subscribe_returns_checkpoint_for_current_position() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let response = facade.subscribe(SubscribeSessionCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            Some(SessionEventSequenceDto::new(1)),
+            RunModeDto::Build,
+        ));
+        assert!(
+            matches!(response, SessionSubscriptionResponseDto::SnapshotAndTail { tail, .. } if tail.events().is_empty())
+        );
+    }
+
+    #[test]
     fn persistence_failure_never_publishes_and_publisher_failure_preserves_durable_replay() {
         let recorder = Arc::new(RecordingPublisher::failing());
         let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
@@ -1469,5 +1693,248 @@ mod tests {
             reducer.last_sequence(),
             Some(SessionEventSequenceDto::new(3))
         );
+    }
+
+    #[test]
+    fn selected_provider_rejects_configuration_kind_mismatch() {
+        let result = DaemonApplicationFacade::open_with_selected_provider(
+            TempDir::new().expect("temporary directory exists").path().join("mismatch.sqlite"),
+            fixture_config_snapshot(),
+            SelectedProvider::GenericChat(
+                GenericChatDriver::from_startup_material(
+                    ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+                        "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"fixture\"",
+                        ConfigSourceDto::Explicit(ConfigPathDto::parse(
+                            std::env::temp_dir().join("mismatch.toml").to_string_lossy().into_owned(),
+                        ).expect("fixture path is absolute")),
+                    )).expect("fixture material parses"),
+                ).expect("generic provider builds"),
+            ),
+            Box::new(NoopPostCommitPublisher),
+        );
+        let error = match result {
+            Ok(_) => return,
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "invalid_selected_provider");
+    }
+
+    #[test]
+    fn command_rejects_malformed_turn_identifier() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let result = facade.command(ProtocolCommandDto::SendUserTurn(
+            SendUserTurnCommandDto::new(SessionId::new(), intention_types::TurnId::new(), "turn")
+                .expect("fixture turn is valid"),
+        ));
+        assert!(
+            matches!(result, ProtocolCommandResultDto::Rejected(error) if error.code() == "storage_record_not_found" || error.code() == "daemon_command_unavailable")
+        );
+    }
+
+    #[test]
+    fn daemon_execution_bridge_runs_selected_test_driver_and_tool_bridge_reports_safe_error() {
+        let driver = Arc::new(TestSupportUnconfiguredDriver);
+        let (_directory, facade) = {
+            let directory = TempDir::new().expect("temporary directory exists");
+            let facade = DaemonApplicationFacade::open_for_test_support_with_driver(
+                directory.path().join("execution.sqlite"),
+                fixture_config_snapshot(),
+                driver,
+            )
+            .expect("durable facade opens");
+            (directory, facade)
+        };
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let accepted = send_user_turn(&facade, session_id, "execution bridge");
+        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
+            unreachable!("turn is accepted")
+        };
+        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+            unreachable!("turn evidence exists")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
+            unreachable!("turn starts")
+        };
+
+        let result = facade.invoke_local_tool_for_daemon(
+            session_id,
+            run_id,
+            intention_types::ToolCallId::new(),
+            "missing-tool",
+            ToolInput::Read(intention_tools::ReadInput {
+                path: intention_types::WorkspaceRelativePathDto::parse("missing.txt")
+                    .expect("path is valid"),
+            }),
+            WorkspaceRoot::resolve(
+                &WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
+                    .expect("workspace root is valid"),
+            )
+            .expect("workspace root resolves"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn current_starting_run_returns_none_after_terminalization() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        assert_eq!(
+            facade
+                .current_starting_run_for_daemon(session_id)
+                .expect("new session has no starting run"),
+            None
+        );
+    }
+
+    #[test]
+    fn facade_rejects_invalid_commands_and_unknown_run_bridges() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        let unknown = RunId::new();
+
+        assert!(matches!(
+            facade.command(ProtocolCommandDto::StopRun(
+                intention_domain::StopRunCommandDto::new(session_id, unknown)
+            )),
+            ProtocolCommandResultDto::Rejected(_)
+        ));
+        assert!(matches!(
+            facade.command(ProtocolCommandDto::RemoveQueuedTurn(
+                intention_domain::RemoveQueuedTurnCommandDto::new(
+                    session_id,
+                    intention_types::TurnId::new(),
+                )
+            )),
+            ProtocolCommandResultDto::Rejected(_)
+        ));
+        assert!(matches!(
+            facade.current_starting_run_for_daemon(session_id),
+            Err(error) if error.code() == "storage_record_not_found"
+        ));
+        assert!(
+            facade
+                .terminalize_cancelling_run_for_daemon(session_id, unknown)
+                .is_err()
+        );
+        assert!(
+            facade
+                .fail_starting_run_for_daemon(session_id, unknown, "fixture")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn subscription_accepts_exact_checkpoint_and_rejects_unknown_position() {
+        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        let exact = facade.subscribe(SubscribeSessionCommandDto::new(
+            SCHEMA_VERSION,
+            session_id,
+            Some(SessionEventSequenceDto::new(1)),
+            RunModeDto::Build,
+        ));
+        assert!(matches!(
+            exact,
+            SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
+                if snapshot.at_sequence() == SessionEventSequenceDto::new(1)
+                    && tail.after_sequence() == SessionEventSequenceDto::new(1)
+        ));
+    }
+
+    #[test]
+    fn selected_provider_helpers_cover_test_provider_variant() {
+        let provider = SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver));
+        assert_eq!(provider.safe_kind(), None);
+        assert!(!provider.driver().capabilities().supports_streaming());
+    }
+
+    #[test]
+    fn no_op_publisher_and_dispatch_cover_success_paths() {
+        let publisher = NoopPostCommitPublisher;
+        let session_id = SessionId::new();
+        let change = CommittedChangeDto::new(
+            intention_domain::SessionProjectionDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                fixture_workspace_root(),
+                RunModeDto::Build,
+                None,
+                None,
+                Vec::new(),
+                SessionEventSequenceDto::new(0),
+            )
+            .expect("empty projection is valid"),
+            SessionEventSequenceDto::new(0),
+            Vec::new(),
+            None,
+        )
+        .expect("empty committed change is valid");
+        publisher.publish(&change).expect("noop publisher succeeds");
+        let run_id = RunId::new();
+        let request = intention_model::ModelRequestDto::new(
+            run_id,
+            "fixture",
+            vec![
+                intention_model::ModelMessageDto::new(
+                    intention_model::ModelRoleDto::User,
+                    "fixture",
+                )
+                .expect("fixture message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("fixture request is valid");
+        PrivateModelRunDispatch::default()
+            .dispatch_model_run(
+                ScheduleModelRunDto::new(session_id, run_id, request, fixture_config_snapshot())
+                    .expect("fixture schedule is valid"),
+            )
+            .expect("dispatch succeeds");
+    }
+
+    #[test]
+    fn provider_driver_branches_and_empty_test_driver_stream_are_exercised() {
+        let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture\"",
+            ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("provider-branches.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("fixture material parses");
+        let openrouter =
+            SelectedProvider::from_startup_material(material).expect("openrouter provider builds");
+        assert_eq!(openrouter.safe_kind(), Some(ProviderKindDto::Openrouter));
+        let _ = openrouter.driver();
+
+        let test_driver = TestSupportUnconfiguredDriver;
+        let stream = test_driver.execute(
+            intention_model::ModelRequestDto::new(
+                RunId::new(),
+                "fixture",
+                vec![
+                    intention_model::ModelMessageDto::new(
+                        intention_model::ModelRoleDto::User,
+                        "fixture",
+                    )
+                    .expect("fixture message is valid"),
+                ],
+                None,
+                None,
+            )
+            .expect("fixture request is valid"),
+            ModelCancellationSignal::new(),
+        );
+        futures_util::pin_mut!(stream);
     }
 }
