@@ -282,7 +282,7 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
             &self,
             _: SessionId,
         ) -> intention_types::DtoResult<intention_domain::SessionProjectionDto> {
-            panic!()
+            unreachable!()
         }
         fn load_tail(
             &self,
@@ -291,13 +291,13 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
         ) -> intention_types::DtoResult<
             Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>,
         > {
-            panic!()
+            unreachable!()
         }
         fn accept_configuration_revision(
             &self,
             _: ConfigSnapshotDto,
         ) -> intention_types::DtoResult<()> {
-            panic!()
+            unreachable!()
         }
     }
     let _ = AppendModelRunFactsOutcomeDto::new;
@@ -315,35 +315,35 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
     assert_eq!(
         repository
             .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "tool_lifecycle_unavailable"
     );
     assert_eq!(
         repository
             .append_model_run_facts(append)
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "run_history_unavailable"
     );
     assert_eq!(
         repository
             .load_run_config_snapshot(session_id, run_id)
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "run_configuration_unavailable"
     );
     assert_eq!(
         repository
             .load_starting_run_model_context(session_id, run_id)
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "run_model_context_unavailable"
     );
     assert_eq!(
         repository
             .load_current_run_replay(session_id, run_id)
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "run_history_unavailable"
     );
@@ -354,7 +354,7 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
                 run_id,
                 intention_domain::RunEventCursorDto::new(0)
             )
-            .unwrap_err()
+            .expect_err("repository operation must be unavailable")
             .code(),
         "run_history_unavailable"
     );
@@ -430,7 +430,7 @@ fn storage_constructors_cover_successful_accessors_and_validation_paths() {
             run_id,
             intention_domain::RunEventCursorDto::new(0),
             vec![
-                finished.clone(),
+                finished,
                 intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
                     .expect("fact is valid")
             ],
