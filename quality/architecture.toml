@@ -1,6 +1,6 @@
 [policy]
-phase = "m4plus-autopilot-spec"
-active_milestone = "autopilot-transition"
+phase = "m5"
+active_milestone = "m5"
 quality_harness = "quality-harness"
 non_production_test_crates = ["intention-test-support"]
 active_production_crates = [
@@ -19,11 +19,11 @@ active_production_crates = [
   "intention-model",
   "intention-provider-openrouter",
   "intention-provider-generic-chat",
-]
-skeleton_crates = [
   "intention-tools",
   "intention-workspace",
   "intention-hooks",
+]
+skeleton_crates = [
   "intention-vfr",
   "intention-headroom",
   "intention-plans",
@@ -52,6 +52,10 @@ source_patterns = [
   "rusqlite::",
   "tauri::",
 ]
+test_only_source_patterns = [
+  "std::env::current_dir",
+  "std::env::set_current_dir",
+]
 reason_required_attributes = ["allow", "expect"]
 secret_assignment_patterns = ["api_key", "api-key", "secret", "token", "password"]
 public_resource_patterns = [
@@ -73,14 +77,17 @@ public_resource_patterns = [
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
-"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-types"]
+"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
 "intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]
-"intention-application" = ["intention-config", "intention-domain", "intention-protocol", "intention-runtime", "intention-storage", "intention-types"]
+"intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-types", "intention-workspace"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
 "intention-model" = ["intention-types"]
 "intention-provider-openrouter" = ["intention-config", "intention-model", "intention-types"]
 "intention-provider-generic-chat" = ["intention-config", "intention-model", "intention-types"]
+"intention-tools" = ["intention-domain", "intention-types", "intention-workspace"]
+"intention-workspace" = ["intention-domain", "intention-types"]
+"intention-hooks" = ["intention-tools", "intention-types"]
 
 [future_dependencies]
 "intention-runtime" = ["intention-model"]
@@ -101,6 +108,9 @@ public_resource_patterns = [
 "intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
 "intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
 "intention-provider-generic-chat" = ["async-openai", "futures-util", "serde_json"]
+"intention-tools" = ["glob", "serde", "serde_json", "tempfile"]
+"intention-workspace" = []
+"intention-hooks" = []
 
 [adapter_boundaries]
 packages = ["intention-tauri", "intention-tui"]
@@ -241,21 +251,21 @@ coverage_tier = "C"
 name = "intention-tools"
 responsibility = "Typed tool registry and core tool contracts."
 test_target = "tool invocation and policy tests"
-test_targets = []
+test_targets = ["tool_contracts"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-workspace"
 responsibility = "WorkspaceRoot path policy and process CWD enforcement."
 test_target = "workspace containment tests"
-test_targets = []
+test_targets = ["workspace_contract"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-hooks"
 responsibility = "Typed hook phases, ordering, contexts, and dispatch."
 test_target = "hook ordering and rejection tests"
-test_targets = []
+test_targets = ["hook_contracts"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -276,7 +286,7 @@ coverage_tier = "B"
 name = "intention-plans"
 responsibility = "Plan artifacts, hidden frontmatter, and Plan/Build policy."
 test_target = "plan integrity, focus, approval, and mode-policy tests"
-test_targets = ["autopilot_plan_contracts", "autopilot_plan_outcomes"]
+test_targets = []
 coverage_tier = "B"
 
 [[future_crates]]

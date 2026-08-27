@@ -251,7 +251,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
 def test_m3_phase_partition_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m2"')
+        replace_once(policy, 'active_milestone = "m5"', 'active_milestone = "m2"')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -263,7 +263,7 @@ def test_m3_phase_partition_policy(root: Path) -> None:
 def test_m4_phase_activation_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
-        replace_once(policy, 'active_milestone = "m4"', 'active_milestone = "m3"')
+        replace_once(policy, 'active_milestone = "m5"', 'active_milestone = "m3"')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -273,14 +273,14 @@ def test_m4_phase_activation_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            '  "intention-provider-generic-chat",\n]',
+            '  "intention-provider-generic-chat",\n  "intention-tools",\n  "intention-workspace",\n  "intention-hooks",\n]',
             ']',
         )
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="M4 active production crates must equal the roadmap crate set",
+            expected_output="M5 active production crates must equal the roadmap crate set",
         )
 
 
@@ -292,11 +292,63 @@ def test_m4_active_test_target_policy(root: Path) -> None:
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
+
+
+def test_m5_activation_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, '"intention-tools",\n', '')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
             expect_success=False,
-            expected_output="intention-model: declared integration test targets",
+            expected_output="M5 active production crates must equal the roadmap crate set",
+        )
+    with modified(policy):
+        replace_once(policy, 'test_targets = ["tool_contracts"]', 'test_targets = []')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-tools: declared integration test targets",
+        )
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-tools: declared integration test targets",
+        )
+
+
+def test_m5_skeleton_drift_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, '"intention-vfr",', '"intention-tools",')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="an M5 crate cannot be both active and a skeleton",
+        )
+    with modified(policy):
+        replace_once(policy, '"intention-vfr",', '"missing-skeleton",')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="M5 active, skeleton, adapter, and test-support crates must cover",
+        )
+
+
+def test_m5_exact_active_crate_policy(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(policy, '  "intention-hooks",\n]', '  "intention-hooks",\n  "intention-test-support",\n]')
+        run(
+            [sys.executable, "quality/check_architecture.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="M5 active production crates must equal the roadmap crate set",
         )
 
 
@@ -577,6 +629,24 @@ def test_coverage_failures(root: Path) -> None:
         )
 
 
+def test_coverage_override_validation(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/coverage-low.json"
+    with modified(policy), modified(report):
+        report.write_text(coverage_report(root, [("crates/intention-tools/src/lib.rs", 100, 100)]), encoding="utf-8")
+        original = policy.read_text(encoding="utf-8")
+        invalids = [
+            ("approved_floor = 101.0", "approved_floor must be numeric from 0 through 100"),
+            ('[coverage_overrides.crates.intention-tools]', '[coverage_overrides.crates.missing]'),
+            ('threshold = 80.0', 'threshold = 79.0'),
+            ('review = "M5 quality review; revisit before the next milestone gate."', 'review = ""'),
+            ('review = "Reviewer: M5 quality council; date: 2026-08-26; decision: M5-approved transition floor; revisit before the next milestone gate."', 'review = "M5 quality review"'),
+        ]
+        for old, expected in invalids:
+            policy.write_text(original.replace(old, expected if old.startswith("approved") else old.replace("80.0", "79.0") if "threshold" in old else old.replace("M5 quality review; revisit before the next milestone gate.", "")), encoding="utf-8")
+            run([sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)], cwd=root, expect_success=False)
+
+
 def test_coverage_exclusion_semantics(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/m1plus-coverage.json"
@@ -608,6 +678,9 @@ def test_coverage_exclusion_semantics(root: Path) -> None:
                     ("crates/intention-model/src/lib.rs", 100, 100),
                     ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
                     ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
+                    ("crates/intention-tools/src/lib.rs", 100, 100),
+                    ("crates/intention-workspace/src/lib.rs", 100, 100),
+                    ("crates/intention-hooks/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -673,6 +746,7 @@ enabled = true
                     ("crates/intention-model/src/lib.rs", 100, 100),
                     ("crates/intention-provider-openrouter/src/lib.rs", 100, 100),
                     ("crates/intention-provider-generic-chat/src/lib.rs", 100, 100),
+                    ("crates/intention-tools/src/lib.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -693,6 +767,58 @@ def test_missing_feature_profile(root: Path) -> None:
             [sys.executable, "quality/check_features.py", "--policy", str(policy)],
             cwd=root,
             expect_success=False,
+        )
+
+
+def test_coverage_runner_policy_and_profile_names(root: Path) -> None:
+    runner = root / "quality/run_coverage.py"
+    coverage_policy = root / "quality/coverage.toml"
+    source = runner.read_text(encoding="utf-8")
+    if 'coverage_command = "test" if crate == "intention-daemon" else "nextest"' not in source:
+        raise RuntimeError("coverage runner must use cargo test for intention-daemon")
+    if '"--all-targets"' not in source:
+        raise RuntimeError("daemon coverage must run all targets")
+    aggregate_start = source.index("    for name, flags in combinations:\n", source.index("REPORTS.mkdir"))
+    crate_loop_end = source.index("    for name, flags in combinations:\n", aggregate_start + 1)
+    aggregate_block = source[crate_loop_end:source.index("\n\n\nif __name__", crate_loop_end)]
+    if "--workspace-aggregate" not in aggregate_block:
+        raise RuntimeError("coverage runner must check each workspace aggregate")
+    if source.index("    for name, flags in combinations:\n", source.index("REPORTS.mkdir")) != aggregate_start:
+        raise RuntimeError("coverage runner profile loop structure changed unexpectedly")
+    if aggregate_block.count("--workspace-aggregate") != 1:
+        raise RuntimeError("coverage runner must run one aggregate check per profile")
+    with modified(coverage_policy):
+        replace_once(coverage_policy, '"intention-tools",', '"intention-types",')
+        if "ISOLATED_CRATES" in source:
+            raise RuntimeError("coverage runner must not hard-code isolated crates")
+        run(
+            [sys.executable, "-m", "py_compile", "quality/run_coverage.py"],
+            cwd=root,
+            expect_success=True,
+        )
+    features = root / "quality/features.toml"
+    with modified(features):
+        replace_once(features, 'no_default = ["--no-default-features"]', 'custom = []')
+        run(
+            [sys.executable, "quality/run_coverage.py"],
+            cwd=root,
+            expect_success=False,
+            expected_output="unsupported coverage profile name: custom",
+        )
+
+
+def test_workspace_aggregate_coverage_check(root: Path) -> None:
+    report = root / "quality/fixtures/coverage-low.json"
+    with modified(report):
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 1, 0)]),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_coverage.py", "--report", str(report), "--workspace-aggregate"],
+            cwd=root,
+            expect_success=True,
+            expected_output="workspace aggregate contains production source files",
         )
 
 
@@ -831,6 +957,9 @@ def main() -> None:
         test_m3_phase_partition_policy,
         test_m4_phase_activation_policy,
         test_m4_active_test_target_policy,
+        test_m5_activation_policy,
+        test_m5_skeleton_drift_policy,
+        test_m5_exact_active_crate_policy,
         test_m4_sdk_ownership_and_public_contract_boundaries,
         test_m3_daemon_test_dependency_policy,
         test_m3_non_production_test_target_policy,
@@ -848,6 +977,8 @@ def main() -> None:
         test_error_detail_and_correlation_validation,
         test_coverage_failures,
         test_coverage_exclusion_semantics,
+        test_coverage_runner_policy_and_profile_names,
+        test_workspace_aggregate_coverage_check,
         test_missing_feature_profile,
         test_isolated_release_profile,
         test_missing_isolated_release_profile,
