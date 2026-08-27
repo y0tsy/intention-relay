@@ -25,7 +25,9 @@ intention-protocol = { path = "../intention-protocol", version = "=0.0.0" }
 intention-runtime = { path = "../intention-runtime", version = "=0.0.0" }
 intention-storage = { path = "../intention-storage", version = "=0.0.0" }
 intention-storage-sqlite = { path = "../intention-storage-sqlite", version = "=0.0.0" }
+intention-tools = { path = "../intention-tools", version = "=0.0.0" }
 intention-types = { path = "../intention-types", version = "=0.0.0" }
+intention-workspace = { path = "../intention-workspace", version = "=0.0.0" }
 
 [dev-dependencies]
 tempfile = "3.24.0"

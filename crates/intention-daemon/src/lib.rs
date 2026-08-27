@@ -4,7 +4,7 @@
 //! health, query, command, and replay-only subscription meaning to the durable
 //! composition facade.
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
@@ -21,7 +21,7 @@ use intention_protocol::{
     ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto,
     RunResyncReasonDto, RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
 };
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
@@ -75,9 +75,9 @@ struct PublishedRun {
 
 struct HostData {
     tasks: HashMap<RunKey, ModelCancellationSignal>,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     execution_tasks: Vec<tokio::task::JoinHandle<()>>,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     execution_completion: HashMap<RunKey, tokio::sync::watch::Receiver<bool>>,
     subscribers: HashMap<RunKey, Vec<Subscriber>>,
     published: HashMap<RunKey, PublishedRun>,
@@ -88,9 +88,9 @@ impl Default for HostData {
     fn default() -> Self {
         Self {
             tasks: HashMap::new(),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             execution_tasks: Vec::new(),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             execution_completion: HashMap::new(),
             subscribers: HashMap::new(),
             published: HashMap::new(),
@@ -103,21 +103,21 @@ struct HostState {
     facade: DaemonApplicationFacade,
     data: Mutex<HostData>,
     publication_gate: Mutex<()>,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     first_append_gate: Option<Arc<dyn ModelRunFirstAppendGate>>,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_failures: AtomicUsize,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_attempts: AtomicUsize,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_retry_paused: AtomicBool,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_failure_entered: tokio::sync::Notify,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_failure_release: tokio::sync::Notify,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     terminalizer_completed: tokio::sync::Notify,
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     task_completed: tokio::sync::Notify,
 }
 
@@ -127,21 +127,21 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         first_append_gate: None,
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
     })
 }
@@ -176,9 +176,9 @@ impl HostState {
             return;
         };
         entry.insert(cancellation.clone());
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         let (execution_completion, completion) = tokio::sync::watch::channel(false);
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         data.execution_completion.insert(key, completion);
         drop(data);
         let host = Arc::clone(self);
@@ -186,7 +186,7 @@ impl HostState {
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
             };
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             let result = if let Some(first_append_gate) = host.first_append_gate.as_deref() {
                 host.facade
                     .execute_scheduled_model_run_for_daemon_with_first_append_gate(
@@ -207,7 +207,7 @@ impl HostState {
                     )
                     .await
             };
-            #[cfg(not(feature = "test-support"))]
+            #[cfg(not(any(test, feature = "test-support")))]
             let result = host
                 .facade
                 .execute_scheduled_model_run_for_daemon(
@@ -242,15 +242,15 @@ impl HostState {
             if let Ok(mut data) = host.data.lock() {
                 data.tasks.remove(&key);
             }
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             {
                 execution_completion.send_replace(true);
                 host.task_completed.notify_one();
             }
         });
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         self.track_test_execution_task(task);
-        #[cfg(not(feature = "test-support"))]
+        #[cfg(not(any(test, feature = "test-support")))]
         std::mem::drop(task);
     }
 
@@ -301,7 +301,7 @@ impl HostState {
                     if let Ok(mut data) = host.data.lock() {
                         data.tasks.remove(&key);
                     }
-                    #[cfg(feature = "test-support")]
+                    #[cfg(any(test, feature = "test-support"))]
                     {
                         host.terminalizer_completed.notify_one();
                         host.task_completed.notify_one();
@@ -322,14 +322,14 @@ impl HostState {
                 }
             }
         });
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         self.track_test_execution_task(task);
-        #[cfg(not(feature = "test-support"))]
+        #[cfg(not(any(test, feature = "test-support")))]
         std::mem::drop(task);
     }
 
     fn terminalize_cancelling_run(&self, key: RunKey) -> DtoResult<()> {
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         {
             self.terminalizer_attempts.fetch_add(1, Ordering::Relaxed);
             if self
@@ -359,13 +359,13 @@ impl HostState {
     }
 
     async fn wait_for_injected_terminalizer_retry(&self) {
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         if self.terminalizer_retry_paused.swap(false, Ordering::AcqRel) {
             self.terminalizer_failure_release.notified().await;
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     fn track_test_execution_task(&self, task: tokio::task::JoinHandle<()>) {
         if let Ok(mut data) = self.data.lock() {
             data.execution_tasks.push(task);
@@ -374,7 +374,7 @@ impl HostState {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     fn abort_test_execution_tasks(&self) -> Vec<tokio::task::JoinHandle<()>> {
         let Ok(mut data) = self.data.lock() else {
             return Vec::new();
@@ -382,32 +382,32 @@ impl HostState {
         std::mem::take(&mut data.execution_tasks)
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     fn inject_terminalizer_failure_once(&self) {
         self.terminalizer_failures.store(1, Ordering::Release);
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     fn terminalizer_attempts(&self) -> usize {
         self.terminalizer_attempts.load(Ordering::Acquire)
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     async fn wait_for_terminalizer_failure(&self) {
         self.terminalizer_failure_entered.notified().await;
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     fn release_terminalizer_retry(&self) {
         self.terminalizer_failure_release.notify_one();
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     async fn wait_for_terminalizer_completion(&self) {
         self.terminalizer_completed.notified().await;
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     async fn wait_for_task_cleanup(&self) {
         loop {
             if self.data.lock().is_ok_and(|data| data.tasks.is_empty()) {
@@ -417,7 +417,7 @@ impl HostState {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     async fn wait_for_execution_completion(&self, key: RunKey) -> bool {
         let Some(mut completion) = self
             .data
@@ -727,21 +727,21 @@ async fn serve_async_listener(
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         first_append_gate: None,
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_completed: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
     });
     loop {
@@ -947,14 +947,14 @@ fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
     )
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn serve_test_connection(connection: LocalConnection, facade: DaemonApplicationFacade) {
     serve_connection(connection, facade);
 }
 
 /// Serves one injected asynchronous connection for a bounded integration fixture.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub async fn serve_test_async_connection(
     connection: intention_transport::AsyncLocalDaemonConnection,
@@ -964,19 +964,19 @@ pub async fn serve_test_async_connection(
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         first_append_gate: None,
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failures: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_attempts: AtomicUsize::new(0),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_retry_paused: AtomicBool::new(false),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_entered: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_failure_release: tokio::sync::Notify::new(),
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         terminalizer_completed: tokio::sync::Notify::new(),
         task_completed: tokio::sync::Notify::new(),
     });
@@ -987,7 +987,7 @@ pub async fn serve_test_async_connection(
 ///
 /// This exists only for outcome tests that must exercise ordinary commands and
 /// persistent run-stream peers against the same task and subscriber registry.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub async fn serve_test_async_listener(
     listener: AsyncLocalListener,
@@ -1019,7 +1019,7 @@ pub async fn serve_test_async_listener(
 }
 
 /// Serves bounded fixture connections with a deterministic first-append gate.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub async fn serve_test_async_listener_with_first_append_gate(
     listener: AsyncLocalListener,
@@ -1056,7 +1056,7 @@ pub async fn serve_test_async_listener_with_first_append_gate(
 /// This deterministic test-only lifecycle is not production process shutdown:
 /// it aborts fixture connection and execution tasks so a subsequent facade open
 /// observes the same durable state a fresh host would recover.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[derive(Clone)]
 pub struct TestHostLifecycle {
@@ -1065,7 +1065,7 @@ pub struct TestHostLifecycle {
 }
 
 /// Creates a deterministic bounded lifecycle for daemon-host outcome fixtures.
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[must_use]
 pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle {
@@ -1087,7 +1087,7 @@ pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle
     }
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 impl TestHostLifecycle {
     /// Attempts exact durable admission through this fixture host.
     pub fn admit_starting_run(&self, session_id: SessionId, run_id: RunId) {
@@ -1891,6 +1891,44 @@ mod tests {
             Some(1)
         );
         assert!(slow_receiver.recv().await.is_some());
+    }
+
+    #[test]
+    fn daemon_hello_and_subscription_response_are_typed() {
+        let hello = daemon_hello().expect("daemon hello is valid");
+        assert!(format!("{hello:?}").contains("intention-daemon"));
+        let frame = run_subscription_response(
+            CorrelationIdDto::new(),
+            RunSubscriptionResponseDto::Resync(RunResyncDto::new(
+                SessionId::new(),
+                RunId::new(),
+                RunResyncReasonDto::HistoryUnavailable,
+            )),
+        );
+        assert!(matches!(frame, ProtocolDaemonFrameDto::Response(_)));
+    }
+
+    #[tokio::test]
+    async fn terminalizer_retries_after_injected_failure() {
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = host_for_test(facade.clone());
+        host.inject_terminalizer_failure_once();
+        host.stop_run(session_id, run_id).expect("stop is accepted");
+        host.wait_for_terminalizer_failure().await;
+        assert_eq!(host.terminalizer_attempts(), 1);
+        host.release_terminalizer_retry();
+        host.wait_for_terminalizer_completion().await;
+        assert_eq!(host.terminalizer_attempts(), 2);
+        assert_eq!(host.data.lock().expect("host data").tasks.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_shutdown_aborts_fixture_tasks() {
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let lifecycle = test_host_lifecycle(facade);
+        assert_eq!(lifecycle.task_count(), 0);
+        lifecycle.shutdown().await;
     }
 
     #[test]
