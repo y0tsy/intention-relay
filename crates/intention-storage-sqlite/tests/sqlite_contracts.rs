@@ -7,12 +7,13 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto, WorkspaceRootDto,
+    CreateSessionCommandDto, DomainEventDto, RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto,
+    ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, CreateSessionInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
-    TransitionRunInputDto,
+    AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
+    CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto,
+    StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -110,6 +111,181 @@ fn accept(
                 .expect("turn input is valid"),
         )
         .expect("turn commits")
+}
+
+fn tool_event(session: SessionId, run: RunId, detail: &str, at: i64) -> ToolLifecycleEventDto {
+    ToolLifecycleEventDto::new(
+        session,
+        run,
+        intention_types::ToolCallId::new(),
+        "shell",
+        ToolLifecycleStatusDto::Completed,
+        detail,
+        time(at),
+    )
+    .expect("tool event is valid")
+}
+
+fn tool_event_with_status(
+    session: SessionId,
+    run: RunId,
+    status: ToolLifecycleStatusDto,
+    detail: &str,
+    at: i64,
+) -> ToolLifecycleEventDto {
+    ToolLifecycleEventDto::new(
+        session,
+        run,
+        intention_types::ToolCallId::new(),
+        "shell",
+        status,
+        detail,
+        time(at),
+    )
+    .expect("tool event is valid")
+}
+
+#[test]
+fn append_tool_lifecycle_event_accepts_scoped_event_and_round_trips_redacted_payload() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let event = tool_event_with_status(
+        session,
+        run,
+        ToolLifecycleStatusDto::Admitted,
+        "safe detail",
+        3,
+    );
+    let appended = store
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event.clone()))
+        .expect("scoped tool event appends");
+    assert_eq!(appended.session_id(), session);
+    assert_eq!(appended.run_id(), Some(run));
+    assert_eq!(appended.sequence().value(), 4);
+    assert!(matches!(appended.payload(), DomainEventDto::ToolLifecycle(value) if value == &event));
+    let tail = store
+        .load_tail(session, SessionEventSequenceDto::new(3))
+        .expect("tool event tail loads");
+    assert_eq!(tail.last(), Some(&appended));
+    let encoded = serde_json::to_string(&tail[0]).expect("event serializes");
+    assert!(!encoded.contains("credential"));
+    assert!(!encoded.contains("/tmp/"));
+    let decoded: intention_types::EventEnvelopeDto<DomainEventDto> =
+        serde_json::from_str(&encoded).expect("event round-trips");
+    assert_eq!(decoded, tail[0]);
+}
+
+#[test]
+fn append_tool_lifecycle_event_rejects_wrong_session_or_unknown_run_without_writing() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let other_session = {
+        let other = SessionId::new();
+        store
+            .create_session(CreateSessionInputDto::new(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    other,
+                    WorkspaceId::new(),
+                    workspace_root("other-session"),
+                    RunModeDto::Build,
+                ),
+                time(1),
+            ))
+            .expect("other session creates");
+        other
+    };
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    for event in [
+        tool_event(other_session, run, "cross-session", 3),
+        tool_event(session, RunId::new(), "unknown-run", 3),
+    ] {
+        let error = store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
+            .expect_err("invalid run scope is rejected");
+        assert!(matches!(
+            error.code(),
+            "run_replay_not_found" | "run_history_unavailable"
+        ));
+    }
+    assert_eq!(
+        store
+            .load_tail(session, SessionEventSequenceDto::new(2))
+            .expect("tail loads")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn append_tool_lifecycle_event_preserves_sequence_and_rolls_back_on_fault() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let admitted = store
+        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+            tool_event_with_status(
+                session,
+                run,
+                ToolLifecycleStatusDto::Admitted,
+                "committed",
+                4,
+            ),
+        ))
+        .expect("next append succeeds");
+    assert_eq!(admitted.sequence().value(), 4);
+    assert_eq!(
+        store
+            .load_tail(session, SessionEventSequenceDto::new(2))
+            .expect("tail loads")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn tool_lifecycle_rejects_invalid_initial_status_and_terminal_successor() {
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "run");
+    let invalid = tool_event_with_status(session, run, ToolLifecycleStatusDto::Completed, "bad", 3);
+    assert!(
+        store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(invalid))
+            .is_err()
+    );
+    let call = intention_types::ToolCallId::new();
+    for status in [
+        ToolLifecycleStatusDto::Admitted,
+        ToolLifecycleStatusDto::Started,
+        ToolLifecycleStatusDto::Completed,
+    ] {
+        let event = ToolLifecycleEventDto::new(session, run, call, "shell", status, "ok", time(3))
+            .expect("event");
+        store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(event))
+            .expect("valid sequence");
+    }
+    let late = ToolLifecycleEventDto::new(
+        session,
+        run,
+        call,
+        "shell",
+        ToolLifecycleStatusDto::Failed,
+        "late",
+        time(4),
+    )
+    .expect("event");
+    assert!(
+        store
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(late))
+            .is_err()
+    );
 }
 
 #[test]
