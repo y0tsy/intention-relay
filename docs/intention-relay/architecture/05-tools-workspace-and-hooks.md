@@ -71,7 +71,9 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
 - tools must not use process `pwd` as a fallback;
 - absolute paths are normalized and rejected if outside the allowed root;
 - symbolic-link and path traversal behavior must be explicitly verified before access;
-- `execute` always starts with `cwd = workspace_root`;
+- `execute` always starts with `cwd = workspace_root` and inherits the
+  invoking process environment without name-based filtering. WorkspaceRoot is
+  a filesystem and CWD boundary, not an environment or privilege boundary.
 - a tool result identifies the normalized path/CWD used, with safe redaction as necessary;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 

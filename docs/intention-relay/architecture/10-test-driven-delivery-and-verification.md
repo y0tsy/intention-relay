@@ -185,6 +185,14 @@ run resumes provider execution. Queue capacity and exact writer-deadline
 behavior remain focused daemon-host unit evidence. The fixture uses no network
 or real credential.
 
+## M5 trusted-local execute environment decision
+
+M5 `execute` inherits the invoking process environment without name-based or
+pattern-based filtering. This is intentional: the agent is trusted-local and
+WorkspaceRoot scopes filesystem resolution and child CWD, not environment
+visibility or process privileges. Environment values remain excluded from
+durable lifecycle evidence, logs, protocol DTOs, and published projections.
+
 ## Result-oriented acceptance scenarios
 
 ### G. Plan-to-Build Autopilot continuity

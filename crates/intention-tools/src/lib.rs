@@ -1159,15 +1159,9 @@ fn execute_tool(
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
-    // Do not inherit the caller's complete environment: tool commands are
-    // workspace-scoped, but may still inspect inherited credentials. Keep the
-    // standard execution essentials and explicitly deny common secret-bearing
-    // variables (case-insensitively on all platforms).
-    for (key, value) in std::env::vars() {
-        if !is_secret_environment_name(&key) {
-            command.env(key, value);
-        }
-    }
+    // Execute with the caller's environment. WorkspaceRoot scopes filesystem
+    // path resolution and the child CWD, not the process environment.
+    command.envs(std::env::vars());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let child = command.spawn().map_err(|_| {
         intention_types::ErrorDto::validation(
@@ -1197,23 +1191,6 @@ fn execute_tool(
         }),
         process_status: Some(process_status),
     })
-}
-
-fn is_secret_environment_name(name: &str) -> bool {
-    let normalized = name.to_ascii_uppercase().replace('-', "_");
-    normalized.split('_').any(|part| {
-        matches!(
-            part,
-            "APIKEY"
-                | "TOKEN"
-                | "SECRET"
-                | "PASSWORD"
-                | "PASSWD"
-                | "CREDENTIAL"
-                | "CREDENTIALS"
-                | "PRIVATE"
-        )
-    }) || normalized.ends_with("_KEY")
 }
 
 fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> {
