@@ -1173,10 +1173,22 @@ fn dispatch_covers_each_tool_input_variant() {
     let path = WorkspaceRelativePathDto::parse("a.txt").unwrap();
     let calls = [
         ToolInput::Read(ReadInput { path: path.clone() }),
-        ToolInput::Glob(GlobInput { pattern: BoundedText::new("*.txt").unwrap() }),
-        ToolInput::Grep(GrepInput { pattern: BoundedText::new("needle").unwrap(), path: Some(path.clone()) }),
-        ToolInput::Write(WriteInput { path: WorkspaceRelativePathDto::parse("b.txt").unwrap(), content: BoundedText::new("b").unwrap() }),
-        ToolInput::Edit(EditInput { path, old: BoundedText::new("needle").unwrap(), new: BoundedText::new("changed").unwrap() }),
+        ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("*.txt").unwrap(),
+        }),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").unwrap(),
+            path: Some(path.clone()),
+        }),
+        ToolInput::Write(WriteInput {
+            path: WorkspaceRelativePathDto::parse("b.txt").unwrap(),
+            content: BoundedText::new("b").unwrap(),
+        }),
+        ToolInput::Edit(EditInput {
+            path,
+            old: BoundedText::new("needle").unwrap(),
+            new: BoundedText::new("changed").unwrap(),
+        }),
     ];
     for input in calls {
         assert!(service.dispatch(ToolCallId::new(), input).is_ok());
