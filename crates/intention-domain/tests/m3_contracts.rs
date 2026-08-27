@@ -226,6 +226,44 @@ fn m3_projection_deserialization_rejects_invalid_nested_turns() {
 }
 
 #[test]
+fn m3_projection_accessors_and_deserialization_cover_optional_state() {
+    let session_id = SessionId::new();
+    let run = RunProjectionDto::new(
+        session_id,
+        RunId::new(),
+        TurnId::new(),
+        RunStatusDto::Running,
+        ConfigRevisionId::new(),
+    );
+    let queued = QueuedTurnProjectionDto::new(
+        session_id,
+        TurnId::new(),
+        "queued",
+        QueuePositionDto::new(1),
+    )
+    .expect("queued turn is valid");
+    let projection = SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Plan,
+        Some(ConfigRevisionId::new()),
+        Some(run),
+        vec![queued],
+        SessionEventSequenceDto::new(4),
+    )
+    .expect("projection is valid");
+    assert!(projection.config_revision_id().is_some());
+    assert!(projection.active_run().is_some());
+    assert_eq!(projection.queued_turns().len(), 1);
+    assert_eq!(projection.at_sequence().value(), 4);
+    let wire = serde_json::to_string(&projection).expect("projection serializes");
+    let decoded: SessionProjectionDto = serde_json::from_str(&wire).expect("projection decodes");
+    assert_eq!(decoded, projection);
+}
+
+#[test]
 fn run_status_terminal_classification_is_complete() {
     for status in [
         RunStatusDto::Completed,
@@ -281,5 +319,33 @@ fn run_status_state_machine_accepts_only_declared_edges() {
             );
             assert_eq!(validate_run_status_transition(from, to).is_ok(), expected);
         }
+    }
+}
+
+#[test]
+fn plan_transitions_cover_all_allowed_and_rejected_edges() {
+    use intention_domain::{PlanStatusDto, validate_plan_status_transition};
+    assert!(validate_plan_status_transition(None, PlanStatusDto::Drafting).is_ok());
+    for (from, to) in [
+        (PlanStatusDto::Drafting, PlanStatusDto::Revising),
+        (PlanStatusDto::Drafting, PlanStatusDto::Submitted),
+        (PlanStatusDto::Drafting, PlanStatusDto::Abandoned),
+        (PlanStatusDto::Revising, PlanStatusDto::Revising),
+        (PlanStatusDto::Revising, PlanStatusDto::Submitted),
+        (PlanStatusDto::Revising, PlanStatusDto::Abandoned),
+        (PlanStatusDto::Submitted, PlanStatusDto::Approved),
+        (PlanStatusDto::Submitted, PlanStatusDto::Rejected),
+        (PlanStatusDto::Submitted, PlanStatusDto::Abandoned),
+        (PlanStatusDto::Rejected, PlanStatusDto::Revising),
+        (PlanStatusDto::Rejected, PlanStatusDto::Abandoned),
+    ] {
+        assert!(validate_plan_status_transition(Some(from), to).is_ok());
+    }
+    for status in [
+        PlanStatusDto::Approved,
+        PlanStatusDto::Superseded,
+        PlanStatusDto::Abandoned,
+    ] {
+        assert!(validate_plan_status_transition(Some(status), PlanStatusDto::Drafting).is_err());
     }
 }
