@@ -1546,7 +1546,6 @@ fn execute_formats_success_and_truncates_both_streams() {
                 program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
                 args: if cfg!(windows) {
                     vec![
-                        BoundedText::new("/C").unwrap(),
                         // `for /L` and `set /P` are built into cmd.exe, so this
                         // fixture does not depend on Python or another tool.
                         BoundedText::new("/C").unwrap(),
