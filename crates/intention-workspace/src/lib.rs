@@ -198,12 +198,15 @@ mod tests {
     use super::*;
     use intention_domain::WorkspaceRootDto;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ROOT: AtomicU64 = AtomicU64::new(0);
 
     fn temp_root() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "intention-workspace-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create temporary workspace");
