@@ -10,20 +10,18 @@ import sys
 import tomllib
 
 if __package__:
-    from .timing import timed
+    from .timing import run_command
 else:
-    from timing import timed
+    from timing import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "quality" / "features.toml"
 
 
 def run(command: list[str]) -> None:
-    rendered = " ".join(command)
-    print("+", rendered, flush=True)
-    with timed(rendered, phase="profiles", gate=rendered.split()[1] if len(rendered.split()) > 1 else rendered):
-        subprocess.run(command, check=True, cwd=ROOT)
-
+    completed = run_command(command, cwd=ROOT, phase="profiles", gate=command[1])
+    if completed.returncode != 0:
+        raise subprocess.CalledProcessError(completed.returncode, command)
 
 def profile_arguments(policy: dict[str, object]) -> list[tuple[str, list[str]]]:
     profiles = policy["profiles"]
@@ -98,13 +96,20 @@ def main() -> None:
             command.extend(flags)
         environment = None
         if arguments.command == "doc":
-            environment = {**dict(), "RUSTDOCFLAGS": "-D warnings"}
+            environment = {"RUSTDOCFLAGS": "-D warnings"}
         if environment is None:
             run(command)
         else:
-            print("+", " ".join(command), flush=True)
-            with timed(" ".join(command)):
-                subprocess.run(command, check=True, cwd=ROOT, env={**__import__("os").environ, **environment})
+            completed = run_command(
+                command,
+                cwd=ROOT,
+                phase="profiles",
+                gate=arguments.command,
+                profile=profile_name,
+                env_overrides=environment,
+            )
+            if completed.returncode != 0:
+                raise subprocess.CalledProcessError(completed.returncode, command)
 
 
 if __name__ == "__main__":

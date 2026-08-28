@@ -11,7 +11,6 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-
 .PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage coverage-artifacts-clean deps quality-self-test quick check verify ci
 
 help: ## List supported M0 targets and mutation behavior.
@@ -85,5 +84,11 @@ verify: check coverage deps ## Full reproducible merge and release gate.
 	$(MAKE) coverage-artifacts-clean
 	$(MAKE) quality-self-test
 
-ci: verify ## CI alias. GitHub Actions must invoke only this target.
+ci: metrics-start verify metrics-finish ## CI alias. GitHub Actions must invoke only this target.
 	@true
+
+metrics-start: ## Initialize the quality metrics manifest for this run.
+	@$(PYTHON) quality/metrics.py start
+
+metrics-finish: ## Finalize the quality metrics manifest preserving the gate result.
+	@$(PYTHON) quality/metrics.py finish

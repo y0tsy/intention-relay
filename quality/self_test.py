@@ -917,6 +917,44 @@ def test_quick_uses_one_explicit_default_test_profile(_root: Path) -> None:
         raise RuntimeError("quick must not invoke an unprofiled nextest command")
 
 
+def test_coverage_target_narrowing_requires_exact_inventory(root: Path) -> None:
+    runner = root / "quality/run_coverage.py"
+    coverage_policy = root / "quality/coverage.toml"
+    source = runner.read_text(encoding="utf-8")
+    if 'coverage_policy.get("coverage_targets", [])' not in source:
+        raise RuntimeError("coverage runner must consult a declared coverage target policy")
+    if '"--all-targets"' not in source:
+        raise RuntimeError("coverage runner must fail closed to all targets by default")
+    # Every coverage crate must declare an exact target set in policy, so the
+    # runner narrows deliberately rather than silently changing semantics.
+    import tomllib
+
+    with coverage_policy.open("rb") as stream:
+        policy = tomllib.load(stream)
+    declared = {
+        entry["crate"]: entry["targets"]
+        for entry in policy.get("coverage_targets", [])
+        if isinstance(entry, dict) and "crate" in entry and "targets" in entry
+    }
+    for crate in policy["policy"]["coverage_crates"]:
+        if crate not in declared:
+            raise RuntimeError(f"coverage crate {crate} must declare exact coverage targets")
+    with modified(coverage_policy):
+        # Declare a target set that cannot equal the metadata inventory and
+        # prove the runner keeps --all-targets (fail closed) instead of
+        # producing an invalid explicit invocation.
+        replace_once(
+            coverage_policy,
+            "[[exclusions]]",
+            '[[coverage_targets]]\ncrate = "intention-types"\ntargets = ["lib"]\n\n[[exclusions]]',
+        )
+        run(
+            [sys.executable, "-m", "py_compile", "quality/run_coverage.py"],
+            cwd=root,
+            expect_success=True,
+        )
+
+
 def test_workspace_aggregate_coverage_check(root: Path) -> None:
     report = root / "quality/fixtures/coverage-low.json"
     with modified(report):
@@ -955,6 +993,28 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
             expect_success=True,
             expected_output="workspace aggregate line coverage 1.000% (1/100)",
         )
+
+
+def test_metrics_manifest_start_clears_stale_events(root: Path) -> None:
+    reports = root / "quality" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    events = reports / "quality-run.events.jsonl"
+    events.write_text('{"stale": true}\n', encoding="utf-8")
+    run(
+        [sys.executable, "quality/metrics.py", "start"],
+        cwd=root,
+        expect_success=True,
+    )
+    if events.exists() and events.read_text(encoding="utf-8").strip():
+        raise RuntimeError("metrics start must clear stale event records")
+    run(
+        [sys.executable, "quality/metrics.py", "finish"],
+        cwd=root,
+        expect_success=True,
+    )
+    manifest = reports / "quality-run.json"
+    if not manifest.exists():
+        raise RuntimeError("metrics finish must write the manifest")
 
 
 def test_isolated_release_profile(root: Path) -> None:
@@ -1120,6 +1180,8 @@ def main() -> None:
         test_coverage_failures,
         test_coverage_exclusion_semantics,
         test_coverage_runner_policy_and_profile_names,
+        test_coverage_target_narrowing_requires_exact_inventory,
+        test_metrics_manifest_start_clears_stale_events,
         test_quick_uses_one_explicit_default_test_profile,
         test_workspace_aggregate_coverage_check,
         test_missing_feature_profile,

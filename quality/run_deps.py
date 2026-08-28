@@ -4,24 +4,28 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 try:
-    from timing import timed
+    from timing import run_command
 except ImportError:  # pragma: no cover - package/module invocation compatibility
-    from quality.timing import timed
+    from quality.timing import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_WORKERS = 2
 
 
 def run_check(label: str, command: list[str]) -> tuple[str, int, str]:
-    print("+", " ".join(command), flush=True)
-    with timed(label, phase="deps", gate=label):
-        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    completed = run_command(
+        command,
+        cwd=ROOT,
+        phase="deps",
+        gate=label,
+        stage="dependency-check",
+        capture_output=True,
+    )
     output = (completed.stdout + completed.stderr).strip()
     return label, completed.returncode, output
 
