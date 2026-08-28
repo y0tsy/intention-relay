@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI uses a fresh runner-temporary Cargo target directory rather than restoring build artifacts, preventing ordinary and LLVM-instrumented builds from exhausting runner disk; only registries, toolchains, and quality reports are cached or uploaded. CI records free space and relevant artifact-directory sizes before and after the quality gate as operational diagnostics; those reports never change a gate's verdict. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
+`make quick` is the fast inner-loop signal and runs the profile-based lint matrix without duplicating the default test suite. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking `make ci` on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI uses a fresh runner-temporary Cargo target directory rather than restoring build artifacts, preventing ordinary and LLVM-instrumented builds from exhausting runner disk; only registries and toolchains are cached, while quality reports are uploaded fresh per run. CI records free space and relevant artifact-directory sizes before and after the quality gate as operational diagnostics; those reports never change a gate's verdict. Human-readable timing records identify Makefile phases, profiles, crates, coverage stages, dependency checks, durations, and outcomes without recording secrets. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -196,7 +196,7 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make coverage` | No | Collect coverage and apply the tier policy. |
 | `make coverage-artifacts-clean` | Yes, generated artifacts only | Remove `target/llvm-cov-target` after coverage's JSON reports are checked; it preserves reports and ordinary Cargo artifacts. |
 | `make deps` | No | Run locked metadata, third-party-notice freshness, deny, audit, unused-dependency, manifest, stale-direct-dependency, and duplicate-version checks. |
-| `make quick` | No | Run tools-check, fmt-check, lint, and focused/default tests for fast iteration. |
+| `make quick` | No | Run tools-check, fmt-check, and the profile-based lint matrix without duplicating the full test gate. |
 | `make check` | No | Run complete source-quality checks: tools, formatting, features, lint, all tests, doctests, docs, and architecture. |
 | `make verify` | No | Run `check` plus coverage and dependency/supply-chain checks. |
 | `make ci` | No | Alias the blocking CI gate, `verify`. |

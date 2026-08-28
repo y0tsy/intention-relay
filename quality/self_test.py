@@ -18,6 +18,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED_TARGET_DIRECTORY = ROOT / "target"
 
 
+def test_profile_arguments_include_critical_combinations(_root: Path) -> None:
+    namespace = {"__file__": str(ROOT / "quality/run_profiles.py"), "__name__": "quality.run_profiles"}
+    exec((ROOT / "quality/run_profiles.py").read_text(encoding="utf-8"), namespace)
+    profiles = namespace["profile_arguments"]({
+        "profiles": {"default": []},
+        "critical_combinations": [{"enabled": True, "name": "extra", "features": ["a", "b"]}],
+    })
+    if profiles != [("default", []), ("critical:extra", ["--features", "a,b"])]:
+        raise RuntimeError(f"unexpected profile selection: {profiles!r}")
+
+
 def command_environment(cwd: Path) -> dict[str, str] | None:
     """Share Cargo artifacts only with an isolated copy of this repository."""
     if cwd != ROOT and (cwd / "quality" / "self_test.py").is_file():
@@ -865,6 +876,8 @@ def test_coverage_runner_policy_and_profile_names(root: Path) -> None:
         raise RuntimeError("coverage runner must use cargo test for intention-daemon")
     if '"--all-targets"' not in source:
         raise RuntimeError("daemon coverage must run all targets")
+    if "normalized_flags" not in source:
+        raise RuntimeError("coverage runner must normalize profiles")
     aggregate_start = source.index("    for name, flags in combinations:\n", source.index("REPORTS.mkdir"))
     crate_loop_end = source.index("    for name, flags in combinations:\n", aggregate_start + 1)
     aggregate_block = source[crate_loop_end:source.index("\n\n\nif __name__", crate_loop_end)]
@@ -892,6 +905,16 @@ def test_coverage_runner_policy_and_profile_names(root: Path) -> None:
             expect_success=False,
             expected_output="unsupported coverage profile name: custom",
         )
+
+
+def test_quick_uses_one_explicit_default_test_profile(_root: Path) -> None:
+    source = (ROOT / "Makefile").read_text(encoding="utf-8")
+    if "quick: tools-check fmt-check lint" not in source:
+        raise RuntimeError("quick target contract changed")
+    if "quality/run_profiles.py test --profile default" not in source:
+        raise RuntimeError("quick must run one explicit default profile")
+    if "quick:\n\t$(CARGO) nextest" in source:
+        raise RuntimeError("quick must not invoke an unprofiled nextest command")
 
 
 def test_workspace_aggregate_coverage_check(root: Path) -> None:
@@ -1055,6 +1078,7 @@ def main() -> None:
     parser.add_argument("--list", action="store_true")
     arguments = parser.parse_args()
     repository_tests = [
+        test_profile_arguments_include_critical_combinations,
         test_copied_repository_commands_share_the_controller_target,
         test_formatting_drift,
         test_lint_warning,
@@ -1096,6 +1120,7 @@ def main() -> None:
         test_coverage_failures,
         test_coverage_exclusion_semantics,
         test_coverage_runner_policy_and_profile_names,
+        test_quick_uses_one_explicit_default_test_profile,
         test_workspace_aggregate_coverage_check,
         test_missing_feature_profile,
         test_isolated_release_profile,

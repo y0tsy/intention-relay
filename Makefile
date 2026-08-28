@@ -7,6 +7,11 @@ SHELL := /bin/bash
 .NOTPARALLEL:
 .DEFAULT_GOAL := help
 
+# Keep phase timing in one human-readable manifest without changing failures.
+define TIMED
+$(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
+endef
+
 .PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage coverage-artifacts-clean deps quality-self-test quick check verify ci
 
 help: ## List supported M0 targets and mutation behavior.
@@ -26,7 +31,7 @@ fmt: ## MUTATING: format all Rust code.
 	$(CARGO) fmt --all
 
 fmt-check: ## Verify formatting without changing files.
-	$(CARGO) fmt --all --check
+	$(TIMED) $(CARGO) fmt --all --check
 
 notices: tools-check ## MUTATING: regenerate committed third-party notices from the locked graph.
 	$(PYTHON) quality/generate_third_party_notices.py
@@ -48,7 +53,7 @@ test: tools-check ## Run nextest and doctests for all feature profiles.
 	$(PYTHON) quality/run_profiles.py doctest
 
 check-cargo: tools-check ## Run Cargo check for all feature profiles.
-	$(PYTHON) quality/run_profiles.py check
+	$(TIMED) $(PYTHON) quality/run_profiles.py check
 
 docs-check: tools-check ## Verify Rust docs, Markdown links, Mermaid, and secret patterns.
 	$(PYTHON) quality/run_profiles.py doc
@@ -65,19 +70,13 @@ coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build arti
 	rm -rf target/llvm-cov-target
 
 deps: tools-check notices-check ## Run online dependency, license, advisory, notices, and hygiene gates.
-	$(CARGO) metadata --locked --format-version 1 > /dev/null
-	$(PYTHON) quality/check_deny_policy.py
-	$(CARGO) deny check
-	$(CARGO) audit --ignore RUSTSEC-2024-0384 --ignore RUSTSEC-2025-0012
-	$(PYTHON) quality/run_profiles.py udeps
-	$(CARGO) machete --with-metadata --skip-target-dir
-	$(CARGO) outdated --workspace --root-deps-only --ignore $$($(PYTHON) -c 'import tomllib; print(",".join(tomllib.load(open("quality/outdated.toml", "rb"))["outdated_ignores"]["crates"]))') --exit-code 1
+	$(PYTHON) quality/run_deps.py
 
 quality-self-test: tools-check ## Prove isolated invalid fixtures fail their intended checks.
 	$(PYTHON) quality/self_test.py
 
 quick: tools-check fmt-check lint ## Fast default local quality loop.
-	$(CARGO) nextest run --workspace --all-targets --locked
+	$(PYTHON) quality/run_profiles.py test --profile default
 
 check: tools-check fmt-check features isolated-release check-cargo lint test docs-check architecture ## Complete non-mutating source-quality gate.
 	@true
