@@ -63,7 +63,9 @@ def main() -> None:
             # latter is especially important for boundary crates whose
             # implementation lives in lib.rs. Cargo test executes both the
             # library harness and integration targets in one coverage run.
-            coverage_command = "test" if crate == "intention-daemon" else "nextest"
+            coverage_command = (
+                "test" if crate in {"intention-daemon", "intention-workspace"} else "nextest"
+            )
             coverage_flags = [*flags]
             if crate == "intention-daemon" and "--all-features" not in coverage_flags:
                 coverage_flags.append("--all-features")
@@ -75,7 +77,9 @@ def main() -> None:
             # do not reliably reproduce the --all-targets coverage set on every
             # supported platform (Windows integration-target behavior differs),
             # so the runner always uses --all-targets to keep per-crate
-            # thresholds comparable across Linux and Windows.
+            # thresholds comparable across Linux and Windows. Boundary crates
+            # use `cargo test` instead of nextest so the library test harness
+            # is merged into the coverage report on Windows.
             target_flags = ["--all-targets"]
             command = [
                 "cargo",

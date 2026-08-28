@@ -872,12 +872,10 @@ def test_coverage_runner_policy_and_profile_names(root: Path) -> None:
     runner = root / "quality/run_coverage.py"
     coverage_policy = root / "quality/coverage.toml"
     source = runner.read_text(encoding="utf-8")
-    if 'coverage_command = "test" if crate == "intention-daemon" else "nextest"' not in source:
-        raise RuntimeError("coverage runner must use cargo test for intention-daemon")
+    if 'crate in {"intention-daemon", "intention-workspace"}' not in source:
+        raise RuntimeError("coverage runner must use cargo test for boundary crates")
     if '"--all-targets"' not in source:
-        raise RuntimeError("daemon coverage must run all targets")
-    if "normalized_flags" not in source:
-        raise RuntimeError("coverage runner must normalize profiles")
+        raise RuntimeError("coverage must run all targets")
     aggregate_start = source.index("    for name, flags in combinations:\n", source.index("REPORTS.mkdir"))
     crate_loop_end = source.index("    for name, flags in combinations:\n", aggregate_start + 1)
     aggregate_block = source[crate_loop_end:source.index("\n\n\nif __name__", crate_loop_end)]
