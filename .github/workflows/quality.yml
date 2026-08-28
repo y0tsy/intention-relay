@@ -103,4 +103,4 @@ jobs:
           if-no-files-found: ignore
           path: |
             quality/reports
-            "${RUNNER_TEMP}/intention-relay-target/nextest"
+            ${{ runner.temp }}/intention-relay-target/nextest
