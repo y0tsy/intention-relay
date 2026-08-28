@@ -33,7 +33,6 @@ jobs:
             ~/.cargo/advisory-db
             ~/.cargo/git
             ~/.rustup
-            target
             quality/reports
           key: quality-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'quality/tools.toml', 'quality/features.toml', 'Cargo.lock', 'deny.toml') }}
           restore-keys: |
@@ -44,6 +43,10 @@ jobs:
           echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Configure bounded CI build directory
+        run: |
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/intention-relay-target" >> "$GITHUB_ENV"
 
       - name: Install pinned Rust toolchains
         run: |
@@ -69,7 +72,7 @@ jobs:
       - name: Report disk space before quality gate
         run: |
           df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
-          for path in target quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
+          for path in "${CARGO_TARGET_DIR}" quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
             if [ -e "$path" ]; then
               du -sh "$path"
             else
@@ -84,7 +87,7 @@ jobs:
         if: always()
         run: |
           df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
-          for path in target quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
+          for path in "${CARGO_TARGET_DIR}" quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
             if [ -e "$path" ]; then
               du -sh "$path"
             else
@@ -100,4 +103,4 @@ jobs:
           if-no-files-found: ignore
           path: |
             quality/reports
-            target/nextest
+            "${RUNNER_TEMP}/intention-relay-target/nextest"

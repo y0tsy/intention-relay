@@ -1734,7 +1734,12 @@ mod tests {
                 ProjectId::new(),
                 session,
                 WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse("/workspace").expect("root"),
+                intention_domain::WorkspaceRootDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-protocol-workspace")
+                        .to_string_lossy(),
+                )
+                .expect("root"),
                 RunModeDto::Build,
             )),
             ProtocolCommandDto::RemoveQueuedTurn(RemoveQueuedTurnCommandDto::new(
