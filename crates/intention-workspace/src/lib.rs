@@ -57,20 +57,11 @@ impl WorkspaceRoot {
             ));
         }
         let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
-            ErrorDto::with_detail(
+            unavailable_path_error(
                 "workspace_path_unavailable",
-                intention_types::ErrorCategoryDto::Validation,
                 "workspace path is unavailable",
-                intention_types::ErrorRetryDto::Manual,
-                None,
-                ErrorDetailDto::MissingWorkspacePath { path: path.clone() },
+                path,
             )
-            .unwrap_or_else(|_| {
-                ErrorDto::validation(
-                    "workspace_path_unavailable",
-                    "workspace path is unavailable",
-                )
-            })
         })?;
         // `starts_with` is component-aware, unlike string-prefix checks. Keep
         // the root itself valid, but reject siblings such as `root-other`.
@@ -111,38 +102,20 @@ impl WorkspaceRoot {
             ));
         }
         let file_name = logical.file_name().ok_or_else(|| {
-            ErrorDto::with_detail(
+            unavailable_path_error(
                 "workspace_path_unavailable",
-                intention_types::ErrorCategoryDto::Validation,
                 "workspace path is unavailable",
-                intention_types::ErrorRetryDto::Manual,
-                None,
-                ErrorDetailDto::MissingWorkspacePath { path: path.clone() },
+                path,
             )
-            .unwrap_or_else(|_| {
-                ErrorDto::validation(
-                    "workspace_path_unavailable",
-                    "workspace path is unavailable",
-                )
-            })
         })?;
         let parent = logical.parent().unwrap_or_else(|| Path::new("."));
         let parent = self.canonical.join(parent);
         let canonical_parent = std::fs::canonicalize(parent).map_err(|_| {
-            ErrorDto::with_detail(
+            unavailable_path_error(
                 "workspace_parent_unavailable",
-                intention_types::ErrorCategoryDto::Validation,
                 "workspace parent is unavailable",
-                intention_types::ErrorRetryDto::Manual,
-                None,
-                ErrorDetailDto::MissingWorkspacePath { path: path.clone() },
+                path,
             )
-            .unwrap_or_else(|_| {
-                ErrorDto::validation(
-                    "workspace_parent_unavailable",
-                    "workspace parent is unavailable",
-                )
-            })
         })?;
         if canonical_parent != self.canonical && !canonical_parent.starts_with(&self.canonical) {
             return Err(ErrorDto::validation(
@@ -189,6 +162,26 @@ fn contains_symlink_component(path: &Path, root: &Path) -> bool {
     false
 }
 
+/// Builds the safe missing-path error with its detail, falling back to a plain
+/// validation error if the detailed form cannot be constructed. The fallback
+/// is unreachable at the current call sites (the constants are always valid)
+/// but keeps the boundary fail-closed against future error-DTO changes.
+fn unavailable_path_error(
+    code: &'static str,
+    message: &'static str,
+    path: &WorkspaceRelativePathDto,
+) -> ErrorDto {
+    ErrorDto::with_detail(
+        code,
+        intention_types::ErrorCategoryDto::Validation,
+        message,
+        intention_types::ErrorRetryDto::Manual,
+        None,
+        ErrorDetailDto::MissingWorkspacePath { path: path.clone() },
+    )
+    .unwrap_or_else(|_| ErrorDto::validation(code, message))
+}
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -211,6 +204,30 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create temporary workspace");
         root
+    }
+
+    /// Creates a file symbolic link with the platform-native API.
+    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
+
+    /// Creates a directory symbolic link with the platform-native API.
+    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link)
+        }
     }
     #[test]
     fn resolves_relative_file_and_is_cwd_independent() {
@@ -242,15 +259,12 @@ mod tests {
         ));
         let outside = std::env::temp_dir().join("outside-intention");
         fs::write(&outside, "x").expect("outside file");
-        #[cfg(unix)]
-        {
-            let link = root.join("link");
-            std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-            assert!(
-                ws.resolve_path(&WorkspaceRelativePathDto::parse("link").expect("link path"))
-                    .is_err()
-            );
-        }
+        let link = root.join("link");
+        symlink_file(&outside, &link).expect("symlink");
+        assert!(
+            ws.resolve_path(&WorkspaceRelativePathDto::parse("link").expect("link path"))
+                .is_err()
+        );
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
@@ -309,23 +323,20 @@ mod tests {
         let outside =
             std::env::temp_dir().join(format!("intention-workspace-parent-{}", std::process::id()));
         fs::create_dir_all(&outside).expect("outside parent");
-        #[cfg(unix)]
-        {
-            let ws = WorkspaceRoot::resolve(
-                &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-            )
-            .expect("workspace");
-            std::os::unix::fs::symlink(&outside, root.join("outside")).expect("symlink");
-            let path = WorkspaceRelativePathDto::parse("outside/new.txt").expect("path");
-            // The parent is a symbolic link, so resolution must reject it
-            // before it can be followed out of the root.
-            assert_eq!(
-                ws.resolve_new_file_path(&path)
-                    .expect_err("outside parent")
-                    .code(),
-                "workspace_path_symlink"
-            );
-        }
+        let ws = WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+        )
+        .expect("workspace");
+        symlink_dir(&outside, &root.join("outside")).expect("symlink");
+        let path = WorkspaceRelativePathDto::parse("outside/new.txt").expect("path");
+        // The parent is a symbolic link, so resolution must reject it
+        // before it can be followed out of the root.
+        assert_eq!(
+            ws.resolve_new_file_path(&path)
+                .expect_err("outside parent")
+                .code(),
+            "workspace_path_symlink"
+        );
         let _ = fs::remove_dir_all(&outside);
         let _ = fs::remove_dir_all(root);
     }
@@ -390,17 +401,14 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_symlink_paths_including_in_root_links() {
         let root = temp_root();
         fs::write(root.join("target.txt"), "x").expect("target");
         let outside = temp_root();
         fs::write(outside.join("secret.txt"), "secret").expect("outside target");
-        std::os::unix::fs::symlink(root.join("target.txt"), root.join("inside-link"))
-            .expect("link");
-        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("escape-link"))
-            .expect("escape link");
+        symlink_file(&root.join("target.txt"), &root.join("inside-link")).expect("link");
+        symlink_file(&outside.join("secret.txt"), &root.join("escape-link")).expect("escape link");
         let ws = WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
         )
@@ -421,7 +429,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_symlink_to_directory_outside_root() {
         let root = temp_root();
@@ -430,7 +437,7 @@ mod tests {
             std::process::id()
         ));
         fs::create_dir_all(&outside).expect("outside directory");
-        std::os::unix::fs::symlink(&outside, root.join("external")).expect("symlink");
+        symlink_dir(&outside, &root.join("external")).expect("symlink");
         let ws = WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
         )
@@ -445,7 +452,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_sibling_prefix_and_dangling_final_symlink() {
         let root = temp_root();
@@ -457,7 +463,7 @@ mod tests {
         ));
         fs::create_dir_all(&sibling).expect("sibling");
         fs::write(sibling.join("file.txt"), "x").expect("sibling file");
-        std::os::unix::fs::symlink(root.join("does-not-exist"), root.join("dangling"))
+        symlink_file(&root.join("does-not-exist"), &root.join("dangling"))
             .expect("dangling symlink");
         let ws = WorkspaceRoot::resolve(
             &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
