@@ -340,7 +340,7 @@ mod tests {
         let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
         assert_eq!(
             ws.resolve_new_file_path(&path).expect("new file"),
-            root.join("new.txt")
+            ws.canonical_path().join("new.txt")
         );
         let _ = fs::remove_dir_all(root);
     }
