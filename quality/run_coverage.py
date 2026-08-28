@@ -8,6 +8,11 @@ import subprocess
 import sys
 import tomllib
 
+try:
+    from .timing import run_command
+except ImportError:
+    from timing import run_command
+
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "quality" / "features.toml"
 COVERAGE_POLICY = ROOT / "quality" / "coverage.toml"
@@ -15,8 +20,15 @@ REPORTS = ROOT / "quality" / "reports"
 
 
 def run(command: list[str]) -> None:
-    print("+", " ".join(command), flush=True)
-    subprocess.run(command, check=True, cwd=ROOT)
+    completed = run_command(command, cwd=ROOT, phase="coverage", gate="coverage")
+    if completed.returncode != 0:
+        raise subprocess.CalledProcessError(completed.returncode, command)
+
+
+def normalized_flags(flags: object) -> tuple[str, ...]:
+    if not isinstance(flags, list) or not all(isinstance(flag, str) for flag in flags):
+        raise ValueError("coverage profile flags must be a string list")
+    return tuple(flags)
 
 
 def main() -> None:
@@ -32,7 +44,8 @@ def main() -> None:
     for name, flags in profiles.items():
         if name not in {"default", "no_default", "all"}:
             raise ValueError(f"unsupported coverage profile name: {name}")
-        combinations.append((name, flags))
+        normalized = normalized_flags(flags)
+        combinations.append((name, list(normalized)))
     combinations.extend(
         (f"critical-{entry['name']}", ["--features", ",".join(entry["features"])])
         for entry in policy.get("critical_combinations", [])
@@ -41,6 +54,7 @@ def main() -> None:
 
     REPORTS.mkdir(parents=True, exist_ok=True)
     for crate in coverage_crates:
+        seen_effective: set[tuple[str, ...]] = set()
         for name, flags in combinations:
             report = (REPORTS / f"coverage-{name}-{crate}.json").resolve()
             # `cargo llvm-cov nextest --package` instruments the package's
@@ -49,10 +63,24 @@ def main() -> None:
             # latter is especially important for boundary crates whose
             # implementation lives in lib.rs. Cargo test executes both the
             # library harness and integration targets in one coverage run.
-            coverage_command = "test" if crate == "intention-daemon" else "nextest"
+            coverage_command = (
+                "test" if crate in {"intention-daemon", "intention-workspace"} else "nextest"
+            )
             coverage_flags = [*flags]
             if crate == "intention-daemon" and "--all-features" not in coverage_flags:
                 coverage_flags.append("--all-features")
+            effective = tuple(coverage_flags)
+            if crate == "intention-daemon" and effective in seen_effective:
+                continue
+            seen_effective.add(effective)
+            # Target narrowing is intentionally disabled: explicit target sets
+            # do not reliably reproduce the --all-targets coverage set on every
+            # supported platform (Windows integration-target behavior differs),
+            # so the runner always uses --all-targets to keep per-crate
+            # thresholds comparable across Linux and Windows. Boundary crates
+            # use `cargo test` instead of nextest so the library test harness
+            # is merged into the coverage report on Windows.
+            target_flags = ["--all-targets"]
             command = [
                 "cargo",
                 "+nightly-2026-07-31",
@@ -63,7 +91,7 @@ def main() -> None:
                 "--output-path",
                 str(report),
                 coverage_command,
-                "--all-targets",
+                *target_flags,
                 "--locked",
                 *coverage_flags,
                 "--package",

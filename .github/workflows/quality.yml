@@ -25,18 +25,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore Cargo registries and build artifacts
+      - name: Restore Cargo registry cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/advisory-db
-            ~/.cargo/git
-            ~/.rustup
-            quality/reports
-          key: quality-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'quality/tools.toml', 'quality/features.toml', 'Cargo.lock', 'deny.toml') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            quality-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
+
+      - name: Restore Cargo git cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: cargo-git-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-git-${{ runner.os }}-
+
+      - name: Restore Rustup cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.rustup
+          key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+          restore-keys: rustup-${{ runner.os }}-
+
+      - name: Restore quality tools cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: quality-tools-${{ runner.os }}-${{ hashFiles('quality/tools.toml') }}
+          restore-keys: quality-tools-${{ runner.os }}-
 
       - name: Set canonical Rust homes
         run: |
