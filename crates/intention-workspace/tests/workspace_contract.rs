@@ -30,6 +30,30 @@ impl TempDir {
     }
 }
 
+/// Creates a file symbolic link with the platform-native API.
+fn symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+/// Creates a directory symbolic link with the platform-native API.
+fn symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+}
+
 struct CwdGuard(std::path::PathBuf);
 impl CwdGuard {
     fn change_to(path: &std::path::Path) -> Self {
@@ -121,7 +145,6 @@ fn execute_cwd_is_explicit_workspace_root() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-#[cfg(unix)]
 #[test]
 fn symlink_to_outside_is_rejected() {
     let root = std::env::temp_dir().join(format!(
@@ -136,7 +159,7 @@ fn symlink_to_outside_is_rejected() {
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&root).expect("root");
     std::fs::create_dir_all(&outside).expect("outside");
-    std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+    symlink_dir(&outside, &root.join("link")).expect("symlink");
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
     )
@@ -147,7 +170,6 @@ fn symlink_to_outside_is_rejected() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
-#[cfg(unix)]
 #[test]
 fn sibling_prefix_and_dangling_final_symlink_fail_closed() {
     let root = TempDir::new("boundary");
@@ -157,7 +179,7 @@ fn sibling_prefix_and_dangling_final_symlink_fail_closed() {
     ));
     std::fs::create_dir_all(&sibling).expect("sibling");
     std::fs::write(sibling.join("file.txt"), "x").expect("sibling file");
-    std::os::unix::fs::symlink(root.path().join("missing"), root.path().join("dangling"))
+    symlink_file(&root.path().join("missing"), &root.path().join("dangling"))
         .expect("dangling symlink");
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
