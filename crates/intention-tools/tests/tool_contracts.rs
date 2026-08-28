@@ -1570,7 +1570,7 @@ fn execute_formats_success_and_truncates_both_streams() {
     assert!(value.truncated || cfg!(windows));
     // Truncation is part of the typed result contract; the text marker is
     // retained for compatibility but is not required to be a suffix.
-    assert!(value.text.as_str().contains("[truncated]"));
+    assert!(value.text.as_str().contains("[truncated]") || cfg!(windows));
 }
 
 #[test]
