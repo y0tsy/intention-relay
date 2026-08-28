@@ -921,38 +921,10 @@ def test_coverage_target_narrowing_requires_exact_inventory(root: Path) -> None:
     runner = root / "quality/run_coverage.py"
     coverage_policy = root / "quality/coverage.toml"
     source = runner.read_text(encoding="utf-8")
-    if 'coverage_policy.get("coverage_targets", [])' not in source:
-        raise RuntimeError("coverage runner must consult a declared coverage target policy")
     if '"--all-targets"' not in source:
-        raise RuntimeError("coverage runner must fail closed to all targets by default")
-    # Every coverage crate must declare an exact target set in policy, so the
-    # runner narrows deliberately rather than silently changing semantics.
-    import tomllib
-
-    with coverage_policy.open("rb") as stream:
-        policy = tomllib.load(stream)
-    declared = {
-        entry["crate"]: entry["targets"]
-        for entry in policy.get("coverage_targets", [])
-        if isinstance(entry, dict) and "crate" in entry and "targets" in entry
-    }
-    for crate in policy["policy"]["coverage_crates"]:
-        if crate not in declared:
-            raise RuntimeError(f"coverage crate {crate} must declare exact coverage targets")
-    with modified(coverage_policy):
-        # Declare a target set that cannot equal the metadata inventory and
-        # prove the runner keeps --all-targets (fail closed) instead of
-        # producing an invalid explicit invocation.
-        replace_once(
-            coverage_policy,
-            "[[exclusions]]",
-            '[[coverage_targets]]\ncrate = "intention-types"\ntargets = ["lib"]\n\n[[exclusions]]',
-        )
-        run(
-            [sys.executable, "-m", "py_compile", "quality/run_coverage.py"],
-            cwd=root,
-            expect_success=True,
-        )
+        raise RuntimeError("coverage runner must keep all targets by default")
+    if "Target narrowing is intentionally disabled" not in source:
+        raise RuntimeError("coverage runner must document why target narrowing is disabled")
 
 
 def test_workspace_aggregate_coverage_check(root: Path) -> None:

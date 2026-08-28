@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import json
 import subprocess
 import sys
 import tomllib
@@ -32,24 +31,6 @@ def normalized_flags(flags: object) -> tuple[str, ...]:
     return tuple(flags)
 
 
-def metadata_targets() -> dict[str, set[str]]:
-    """Return each package's declared target kinds from locked Cargo metadata."""
-    completed = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
-        check=True, capture_output=True, text=True, cwd=ROOT,
-    )
-    metadata = json.loads(completed.stdout)
-    result: dict[str, set[str]] = {}
-    for package in metadata["packages"]:
-        result[package["name"]] = {
-            kind
-            for target in package["targets"]
-            for kind in target["kind"]
-            if kind in {"lib", "bin", "test", "example", "bench"}
-        }
-    return result
-
-
 def main() -> None:
     with POLICY.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
@@ -72,7 +53,6 @@ def main() -> None:
     )
 
     REPORTS.mkdir(parents=True, exist_ok=True)
-    targets_by_crate = metadata_targets()
     for crate in coverage_crates:
         seen_effective: set[tuple[str, ...]] = set()
         for name, flags in combinations:
@@ -91,34 +71,12 @@ def main() -> None:
             if crate == "intention-daemon" and effective in seen_effective:
                 continue
             seen_effective.add(effective)
-            # Target narrowing is enabled only when the coverage policy
-            # declares an explicit target set for this crate and that set
-            # exactly equals the metadata-derived inventory. Otherwise the
-            # runner fails closed and keeps --all-targets.
+            # Target narrowing is intentionally disabled: explicit target sets
+            # do not reliably reproduce the --all-targets coverage set on every
+            # supported platform (Windows integration-target behavior differs),
+            # so the runner always uses --all-targets to keep per-crate
+            # thresholds comparable across Linux and Windows.
             target_flags = ["--all-targets"]
-            declared_targets = next(
-                (
-                    entry["targets"]
-                    for entry in coverage_policy.get("coverage_targets", [])
-                    if entry.get("crate") == crate and isinstance(entry.get("targets"), list)
-                ),
-                None,
-            )
-            if declared_targets is not None and set(declared_targets) == targets_by_crate.get(
-                crate, set()
-            ):
-                target_flags = []
-                for target in declared_targets:
-                    if target == "lib":
-                        target_flags.append("--lib")
-                    elif target == "bin":
-                        target_flags.append("--bins")
-                    elif target == "test":
-                        target_flags.append("--tests")
-                    elif target == "example":
-                        target_flags.append("--examples")
-                    elif target == "bench":
-                        target_flags.append("--benches")
             command = [
                 "cargo",
                 "+nightly-2026-07-31",
