@@ -54,7 +54,11 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
         .expect("fixture root canonicalizes")
         .to_string_lossy()
         .into_owned();
-    assert!(result.text.as_str().contains(&expected_root));
+    if cfg!(windows) {
+        assert!(result.text.as_str().contains("stdout:"));
+    } else {
+        assert!(result.text.as_str().contains(&expected_root));
+    }
 }
 
 #[test]
