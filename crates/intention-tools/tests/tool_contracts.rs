@@ -50,12 +50,11 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
-    assert!(
-        result
-            .text
-            .as_str()
-            .contains(&root.to_string_lossy().to_string())
-    );
+    let expected_root = std::fs::canonicalize(&root)
+        .expect("fixture root canonicalizes")
+        .to_string_lossy()
+        .into_owned();
+    assert!(result.text.as_str().contains(&expected_root));
 }
 
 #[test]
