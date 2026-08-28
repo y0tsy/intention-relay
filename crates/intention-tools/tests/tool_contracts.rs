@@ -1550,7 +1550,7 @@ fn execute_formats_success_and_truncates_both_streams() {
                         // `for /L` and `set /P` are built into cmd.exe, so this
                         // fixture does not depend on Python or another tool.
                         BoundedText::new("/C").unwrap(),
-                        BoundedText::new("for /L %i in (1,1,200000) do @<nul set /p =x").unwrap(),
+                        BoundedText::new("for /L %i in (1,1,200000) do @<nul set /p =x & exit /b 0").unwrap(),
                     ]
                 } else {
                     let script = "python3 -c 'import sys; sys.stdout.write(\"x\" * 200000); sys.stderr.write(\"y\" * 200000)'";
