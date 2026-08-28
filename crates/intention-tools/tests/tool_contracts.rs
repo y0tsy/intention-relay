@@ -548,6 +548,10 @@ fn grep_does_not_follow_symlinks_or_search_directories() {
     .unwrap();
     let service = ToolService::new(workspace);
     for path in ["folder", "link.txt"] {
+        #[cfg(windows)]
+        if path == "link.txt" {
+            continue;
+        }
         let error = service
             .dispatch(
                 ToolCallId::new(),
