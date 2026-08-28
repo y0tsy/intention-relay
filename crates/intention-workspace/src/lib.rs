@@ -381,7 +381,7 @@ mod tests {
         .expect("workspace");
         let original = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&other).expect("change cwd");
-        assert_eq!(ws.execute_cwd(), root.as_path());
+        assert_eq!(ws.execute_cwd(), ws.canonical_path());
         std::env::set_current_dir(original).expect("restore cwd");
         let _ = fs::remove_dir_all(other);
         let _ = fs::remove_dir_all(root);
