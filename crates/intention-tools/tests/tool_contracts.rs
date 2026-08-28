@@ -331,8 +331,9 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
                     .expect("program"),
                 args: if cfg!(windows) {
                     vec![
-                        BoundedText::new("/C").unwrap(),
-                        BoundedText::new("-n 30 127.0.0.1 > nul").unwrap(),
+                        BoundedText::new("-n").unwrap(),
+                        BoundedText::new("30").unwrap(),
+                        BoundedText::new("127.0.0.1").unwrap(),
                     ]
                 } else {
                     vec![
