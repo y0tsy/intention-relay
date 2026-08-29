@@ -406,7 +406,7 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionReque
         messages.push(Message::new(Role::System, context));
     }
     for message in request.messages() {
-        messages.push(translate_message(message));
+        messages.push(translate_message(message)?);
     }
     ChatCompletionRequest::builder()
         .model(request.model())
@@ -420,13 +420,20 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionReque
         })
 }
 
-fn translate_message(message: &ModelMessageDto) -> Message {
+fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
     let role = match message.role() {
         ModelRoleDto::System => Role::System,
         ModelRoleDto::User => Role::User,
         ModelRoleDto::Assistant => Role::Assistant,
+        // Tool-role mapping lands with the model-tool loop layer.
+        ModelRoleDto::Tool => {
+            return Err(ErrorDto::validation(
+                "invalid_openrouter_request",
+                "tool-role messages are not yet mapped to OpenRouter messages",
+            ));
+        }
     };
-    Message::new(role, message.content())
+    Ok(Message::new(role, message.content()))
 }
 
 #[cfg(test)]
