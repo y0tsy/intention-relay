@@ -86,7 +86,7 @@ jobs:
           rustup component add rustfmt clippy llvm-tools-preview --toolchain nightly-2026-07-31
 
       - name: Install pinned quality tools
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
         with:
           tool: |
             cargo-nextest@0.9.140
