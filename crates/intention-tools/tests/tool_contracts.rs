@@ -322,7 +322,8 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
     let canceller = cancellation.clone();
     std::thread::spawn(move || {
         // Give the child a chance to spawn before requesting cancellation.
-        // The longer fixture is deterministic on both Unix and Windows.
+        // The short fixture stays alive long enough on both Unix and
+        // Windows, and its trap ignores termination signals.
         std::thread::sleep(std::time::Duration::from_millis(50));
         canceller.cancel();
     });
@@ -335,13 +336,13 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
                 args: if cfg!(windows) {
                     vec![
                         BoundedText::new("-n").unwrap(),
-                        BoundedText::new("30").unwrap(),
+                        BoundedText::new("2").unwrap(),
                         BoundedText::new("127.0.0.1").unwrap(),
                     ]
                 } else {
                     vec![
                         BoundedText::new("-c").unwrap(),
-                        BoundedText::new("trap '' TERM; sleep 30").unwrap(),
+                        BoundedText::new("trap '' TERM; sleep 2").unwrap(),
                     ]
                 },
             }),

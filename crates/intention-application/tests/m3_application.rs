@@ -1647,9 +1647,9 @@ fn local_tool_records_external_effect_unknown_terminal_status() {
                         intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
                             .expect("arg"),
                         intention_tools::BoundedText::new(if cfg!(windows) {
-                            "10"
+                            "2"
                         } else {
-                            "sleep 5"
+                            "sleep 1"
                         })
                         .expect("arg"),
                         #[cfg(windows)]
@@ -1782,7 +1782,7 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
                     program: intention_tools::BoundedText::new("sh").expect("program"),
                     args: vec![
                         intention_tools::BoundedText::new("-c").expect("arg"),
-                        intention_tools::BoundedText::new("sleep 5").expect("arg"),
+                        intention_tools::BoundedText::new("sleep 1").expect("arg"),
                     ],
                 }),
                 fixture_time(),
@@ -2652,9 +2652,9 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
                         intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
                             .expect("arg"),
                         intention_tools::BoundedText::new(if cfg!(windows) {
-                            "10"
+                            "2"
                         } else {
-                            "sleep 5"
+                            "sleep 1"
                         })
                         .expect("arg"),
                         #[cfg(windows)]
@@ -2833,9 +2833,9 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
                         intention_tools::BoundedText::new(if cfg!(windows) { "-n" } else { "-c" })
                             .expect("arg"),
                         intention_tools::BoundedText::new(if cfg!(windows) {
-                            "10"
+                            "2"
                         } else {
-                            "sleep 5"
+                            "sleep 1"
                         })
                         .expect("arg"),
                         #[cfg(windows)]
