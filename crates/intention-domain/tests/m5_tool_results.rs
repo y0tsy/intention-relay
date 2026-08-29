@@ -4,7 +4,7 @@
     reason = "M5 tool-result contract fixtures use expect for precise diagnostics."
 )]
 
-//! Typed, bounded, credential-free durable tool-result contract evidence.
+//! Typed, credential-free durable tool-result contract evidence.
 
 use intention_domain::{
     DomainEventDto, ToolLifecycleEventDto, ToolLifecycleStatusDto, ToolResultMetadataEntryDto,
@@ -79,7 +79,7 @@ fn tool_result_record_round_trips_with_typed_identity_and_accessors() {
 }
 
 #[test]
-fn tool_result_record_validates_identity_bounds_and_metadata() {
+fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
@@ -97,7 +97,7 @@ fn tool_result_record_validates_identity_bounds_and_metadata() {
         )
         .is_err()
     );
-    // An empty normalized result is legitimate; 4 KiB is the exact bound.
+    // An empty normalized result is legitimate; content is not size-bounded.
     assert!(
         ToolResultRecordedEventDto::new(
             session_id,
@@ -124,6 +124,7 @@ fn tool_result_record_validates_identity_bounds_and_metadata() {
         )
         .is_ok()
     );
+    // Content beyond the former 4 KiB cap is accepted.
     assert!(
         ToolResultRecordedEventDto::new(
             session_id,
@@ -135,7 +136,7 @@ fn tool_result_record_validates_identity_bounds_and_metadata() {
             Vec::new(),
             time(),
         )
-        .is_err()
+        .is_ok()
     );
     assert!(
         ToolResultRecordedEventDto::new(
@@ -174,19 +175,35 @@ fn tool_result_record_validates_identity_bounds_and_metadata() {
             .map(|index| entry(&format!("key{index}"), "v"))
             .collect()
     };
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "content",
-            oversized_metadata(),
-            time(),
-        )
-        .is_err()
-    );
+    // Metadata beyond the former 16-entry cap is accepted, and materially
+    // larger collections are preserved in full.
+    let record = ToolResultRecordedEventDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        "content",
+        oversized_metadata(),
+        time(),
+    )
+    .expect("record with 17 metadata entries is accepted");
+    assert_eq!(record.structured_metadata().len(), 17);
+    let wide_metadata = (0..64)
+        .map(|index| entry(&format!("wide{index}"), "v"))
+        .collect::<Vec<_>>();
+    let record = ToolResultRecordedEventDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolResultStatusDto::Completed,
+        "content",
+        wide_metadata,
+        time(),
+    )
+    .expect("record with 64 metadata entries is accepted");
+    assert_eq!(record.structured_metadata().len(), 64);
     assert!(
         ToolResultRecordedEventDto::new(
             session_id,
@@ -203,14 +220,26 @@ fn tool_result_record_validates_identity_bounds_and_metadata() {
 
     assert!(ToolResultMetadataEntryDto::new(" ", "v").is_err());
     assert!(ToolResultMetadataEntryDto::new("k", "bad\0value").is_err());
-    assert!(ToolResultMetadataEntryDto::new("x".repeat(128), "v").is_ok());
-    assert!(ToolResultMetadataEntryDto::new("x".repeat(129), "v").is_err());
-    assert!(ToolResultMetadataEntryDto::new("k", "x".repeat(1024)).is_ok());
-    assert!(ToolResultMetadataEntryDto::new("k", "x".repeat(1025)).is_err());
+    let key_128 = ToolResultMetadataEntryDto::new("x".repeat(128), "v").expect("128-byte key");
+    assert_eq!(key_128.key().len(), 128);
+    // Keys and values beyond the former 128-byte and 1 KiB caps are accepted
+    // and preserved exactly.
+    let key_129 = ToolResultMetadataEntryDto::new("x".repeat(129), "v").expect("129-byte key");
+    assert_eq!(key_129.key().len(), 129);
+    let value_1024 = ToolResultMetadataEntryDto::new("k", "x".repeat(1024)).expect("1 KiB value");
+    assert_eq!(value_1024.value().len(), 1024);
+    let value_1025 =
+        ToolResultMetadataEntryDto::new("k", "x".repeat(1025)).expect("1 KiB + 1 value");
+    assert_eq!(value_1025.value().len(), 1025);
+    let huge_key = ToolResultMetadataEntryDto::new("x".repeat(8 * 1024), "v").expect("8 KiB key");
+    assert_eq!(huge_key.key().len(), 8 * 1024);
+    let huge_value =
+        ToolResultMetadataEntryDto::new("k", "x".repeat(16 * 1024)).expect("16 KiB value");
+    assert_eq!(huge_value.value().len(), 16 * 1024);
 }
 
 #[test]
-fn tool_result_wire_shape_is_closed_bounded_and_additive_tolerant() {
+fn tool_result_wire_shape_is_closed_safe_and_additive_tolerant() {
     let event = record();
     let encoded: serde_json::Value =
         serde_json::to_value(&event).expect("record serializes to JSON");
@@ -246,10 +275,16 @@ fn tool_result_wire_shape_is_closed_bounded_and_additive_tolerant() {
         .remove("structured_metadata");
     assert!(valid(without_metadata));
 
-    // Validated wire decoding: persisted bounds cannot be bypassed.
+    // Validated wire decoding: persisted safety constraints cannot be bypassed.
+    // Content beyond the former 4 KiB cap round-trips in full.
     let mut oversize = expected.clone();
     oversize["normalized_content"] = serde_json::json!("x".repeat(4 * 1024 + 1));
-    assert!(!valid(oversize));
+    let decoded_oversize =
+        serde_json::from_value::<ToolResultRecordedEventDto>(oversize).expect("oversize decodes");
+    assert_eq!(
+        decoded_oversize.normalized_content(),
+        "x".repeat(4 * 1024 + 1)
+    );
     let mut nul = expected.clone();
     nul["normalized_content"] = serde_json::json!("bad\0content");
     assert!(!valid(nul));

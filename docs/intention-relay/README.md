@@ -6,6 +6,7 @@ This directory contains the active legacy-derived reference material for rebuild
 
 - [`architecture/`](architecture/README.md): the approved target architecture, crate boundaries, quality gates, Makefile contract, TDD/verification policy, and implementation roadmap for the new Intention Relay implementation.
 - [`m4.md`](m4.md): historical M4 execution charter, including Package 1 baseline, accepted decisions, lane integrations, and retained scope boundaries.
+- [`production-ceiling-removal.md`](production-ceiling-removal.md): working scope reference for removing product ceilings from post-M4 production code (PR #15).
 - [`closeout/m4-closure-evidence.md`](closeout/m4-closure-evidence.md): immutable M4 implementation baseline, local verification, CI matrix, coverage, acceptance evidence, exceptions, and retained deferrals.
 - [`reconciliation/`](reconciliation/README.md): approved documentation-only post-M4 authority, compatibility, ownership, and delivery-boundary reconciliation.
 - [`decisions/`](decisions/README.md): accepted cross-document architecture decisions and their provenance.

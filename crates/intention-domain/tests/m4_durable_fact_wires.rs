@@ -257,13 +257,11 @@ fn snapshots_tails_and_replays_reject_mismatches_and_round_trip() {
 }
 
 #[test]
-fn tool_result_fact_wire_shape_and_outcome_bounds_are_validated() {
+fn tool_result_fact_wire_shape_and_outcome_safety_are_validated() {
     let outcome = ToolResultOutcomeDto::succeeded("done").expect("outcome is valid");
     assert!(ToolResultOutcomeDto::succeeded(" ").is_err());
-    assert!(
-        ToolResultOutcomeDto::succeeded("x".repeat(4 * 1024 + 1)).is_err(),
-        "tool result content must not exceed 4 KiB"
-    );
+    // Content beyond the former 4 KiB cap is accepted.
+    assert!(ToolResultOutcomeDto::succeeded("x".repeat(4 * 1024 + 1)).is_ok());
     let decoded: ToolResultOutcomeDto =
         serde_json::from_str(&serde_json::to_string(&outcome).expect("outcome serializes"))
             .expect("succeeded outcome deserializes");
