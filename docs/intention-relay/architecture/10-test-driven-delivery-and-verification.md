@@ -155,7 +155,7 @@ Evidence](../closeout/m3-closure-evidence.md).
 
 ## Completed M4 model/provider evidence
 
-M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their policy-declared Cargo integration targets prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, tool denial, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. No test requires live credentials or provider network access. Final gate and cross-platform evidence are recorded in [M4 Closure Evidence](../closeout/m4-closure-evidence.md).
+M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their policy-declared Cargo integration targets prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, durable tool-call recording, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. No test requires live credentials or provider network access. Final gate and cross-platform evidence are recorded in [M4 Closure Evidence](../closeout/m4-closure-evidence.md).
 
 ## Completed M4 run-stream protocol evidence
 
@@ -266,6 +266,16 @@ The following scenarios must become executable before the corresponding capabili
 3. Enumerate events, snapshots, errors, structured logs, and adapter DTOs.
 4. Verify the credential is absent from all output.
 
+### I. Daemon-host tool loop
+
+1. Start the real daemon binary and connect over the local protocol.
+2. Send a user turn against a fake provider that emits a tool call.
+3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
+4. Verify the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication and are streamed to the client.
+5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
+6. Restart the daemon and replay the run.
+7. Verify recorded tool calls and results replay and are never re-executed.
+
 ## Verification evidence
 
 Each completed implementation slice must report:
@@ -324,8 +334,9 @@ Before implementation, future tool-loop work requires fixed-slot and owner
 goldens, Reserved/non-bypass fixtures, canonical registry/descriptor selection,
 ordinary-versus-Mandate WorkspaceRoot outcomes, direct-Mandate/no-confirmation
 admission, group atomicity/concurrency/order, fragment/result integrity,
-before-start/started/known/unknown recovery, negotiated replay, M4 tool-denial
-preservation, no-current-state reconstruction, and fake-secret absence. These
+before-start/started/known/unknown recovery, negotiated replay, historical M4
+tool-call compatibility, no-current-state reconstruction, and fake-secret
+absence. These
 are future obligations, not claims that a runtime or test target exists; the
 detailed portfolio is owned by [Tool registry and direct Mandate tool
 loop](15-tool-registry-and-mandate-tool-loop.md).

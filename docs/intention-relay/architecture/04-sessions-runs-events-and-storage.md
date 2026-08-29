@@ -228,7 +228,9 @@ historical event bytes and use additive versioned records.
   fact/status batch to the repository's atomic append contract. It records
   `Starting -> Running` attempt facts, batches one assistant turn into non-blank
   UTF-8-safe 4 KiB content facts, retains reasoning only in the tail, records
-  usage once through stream lifecycle validation, denies tool calls durably, and
+  usage once through stream lifecycle validation, records typed tool-call
+  facts durably and executes admitted calls through the daemon-owned registry
+  with correlated `ToolResultRecorded` facts, and
   commits `Running -> Completing` before the separate `Completing -> Completed`
   transition. A provider-neutral runtime time port supplies durable timestamps,
   attempt deadlines, and the cancellation-aware fixed 250 ms retry wait.

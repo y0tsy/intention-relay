@@ -45,7 +45,7 @@ clean checkout.
 | WorkspaceRoot policy | `intention-workspace` unit and `workspace_contract` tests cover explicit-root resolution, CWD independence, missing paths, new-file parents, acceptance of proven-in-root symlinks, and fail-closed rejection of outward, unprovable, or dangling symlinks |
 | Execute CWD | Contract tests prove execute uses the declared workspace root rather than process CWD |
 | Typed hooks | `intention-hooks` unit and `hook_contracts` tests cover phase mapping, stable ordering, duplicate rejection, chained transforms, typed rejection, and short-circuit before tool execution |
-| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. A full facade-level end-to-end run through the daemon host is not claimed by this focused evidence. |
+| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. The facade-level daemon-host E2E scenario (crates/intention-daemon/tests/facade_e2e.rs) closes this gap for the ordinary daemon path; its observed results are recorded once the implementation CI evidence exists. |
 | Real application path | Application integration tests cover accepted user turns, queued-versus-started scheduling, idempotent retry, context identity failures, typed failure persistence, hook-controlled tool execution, and durable tool lifecycle events; runtime integration tests cover ordered model facts, UTF-8 chunking, retries/timeouts, cancellation races, provider failures, and commit observation. |
 
 ## Active M5 specification criteria matrix
@@ -147,8 +147,9 @@ default-profile test pass instead of duplicating the nextest gate.
   current implementation state, not a claim that the worktree was clean.
 - Later Plan/Build artifact policy remains M7 scope. M5 evidence does not claim
   physical plans, Plan mode, Build Autopilot, or UI delivery.
-- Architecture-15 registry, Mandate, loop, recovery, replay, and
-  canonicalization work remains future follow-up.
+- Mandate-specific architecture-15 registry, loop, recovery, replay, and
+  canonicalization obligations remain future follow-up; the ordinary-run
+  production model-tool loop is implemented per ADR 0019.
 
 ## Closeout rule
 

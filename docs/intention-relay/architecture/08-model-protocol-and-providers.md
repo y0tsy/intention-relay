@@ -121,11 +121,20 @@ Provider/model selection changes do not mutate an already-started run. They appl
 
 ## Streaming and tool calls
 
-The model stream can emit content, reasoning, tool-call, usage, and terminal events. Runtime owns ordering, stable assistant-turn identity, persistence, and conversion of a model tool call into typed durable evidence and denial until M5 provides tool execution.
+The model stream can emit content, reasoning, tool-call, usage, and terminal
+events. Runtime owns ordering, stable assistant-turn identity, persistence,
+and conversion of a model tool call into typed durable evidence and execution
+through the daemon-owned registry: it records `ToolCallRecorded` before the
+local effect, persists the correlated `ToolResultRecorded`, and continues the
+provider exchange with assistant-tool-call and tool-role messages until the
+provider finishes or the bounded round limit is exceeded.
 
-Provider drivers do not invoke local tools directly. M4 records typed tool-call
-evidence and then fails `tool_execution_unavailable`; concrete tool execution
-remains M5 scope.
+Provider drivers do not invoke local tools directly. The application builds
+the typed invocation from a provider-emitted tool call, and the daemon-owned
+registry executes it under `WorkspaceRoot` with typed hooks. The M4 no-port
+denial path remains byte-identical: without a tool executor, the runtime
+records the tool-call facts and appends the terminal
+`tool_execution_unavailable` failure.
 
 ## Retry and timeout ownership
 
@@ -150,7 +159,7 @@ cancelling is durable it suppresses later provider events/errors and retries.
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
-| Tool call boundary | Runtime/provider integration test. | Provider emits a tool-call DTO; only runtime invokes the tool registry. |
+| Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned registry executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
 | Secret redaction | Provider error fixture. | API key never appears in `ProviderErrorDto`, logs, or events. |
