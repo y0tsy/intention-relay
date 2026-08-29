@@ -5,7 +5,7 @@
 | Status, closed M4 baseline, recommendation | GOV-001..005 | Research provenance and historical baseline retained. | Architecture index, roadmap, compatibility register. |
 | Selected semi-autonomous Mandate overlay | MAN-001..018, RUN-001..006 | Lifecycle/admission and execution-meaning compatibility authority adopted; nested owner payloads remain later. | Mandate lifecycle and execution-meaning packages. |
 | Direct descriptor admission and unified registry | TLS-001..015 | Adopted for future Mandate execution; ordinary behavior preserved. | Tool registry and Mandate-loop package. |
-| Model-tool loop | MTL-001..018 | Adopted for future Mandate execution. | Tool registry and Mandate-loop package. |
+| Model-tool loop | MTL-001..018 | Ordinary daemon model-tool continuation adopted by ADR 0019; Mandate-specific execution meaning remains future-scoped. | Tool registry and Mandate-loop package. |
 | Gateway/RLM bridge | BRG-001..014 | Adopted for future Mandate execution; retained bridge/RLM identity remains historical. | Architecture 19, Gateway/RLM bridge package. |
 | Kernel and programmable runtime | KER-001..018 | Adopted for future Mandate execution; retained IPython/RLM identity remains historical. | Architecture 20, run-scoped IPython kernel package. |
 | Durable Mandate scheduler and readiness admission | SCH-001..012 | Readiness-driven admission adopted; calendar/interval/time-zone and continual-harness ownership remain deferred or historical-only. | Mandate scheduler package. |

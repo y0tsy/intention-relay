@@ -347,7 +347,8 @@ closed until those gates are run at an immutable implementation baseline.
 - typed core tool registry and first read/search/write/edit/execute contracts as appropriate;
 - mandatory `WorkspaceRoot` policy;
 - typed hook dispatcher and deterministic ordering;
-- tool lifecycle persistence/events.
+- tool lifecycle persistence/events;
+- daemon-owned invocation path consumed by the model-tool loop.
 
 ### Tests first
 
@@ -355,6 +356,7 @@ closed until those gates are run at an immutable implementation baseline.
 - execute CWD test;
 - hook order/rejection tests;
 - tool event consistency tests;
+- durable tool-call and tool-result continuation fixtures and daemon-host loop wiring tests;
 - Tier B coverage fixtures for policy-denial and workspace-path branches.
 
 ### Acceptance outcomes
@@ -362,6 +364,7 @@ closed until those gates are run at an immutable implementation baseline.
 - file tools cannot use process CWD fallback or access outside the allowed root;
 - `execute` observes `workspace_root` as CWD;
 - hook rejection prevents base tool execution and produces typed durable evidence;
+- a provider-emitted tool call is durably recorded, executed through the real registry under `WorkspaceRoot`, and the exchange continues to `Completed`; a real-binary daemon-host E2E scenario exercises this path, and restart replay never re-executes tools;
 - applicable Tier B crates meet 90% coverage without excluding policy or boundary logic.
 
 The implemented M5 registry has six active tools (`read`, `write`, `edit`,
@@ -406,6 +409,9 @@ typed ordering and short-circuiting.
 - Plan `execute` availability with advisory focus instruction and trusted-local audit;
 - automatic same-Session fresh Build start after approval;
 - optional full-context implementation handoff to a new Session.
+
+M7 consumes the daemon-owned model-tool loop for its execution paths; it does
+not redefine the loop.
 
 ### Tests first
 
@@ -465,6 +471,7 @@ typed ordering and short-circuiting.
 ### Tests first
 
 - full result-oriented scenario suite from [10 TTD](10-test-driven-delivery-and-verification.md);
+- real-binary daemon-host model-tool-loop outcome test; the broader M9 scenario suite remains;
 - secret injection regression suite;
 - daemon restart and reconnect endurance fixtures;
 - architecture dependency/API boundary checks across all crates;

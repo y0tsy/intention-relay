@@ -1639,6 +1639,7 @@ const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventD
         | DomainEventDto::ReasoningDeltaRecorded(value)
         | DomainEventDto::UsageRecorded(value)
         | DomainEventDto::ToolCallRecorded(value)
+        | DomainEventDto::ModelToolResultRecorded(value)
         | DomainEventDto::Finished(value)
         | DomainEventDto::Failed(value) => Some(value),
         _ => None,
@@ -1673,6 +1674,9 @@ const fn model_fact_event(
         }
         intention_domain::ModelRunFactKindDto::ToolCallRecorded => {
             DomainEventDto::ToolCallRecorded(event)
+        }
+        intention_domain::ModelRunFactKindDto::ToolResultRecorded => {
+            DomainEventDto::ModelToolResultRecorded(event)
         }
         intention_domain::ModelRunFactKindDto::Finished => DomainEventDto::Finished(event),
         intention_domain::ModelRunFactKindDto::Failed => DomainEventDto::Failed(event),

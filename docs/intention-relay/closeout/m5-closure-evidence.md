@@ -30,11 +30,11 @@ clean checkout.
 | Diff hygiene | `git diff --check` — no errors, executed 2026-08-27 in the current dirty worktree |
 | Blocker repair verification | Executed 2026-08-27 in the repaired dirty worktree: `cargo test --locked -p intention-hooks --test hook_contracts -p intention-workspace --test workspace_contract -p intention-tools --test tool_contracts` — 11, 6, and 47 tests passed respectively, 0 failed; `cargo test --locked -p intention-application --test m3_application` — 33 passed, 0 failed; `cargo test --locked -p intention --lib` — 29 passed, 0 failed; `cargo check --workspace --all-targets --locked` — exit status `0` |
 | ToolResult persistence verification | Executed 2026-08-27 in the current dirty worktree: `cargo test --locked -p intention-domain --test m5_tool_results` — 4 passed, 0 failed; `cargo test --locked -p intention-storage-sqlite --test sqlite_contracts` — 19 passed, 0 failed (including `completed_result_evidence_is_durable_across_reopen_with_redacted_payload` and the typed-result-evidence reopen and not-found cases); `cargo test --locked -p intention-application --test m3_application` — 45 passed, 0 failed (including `every_terminal_outcome_persists_one_correlated_event_before_publication` and the publication/after-publish family). Exact required/observed persistence statements are recorded in the section below; no unrun gate is attributed to these runs. |
-| Unrun gates for this dirty baseline | Besides CI (see limitations): `lint`, `test`, `isolated-release`, `features`, `coverage`, `deps`, and `quality-self-test` from a fresh `make verify` were not rerun against this tree; only the focused test suites and Python checkers named above are evidenced for it |
+| Unrun gates for this dirty baseline | No CI run is recorded against this tree (the only cited CI run is historical evidence for the merged head `bd3ab01`; see limitations); `lint`, `test`, `isolated-release`, `features`, `coverage`, `deps`, and `quality-self-test` from a fresh `make verify` were not rerun against this tree; only the focused test suites and Python checkers named above are evidenced for it |
 | Environment | Linux `7.1.8-200.fc44.x86_64`, `x86_64` GNU/Linux; repository reports stable Rust toolchain via `rust-toolchain.toml` |
 | Coverage scope and result | `default`, `no_default`, and `all` feature profiles; current report shows `intention-tools` at 90%+ actual coverage. Threshold evaluation passed with the configured profile scope. |
 | Coverage policy exception | None. All Tier B crates, including `intention-tools` and `intention-hooks`, use the standard 90% line threshold. |
-| CI matrix | Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) is green on both platforms for head `bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3): `ubuntu-24.04 make ci` PASS 21m37s, `windows-2025 make ci` PASS 39m40s. See the CI verification section below. |
+| CI matrix | Historical baseline evidence only: the Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) is green on both platforms for the cited merged head `bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3): `ubuntu-24.04 make ci` PASS 21m37s, `windows-2025 make ci` PASS 39m40s. That run covers the cited merged head, not the current implementation baseline after `299d922`; no CI run is recorded for the current tree (see the CI verification section below). |
 | Immutable documents | `m4plus_concept2.md` and other immutable documents were not edited |
 
 ## Acceptance evidence
@@ -45,7 +45,7 @@ clean checkout.
 | WorkspaceRoot policy | `intention-workspace` unit and `workspace_contract` tests cover explicit-root resolution, CWD independence, missing paths, new-file parents, acceptance of proven-in-root symlinks, and fail-closed rejection of outward, unprovable, or dangling symlinks |
 | Execute CWD | Contract tests prove execute uses the declared workspace root rather than process CWD |
 | Typed hooks | `intention-hooks` unit and `hook_contracts` tests cover phase mapping, stable ordering, duplicate rejection, chained transforms, typed rejection, and short-circuit before tool execution |
-| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. A full facade-level end-to-end run through the daemon host is not claimed by this focused evidence. |
+| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. The facade-level daemon-host E2E scenario exists on this branch as `crates/intention-daemon/tests/facade_e2e.rs` (tests `real_daemon_tool_loop_executes_read_and_replays_after_restart` and `real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure`): it spawns the real daemon binary over local IPC, drives the real client transport, executes a real `read` tool through the production model-tool loop against a fake OpenAI-compatible provider, proves durable `ToolResultRecorded` facts and daemon-restart replay without re-execution, and proves the missing-file path terminalizes as `Failed` without provider retry. Pending: no run result is recorded for these tests in the current open-PR state; per this document's observed-results policy, the facade row is marked pending until a CI/run result is recorded at merge. |
 | Real application path | Application integration tests cover accepted user turns, queued-versus-started scheduling, idempotent retry, context identity failures, typed failure persistence, hook-controlled tool execution, and durable tool lifecycle events; runtime integration tests cover ordered model facts, UTF-8 chunking, retries/timeouts, cancellation races, provider failures, and commit observation. |
 
 ## Active M5 specification criteria matrix
@@ -107,10 +107,14 @@ cross-platform fixtures are future obligations. No M5 test is counted as
 satisfying them, and this closeout claims neither implementation nor execution
 of architecture-15 gates.
 
-## CI verification (2026-08-28)
+## CI verification (2026-08-28): historical baseline evidence for the merged head
 
-The full quality matrix ran green on both supported platforms for the merged
-head, closing the previously unrun CI limitation.
+This section is historical baseline evidence for the cited merged head
+`bd3ab01` (run 33186533012, PR #3, merged to `main` as `e915e12`) only: the
+full quality matrix ran green on both supported platforms for that merged
+head. It was not rerun against the current implementation baseline after
+`299d922`; no CI run is recorded for the current tree, whose CI result is the
+current open-PR state and remains pending/recorded at merge.
 
 | Item | Ubuntu 24.04 | Windows 2025 |
 | --- | --- | --- |
@@ -137,8 +141,11 @@ default-profile test pass instead of duplicating the nextest gate.
 
 ## Known limitations and follow-up
 
-- Linux/Windows CI is green on both platforms for the merged head (run
-  33186533012); Windows named-pipe and filesystem behavior is independently
+- Linux/Windows CI is green on both platforms for the merged head `bd3ab01`
+  (run 33186533012, merged to `main` as `e915e12` via PR #3); that is
+  historical baseline evidence for the cited merged head, not for the current
+  tree after `299d922`, and no CI run is recorded for the current open-PR
+  branch. Windows named-pipe and filesystem behavior is independently
   evidenced by that run. Earlier rows above predate the CI runs and are
   retained as the historical focused evidence.
 - The current worktree contains parent-agent changes in production crates,
@@ -147,8 +154,9 @@ default-profile test pass instead of duplicating the nextest gate.
   current implementation state, not a claim that the worktree was clean.
 - Later Plan/Build artifact policy remains M7 scope. M5 evidence does not claim
   physical plans, Plan mode, Build Autopilot, or UI delivery.
-- Architecture-15 registry, Mandate, loop, recovery, replay, and
-  canonicalization work remains future follow-up.
+- Mandate-specific architecture-15 registry, loop, recovery, replay, and
+  canonicalization obligations remain future follow-up; the ordinary-run
+  production model-tool loop is implemented per ADR 0019.
 
 ## Closeout rule
 
@@ -159,4 +167,7 @@ checks, ToolResult persistence/fault-injection/reopen evidence, adapter
 parity, trusted environment policy, and proven-in-root symlink policy are
 recorded as passing. The Linux/Windows CI matrix (`ubuntu-24.04` and
 `windows-2025` `make ci`) is green on both platforms for the merged head
-(run 33186533012), so M5 is closed across supported platforms.
+`bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3); that
+run is historical baseline evidence for the cited merged head, not for the
+current tree after `299d922`, whose CI result is the current open-PR state
+and remains pending/recorded at merge.

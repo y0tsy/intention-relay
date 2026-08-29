@@ -97,7 +97,8 @@ When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with 
 
 ```mermaid
 flowchart LR
-  IV[Invocation DTO] --> BI[Before invocation]
+  MT[Model tool call] --> IV[Invocation DTO]
+  IV --> BI[Before invocation]
   BI --> WR[Workspace resolve]
   WR --> BV[Boundary validate]
   BV --> BE[Before execute]
@@ -106,9 +107,17 @@ flowchart LR
   AE --> PE[Persist result]
   PE --> MC[Model context hook]
   MC --> PB[Publish event]
+  PB --> CE[Continue provider exchange]
 ```
 
 <!-- The phases map to the typed hook lifecycle. Base tools do primitive work only. -->
+
+The model-tool loop feeds this pipeline: a provider-emitted tool call becomes
+a typed invocation built by the application, executes through the daemon-owned
+registry, and its durable result is persisted before publication and returned
+to the provider exchange as a tool-role message. Provider adapters never
+execute local tools. The runtime owns the provider continuation until the
+provider finishes.
 
 ## Hook system
 

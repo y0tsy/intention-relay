@@ -191,11 +191,12 @@ impl RawConfigInputDto {
 
 /// The provider API contract selected by validated configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ProviderKindDto {
     /// The OpenRouter provider adapter.
+    #[serde(rename = "openrouter")]
     Openrouter,
     /// An OpenAI-compatible Chat Completions endpoint.
+    #[serde(rename = "generic-chat-completion-api")]
     GenericChatCompletionApi,
 }
 

@@ -1,4 +1,4 @@
-//! Provider-neutral model contracts and validated stream facts.
+//! Provider-neutral model contracts (including tool calls and results) and validated stream facts.
 //!
 //! This crate contains no provider SDK, asynchronous runtime, or transport
 //! resources. Provider crates translate their native responses into these
@@ -15,11 +15,11 @@ use std::{
 };
 
 use futures_core::Stream;
-use intention_types::{DtoResult, ErrorDto, ErrorRetryDto, RunId};
+use intention_types::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
 pub use intention_types::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-/// The sender role of a text-only model-context message.
+/// The sender role of a model-context message, including tool calls and results.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelRoleDto {
@@ -27,15 +27,21 @@ pub enum ModelRoleDto {
     System,
     /// User-provided turn content.
     User,
-    /// A prior normalized assistant response.
+    /// A prior normalized assistant response, optionally carrying tool calls.
     Assistant,
+    /// A tool-role message carrying the result of one tool call.
+    Tool,
 }
 
-/// A validated text-only model-context message.
+/// A validated model-context message, text-only or carrying tool calls or a tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelMessageDto {
     role: ModelRoleDto,
     content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCallDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<ToolCallId>,
 }
 
 impl<'de> Deserialize<'de> for ModelMessageDto {
@@ -48,10 +54,31 @@ impl<'de> Deserialize<'de> for ModelMessageDto {
         struct RawModelMessageDto {
             role: ModelRoleDto,
             content: String,
+            #[serde(default)]
+            tool_calls: Option<Vec<ToolCallDto>>,
+            #[serde(default)]
+            tool_call_id: Option<ToolCallId>,
         }
 
         let raw = RawModelMessageDto::deserialize(deserializer)?;
-        Self::new(raw.role, raw.content).map_err(de::Error::custom)
+        let message = match (raw.role, raw.tool_calls, raw.tool_call_id) {
+            (ModelRoleDto::Tool, None, Some(tool_call_id)) => {
+                Self::tool_result(tool_call_id, raw.content)
+            }
+            (ModelRoleDto::Assistant, Some(tool_calls), None) => {
+                Self::assistant_tool_calls(Some(raw.content), tool_calls)
+            }
+            (
+                role @ (ModelRoleDto::System | ModelRoleDto::User | ModelRoleDto::Assistant),
+                None,
+                None,
+            ) => Self::new(role, raw.content),
+            _ => Err(ErrorDto::validation(
+                "invalid_model_message_shape",
+                "model message role and tool-call fields are inconsistent",
+            )),
+        };
+        message.map_err(de::Error::custom)
     }
 }
 
@@ -60,7 +87,7 @@ impl ModelMessageDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank.
+    /// Returns a validation error when content is blank or the role is [`ModelRoleDto::Tool`].
     pub fn new(role: ModelRoleDto, content: impl Into<String>) -> DtoResult<Self> {
         let content = content.into();
         if content.trim().is_empty() {
@@ -69,7 +96,62 @@ impl ModelMessageDto {
                 "model message content must not be empty",
             ));
         }
-        Ok(Self { role, content })
+        if role == ModelRoleDto::Tool {
+            return Err(ErrorDto::validation(
+                "invalid_model_message_role",
+                "tool-role messages require a tool call result",
+            ));
+        }
+        Ok(Self {
+            role,
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        })
+    }
+
+    /// Creates an assistant tool-call message that may carry empty text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when no tool call is provided.
+    pub fn assistant_tool_calls(
+        content: Option<String>,
+        tool_calls: Vec<ToolCallDto>,
+    ) -> DtoResult<Self> {
+        if tool_calls.is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_message_tool_calls",
+                "assistant tool-call message must contain at least one tool call",
+            ));
+        }
+        Ok(Self {
+            role: ModelRoleDto::Assistant,
+            content: content.unwrap_or_default(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        })
+    }
+
+    /// Creates a non-blank tool-role message answering one tool call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank.
+    pub fn tool_result(tool_call_id: ToolCallId, content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_message_content",
+                "model message content must not be empty",
+            ));
+        }
+        Ok(Self {
+            role: ModelRoleDto::Tool,
+            content,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id),
+        })
     }
 
     /// Returns the message role.
@@ -82,6 +164,18 @@ impl ModelMessageDto {
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// Returns the tool calls carried by an assistant tool-call message, if any.
+    #[must_use]
+    pub fn tool_calls(&self) -> Option<&[ToolCallDto]> {
+        self.tool_calls.as_deref()
+    }
+
+    /// Returns the tool call identity answered by a tool-role message, if any.
+    #[must_use]
+    pub const fn tool_call_id(&self) -> Option<ToolCallId> {
+        self.tool_call_id
     }
 }
 
@@ -270,7 +364,7 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
 }
 
 impl ModelRequestDto {
-    /// Creates a text-only provider-neutral model request.
+    /// Creates a provider-neutral model request.
     ///
     /// # Errors
     ///
@@ -325,10 +419,25 @@ impl ModelRequestDto {
         &self.model
     }
 
-    /// Returns the text-only model context messages.
+    /// Returns the model context messages.
     #[must_use]
     pub fn messages(&self) -> &[ModelMessageDto] {
         &self.messages
+    }
+
+    /// Returns a copy of this request with the model context messages replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the replacement message list is empty.
+    pub fn with_messages(&self, messages: Vec<ModelMessageDto>) -> DtoResult<Self> {
+        Self::new(
+            self.run_id,
+            self.model.clone(),
+            messages,
+            self.system_context.clone(),
+            Some(self.requested_capabilities),
+        )
     }
 
     /// Returns optional daemon-selected system context.

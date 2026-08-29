@@ -7,7 +7,7 @@
 use intention_domain::{
     DomainEventDto, ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto,
     ModelRunFactKindDto, ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto,
-    RunFailureDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
+    RunFailureDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, ToolResultOutcomeDto,
 };
 use intention_types::{
     AssistantTurnId, ConfigRevisionId, ErrorRetryDto, RunId, SessionEventSequenceDto, SessionId,
@@ -162,6 +162,19 @@ fn model_fact_validators_cover_success_boundaries_and_all_projection_shapes() {
             == ModelRunFactKindDto::ToolCallRecorded
     );
     assert_eq!(
+        ModelRunFactInputDto::tool_result_recorded(
+            ToolCallId::new(),
+            ToolResultOutcomeDto::succeeded("done").expect("outcome"),
+        )
+        .expect("result fact")
+        .kind(),
+        ModelRunFactKindDto::ToolResultRecorded
+    );
+    assert_eq!(
+        ModelRunFactKindDto::ToolResultRecorded.as_str(),
+        "tool_result_recorded"
+    );
+    assert_eq!(
         ModelRunFactInputDto::finished(intention_types::FinishReasonDto::Stop).kind(),
         ModelRunFactKindDto::Finished
     );
@@ -214,6 +227,7 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         serde_json::json!({"cursor":1,"kind":"reasoning_delta_recorded","content":"thought"}),
         serde_json::json!({"cursor":1,"kind":"usage_recorded","usage":{"state":"not_reported"}}),
         serde_json::json!({"cursor":1,"kind":"tool_call_recorded","call":{"call_id":ToolCallId::new(),"name":"inspect","arguments_json":"{}"}}),
+        serde_json::json!({"cursor":1,"kind":"tool_result_recorded","call_id":ToolCallId::new(),"outcome":{"state":"succeeded","content":"ok"}}),
         serde_json::json!({"cursor":1,"kind":"finished","reason":"stop"}),
         serde_json::json!({"cursor":1,"kind":"failed","failure":{"code":"failed","retry":"never"}}),
     ];

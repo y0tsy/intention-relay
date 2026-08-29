@@ -301,6 +301,125 @@ fn lifecycle_rejects_duplicate_usage_and_all_terminal_preconditions() {
     );
 }
 
+#[test]
+fn model_tool_messages_round_trip_and_validate() {
+    let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid");
+
+    let with_content =
+        ModelMessageDto::assistant_tool_calls(Some("thinking".to_owned()), vec![call.clone()])
+            .expect("assistant tool-call message with content is valid");
+    assert_eq!(with_content.role(), ModelRoleDto::Assistant);
+    assert_eq!(with_content.content(), "thinking");
+    assert_eq!(with_content.tool_calls(), Some(&[call.clone()][..]));
+    assert_eq!(with_content.tool_call_id(), None);
+    let decoded: ModelMessageDto = serde_json::from_str(
+        &serde_json::to_string(&with_content).expect("assistant tool-call message serializes"),
+    )
+    .expect("assistant tool-call message deserializes");
+    assert_eq!(decoded, with_content);
+
+    let without_content = ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+        .expect("tool-call message is valid");
+    assert_eq!(without_content.content(), "");
+    assert_eq!(without_content.tool_calls(), Some(&[call][..]));
+    let encoded = serde_json::to_string(&without_content).expect("tool-call message serializes");
+    assert!(encoded.contains("\"tool_calls\""));
+    let decoded: ModelMessageDto =
+        serde_json::from_str(&encoded).expect("tool-call message deserializes");
+    assert_eq!(decoded, without_content);
+
+    let tool_call_id = ToolCallId::new();
+    let result = ModelMessageDto::tool_result(tool_call_id, "result content")
+        .expect("tool result message is valid");
+    assert_eq!(result.role(), ModelRoleDto::Tool);
+    assert_eq!(result.content(), "result content");
+    assert_eq!(result.tool_call_id(), Some(tool_call_id));
+    assert_eq!(result.tool_calls(), None);
+    let decoded: ModelMessageDto = serde_json::from_str(
+        &serde_json::to_string(&result).expect("tool result message serializes"),
+    )
+    .expect("tool result message deserializes");
+    assert_eq!(decoded, result);
+
+    assert_eq!(
+        ModelMessageDto::assistant_tool_calls(None, Vec::new())
+            .expect_err("empty tool-call list must fail")
+            .code(),
+        "invalid_model_message_tool_calls"
+    );
+    assert!(ModelMessageDto::tool_result(tool_call_id, " ").is_err());
+    assert!(
+        serde_json::from_str::<ModelMessageDto>(r#"{"role":"tool","content":"result"}"#).is_err()
+    );
+    assert!(
+        serde_json::from_str::<ModelMessageDto>(
+            r#"{"role":"user","content":"hi","tool_call_id":"00000000-0000-0000-0000-000000000000"}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<ModelMessageDto>(
+            r#"{"role":"assistant","content":"answer","tool_call_id":"00000000-0000-0000-0000-000000000000"}"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn model_message_legacy_wire_still_decodes() {
+    let legacy: ModelMessageDto = serde_json::from_str(r#"{"role":"user","content":"hi"}"#)
+        .expect("legacy user message decodes");
+    assert_eq!(legacy.role(), ModelRoleDto::User);
+    assert_eq!(legacy.content(), "hi");
+    assert_eq!(legacy.tool_calls(), None);
+    assert_eq!(legacy.tool_call_id(), None);
+    assert_eq!(
+        serde_json::to_string(&legacy).expect("legacy message serializes"),
+        r#"{"role":"user","content":"hi"}"#
+    );
+    let assistant: ModelMessageDto =
+        serde_json::from_str(r#"{"role":"assistant","content":"answer"}"#)
+            .expect("legacy assistant message decodes");
+    assert_eq!(assistant.role(), ModelRoleDto::Assistant);
+    assert_eq!(assistant.content(), "answer");
+    let system: ModelMessageDto = serde_json::from_str(r#"{"role":"system","content":"context"}"#)
+        .expect("legacy system message decodes");
+    assert_eq!(system.role(), ModelRoleDto::System);
+}
+
+#[test]
+fn model_request_with_messages_preserves_fields() {
+    let request = ModelRequestDto::new(
+        RunId::new(),
+        "fixture-model",
+        vec![message(ModelRoleDto::User, "first")],
+        Some("system-context".to_owned()),
+        Some(intention_model::ModelRequestedCapabilitiesDto::new(
+            true, true, true, true,
+        )),
+    )
+    .expect("request is valid");
+    let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid");
+    let updated = request
+        .with_messages(vec![
+            message(ModelRoleDto::User, "next"),
+            ModelMessageDto::assistant_tool_calls(None, vec![call])
+                .expect("tool-call message is valid"),
+        ])
+        .expect("updated request is valid");
+    assert_eq!(updated.run_id(), request.run_id());
+    assert_eq!(updated.model(), request.model());
+    assert_eq!(updated.system_context(), request.system_context());
+    assert_eq!(
+        updated.requested_capabilities(),
+        request.requested_capabilities()
+    );
+    assert_eq!(updated.messages().len(), 2);
+    assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
+    assert!(updated.messages()[1].tool_calls().is_some());
+    assert!(request.with_messages(Vec::new()).is_err());
+}
+
 struct FixtureDriver(ModelCapabilitiesDto);
 
 impl ModelDriver for FixtureDriver {
