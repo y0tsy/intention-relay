@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Restore Cargo registry cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -48,21 +48,21 @@ jobs:
             cargo-registry-${{ runner.os }}-
 
       - name: Restore Cargo git cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/git
           key: cargo-git-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-git-${{ runner.os }}-
 
       - name: Restore Rustup cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.rustup
           key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: rustup-${{ runner.os }}-
 
       - name: Restore quality tools cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin
           key: quality-tools-${{ runner.os }}-${{ hashFiles('quality/tools.toml') }}
