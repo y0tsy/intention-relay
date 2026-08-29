@@ -49,6 +49,39 @@ mod timeout_tests {
     }
 }
 
+#[cfg(test)]
+mod spawn_observation_tests {
+    use super::*;
+
+    #[test]
+    fn spawn_observation_is_shared_across_clones_and_wait_returns_on_observe() {
+        let signal = CancellationSignal::new();
+        let observer = signal.clone();
+        std::thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            observer.observe_spawn();
+        });
+        assert!(
+            signal.wait_until_spawn_observed(Duration::from_secs(5)),
+            "spawn observation must be visible once the executor records it"
+        );
+        assert!(
+            signal.wait_until_spawn_observed(Duration::from_millis(1)),
+            "an already-observed spawn must return immediately"
+        );
+    }
+
+    #[test]
+    fn spawn_observation_wait_times_out_when_no_spawn_is_recorded() {
+        let signal = CancellationSignal::new();
+        assert!(
+            !signal.wait_until_spawn_observed(Duration::from_millis(10)),
+            "the wait must time out when no spawn is ever recorded"
+        );
+        assert!(!signal.is_cancelled(), "observation must not cancel");
+    }
+}
+
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_GLOB_MATCHES: usize = 10_000;
@@ -60,25 +93,68 @@ const MAX_GREP_MATCHES: usize = 10_000;
 pub const REDACTED_WORKSPACE_CWD: &str = "workspace_root";
 
 /// Typed cancellation signal for one tool invocation.
+///
+/// Besides cancellation state, the signal records whether the process executor
+/// has spawned the invocation's child, so deterministic fixtures can wait for
+/// a confirmed spawn instead of blind sleeps before requesting cancellation.
 #[derive(Clone, Debug, Default)]
-pub struct CancellationSignal(Arc<AtomicBool>);
+pub struct CancellationSignal {
+    cancelled: Arc<AtomicBool>,
+    spawn_observed: Arc<AtomicBool>,
+}
 
 impl CancellationSignal {
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            spawn_observed: Arc::new(AtomicBool::new(false)),
+        }
     }
     #[must_use]
     pub fn cancelled() -> Self {
-        Self(Arc::new(AtomicBool::new(true)))
+        Self {
+            cancelled: Arc::new(AtomicBool::new(true)),
+            spawn_observed: Arc::new(AtomicBool::new(false)),
+        }
     }
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.cancelled.load(Ordering::Acquire)
     }
     /// Requests cancellation of this invocation.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.cancelled.store(true, Ordering::Release);
+    }
+    /// Records that the process executor spawned the invocation's child.
+    ///
+    /// Internal synchronization point for process-lifecycle fixtures; the
+    /// flag is never read by production behavior.
+    pub(crate) fn observe_spawn(&self) {
+        self.spawn_observed.store(true, Ordering::Release);
+    }
+    /// Waits until the invocation's child has been spawned, or until `timeout`
+    /// elapses.
+    ///
+    /// Returns whether the spawn was observed. This is a test-only
+    /// synchronization point for deterministic cancellation fixtures: waiting
+    /// on a confirmed spawn replaces blind sleeps while keeping the
+    /// platform-independent unknown external-effect classification intact. It
+    /// is hidden from the public documentation because no production caller
+    /// should depend on it.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn wait_until_spawn_observed(&self, timeout: Duration) -> bool {
+        let Some(deadline) = Instant::now().checked_add(timeout) else {
+            return false;
+        };
+        while !self.spawn_observed.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        true
     }
 }
 
@@ -1200,6 +1276,7 @@ fn execute_tool(
             "unable to spawn workspace command",
         )
     })?;
+    cancellation.observe_spawn();
     let output = bounded_output(child, cancellation).map_err(|code| {
         intention_types::ErrorDto::validation(code, "workspace command execution failed")
     })?;

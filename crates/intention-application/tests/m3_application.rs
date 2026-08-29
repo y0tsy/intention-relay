@@ -1620,9 +1620,13 @@ fn local_tool_records_external_effect_unknown_terminal_status() {
     let signal = intention_tools::CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
-        // Keep the child alive long enough for spawn and for the execution
-        // poller to observe it, while avoiding a race with a short command.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for a confirmed child spawn instead of racing a fixed sleep:
+        // the cancellation then provably lands while the external process is
+        // running, preserving the unknown-effect classification everywhere.
+        assert!(
+            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
+            "execute child was never observed after spawn"
+        );
         cancellation.cancel();
     });
     let error = ApplicationService::new(&repository)
@@ -2628,9 +2632,13 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
     let signal = intention_tools::CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
-        // Keep the child alive long enough for spawn and for the execution
-        // poller to observe it, while avoiding a race with a short command.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for a confirmed child spawn instead of racing a fixed sleep:
+        // the cancellation then provably lands while the external process is
+        // running, preserving the unknown-effect classification everywhere.
+        assert!(
+            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
+            "execute child was never observed after spawn"
+        );
         cancellation.cancel();
     });
     let error = ApplicationService::new(&repository)
@@ -2809,9 +2817,13 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let signal = intention_tools::CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
-        // Keep the child alive long enough for spawn and for the execution
-        // poller to observe it, while avoiding a race with a short command.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for a confirmed child spawn instead of racing a fixed sleep:
+        // the cancellation then provably lands while the external process is
+        // running, preserving the unknown-effect classification everywhere.
+        assert!(
+            cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
+            "execute child was never observed after spawn"
+        );
         cancellation.cancel();
     });
     let error = ApplicationService::new(&repository)

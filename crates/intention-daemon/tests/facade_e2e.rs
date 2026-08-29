@@ -17,8 +17,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -248,6 +248,110 @@ fn endpoint_socket_path(endpoint: &LocalEndpoint) -> Option<PathBuf> {
     Some(base.join(format!("{}.sock", endpoint.instance_id())))
 }
 
+/// Deterministic pacing gate between the provider thread and the test.
+///
+/// The provider holds each scripted round on a condvar after signaling the
+/// request's arrival; the test attaches its run subscribers while the round is
+/// held and then releases it. Because the arrival is signaled while the
+/// release lock is held, a test that observes the arrival cannot release the
+/// gate before the provider has parked on the condvar, so a subscriber always
+/// attaches before the daemon can commit any durable fact for that round.
+struct ProviderGate {
+    arrivals: AtomicUsize,
+    arrival: tokio::sync::Notify,
+    released: Mutex<bool>,
+    release: Condvar,
+}
+
+impl ProviderGate {
+    fn new() -> Self {
+        Self {
+            arrivals: AtomicUsize::new(0),
+            arrival: tokio::sync::Notify::new(),
+            released: Mutex::new(false),
+            release: Condvar::new(),
+        }
+    }
+
+    fn arrivals(&self) -> usize {
+        self.arrivals.load(Ordering::Acquire)
+    }
+
+    /// Waits (event-driven, bounded by `deadline`) until at least `count`
+    /// provider requests have arrived.
+    async fn wait_for_arrivals(&self, count: usize, deadline: Instant) {
+        loop {
+            if self.arrivals() >= count {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "provider receives {count} requests before the deadline"
+            );
+            tokio::time::timeout(remaining, self.arrival.notified())
+                .await
+                .expect("provider request arrives before the deadline");
+        }
+    }
+
+    /// Bounded negative wait: fails fast if any further request arrives,
+    /// otherwise returns once the quiescence window has elapsed.
+    async fn assert_no_request_within(&self, from_arrivals: usize, window: Duration) {
+        let deadline = Instant::now() + window;
+        loop {
+            if self.arrivals() > from_arrivals {
+                panic!("a provider request arrived within the quiescence window");
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            tokio::select! {
+                _ = self.arrival.notified() => {}
+                _ = tokio::time::sleep(remaining) => {
+                    if self.arrivals() > from_arrivals {
+                        panic!("a provider request arrived within the quiescence window");
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Releases the provider to answer every arrived and future request.
+    fn release(&self) {
+        let mut released = self
+            .released
+            .lock()
+            .expect("provider release gate is available");
+        *released = true;
+        drop(released);
+        self.release.notify_all();
+    }
+
+    /// Parks the provider until released or torn down; returns whether the
+    /// gate was released.
+    ///
+    /// The arrival is signaled while the release lock is held, so the test's
+    /// `release` cannot complete until this provider parks on the condvar.
+    fn hold_until_released_or_stopped(&self, stop: &AtomicBool) -> bool {
+        let mut released = self
+            .released
+            .lock()
+            .expect("provider release gate is available");
+        self.arrivals.fetch_add(1, Ordering::AcqRel);
+        self.arrival.notify_one();
+        while !*released && !stop.load(Ordering::Acquire) {
+            released = self
+                .release
+                .wait(released)
+                .expect("provider release condvar is available");
+        }
+        *released
+    }
+}
+
 /// A fake OpenAI-compatible provider serving two scripted SSE rounds.
 ///
 /// The first request receives a tool-call round for the `read` tool, the second
@@ -258,6 +362,7 @@ struct FakeProvider {
     requests: Arc<AtomicUsize>,
     excess: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    gate: Arc<ProviderGate>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -320,6 +425,8 @@ impl FakeProvider {
         let text_response = sse_response(&format!(
             "data: {text_body}\n\ndata: {usage_body}\n\ndata: [DONE]\n\n"
         ));
+        let gate = Arc::new(ProviderGate::new());
+        let thread_gate = Arc::clone(&gate);
         let thread = thread::Builder::new()
             .name("facade-e2e-provider".to_owned())
             .spawn(move || {
@@ -334,6 +441,8 @@ impl FakeProvider {
                             &thread_excess,
                             &tool_response,
                             &text_response,
+                            &thread_gate,
+                            &thread_stop,
                         ),
                         Err(_) => thread::sleep(Duration::from_millis(10)),
                     }
@@ -345,6 +454,7 @@ impl FakeProvider {
             requests,
             excess,
             stop,
+            gate,
             thread: Some(thread),
         }
     }
@@ -361,8 +471,39 @@ impl FakeProvider {
         self.excess.load(Ordering::Acquire)
     }
 
+    fn arrivals(&self) -> usize {
+        self.gate.arrivals()
+    }
+
+    /// Waits until at least `count` provider requests have arrived.
+    async fn wait_for_arrivals(&self, count: usize, deadline: Instant) {
+        self.gate.wait_for_arrivals(count, deadline).await;
+    }
+
+    /// Releases every held scripted round.
+    fn release(&self) {
+        self.gate.release();
+    }
+
+    /// Fails fast if any further request arrives within the quiescence window.
+    async fn assert_no_request_within(&self, from_arrivals: usize, window: Duration) {
+        self.gate
+            .assert_no_request_within(from_arrivals, window)
+            .await;
+    }
+
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        {
+            // Wake any provider thread held at the release gate so teardown
+            // never waits on a round the test did not release.
+            let _released = self
+                .gate
+                .released
+                .lock()
+                .expect("provider release gate is available");
+            self.gate.release.notify_all();
+        }
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -376,14 +517,19 @@ fn handle_provider_request(
     excess: &AtomicUsize,
     tool_response: &str,
     text_response: &str,
+    gate: &ProviderGate,
+    stop: &AtomicBool,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Some(body) = read_request_body(&mut stream) else {
         return;
     };
-    // The provider paces each scripted round so the test's subscriber can
-    // attach before the durable facts for that round are committed.
-    thread::sleep(Duration::from_millis(500));
+    // Deterministic pacing: hold each scripted round at the gate until the
+    // test attaches its subscribers, so a subscriber is always attached
+    // before the daemon commits the durable facts for that round.
+    if !gate.hold_until_released_or_stopped(stop) {
+        return;
+    }
     let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
     let body_text = String::from_utf8_lossy(&body);
     if request_number <= 2 {
@@ -543,12 +689,19 @@ fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> IntentionCli
     panic!("daemon becomes ready before the deadline");
 }
 
-/// Drives the real `RunStreamClient` until the run reaches a terminal snapshot.
+/// Subscribes through the real `RunStreamClient` and drives the subscription
+/// until the run reaches a terminal snapshot.
+///
+/// `attached` is notified as soon as the daemon has registered this
+/// subscriber: `subscribe` resolves only after the daemon's authoritative
+/// reply, which follows registration, so an attached subscriber receives every
+/// later live batch.
 async fn observe_terminal_snapshot(
     client: &RunStreamClient,
     session_id: SessionId,
     run_id: RunId,
     deadline: Instant,
+    attached: Option<&tokio::sync::Notify>,
 ) -> RunSnapshotDto {
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
@@ -559,6 +712,9 @@ async fn observe_terminal_snapshot(
         ))
         .await
         .expect("run subscription arrives");
+    if let Some(attached) = attached {
+        attached.notify_one();
+    }
     loop {
         if let Some(snapshot) = subscription.reducer().snapshot()
             && snapshot.run_projection().status().is_terminal()
@@ -580,11 +736,17 @@ async fn observe_terminal_snapshot(
 /// Subscribes to one run stream and collects every delivered durable fact plus
 /// the terminal snapshot. The daemon only replays the snapshot and tail on
 /// subscribe; facts are delivered as live batches while the run commits them.
+///
+/// `attached` is notified as soon as the daemon has registered this
+/// subscriber: the first delivered frame is the authoritative replay reply,
+/// which follows registration, so an attached subscriber receives every later
+/// live batch.
 async fn collect_run_facts(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
     run_id: RunId,
     deadline: Instant,
+    attached: Option<&tokio::sync::Notify>,
 ) -> (Vec<ModelRunFactDto>, RunSnapshotDto) {
     let connection = AsyncLocalClientConnection::connect(endpoint)
         .await
@@ -606,6 +768,7 @@ async fn collect_run_facts(
         .await
         .expect("run subscription request sends");
     let mut facts = Vec::new();
+    let mut attached_notified = false;
     loop {
         assert!(
             Instant::now() < deadline,
@@ -615,6 +778,12 @@ async fn collect_run_facts(
             .await
             .expect("run stream frame within the deadline")
             .expect("run stream frame is valid");
+        if !attached_notified {
+            attached_notified = true;
+            if let Some(attached) = attached {
+                attached.notify_one();
+            }
+        }
         match frame {
             ProtocolDaemonFrameDto::Response(response) => {
                 assert_eq!(response.correlation_id(), correlation_id);
@@ -719,12 +888,50 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let stream_client =
         RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
     let live_deadline = Instant::now() + Duration::from_secs(30);
-    // Subscribe for facts first: the daemon broadcasts live batches only while
-    // the run commits, and the run-stream replay tail is empty by design.
-    let (facts, snapshot) =
-        collect_run_facts(&host.endpoint, session_id, run_id, live_deadline).await;
-    let terminal_snapshot =
-        observe_terminal_snapshot(&stream_client, session_id, run_id, live_deadline).await;
+    // Hold the provider at its gate until both subscribers attach: the run
+    // cannot commit any round fact before the provider answers, so the
+    // collectors are guaranteed to attach before the durable facts stream.
+    host.provider.wait_for_arrivals(1, live_deadline).await;
+    let facts_attached = Arc::new(tokio::sync::Notify::new());
+    let snapshot_attached = Arc::new(tokio::sync::Notify::new());
+    let endpoint = host.endpoint.clone();
+    let facts_signal = Arc::clone(&facts_attached);
+    let facts_task = tokio::spawn(async move {
+        collect_run_facts(
+            &endpoint,
+            session_id,
+            run_id,
+            live_deadline,
+            Some(&facts_signal),
+        )
+        .await
+    });
+    let snapshot_client =
+        RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
+    let snapshot_signal = Arc::clone(&snapshot_attached);
+    let snapshot_task = tokio::spawn(async move {
+        observe_terminal_snapshot(
+            &snapshot_client,
+            session_id,
+            run_id,
+            live_deadline,
+            Some(&snapshot_signal),
+        )
+        .await
+    });
+    // Release the provider only after both subscribers are registered at the
+    // daemon, so neither can miss a live batch.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        facts_attached.notified().await;
+        snapshot_attached.notified().await;
+    })
+    .await
+    .expect("both run subscribers attach before the provider is released");
+    host.provider.release();
+    let (facts, snapshot) = facts_task.await.expect("run fact collector completes");
+    let terminal_snapshot = snapshot_task
+        .await
+        .expect("terminal snapshot observer completes");
     assert_eq!(
         terminal_snapshot.run_projection().status(),
         RunStatusDto::Completed,
@@ -854,6 +1061,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         session_id,
         run_id,
         Instant::now() + Duration::from_secs(15),
+        None,
     )
     .await;
     assert_eq!(
@@ -878,9 +1086,13 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         "the durable session event sequence replays unchanged"
     );
 
-    // Allow any late provider traffic to land before asserting the tool was
-    // never re-executed after the restart.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // The restarted daemon must never re-execute the tool. The negative claim
+    // is about the absence of events, so it needs a bounded quiescence window;
+    // the wait is event-driven, so a stray provider request fails the test the
+    // moment it arrives instead of after a blind sleep.
+    host.provider
+        .assert_no_request_within(host.provider.arrivals(), Duration::from_millis(1500))
+        .await;
     assert_eq!(
         host.provider.request_count(),
         2,
@@ -932,9 +1144,40 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let stream_client =
         RunStreamClient::new(host.endpoint.clone(), "facade-e2e").expect("stream client is valid");
     let deadline = Instant::now() + Duration::from_secs(30);
-    let (facts, snapshot) = collect_run_facts(&host.endpoint, session_id, run_id, deadline).await;
-    let terminal_snapshot =
-        observe_terminal_snapshot(&stream_client, session_id, run_id, deadline).await;
+    // Hold the provider at its gate until both subscribers attach before the
+    // single scripted round commits its durable facts.
+    host.provider.wait_for_arrivals(1, deadline).await;
+    let facts_attached = Arc::new(tokio::sync::Notify::new());
+    let snapshot_attached = Arc::new(tokio::sync::Notify::new());
+    let endpoint = host.endpoint.clone();
+    let facts_signal = Arc::clone(&facts_attached);
+    let facts_task = tokio::spawn(async move {
+        collect_run_facts(&endpoint, session_id, run_id, deadline, Some(&facts_signal)).await
+    });
+    let snapshot_signal = Arc::clone(&snapshot_attached);
+    let snapshot_task = tokio::spawn(async move {
+        observe_terminal_snapshot(
+            &stream_client,
+            session_id,
+            run_id,
+            deadline,
+            Some(&snapshot_signal),
+        )
+        .await
+    });
+    // Release the provider only after both subscribers are registered at the
+    // daemon, so neither can miss a live batch.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        facts_attached.notified().await;
+        snapshot_attached.notified().await;
+    })
+    .await
+    .expect("both run subscribers attach before the provider is released");
+    host.provider.release();
+    let (facts, snapshot) = facts_task.await.expect("run fact collector completes");
+    let terminal_snapshot = snapshot_task
+        .await
+        .expect("terminal snapshot observer completes");
     assert_eq!(
         terminal_snapshot.run_projection().status(),
         RunStatusDto::Failed,
