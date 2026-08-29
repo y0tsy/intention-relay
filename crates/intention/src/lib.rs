@@ -47,7 +47,8 @@ use intention_provider_openrouter::OpenRouterDriver;
 use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, fail_starting_run,
+    ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, ToolExecutionPort,
+    fail_starting_run,
 };
 use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
@@ -487,6 +488,21 @@ impl DaemonApplicationFacade {
         )
     }
 
+    /// Resolves the authoritative workspace root of one durable session.
+    ///
+    /// # Errors
+    ///
+    /// Returns a safe typed error when the session is unknown or its declared
+    /// workspace cannot be resolved.
+    #[doc(hidden)]
+    pub fn resolve_workspace_root_for_daemon(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<WorkspaceRoot> {
+        let projection = self.inner.repository.load_session_snapshot(session_id)?;
+        WorkspaceRoot::resolve(projection.workspace_root())
+    }
+
     /// Executes one scheduled run through the privately selected provider driver.
     ///
     /// This bridge is provider-neutral and safe: it accepts only scheduling DTOs,
@@ -508,6 +524,40 @@ impl DaemonApplicationFacade {
             self.inner._selected_provider.driver(),
             time,
             observer,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            schedule.session_id(),
+            schedule.run_id(),
+            schedule.request().clone(),
+            schedule.safe_config().clone(),
+            cancellation,
+        ))
+        .await
+    }
+
+    /// Executes one scheduled run through the provider driver with a tool executor.
+    ///
+    /// This is the model-tool loop bridge: tool calls emitted by the provider
+    /// execute through the caller-supplied durable tool path instead of the
+    /// retained M4 denial fallback.
+    #[doc(hidden)]
+    pub async fn execute_scheduled_model_run_for_daemon_with_tool_executor<Time>(
+        &self,
+        schedule: ScheduleModelRunDto,
+        cancellation: ModelCancellationSignal,
+        time: &Time,
+        observer: &dyn ModelRunCommitObserver,
+        tool_executor: &dyn ToolExecutionPort,
+    ) -> DtoResult<ModelRunExecutionOutcomeDto>
+    where
+        Time: ModelTimePort + Sync,
+    {
+        ModelRunExecutionService::with_commit_observer_and_tool_executor(
+            &self.inner.repository,
+            self.inner._selected_provider.driver(),
+            time,
+            observer,
+            tool_executor,
         )
         .execute(ModelRunExecutionInputDto::new(
             schedule.session_id(),
