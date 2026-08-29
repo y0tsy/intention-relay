@@ -119,13 +119,17 @@ def fixture_scope(working_root: Path) -> Iterator[None]:
     try:
         yield
     finally:
-        subprocess.run(
-            ["git", "restore", "--worktree", "--source=HEAD", "--"],
+        restored = subprocess.run(
+            ["git", "restore", "--worktree", "--source=HEAD", "--", "."],
             cwd=working_root,
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
         )
+        if restored.returncode != 0:
+            raise FixtureScopeError(
+                f"fixture restore failed: {restored.stderr.strip() or restored.stdout.strip()}"
+            )
 
 
 def tracked_modified_paths(working_root: Path) -> set[str]:
