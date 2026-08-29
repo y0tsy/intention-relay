@@ -113,9 +113,9 @@ provide the required equivalent evidence.
 
 | Item | Disposition |
 | --- | --- |
-| Provider SDK graph | `openrouter-rs 0.14.0` and `async-openai 0.29.3` are private selected dependencies. Their documented license and duplicate-version exceptions are limited to those dependency paths and must be reassessed if either SDK or its immediate HTTP/random/backoff path changes. |
-| Transitive `async-openai` advisories | `RUSTSEC-2025-0012` (`backoff`) and `RUSTSEC-2024-0384` (`instant`) have no compatible upstream remediation in the selected contract. They are explicit, transitive-only acknowledgements and must be removed or reassessed with an `async-openai`/`backoff` update. |
-| `async-openai` outdated hold | `0.41.3` is outside the selected `0.29.3` compatibility contract. Reassess its API and the two advisory acknowledgements together before removing the hold. |
+| Provider SDK graph | `openrouter-rs 0.14.0` and `async-openai 0.41.3` are private selected dependencies. Their documented license and duplicate-version exceptions are limited to those dependency paths and must be reassessed if either SDK or its immediate HTTP/random/TLS path changes. |
+| Transitive `async-openai` advisories | `RUSTSEC-2025-0012` (`backoff`) and `RUSTSEC-2024-0384` (`instant`) were resolved by the post-M4 `async-openai` 0.41.3 migration, which dropped the `backoff` chain. The acknowledgements were removed from `deny.toml` and the audit command; `cargo audit` is clean. |
+| `async-openai` outdated hold | Removed by the post-M4 `async-openai` 0.41.3 migration; `cargo outdated` is clean and `check_deny_policy.py` now rejects new advisory ignores or outdated holds. |
 | CI self-test disk exhaustion | The baseline's focused correction removes only generated LLVM coverage artifacts before copied-repository self-tests and shares the controller target directory with those isolated copies. The exact baseline passed the full Linux and Windows matrix after the change. |
 
 ## Final baseline recording rule

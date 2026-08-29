@@ -1043,8 +1043,7 @@ def test_supply_chain_policy_failures(root: Path) -> None:
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
         ('allow = ["Apache-2.0", "MIT", "Unicode-3.0", "0BSD", "Zlib", "BSD-3-Clause", "ISC", "CDLA-Permissive-2.0"]', 'allow = ["Apache-2.0"]'),
         ('multiple-versions = "deny"', 'multiple-versions = "allow"'),
-        ('"RUSTSEC-2024-0384",', '"RUSTSEC-2024-0000",'),
-        ('"RUSTSEC-2025-0012",', ''),
+        ('ignore = []', 'ignore = ["RUSTSEC-2024-0000"]'),
         ("version = 2", "version = 1"),
     ]
     policy = root / "deny.toml"
@@ -1052,7 +1051,7 @@ def test_supply_chain_policy_failures(root: Path) -> None:
     with modified(policy), modified(outdated_policy):
         outdated_policy.write_text(
             outdated_policy.read_text(encoding="utf-8").replace(
-                'crates = ["async-openai"]', 'crates = []', 1
+                'crates = []', 'crates = ["async-openai"]', 1
             ),
             encoding="utf-8",
         )

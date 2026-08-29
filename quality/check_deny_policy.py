@@ -39,12 +39,12 @@ def main() -> None:
         fail("graph.all-features must be true")
     if advisories.get("version") != 2 or not isinstance(advisories.get("ignore"), list):
         fail("advisories must use version 2 with an explicit ignore list")
-    expected_advisory_ignores = {"RUSTSEC-2024-0384", "RUSTSEC-2025-0012"}
+    expected_advisory_ignores: set[str] = set()
     if set(advisories["ignore"]) != expected_advisory_ignores:
-        fail("advisories.ignore must equal the reviewed M4 transitive advisory acknowledgements")
+        fail("advisories.ignore must be empty after the async-openai 0.41.3 migration (M4-era backoff-chain acknowledgements removed)")
     outdated_ignores = outdated_policy.get("outdated_ignores")
-    if not isinstance(outdated_ignores, dict) or outdated_ignores.get("crates") != ["async-openai"]:
-        fail("outdated_ignores.crates must equal the reviewed M4 async-openai compatibility hold")
+    if not isinstance(outdated_ignores, dict) or outdated_ignores.get("crates") != []:
+        fail("outdated_ignores.crates must be empty after the async-openai 0.41.3 migration (hold removed)")
     allowed = licenses.get("allow")
     required_licenses = {"Apache-2.0", "MIT", "Unicode-3.0", "0BSD"}
     if not isinstance(allowed, list) or not required_licenses.issubset(allowed):
