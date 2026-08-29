@@ -94,11 +94,11 @@ impl ModelRunFactKindDto {
     }
 }
 
-/// The bounded outcome of one recorded tool result.
+/// The outcome of one recorded tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ToolResultOutcomeDto {
-    /// The tool call completed with bounded normalized content.
+    /// The tool call completed with normalized content.
     Succeeded { content: String },
     /// The tool call failed safely.
     Failed { failure: RunFailureDto },

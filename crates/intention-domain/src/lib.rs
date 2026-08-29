@@ -748,7 +748,7 @@ pub enum DomainEventDto {
     PlanStatusChanged(PlanStatusChangedEventDto),
     /// A typed local tool lifecycle fact was recorded.
     ToolLifecycle(ToolLifecycleEventDto),
-    /// A normalized, bounded local tool result was recorded for durable persistence.
+    /// A normalized, safe local tool result was recorded for durable persistence.
     ToolResultRecorded(ToolResultRecordedEventDto),
 }
 
@@ -966,7 +966,7 @@ impl ToolResultStatusDto {
     }
 }
 
-/// One bounded, credential-free structured metadata entry of a tool result.
+/// One credential-free structured metadata entry of a tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ToolResultMetadataEntryDto {
     key: String,
@@ -1158,7 +1158,7 @@ impl ToolResultRecordedEventDto {
         &self.normalized_content
     }
 
-    /// Returns the bounded structured metadata entries.
+    /// Returns the structured metadata entries.
     #[must_use]
     pub fn structured_metadata(&self) -> &[ToolResultMetadataEntryDto] {
         &self.structured_metadata

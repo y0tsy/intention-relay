@@ -1,7 +1,7 @@
 # Production ceiling removal — scope
 
 **Status:** the domain part (candidate rows 3–8 below) is removed in this PR
-(`df1e8a1`, `794b41c`). Tools (rows 1–2) and config/runtime (rows 9–10) remain
+(`2cd21c9`, `917ca17`). Tools (rows 1–2) and config/runtime (rows 9–10) remain
 undecided; the audit said tools cuts carry context/memory risk and the runtime
 timeout is retained by concept2.
 
@@ -34,12 +34,12 @@ correctness bounds and capacity availability must remain untouched.
 |---|---|---|---|---|---|
 | 1 | intention-tools | `MAX_TOOL_OUTPUT_BYTES` with `[truncated]` marker and truncate-with-flag on read/execute/grep | 64 KiB | ProductCeiling | lib.rs L52; forbidden per L335–336, historical-only per L337–338 |
 | 2 | intention-tools | `MAX_GLOB_MATCHES` / `MAX_GREP_MATCHES` (page items) | 10 000 | ProductCeiling | lib.rs L54–55, L937–945 |
-| 3 | intention-domain | `ToolLifecycleEventDto.detail` inline cap | 4 KiB | ProductCeiling | **REMOVED** in `df1e8a1` |
-| 4 | intention-domain | `MAX_TOOL_RESULT_CONTENT_BYTES` | 4 KiB | ProductCeiling | lib.rs L938, L1110; **REMOVED** in `df1e8a1` |
-| 5 | intention-domain | `MAX_TOOL_RESULT_METADATA_ENTRIES` | 16 | ProductCeiling | lib.rs L940, L1112; **REMOVED** in `df1e8a1` |
-| 6 | intention-domain | `MAX_TOOL_RESULT_METADATA_KEY_BYTES` | 128 | ProductCeiling | lib.rs L942, L1010; **REMOVED** in `df1e8a1` |
-| 7 | intention-domain | `MAX_TOOL_RESULT_METADATA_VALUE_BYTES` | 1024 | ProductCeiling | lib.rs L944, L1011; **REMOVED** in `df1e8a1` |
-| 8 | intention-domain | `ToolResultOutcomeDto::succeeded` reuses the 4-KiB content cap | 4 KiB | ProductCeiling | **REMOVED** in `794b41c` |
+| 3 | intention-domain | `ToolLifecycleEventDto.detail` inline cap | 4 KiB | ProductCeiling | **REMOVED** in `2cd21c9` |
+| 4 | intention-domain | `MAX_TOOL_RESULT_CONTENT_BYTES` | 4 KiB | ProductCeiling | lib.rs L938, L1110; **REMOVED** in `2cd21c9` |
+| 5 | intention-domain | `MAX_TOOL_RESULT_METADATA_ENTRIES` | 16 | ProductCeiling | lib.rs L940, L1112; **REMOVED** in `2cd21c9` |
+| 6 | intention-domain | `MAX_TOOL_RESULT_METADATA_KEY_BYTES` | 128 | ProductCeiling | lib.rs L942, L1010; **REMOVED** in `2cd21c9` |
+| 7 | intention-domain | `MAX_TOOL_RESULT_METADATA_VALUE_BYTES` | 1024 | ProductCeiling | lib.rs L944, L1011; **REMOVED** in `2cd21c9` |
+| 8 | intention-domain | `ToolResultOutcomeDto::succeeded` reuses the 4-KiB content cap | 4 KiB | ProductCeiling | **REMOVED** in `917ca17` |
 | 9 | intention-config / intention-runtime | `max_attempts` (default 2, schema cap 1..=2) | 2 | ProductCeiling | retry counter, listed at L335; historical-only; config lib.rs L604–637 |
 | 10 | intention-config / intention-runtime | `attempt_timeout_seconds` (default 30, schema cap 1..=60) | 30 | confirm | timeout; concept2 retains attempt timeouts (L709); likely out of scope |
 
