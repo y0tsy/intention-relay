@@ -11,11 +11,11 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage coverage-artifacts-clean deps quality-self-test quick check verify ci
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features isolated-release lint test docs-check architecture coverage coverage-artifacts-clean deps quality-self-test quick check verify ci ci-source ci-coverage ci-deps metrics-start metrics-finish metrics-start-source metrics-start-coverage metrics-start-deps metrics-finish-source metrics-finish-coverage metrics-finish-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci' \
+	  'Non-mutating: tools-check fmt-check notices-check features isolated-release lint test docs-check architecture coverage deps quality-self-test quick check verify ci ci-source ci-coverage ci-deps' \
 	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -84,7 +84,16 @@ verify: check coverage deps ## Full reproducible merge and release gate.
 	$(MAKE) coverage-artifacts-clean
 	$(MAKE) quality-self-test
 
-ci: metrics-start verify metrics-finish ## CI alias. GitHub Actions must invoke only this target.
+ci: metrics-start verify metrics-finish ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
+	@true
+
+ci-source: metrics-start-source check metrics-finish-source ## CI source-quality job: metrics, check, metrics.
+	@true
+
+ci-coverage: metrics-start-coverage coverage coverage-artifacts-clean quality-self-test metrics-finish-coverage ## CI coverage job: metrics, coverage, generated-artifact cleanup, self-test, metrics.
+	@true
+
+ci-deps: metrics-start-deps deps metrics-finish-deps ## CI dependency job: metrics, deps, metrics.
 	@true
 
 metrics-start: ## Initialize the quality metrics manifest for this run.
@@ -92,3 +101,9 @@ metrics-start: ## Initialize the quality metrics manifest for this run.
 
 metrics-finish: ## Finalize the quality metrics manifest preserving the gate result.
 	@$(PYTHON) quality/metrics.py finish
+
+metrics-start-source metrics-start-coverage metrics-start-deps:
+	@$(PYTHON) quality/metrics.py start --job $(patsubst metrics-start-%,%,$@)
+
+metrics-finish-source metrics-finish-coverage metrics-finish-deps:
+	@$(PYTHON) quality/metrics.py finish --job $(patsubst metrics-finish-%,%,$@)
