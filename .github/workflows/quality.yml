@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# One in-flight run per workflow and PR number or ref. Pull requests cancel
+# superseded runs (new commits replace older work); push runs never cancel,
+# so main and other branches always execute their latest queued commit.
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   quality:
     name: ${{ matrix.os }} ${{ matrix.phase }}
@@ -39,6 +46,7 @@ jobs:
             tools: ""
             scope: lint-arch
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: test
             stable: true
@@ -48,6 +56,7 @@ jobs:
             tools: "cargo-nextest@0.9.140"
             scope: test
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: coverage-default
             stable: false
@@ -57,6 +66,7 @@ jobs:
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: coverage-no-default
             stable: false
@@ -66,6 +76,7 @@ jobs:
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: coverage-all
             stable: false
@@ -75,6 +86,7 @@ jobs:
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: selftest
             stable: true
@@ -84,6 +96,7 @@ jobs:
             tools: "cargo-machete@0.9.2,cargo-outdated@0.19.0,cargo-about@0.9.1"
             scope: selftest
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: ubuntu-24.04
             phase: deps
             stable: true
@@ -93,6 +106,7 @@ jobs:
             tools: "cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-about@0.9.1,cargo-outdated@0.19.0,cargo-machete@0.9.2,cargo-udeps@0.1.61"
             scope: deps
             rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
           - os: windows-2025
             phase: lint-arch
             stable: true
@@ -102,6 +116,7 @@ jobs:
             tools: ""
             scope: lint-arch
             rustflags: ""
+            uses_mold: false
           - os: windows-2025
             phase: test
             stable: true
@@ -111,6 +126,7 @@ jobs:
             tools: "cargo-nextest@0.9.140"
             scope: test
             rustflags: ""
+            uses_mold: false
     env:
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: "0"
@@ -148,11 +164,31 @@ jobs:
           tool: ${{ matrix.tools }}
           fallback: cargo-binstall
 
+      - name: Enable sccache object cache for coverage builds
+        if: matrix.scope == 'coverage'
+        uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c
+        with:
+          version: "v0.17.0"
+
+      - name: Route coverage builds through the sccache object cache
+        if: matrix.scope == 'coverage'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          # cargo-llvm-cov installs its own RUSTC_WRAPPER; a pre-existing
+          # wrapper is honored only from the cargo build.rustc_wrapper
+          # config, so sccache is wired through that config key. Rustup
+          # resolves the chained `rustc` through RUSTUP_TOOLCHAIN, which
+          # cargo +nightly keeps set for its child processes.
+          echo "CARGO_BUILD_RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Install mold linker
-        if: runner.os == 'Linux'
+        # Only Linux jobs that actually link with mold install it; the
+        # version check verifies the install without hiding its failure.
+        if: runner.os == 'Linux' && matrix.uses_mold
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq mold
+          mold --version
 
       - name: Set canonical Rust homes
         run: |
@@ -163,12 +199,27 @@ jobs:
       - name: Report disk space before quality gate
         run: df -h . "$HOME"
 
+      - name: Collect runner metrics before quality gate (coverage)
+        if: matrix.scope == 'coverage'
+        run: python3 quality/collect_runner_metrics.py --label before --phase ${{ matrix.phase }} --out quality/reports/runner-metrics-${{ matrix.phase }}-before.json
+
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}
+
+      - name: Collect runner metrics after quality gate (coverage)
+        if: always() && matrix.scope == 'coverage'
+        run: python3 quality/collect_runner_metrics.py --label after --phase ${{ matrix.phase }} --out quality/reports/runner-metrics-${{ matrix.phase }}-after.json
 
       - name: Report disk space after quality gate
         if: always()
         run: df -h . "$HOME"
+
+      - name: Collect sccache statistics (raw and diagnostic)
+        # Observational only: the collector always exits 0 (writing null
+        # fields when statistics are unavailable) so it never changes the
+        # gate verdict, and the gate's own failure still fails the job.
+        if: always() && matrix.scope == 'coverage'
+        run: python3 quality/collect_sccache_metrics.py --sccache "${SCCACHE_PATH}" --reports quality/reports --phase ${{ matrix.phase }}
 
       - name: Upload quality reports
         if: always()

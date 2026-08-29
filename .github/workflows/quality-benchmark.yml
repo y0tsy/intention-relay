@@ -1,0 +1,68 @@
+name: Quality Benchmark
+
+# Manual-only measurement workflow: never runs on push or pull_request and
+# is never a required status check. It measures clean-target `cargo build`
+# wall time across `--jobs` settings (baseline without an explicit --jobs,
+# then each requested value) with a warmup build plus three measured
+# repetitions per configuration, and writes a structured JSON report with
+# p50/p95 aggregation. Each build runs in an isolated temporary
+# CARGO_TARGET_DIR created by the benchmark script, so the workspace target
+# directory is never touched or cleaned. Observational only: it never runs
+# or changes the blocking Quality workflow gate.
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Comma-separated --jobs values to benchmark alongside the cargo-default baseline (empty benchmarks only the baseline)
+        required: false
+        default: "2,4,8"
+      repetitions:
+        description: Measured clean-target build repetitions per job count (one warmup build is additional)
+        required: false
+        default: "3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: cargo-jobs-benchmark
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      # Match the blocking workflow's Linux linker so the measured build
+      # reflects the same link path CI uses.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.97.1
+
+      - name: Install mold linker
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mold
+          mold --version
+
+      - name: Run cargo --jobs benchmark
+        run: python3 quality/benchmark_cargo_jobs.py --jobs "${{ inputs.jobs }}" --repetitions "${{ inputs.repetitions }}" --out quality/reports/benchmark-cargo-jobs.json
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-cargo-jobs
+          if-no-files-found: ignore
+          path: |
+            quality/reports/benchmark-cargo-jobs.json

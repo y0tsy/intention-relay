@@ -700,19 +700,17 @@ async fn host_stop_cancels_blocked_execution_without_late_facts() {
         .await
         .expect("driver begins the blocked stream");
     stop_run_through_host(&endpoint, session_id, run_id).await;
-    for _ in 0..200 {
-        if facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
-            .expect("run replay reads")
-            .snapshot()
-            .run_projection()
-            .status()
-            == RunStatusDto::Cancelled
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    // The executor task finishes only after the cancellation terminal state is
+    // durable, so the completion watch is a deterministic status event.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            host.wait_for_execution_completion(session_id, run_id),
+        )
+        .await
+        .expect("cancellation terminalizes the blocked execution"),
+        "the exact registered execution task completes without release"
+    );
     let replay = facade
         .load_current_run_replay_for_daemon(session_id, run_id)
         .expect("cancelled run replay reads");
@@ -780,11 +778,11 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
     let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-promotion-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
-        listener,
-        facade.clone(),
-        2,
-    ));
+    let host = intention_daemon::test_host_lifecycle(facade.clone());
+    let host_server = host.clone();
+    let server = tokio::spawn(async move {
+        host_server.serve_connections(listener, 2).await;
+    });
 
     let first_run = send_user_turn_through_host(&endpoint, session_id).await;
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
@@ -814,19 +812,27 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
     );
     assert_ne!(first_run, promoted_run);
     driver.release.notify_one();
-    for _ in 0..200 {
-        if facade
+    // The promoted executor task finishes only after the run is durably
+    // terminal, so the completion watch is a deterministic status event.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            host.wait_for_execution_completion(session_id, promoted_run),
+        )
+        .await
+        .expect("promoted run execution completes"),
+        "the exact promoted executor completes"
+    );
+    assert_eq!(
+        facade
             .load_current_run_replay_for_daemon(session_id, promoted_run)
             .expect("promoted replay reads")
             .snapshot()
             .run_projection()
-            .status()
-            == RunStatusDto::Completed
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+            .status(),
+        RunStatusDto::Completed,
+        "the promoted run reaches durable completion"
+    );
     assert_eq!(
         driver.executions(),
         2,
@@ -1054,20 +1060,11 @@ async fn host_stop_before_task_registration_terminalizes_without_provider_work_o
     stop_run_through_host(&endpoint, session_id, run_id).await;
     server.await.expect("host accepts the stop peer");
     host.admit_starting_run(session_id, run_id);
-    for _ in 0..200 {
-        if facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
-            .expect("run replay reads")
-            .snapshot()
-            .run_projection()
-            .status()
-            == RunStatusDto::Cancelled
-            && host.task_count() == 0
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    // The terminalizer removes its registry entry only after a durable
+    // terminal reread, so task cleanup is a deterministic status event.
+    tokio::time::timeout(Duration::from_secs(2), host.wait_for_task_cleanup())
+        .await
+        .expect("terminalizer removes its registry entry after a durable terminal reread");
     let replay = facade
         .load_current_run_replay_for_daemon(session_id, run_id)
         .expect("cancelled run replay reads");
@@ -1208,6 +1205,10 @@ async fn host_stop_between_starting_replay_and_first_append_terminalizes_once_wi
         .expect("task observes Starting before its first append");
     stop_run_through_host(&endpoint, session_id, run_id).await;
     barrier.release.notify_one();
+    // The first-append fixture host is internal to
+    // `serve_test_async_listener_with_first_append_gate`, so no host status
+    // event is reachable from this test; keep a bounded 1s watchdog for the
+    // terminal transition instead of an unbounded wait.
     for _ in 0..200 {
         if facade
             .load_current_run_replay_for_daemon(session_id, run_id)
