@@ -44,11 +44,14 @@ def main() -> int:
             return result[1]
 
     ignored = ",".join(tomllib.loads((ROOT / "quality/outdated.toml").read_text(encoding="utf-8"))["outdated_ignores"]["crates"])
+    outdated = ["cargo", "outdated", "--workspace", "--root-deps-only", "--exit-code", "1"]
+    if ignored:
+        outdated += ["--ignore", ignored]
     checks = [
         ("deny", ["cargo", "deny", "check"]),
-        ("audit", ["cargo", "audit", "--ignore", "RUSTSEC-2024-0384", "--ignore", "RUSTSEC-2025-0012"]),
+        ("audit", ["cargo", "audit"]),
         ("machete", ["cargo", "machete", "--with-metadata", "--skip-target-dir"]),
-        ("outdated", ["cargo", "outdated", "--workspace", "--root-deps-only", "--ignore", ignored, "--exit-code", "1"]),
+        ("outdated", outdated),
     ]
     failures: list[tuple[str, int, str]] = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
