@@ -92,7 +92,7 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
 }
 
 #[test]
-fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
+fn scoped_search_handles_invalid_utf8_long_fragments_in_full() {
     let (dir, service) = service();
     let mut bytes = b"needle ".to_vec();
     bytes.extend(std::iter::repeat_n(b'x', 65_600));
@@ -113,8 +113,10 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
     let ToolResult::Grep(result) = result else {
         return;
     };
-    assert!(result.truncated);
-    assert!(result.matches[0].fragment.as_str().len() <= 65_536);
+    assert_eq!(result.matches.len(), 1);
+    let fragment = result.matches[0].fragment.as_str();
+    assert!(fragment.starts_with("needle "));
+    assert!(fragment.len() >= 65_600);
 
     std::fs::create_dir(dir.path().join("many")).unwrap();
     for i in 0..10_001 {
@@ -133,12 +135,11 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
     let ToolResult::Grep(result) = result else {
         return;
     };
-    assert_eq!(result.matches.len(), 10_000);
-    assert!(result.truncated);
+    assert_eq!(result.matches.len(), 10_001);
 }
 
 #[test]
-fn glob_skips_filtered_entries_and_truncates_matches() {
+fn glob_skips_filtered_entries_and_lists_every_match() {
     let (dir, service) = service();
     std::fs::create_dir(dir.path().join("real")).unwrap();
     std::fs::write(dir.path().join("real/ok.txt"), "x").unwrap();
@@ -175,6 +176,5 @@ fn glob_skips_filtered_entries_and_truncates_matches() {
     let ToolResult::Glob(result) = result else {
         return;
     };
-    assert_eq!(result.paths.len(), 10_000);
-    assert!(result.truncated);
+    assert_eq!(result.paths.len(), 10_001);
 }

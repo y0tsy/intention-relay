@@ -799,14 +799,8 @@ fn parse_tool_input(tool_id: &str, arguments_json: &str) -> DtoResult<ToolInput>
 /// content bound.
 fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
     let content = match result.projection().content {
-        ToolProjectedContent::Text { text, truncated } => {
-            if truncated {
-                format!("{}\n[truncated]", text.as_str())
-            } else {
-                text.as_str().to_owned()
-            }
-        }
-        ToolProjectedContent::Paths { paths, .. } => {
+        ToolProjectedContent::Text { text } => text.as_str().to_owned(),
+        ToolProjectedContent::Paths { paths } => {
             serde_json::to_string(&paths).map_err(|_| {
                 ErrorDto::validation(
                     "invalid_tool_result_content",
@@ -814,7 +808,7 @@ fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> 
                 )
             })?
         }
-        ToolProjectedContent::Matches { matches, .. } => {
+        ToolProjectedContent::Matches { matches } => {
             serde_json::to_string(&matches).map_err(|_| {
                 ErrorDto::validation(
                     "invalid_tool_result_content",

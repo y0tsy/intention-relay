@@ -121,22 +121,12 @@ fn directory_scope_recurses_and_rejects_non_files() {
 #[test]
 fn all_result_projections_and_metadata_fallbacks_are_typed() {
     let results = [
-        ToolResult::Read(TextResult {
-            text: text("r"),
-            truncated: true,
-        }),
-        ToolResult::Execute(TextResult {
-            text: text("e"),
-            truncated: false,
-        }),
+        ToolResult::Read(TextResult { text: text("r") }),
+        ToolResult::Execute(TextResult { text: text("e") }),
         ToolResult::Glob(PathsResult {
             paths: vec![path("a")],
-            truncated: false,
         }),
-        ToolResult::Grep(GrepResult {
-            matches: vec![],
-            truncated: true,
-        }),
+        ToolResult::Grep(GrepResult { matches: vec![] }),
         ToolResult::Write(WriteResult { bytes: 2 }),
         ToolResult::Edit(WriteResult { bytes: 3 }),
     ];

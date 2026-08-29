@@ -65,22 +65,10 @@ fn logical_paths_cover_all_inputs_and_projections() {
     assert_eq!(inputs[3].logical_path(), Some(&path));
     assert!(inputs[4].logical_path().is_none() && inputs[5].logical_path().is_none());
     let values = [
-        ToolResult::Read(TextResult {
-            text: t("x"),
-            truncated: true,
-        }),
-        ToolResult::Execute(TextResult {
-            text: t("x"),
-            truncated: false,
-        }),
-        ToolResult::Glob(PathsResult {
-            paths: vec![path],
-            truncated: true,
-        }),
-        ToolResult::Grep(GrepResult {
-            matches: vec![],
-            truncated: true,
-        }),
+        ToolResult::Read(TextResult { text: t("x") }),
+        ToolResult::Execute(TextResult { text: t("x") }),
+        ToolResult::Glob(PathsResult { paths: vec![path] }),
+        ToolResult::Grep(GrepResult { matches: vec![] }),
         ToolResult::Write(WriteResult { bytes: 1 }),
         ToolResult::Edit(WriteResult { bytes: 2 }),
     ];

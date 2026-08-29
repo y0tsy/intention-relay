@@ -114,7 +114,6 @@ fn metadata_builders_and_projection_cover_all_result_shapes() {
         context: context(call),
         result: ToolResult::Read(intention_tools::TextResult {
             text: BoundedText::new("ok").unwrap(),
-            truncated: false,
         }),
         observability: intention_tools::ToolObservability {
             outcome: ToolOutcome::Failed,

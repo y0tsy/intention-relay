@@ -1201,9 +1201,9 @@ fn append_tool_terminal<R: StorageRepositoryDto>(
 
 /// Durable canonical result-document ceiling; mirrors the storage evidence bound.
 const MAX_DURABLE_TOOL_RESULT_BYTES: usize = 512 * 1024;
-/// Characters reserved for closing tokens when truncating a durable document.
+/// Characters reserved for closing tokens when cutting a durable document.
 const DOCUMENT_RESERVE_BYTES: usize = 64;
-/// Raw-byte share of the durable bound granted to one truncated text value.
+/// Raw-byte share of the durable bound granted to one cut text value.
 ///
 /// Escaped control characters expand at most sixfold, so one eighth of the
 /// bound can never exceed it after escaping.
@@ -1274,11 +1274,7 @@ fn canonical_tool_result_document(result: &ToolResult) -> String {
                 / TRUNCATED_TEXT_BUDGET_DIVISOR;
             let complete = write_bounded_json_string(&mut document, value.text.as_str(), budget);
             document.push_str(",\"truncated\":");
-            document.push_str(if value.truncated || !complete {
-                "true"
-            } else {
-                "false"
-            });
+            document.push_str(if !complete { "true" } else { "false" });
             document.push_str("}}");
         }
         ToolResult::Glob(value) => {
@@ -1289,10 +1285,7 @@ fn canonical_tool_result_document(result: &ToolResult) -> String {
                     break;
                 }
             }
-            finish_truncated_array(
-                &mut document,
-                value.truncated || emitted < value.paths.len(),
-            );
+            finish_truncated_array(&mut document, emitted < value.paths.len());
         }
         ToolResult::Grep(value) => {
             document.push_str("{\"result\":\"grep\",\"value\":{\"matches\":[");
@@ -1319,10 +1312,7 @@ fn canonical_tool_result_document(result: &ToolResult) -> String {
                 document.push_str(&probe);
                 emitted += 1;
             }
-            finish_truncated_array(
-                &mut document,
-                value.truncated || emitted < value.matches.len(),
-            );
+            finish_truncated_array(&mut document, emitted < value.matches.len());
         }
         ToolResult::Write(value) | ToolResult::Edit(value) => {
             let tag = match result {
@@ -1545,7 +1535,6 @@ mod tests {
                 Ok(text) => text,
                 Err(_) => return,
             },
-            truncated: false,
         });
         assert!(matches!(
             result_phase_context(Phase::BeforeToolResultPersist, call, &result),
@@ -1565,7 +1554,6 @@ mod tests {
     fn canonical_documents_cover_each_typed_result_family() {
         let read = ToolResult::Read(intention_tools::TextResult {
             text: bounded("hello"),
-            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&read),
@@ -1573,15 +1561,13 @@ mod tests {
         );
         let execute = ToolResult::Execute(intention_tools::TextResult {
             text: bounded("done"),
-            truncated: true,
         });
         assert_eq!(
             canonical_tool_result_document(&execute),
-            "{\"result\":\"execute\",\"value\":{\"text\":\"done\",\"truncated\":true}}"
+            "{\"result\":\"execute\",\"value\":{\"text\":\"done\",\"truncated\":false}}"
         );
         let glob = ToolResult::Glob(intention_tools::PathsResult {
             paths: vec![relative("src/a.rs"), relative("src/b.rs")],
-            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&glob),
@@ -1594,7 +1580,6 @@ mod tests {
                 column: 5,
                 fragment: bounded("needle"),
             }],
-            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&grep),
@@ -1616,7 +1601,6 @@ mod tests {
     fn canonical_documents_escape_json_special_characters() {
         let read = ToolResult::Read(intention_tools::TextResult {
             text: bounded("quote\"back\\slash\nend\u{1}"),
-            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&read),
@@ -1628,7 +1612,6 @@ mod tests {
     fn oversized_text_truncates_within_the_durable_bound() {
         let read = ToolResult::Read(intention_tools::TextResult {
             text: bounded(&"x".repeat(1024 * 1024)),
-            truncated: false,
         });
         let document = canonical_tool_result_document(&read);
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
@@ -1643,7 +1626,6 @@ mod tests {
             .collect();
         let glob = ToolResult::Glob(intention_tools::PathsResult {
             paths,
-            truncated: false,
         });
         let document = canonical_tool_result_document(&glob);
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
@@ -1663,7 +1645,6 @@ mod tests {
             .collect();
         let grep = ToolResult::Grep(intention_tools::GrepResult {
             matches,
-            truncated: false,
         });
         let document = canonical_tool_result_document(&grep);
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
@@ -1701,7 +1682,6 @@ mod tests {
         let call_id = ToolCallId::new();
         let read = ToolResult::Read(intention_tools::TextResult {
             text: bounded("hello"),
-            truncated: false,
         });
         let evidence = durable_tool_result_evidence(
             session_id,

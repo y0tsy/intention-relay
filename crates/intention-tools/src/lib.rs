@@ -36,7 +36,7 @@ mod timeout_tests {
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         let child = command.spawn().expect("spawn timeout fixture");
         let started = Instant::now();
-        let result = bounded_output_with_timeout(
+        let result = captured_output_with_timeout(
             child,
             CancellationSignal::new(),
             Duration::from_millis(25),
@@ -49,10 +49,7 @@ mod timeout_tests {
     }
 }
 
-const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_GLOB_MATCHES: usize = 10_000;
-const MAX_GREP_MATCHES: usize = 10_000;
 
 /// Redacted working-directory identity recorded in durable tool metadata. It
 /// marks the authorized workspace root as the effective CWD without disclosing
@@ -214,18 +211,9 @@ impl ToolExecutionMetadata {
     }
 }
 
-fn bounded_lossy(bytes: &[u8]) -> (String, bool) {
-    if bytes.len() <= MAX_TOOL_OUTPUT_BYTES {
-        return (String::from_utf8_lossy(bytes).into_owned(), false);
-    }
-    let mut end = MAX_TOOL_OUTPUT_BYTES;
-    while end > 0 && std::str::from_utf8(&bytes[..end]).is_err() {
-        end -= 1;
-    }
-    (
-        format!("{}\n[truncated]", String::from_utf8_lossy(&bytes[..end])),
-        true,
-    )
+/// Lossy UTF-8 conversion that never truncates the source.
+fn lossy_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn bounded_text(value: String) -> DtoResult<BoundedText> {
@@ -233,74 +221,68 @@ fn bounded_text(value: String) -> DtoResult<BoundedText> {
 }
 
 #[derive(Debug)]
-struct BoundedOutput {
+struct CapturedOutput {
     status: std::process::ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
 }
 
-fn bounded_output(
+fn captured_output(
     child: Child,
     cancellation: CancellationSignal,
-) -> Result<BoundedOutput, &'static str> {
-    bounded_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
+) -> Result<CapturedOutput, &'static str> {
+    captured_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
 }
 
-fn bounded_output_with_timeout(
+fn captured_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Duration,
-) -> Result<BoundedOutput, &'static str> {
+) -> Result<CapturedOutput, &'static str> {
     let stdout = child.stdout.take().map(|pipe| {
         thread::spawn(move || {
             let mut output = Vec::new();
-            read_bounded(&mut std::io::BufReader::new(pipe), &mut output)
-                .map(|truncated| (output, truncated))
+            read_unbounded(&mut std::io::BufReader::new(pipe), &mut output).map(|()| output)
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
         thread::spawn(move || {
             let mut output = Vec::new();
-            read_bounded(&mut std::io::BufReader::new(pipe), &mut output)
-                .map(|truncated| (output, truncated))
+            read_unbounded(&mut std::io::BufReader::new(pipe), &mut output).map(|()| output)
         })
     });
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let (stdout, stdout_was_truncated) = join_reader(stdout)?;
-                let (stderr, stderr_was_truncated) = join_reader(stderr)?;
-                return Ok(BoundedOutput {
+                let stdout = join_capture(stdout)?;
+                let stderr = join_capture(stderr)?;
+                return Ok(CapturedOutput {
                     status,
                     stdout,
                     stderr,
-                    stdout_truncated: stdout_was_truncated,
-                    stderr_truncated: stderr_was_truncated,
                 });
             }
             Ok(None) if cancellation.is_cancelled() => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
+                let _ = join_capture(stdout);
+                let _ = join_capture(stderr);
                 return Err("tool_execute_external_effect_unknown");
             }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
+                let _ = join_capture(stdout);
+                let _ = join_capture(stderr);
                 return Err("tool_execute_external_effect_unknown");
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
+                let _ = join_capture(stdout);
+                let _ = join_capture(stderr);
                 return Err("tool_execute_external_effect_unknown");
             }
         }
@@ -324,55 +306,42 @@ mod process_failure_tests {
     fn read_failure_is_classified_as_read_failure() {
         let mut output = Vec::new();
         assert_eq!(
-            read_bounded(&mut FailingReader, &mut output),
+            read_unbounded(&mut FailingReader, &mut output),
             Err("tool_execute_read_failed")
         );
     }
 
     #[test]
     fn reader_join_failure_is_classified_as_read_failure() {
-        let reader = thread::spawn(|| -> Result<(Vec<u8>, bool), &'static str> {
+        let reader = thread::spawn(|| -> Result<Vec<u8>, &'static str> {
             Err("tool_execute_read_failed")
         });
-        assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
+        assert_eq!(join_capture(Some(reader)), Err("tool_execute_read_failed"));
     }
 }
 
-type ReaderHandle = thread::JoinHandle<Result<(Vec<u8>, bool), &'static str>>;
+type CaptureHandle = thread::JoinHandle<Result<Vec<u8>, &'static str>>;
 
-fn join_reader(reader: Option<ReaderHandle>) -> Result<(Vec<u8>, bool), &'static str> {
-    reader
-        .map(|reader| reader.join().map_err(|_| "tool_execute_read_failed")?)
+fn join_capture(capture: Option<CaptureHandle>) -> Result<Vec<u8>, &'static str> {
+    capture
+        .map(|capture| capture.join().map_err(|_| "tool_execute_read_failed")?)
         .transpose()
         .map(|value| value.unwrap_or_default())
 }
 
-fn read_bounded(
+fn read_unbounded(
     reader: &mut impl std::io::Read,
     output: &mut Vec<u8>,
-) -> Result<bool, &'static str> {
+) -> Result<(), &'static str> {
     let mut buffer = [0_u8; 4096];
-    let mut total = 0;
-    // Truncation means bytes were actually dropped: a source ending exactly at
-    // the bound stays untruncated.
-    let mut truncated = false;
     loop {
         let count = reader
             .read(&mut buffer)
             .map_err(|_| "tool_execute_read_failed")?;
         if count == 0 {
-            return Ok(truncated);
+            return Ok(());
         }
-        if truncated {
-            // Drain the remainder to EOF so oversized sources still finish
-            // cleanly instead of stalling writers mid-stream.
-            continue;
-        }
-        let remaining = MAX_TOOL_OUTPUT_BYTES.saturating_sub(total);
-        let kept = count.min(remaining);
-        output.extend_from_slice(&buffer[..kept]);
-        total += kept;
-        truncated = count > kept;
+        output.extend_from_slice(&buffer[..count]);
     }
 }
 
@@ -861,13 +830,10 @@ pub struct ToolResultEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TextResult {
     pub text: BoundedText,
-    pub truncated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GrepResult {
     pub matches: Vec<GrepMatch>,
-    #[serde(default)]
-    pub truncated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GrepMatch {
@@ -879,8 +845,6 @@ pub struct GrepMatch {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PathsResult {
     pub paths: Vec<WorkspaceRelativePathDto>,
-    #[serde(default)]
-    pub truncated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WriteResult {
@@ -890,24 +854,17 @@ pub struct WriteResult {
 /// Normalized content shape of one projected concrete tool result.
 ///
 /// The projection keeps the typed payload bounded and workspace-relative: text
-/// stays in [`BoundedText`], path lists and grep matches are clamped to the
-/// search bounds with an explicit truncation flag, and mutations carry only a
-/// byte count.
+/// stays in [`BoundedText`], path lists and grep matches carry workspace-relative
+/// values, and mutations carry only a byte count.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolProjectedContent {
     /// Bounded text produced by Read or Execute.
-    Text { text: BoundedText, truncated: bool },
+    Text { text: BoundedText },
     /// Bounded workspace-relative path list produced by Glob.
-    Paths {
-        paths: Vec<WorkspaceRelativePathDto>,
-        truncated: bool,
-    },
+    Paths { paths: Vec<WorkspaceRelativePathDto> },
     /// Bounded workspace-relative matches produced by Grep.
-    Matches {
-        matches: Vec<GrepMatch>,
-        truncated: bool,
-    },
+    Matches { matches: Vec<GrepMatch> },
     /// Byte-count summary produced by Write or Edit.
     Mutation { bytes: u64 },
 }
@@ -917,8 +874,8 @@ pub enum ToolProjectedContent {
 ///
 /// The projection never carries an absolute path, OS resource detail, command
 /// line, or environment value: the working-directory identity is redacted to
-/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and content is
-/// clamped to the search bounds.
+/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and mutations
+/// carry only a byte count.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultProjection {
     pub schema_version: u16,
@@ -931,20 +888,12 @@ fn projected_content(result: &ToolResult) -> ToolProjectedContent {
     match result {
         ToolResult::Read(value) | ToolResult::Execute(value) => ToolProjectedContent::Text {
             text: value.text.clone(),
-            truncated: value.truncated,
         },
         ToolResult::Glob(value) => ToolProjectedContent::Paths {
-            truncated: value.truncated || value.paths.len() > MAX_GLOB_MATCHES,
-            paths: value.paths.iter().take(MAX_GLOB_MATCHES).cloned().collect(),
+            paths: value.paths.clone(),
         },
         ToolResult::Grep(value) => ToolProjectedContent::Matches {
-            truncated: value.truncated || value.matches.len() > MAX_GREP_MATCHES,
-            matches: value
-                .matches
-                .iter()
-                .take(MAX_GREP_MATCHES)
-                .cloned()
-                .collect(),
+            matches: value.matches.clone(),
         },
         ToolResult::Write(value) | ToolResult::Edit(value) => {
             ToolProjectedContent::Mutation { bytes: value.bytes }
@@ -1170,13 +1119,11 @@ fn read_tool(root: &WorkspaceRoot, input: ReadInput) -> DtoResult<ToolResult> {
         intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
+    read_unbounded(&mut file, &mut bytes).map_err(|_| {
         intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
-    let (text, truncated) = bounded_lossy(&bytes);
     Ok(ToolResult::Read(TextResult {
-        text: bounded_text(text)?,
-        truncated: truncated || source_truncated,
+        text: bounded_text(lossy_text(&bytes))?,
     }))
 }
 
@@ -1200,25 +1147,22 @@ fn execute_tool(
             "unable to spawn workspace command",
         )
     })?;
-    let output = bounded_output(child, cancellation).map_err(|code| {
+    let output = captured_output(child, cancellation).map_err(|code| {
         intention_types::ErrorDto::validation(code, "workspace command execution failed")
     })?;
     let process_status = ToolProcessStatus::classify(output.status);
-    let (stdout, _) = bounded_lossy(&output.stdout);
-    let (stderr, _) = bounded_lossy(&output.stderr);
-    let truncated = output.stdout_truncated || output.stderr_truncated;
+    let stdout = lossy_text(&output.stdout);
+    let stderr = lossy_text(&output.stderr);
     let text = format!(
-        "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}{}",
+        "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}",
         output.status.code().unwrap_or(-1),
-        if truncated { "\n[truncated]" } else { "" }
     );
     // A known non-zero exit or known signal termination is a normalized
     // program result, not a transport error; only the unknown-effect paths in
-    // `bounded_output` turn into typed errors.
+    // `captured_output` turn into typed errors.
     Ok(ExecutedTool {
         result: ToolResult::Execute(TextResult {
             text: BoundedText::new(text)?,
-            truncated,
         }),
         process_status: Some(process_status),
     })
@@ -1323,7 +1267,6 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         })?
         .to_owned();
     let mut paths = Vec::new();
-    let mut truncated = false;
     for entry in glob::glob(&pattern).map_err(|_| {
         intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
     })? {
@@ -1343,15 +1286,11 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         let Ok(value) = WorkspaceRelativePathDto::parse(relative.replace('\\', "/")) else {
             continue;
         };
-        if paths.len() >= MAX_GLOB_MATCHES {
-            truncated = true;
-            break;
-        }
         paths.push(value);
     }
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     paths.dedup();
-    Ok(ToolResult::Glob(PathsResult { paths, truncated }))
+    Ok(ToolResult::Glob(PathsResult { paths }))
 }
 
 /// Reports whether any component of `path` beneath `root` is a symbolic link.
@@ -1408,11 +1347,10 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
+    read_unbounded(&mut file, &mut bytes).map_err(|_| {
         intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
     let text = String::from_utf8_lossy(&bytes);
-    let lossy_truncated = std::str::from_utf8(&bytes).is_err();
     let logical = input
         .path
         .as_ref()
@@ -1424,35 +1362,18 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         })?
         .clone();
     let mut matches = Vec::new();
-    let mut truncated = source_truncated || lossy_truncated;
     for (line_index, line) in text.lines().enumerate() {
         let Some(column) = line.find(input.pattern.as_str()) else {
             continue;
-        };
-        if matches.len() >= MAX_GREP_MATCHES {
-            truncated = true;
-            break;
-        }
-        let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
-            truncated = true;
-            let end = line
-                .char_indices()
-                .take_while(|(index, _)| *index < MAX_TOOL_OUTPUT_BYTES)
-                .map(|(index, _)| index)
-                .last()
-                .unwrap_or(0);
-            &line[..end]
-        } else {
-            line
         };
         matches.push(GrepMatch {
             path: logical.clone(),
             line: line_index as u64 + 1,
             column: line[..column].chars().count() as u64 + 1,
-            fragment: bounded_text(fragment.to_owned())?,
+            fragment: bounded_text(line.to_owned())?,
         });
     }
-    Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+    Ok(ToolResult::Grep(GrepResult { matches }))
 }
 
 fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
@@ -1511,16 +1432,11 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     }
     files.sort();
     let mut matches = Vec::new();
-    let mut truncated = false;
     for path in files {
         let bytes = std::fs::read(&path).map_err(|_| {
             intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let text = String::from_utf8_lossy(&bytes);
-        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-        if lossy_truncated {
-            truncated = true;
-        }
         let logical = single.clone().or_else(|| {
             path.strip_prefix(root.canonical_path()).ok().and_then(|p| {
                 WorkspaceRelativePathDto::parse(p.to_string_lossy().replace('\\', "/")).ok()
@@ -1531,35 +1447,15 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
             let Some(column) = line.find(input.pattern.as_str()) else {
                 continue;
             };
-            if matches.len() >= MAX_GREP_MATCHES {
-                truncated = true;
-                break;
-            }
-            let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
-                truncated = true;
-                let end = line
-                    .char_indices()
-                    .take_while(|(index, _)| *index < MAX_TOOL_OUTPUT_BYTES)
-                    .map(|(index, _)| index)
-                    .last()
-                    .unwrap_or(0);
-                line[..end].to_owned()
-            } else {
-                line.to_owned()
-            };
             matches.push(GrepMatch {
                 path: logical.clone(),
                 line: line_index as u64 + 1,
                 column: line[..column].chars().count() as u64 + 1,
-                fragment: bounded_text(fragment)?,
+                fragment: bounded_text(line.to_owned())?,
             });
         }
-        if matches.len() >= MAX_GREP_MATCHES {
-            truncated = true;
-            break;
-        }
     }
-    Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+    Ok(ToolResult::Grep(GrepResult { matches }))
 }
 
 fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
@@ -1599,13 +1495,12 @@ mod coverage_helpers {
     }
 
     #[test]
-    fn bounded_lossy_handles_invalid_utf8_at_boundary() {
-        let mut bytes = vec![b'a'; MAX_TOOL_OUTPUT_BYTES];
-        bytes[MAX_TOOL_OUTPUT_BYTES - 1] = 0xff;
-        let (text, truncated) = bounded_lossy(&[bytes, vec![b'b']].concat());
-        assert!(truncated);
-        assert!(text.ends_with("\n[truncated]"));
-        assert!(!text.contains('\u{fffd}'));
+    fn lossy_text_handles_invalid_utf8_without_truncation() {
+        let bytes = vec![b'a'; 70_000];
+        let text = lossy_text(&[bytes, vec![0xff, b'b']].concat());
+        assert!(text.contains('\u{fffd}'));
+        assert!(text.ends_with('b'));
+        assert!(text.len() >= 70_000);
     }
 
     #[test]
@@ -1613,10 +1508,10 @@ mod coverage_helpers {
         let handle = thread::spawn(|| {
             let mut reader = PanicReader;
             let mut output = Vec::new();
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_unbounded(&mut reader, &mut output).map(|()| output)
         });
         assert!(matches!(
-            join_reader(Some(handle)),
+            join_capture(Some(handle)),
             Err("tool_execute_read_failed")
         ));
     }
