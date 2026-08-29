@@ -148,6 +148,23 @@ jobs:
           tool: ${{ matrix.tools }}
           fallback: cargo-binstall
 
+      - name: Enable sccache object cache for coverage builds
+        if: matrix.scope == 'coverage'
+        uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c
+        with:
+          version: "v0.17.0"
+
+      - name: Route coverage builds through the sccache object cache
+        if: matrix.scope == 'coverage'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          # cargo-llvm-cov installs its own RUSTC_WRAPPER; a pre-existing
+          # wrapper is honored only from the cargo build.rustc_wrapper
+          # config, so sccache is wired through that config key. Rustup
+          # resolves the chained `rustc` through RUSTUP_TOOLCHAIN, which
+          # cargo +nightly keeps set for its child processes.
+          echo "CARGO_BUILD_RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+
       - name: Install mold linker
         if: runner.os == 'Linux'
         run: |
@@ -165,6 +182,10 @@ jobs:
 
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}
+
+      - name: Report sccache hit statistics
+        if: always() && matrix.scope == 'coverage'
+        run: ${SCCACHE_PATH} --show-stats
 
       - name: Report disk space after quality gate
         if: always()
