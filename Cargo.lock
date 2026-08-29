@@ -828,6 +828,7 @@ dependencies = [
  "intention-model",
  "intention-protocol",
  "intention-runtime",
+ "intention-tools",
  "intention-transport",
  "intention-types",
  "serde_json",

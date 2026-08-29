@@ -28,8 +28,10 @@ The governing order is:
 
 A reconciliation row points to authority. It is never a second normative
 architecture source. Closed M4 remains unchanged. In particular, this package
-neither changes M4 provider kinds, M4 tool-call denial, M4 replay behavior, nor
-M4 startup-only configuration behavior.
+neither changes M4 provider kinds, M4 replay behavior, nor
+M4 startup-only configuration behavior. ADR 0019 supersedes the M4 denial-only
+tool boundary for newly admitted ordinary runs while the closed M4 baseline
+remains historical evidence.
 
 ## Scope
 

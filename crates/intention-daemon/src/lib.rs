@@ -13,7 +13,7 @@ use std::{
 };
 
 use intention::DaemonApplicationFacade;
-use intention_domain::{RunEventCursorDto, RunStatusDto};
+use intention_domain::{RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto};
 use intention_model::ModelCancellationSignal;
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolCapabilityDto, ProtocolCommandDto, ProtocolCommandResultDto,
@@ -26,6 +26,10 @@ use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
+use intention_tools::{
+    EditInput, ExecuteInput, GlobInput, GrepInput, ReadInput, ToolInput, ToolProjectedContent,
+    ToolResult, WriteInput,
+};
 #[cfg(test)]
 use intention_transport::LocalListener;
 use intention_transport::{
@@ -36,6 +40,7 @@ use intention_transport::{
 use intention_transport::{LocalConnection, negotiate_daemon};
 use intention_types::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto,
+    ToolCallDto,
 };
 #[cfg(test)]
 use std::thread;
@@ -186,6 +191,7 @@ impl HostState {
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
             };
+            let executor = DaemonToolExecutor::new(host.facade.clone());
             #[cfg(any(test, feature = "test-support"))]
             let result = if let Some(first_append_gate) = host.first_append_gate.as_deref() {
                 host.facade
@@ -199,22 +205,24 @@ impl HostState {
                     .await
             } else {
                 host.facade
-                    .execute_scheduled_model_run_for_daemon(
+                    .execute_scheduled_model_run_for_daemon_with_tool_executor(
                         schedule.clone(),
                         cancellation.clone(),
                         &TokioTime,
                         &observer,
+                        &executor,
                     )
                     .await
             };
             #[cfg(not(any(test, feature = "test-support")))]
             let result = host
                 .facade
-                .execute_scheduled_model_run_for_daemon(
+                .execute_scheduled_model_run_for_daemon_with_tool_executor(
                     schedule.clone(),
                     cancellation.clone(),
                     &TokioTime,
                     &observer,
+                    &executor,
                 )
                 .await;
             // An executor error cannot leave a StopRun's durable Cancelling
@@ -693,6 +701,132 @@ impl ModelRunCommitObserver for HostCommitObserver {
     }
 }
 
+/// Executes provider-normalized tool calls through the durable daemon-owned tool path.
+///
+/// Each call is decoded into the typed daemon tool input and executed through
+/// the facade's durable local-tool lifecycle, which publishes only independently
+/// reread committed evidence. The blocking tool effect runs on a spawned worker
+/// so the async execution loop is never stalled.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct DaemonToolExecutor {
+    facade: DaemonApplicationFacade,
+}
+
+impl DaemonToolExecutor {
+    /// Binds one durable facade to the daemon tool-execution path.
+    #[must_use]
+    pub const fn new(facade: DaemonApplicationFacade) -> Self {
+        Self { facade }
+    }
+}
+
+impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
+    fn execute_tool(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        call: ToolCallDto,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = DtoResult<ToolResultOutcomeDto>> + Send + '_>,
+    > {
+        let facade = self.facade.clone();
+        Box::pin(async move {
+            let tool_id = call.name().to_owned();
+            let call_id = call.call_id();
+            let arguments = call.arguments_json().to_owned();
+            let input = parse_tool_input(&tool_id, &arguments)?;
+            let result = tokio::task::spawn_blocking(move || {
+                let workspace = facade.resolve_workspace_root_for_daemon(session_id)?;
+                facade.invoke_local_tool_for_daemon(
+                    session_id, run_id, call_id, tool_id, input, workspace,
+                )
+            })
+            .await
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "tool_execution_task_failed",
+                    "the tool execution task failed",
+                )
+            })?;
+            // Tool-level failures are typed outcomes, not port errors; only a
+            // lost execution task is a port-level infrastructure failure.
+            match result {
+                Ok(result) => normalize_tool_result(result),
+                Err(error) => Ok(ToolResultOutcomeDto::failed(RunFailureDto::new(
+                    error.code(),
+                    error.retry(),
+                    error.correlation_id(),
+                )?)),
+            }
+        })
+    }
+}
+
+/// Decodes provider-normalized tool arguments into the typed daemon tool input.
+///
+/// # Errors
+///
+/// Returns a validation error for an unknown tool id or arguments that are not
+/// valid typed input for that tool.
+fn parse_tool_input(tool_id: &str, arguments_json: &str) -> DtoResult<ToolInput> {
+    let input = match tool_id {
+        "read" => serde_json::from_str::<ReadInput>(arguments_json).map(ToolInput::Read),
+        "write" => serde_json::from_str::<WriteInput>(arguments_json).map(ToolInput::Write),
+        "edit" => serde_json::from_str::<EditInput>(arguments_json).map(ToolInput::Edit),
+        "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(ToolInput::Execute),
+        "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(ToolInput::Glob),
+        "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(ToolInput::Grep),
+        _ => {
+            return Err(ErrorDto::validation(
+                "unknown_tool",
+                "tool is not supported by the daemon",
+            ));
+        }
+    };
+    input.map_err(|_| {
+        ErrorDto::validation(
+            "invalid_tool_input_json",
+            "tool arguments are not valid typed input",
+        )
+    })
+}
+
+/// Normalizes one typed tool result into bounded durable outcome content.
+///
+/// The projection is redacted and workspace-relative by construction, and
+/// `ToolResultOutcomeDto::succeeded` keeps the durable outcome within its own
+/// content bound.
+fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
+    let content = match result.projection().content {
+        ToolProjectedContent::Text { text, truncated } => {
+            if truncated {
+                format!("{}\n[truncated]", text.as_str())
+            } else {
+                text.as_str().to_owned()
+            }
+        }
+        ToolProjectedContent::Paths { paths, .. } => {
+            serde_json::to_string(&paths).map_err(|_| {
+                ErrorDto::validation(
+                    "invalid_tool_result_content",
+                    "tool result content could not be normalized",
+                )
+            })?
+        }
+        ToolProjectedContent::Matches { matches, .. } => {
+            serde_json::to_string(&matches).map_err(|_| {
+                ErrorDto::validation(
+                    "invalid_tool_result_content",
+                    "tool result content could not be normalized",
+                )
+            })?
+        }
+        ToolProjectedContent::Mutation { bytes } => format!("{bytes} bytes"),
+    };
+    ToolResultOutcomeDto::succeeded(content)
+}
+
 /// Runs the local daemon host until its process is terminated.
 ///
 /// Production startup loads and validates the platform-standard TOML configuration,
@@ -705,8 +839,6 @@ impl ModelRunCommitObserver for HostCommitObserver {
 /// binding cannot complete. Per-connection failures are isolated to that
 /// connection so a malformed or disconnected client cannot stop the host.
 pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
-    let listener = AsyncLocalListener::bind(endpoint)?;
-    let facade = DaemonApplicationFacade::open_platform()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -716,6 +848,10 @@ pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
                 "the daemon runtime is unavailable",
             )
         })?;
+    // The async listener binds inside the runtime: interprocess requires a
+    // Tokio reactor context when it wraps the Unix socket listener.
+    let listener = runtime.block_on(async { AsyncLocalListener::bind(endpoint) })?;
+    let facade = DaemonApplicationFacade::open_platform()?;
     runtime.block_on(serve_async_listener(listener, facade))
 }
 

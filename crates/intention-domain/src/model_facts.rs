@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use intention_types::{
     AssistantTurnId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, FinishReasonDto,
     ProviderErrorDto, RunId, SessionEventSequenceDto, SessionId, TimestampDto, ToolCallDto,
-    UsageDto,
+    ToolCallId, UsageDto,
 };
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
@@ -67,6 +67,8 @@ pub enum ModelRunFactKindDto {
     UsageRecorded,
     /// A provider-normalized tool call was recorded.
     ToolCallRecorded,
+    /// A tool result was durably recorded for one tool call.
+    ToolResultRecorded,
     /// The provider reported a terminal finish reason.
     Finished,
     /// The run recorded a safe terminal failure.
@@ -85,9 +87,48 @@ impl ModelRunFactKindDto {
             Self::ReasoningDeltaRecorded => "reasoning_delta_recorded",
             Self::UsageRecorded => "usage_recorded",
             Self::ToolCallRecorded => "tool_call_recorded",
+            Self::ToolResultRecorded => "tool_result_recorded",
             Self::Finished => "finished",
             Self::Failed => "failed",
         }
+    }
+}
+
+/// The bounded outcome of one recorded tool result.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ToolResultOutcomeDto {
+    /// The tool call completed with bounded normalized content.
+    Succeeded { content: String },
+    /// The tool call failed safely.
+    Failed { failure: RunFailureDto },
+}
+
+impl ToolResultOutcomeDto {
+    /// Creates a bounded successful tool-result outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank or exceeds 4 KiB.
+    pub fn succeeded(content: impl Into<String>) -> DtoResult<Self> {
+        let content = non_blank(
+            content.into(),
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        )?;
+        if content.len() > MAX_ASSISTANT_CONTENT_BYTES {
+            return Err(ErrorDto::validation(
+                "invalid_tool_result_content",
+                "tool result content must not exceed 4 KiB",
+            ));
+        }
+        Ok(Self::Succeeded { content })
+    }
+
+    /// Creates a safe failed tool-result outcome.
+    #[must_use]
+    pub const fn failed(failure: RunFailureDto) -> Self {
+        Self::Failed { failure }
     }
 }
 
@@ -195,6 +236,11 @@ pub enum ModelRunFactInputDto {
     UsageRecorded { usage: UsageDto },
     /// Provider-normalized tool-call evidence was recorded.
     ToolCallRecorded { call: ToolCallDto },
+    /// A durable tool result answered one recorded tool call.
+    ToolResultRecorded {
+        call_id: ToolCallId,
+        outcome: ToolResultOutcomeDto,
+    },
     /// A terminal provider reason was recorded.
     Finished { reason: FinishReasonDto },
     /// A safe terminal failure was recorded.
@@ -233,6 +279,10 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
             ToolCallRecorded {
                 call: ToolCallDto,
             },
+            ToolResultRecorded {
+                call_id: ToolCallId,
+                outcome: ToolResultOutcomeDto,
+            },
             Finished {
                 reason: FinishReasonDto,
             },
@@ -262,6 +312,9 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
             RawModelRunFactInputDto::UsageRecorded { usage } => Ok(Self::usage_recorded(usage)),
             RawModelRunFactInputDto::ToolCallRecorded { call } => {
                 Ok(Self::tool_call_recorded(call))
+            }
+            RawModelRunFactInputDto::ToolResultRecorded { call_id, outcome } => {
+                Self::tool_result_recorded(call_id, outcome)
             }
             RawModelRunFactInputDto::Finished { reason } => Ok(Self::finished(reason)),
             RawModelRunFactInputDto::Failed { failure } => Ok(Self::failed(failure)),
@@ -363,6 +416,19 @@ impl ModelRunFactInputDto {
         Self::ToolCallRecorded { call }
     }
 
+    /// Creates a durable tool-result fact. The call identity is a canonical
+    /// UUID by construction, so no further validation is required.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the call identity is not a canonical UUID.
+    pub const fn tool_result_recorded(
+        call_id: ToolCallId,
+        outcome: ToolResultOutcomeDto,
+    ) -> DtoResult<Self> {
+        Ok(Self::ToolResultRecorded { call_id, outcome })
+    }
+
     /// Creates a terminal finish fact.
     #[must_use]
     pub const fn finished(reason: FinishReasonDto) -> Self {
@@ -386,6 +452,7 @@ impl ModelRunFactInputDto {
             Self::ReasoningDeltaRecorded { .. } => ModelRunFactKindDto::ReasoningDeltaRecorded,
             Self::UsageRecorded { .. } => ModelRunFactKindDto::UsageRecorded,
             Self::ToolCallRecorded { .. } => ModelRunFactKindDto::ToolCallRecorded,
+            Self::ToolResultRecorded { .. } => ModelRunFactKindDto::ToolResultRecorded,
             Self::Finished { .. } => ModelRunFactKindDto::Finished,
             Self::Failed { .. } => ModelRunFactKindDto::Failed,
         }

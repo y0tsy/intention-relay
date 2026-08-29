@@ -11,12 +11,15 @@ use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
     types::chat::{
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-        ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
+        ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
+        ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
         ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
         CreateChatCompletionRequestArgs, CreateChatCompletionStreamResponse, FinishReason,
+        FunctionCall,
     },
 };
 use futures_util::{
@@ -532,10 +535,68 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionReque
                 name: None,
             },
         )),
-        ModelRoleDto::Assistant => ChatCompletionRequestAssistantMessageArgs::default()
-            .content(ChatCompletionRequestAssistantMessageContent::Text(
-                message.content().to_owned(),
+        ModelRoleDto::Assistant => translate_assistant_message(message),
+        ModelRoleDto::Tool => {
+            let tool_call_id = message.tool_call_id().ok_or_else(|| {
+                ErrorDto::validation(
+                    "invalid_generic_chat_request",
+                    "tool-role messages must carry one tool call identity",
+                )
+            })?;
+            Ok(ChatCompletionRequestMessage::Tool(
+                ChatCompletionRequestToolMessage {
+                    content: ChatCompletionRequestToolMessageContent::Text(
+                        message.content().to_owned(),
+                    ),
+                    tool_call_id: tool_call_id.to_string(),
+                },
             ))
+        }
+    }
+}
+
+fn translate_assistant_message(
+    message: &ModelMessageDto,
+) -> DtoResult<ChatCompletionRequestMessage> {
+    let content = message.content();
+    message.tool_calls().map_or_else(
+        || {
+            ChatCompletionRequestAssistantMessageArgs::default()
+                .content(ChatCompletionRequestAssistantMessageContent::Text(
+                    content.to_owned(),
+                ))
+                .build()
+                .map(ChatCompletionRequestMessage::Assistant)
+                .map_err(|_| {
+                    ErrorDto::validation(
+                        "invalid_generic_chat_request",
+                        "generic chat request could not be translated",
+                    )
+                })
+        },
+        |tool_calls| {
+            // The assistant content is optional when tool calls are present, so
+            // an empty DTO content stays omitted on the wire.
+            let mut args = ChatCompletionRequestAssistantMessageArgs::default();
+            if !content.is_empty() {
+                args.content(ChatCompletionRequestAssistantMessageContent::Text(
+                    content.to_owned(),
+                ));
+            }
+            args.tool_calls(
+                tool_calls
+                    .iter()
+                    .map(|call| {
+                        ChatCompletionMessageToolCalls::from(ChatCompletionMessageToolCall {
+                            id: call.call_id().to_string(),
+                            function: FunctionCall {
+                                name: call.name().to_owned(),
+                                arguments: call.arguments_json().to_owned(),
+                            },
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
             .build()
             .map(ChatCompletionRequestMessage::Assistant)
             .map_err(|_| {
@@ -543,8 +604,9 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionReque
                     "invalid_generic_chat_request",
                     "generic chat request could not be translated",
                 )
-            }),
-    }
+            })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -554,6 +616,90 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionReque
 )]
 mod tests {
     use super::*;
+    use intention_types::RunId;
+
+    #[test]
+    fn generic_chat_translates_assistant_tool_calls_and_tool_results() {
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+                ModelMessageDto::assistant_tool_calls(
+                    Some("before".to_owned()),
+                    vec![call.clone()],
+                )
+                .expect("message is valid"),
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "model": "fixture",
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {
+                        "role": "assistant",
+                        "content": "before",
+                        "tool_calls": [{
+                            "id": call.call_id().to_string(),
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": r#"{"path":"hello.txt"}"#,
+                            },
+                        }],
+                    },
+                    {
+                        "role": "tool",
+                        "content": "hello world",
+                        "tool_call_id": call.call_id().to_string(),
+                    },
+                ],
+                "stream_options": {"include_usage": true},
+            })
+        );
+
+        // The model-tool loop's follow-up round carries an assistant tool-call
+        // message without text; its empty content stays omitted on the wire.
+        let follow_up = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+                ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+                    .expect("message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("request is valid");
+        let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
+            .expect("request serializes");
+        let assistant = &wire["messages"][1];
+        assert!(assistant.get("content").is_none());
+        assert_eq!(
+            assistant["tool_calls"][0],
+            serde_json::json!({
+                "id": call.call_id().to_string(),
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": r#"{"path":"hello.txt"}"#,
+                },
+            })
+        );
+    }
 
     #[test]
     fn tool_fragments_accept_split_and_interleaved_calls_only_at_terminal() {

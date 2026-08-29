@@ -77,7 +77,7 @@ public_resource_patterns = [
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
 "intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
-"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-transport", "intention-types"]
+"intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-tools", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-types", "intention-workspace"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
 "intention-storage-sqlite" = ["intention-config", "intention-domain", "intention-storage", "intention-types"]
@@ -193,7 +193,7 @@ coverage_tier = "B"
 name = "intention-runtime"
 responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
 test_target = "deterministic actor integration tests"
-test_targets = ["m3_runtime", "m4_application_scheduling", "m4_model_execution"]
+test_targets = ["m3_runtime", "m4_application_scheduling", "m4_model_execution", "m5_tool_loop"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -319,7 +319,7 @@ coverage_tier = "adapter"
 name = "intention-daemon"
 responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
 test_target = "bootstrap, recovery, and model-execution bridge integration tests"
-test_targets = ["daemon_bootstrap", "m4_streaming_foundation"]
+test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e"]
 coverage_tier = "C"
 
 [[future_crates]]

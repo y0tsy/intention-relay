@@ -5,7 +5,7 @@
 
 use intention_domain::{
     ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
-    RunEventTailPageDto, RunFailureDto, RunReplayDto, RunSnapshotDto,
+    RunEventTailPageDto, RunFailureDto, RunReplayDto, RunSnapshotDto, ToolResultOutcomeDto,
 };
 use intention_types::{
     AssistantTurnId, ConfigRevisionId, CorrelationIdDto, FinishReasonDto, ProviderErrorDto, RunId,
@@ -46,11 +46,16 @@ fn model_fact_inputs_and_assigned_facts_cover_every_typed_variant_and_wire_valid
         intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded,
         intention_domain::ModelRunFactKindDto::UsageRecorded,
         intention_domain::ModelRunFactKindDto::ToolCallRecorded,
+        intention_domain::ModelRunFactKindDto::ToolResultRecorded,
         intention_domain::ModelRunFactKindDto::Finished,
         intention_domain::ModelRunFactKindDto::Failed,
     ] {
         assert!(!kind.as_str().is_empty());
     }
+    assert_eq!(
+        intention_domain::ModelRunFactKindDto::ToolResultRecorded.as_str(),
+        "tool_result_recorded"
+    );
     assert_eq!(failure.code(), "provider_unavailable");
     assert_eq!(failure.retry(), intention_types::ErrorRetryDto::Delayed);
     assert_eq!(failure.correlation_id(), Some(correlation));
@@ -79,6 +84,11 @@ fn model_fact_inputs_and_assigned_facts_cover_every_typed_variant_and_wire_valid
         ModelRunFactInputDto::tool_call_recorded(
             ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid"),
         ),
+        ModelRunFactInputDto::tool_result_recorded(
+            ToolCallId::new(),
+            ToolResultOutcomeDto::succeeded("done").expect("outcome is valid"),
+        )
+        .expect("tool result fact is valid"),
         ModelRunFactInputDto::finished(FinishReasonDto::Length),
         ModelRunFactInputDto::failed(failure),
     ];
@@ -244,4 +254,59 @@ fn snapshots_tails_and_replays_reject_mismatches_and_round_trip() {
     );
     let mismatched_tail = RunEventTailPageDto::empty(session_id, RunId::new(), snapshot.cursor());
     assert!(RunReplayDto::new(snapshot, mismatched_tail).is_err());
+}
+
+#[test]
+fn tool_result_fact_wire_shape_and_outcome_bounds_are_validated() {
+    let outcome = ToolResultOutcomeDto::succeeded("done").expect("outcome is valid");
+    assert!(ToolResultOutcomeDto::succeeded(" ").is_err());
+    assert!(
+        ToolResultOutcomeDto::succeeded("x".repeat(4 * 1024 + 1)).is_err(),
+        "tool result content must not exceed 4 KiB"
+    );
+    let decoded: ToolResultOutcomeDto =
+        serde_json::from_str(&serde_json::to_string(&outcome).expect("outcome serializes"))
+            .expect("succeeded outcome deserializes");
+    assert_eq!(decoded, outcome);
+    let failed = ToolResultOutcomeDto::failed(
+        RunFailureDto::new("tool_failed", intention_types::ErrorRetryDto::Never, None)
+            .expect("failure is valid"),
+    );
+    let decoded: ToolResultOutcomeDto =
+        serde_json::from_str(&serde_json::to_string(&failed).expect("failed outcome serializes"))
+            .expect("failed outcome deserializes");
+    assert_eq!(decoded, failed);
+
+    let call_id = ToolCallId::new();
+    let input = ModelRunFactInputDto::tool_result_recorded(call_id, outcome)
+        .expect("tool result fact is valid");
+    assert_eq!(
+        input.kind(),
+        intention_domain::ModelRunFactKindDto::ToolResultRecorded
+    );
+    assert_eq!(
+        serde_json::to_value(&input).expect("fact serializes"),
+        serde_json::json!({
+            "kind": "tool_result_recorded",
+            "call_id": call_id,
+            "outcome": {"state": "succeeded", "content": "done"}
+        })
+    );
+    let fact =
+        ModelRunFactDto::new(RunEventCursorDto::new(1), input).expect("assigned fact is valid");
+    let decoded: ModelRunFactDto =
+        serde_json::from_str(&serde_json::to_string(&fact).expect("fact serializes"))
+            .expect("fact deserializes");
+    assert_eq!(decoded, fact);
+
+    let legacy: ModelRunFactDto = serde_json::from_value(serde_json::json!({
+        "cursor": 1,
+        "kind": "tool_call_recorded",
+        "call": {"call_id": call_id, "name": "inspect", "arguments_json": "{}"}
+    }))
+    .expect("legacy tool-call wire still decodes");
+    assert_eq!(
+        legacy.kind(),
+        intention_domain::ModelRunFactKindDto::ToolCallRecorded
+    );
 }
