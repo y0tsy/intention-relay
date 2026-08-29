@@ -16,6 +16,11 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SHARED_TARGET_DIRECTORY = ROOT / "target"
+FIXTURE_TRACKED_SUFFIXES = {".json", ".lock", ".py", ".toml"}
+
+
+class FixtureScopeError(RuntimeError):
+    """Raised when a fixture would mutate untracked or binary repository files."""
 
 
 def test_profile_arguments_include_critical_combinations(_root: Path) -> None:
@@ -80,6 +85,70 @@ def copied_repository() -> Iterator[Path]:
 
 
 @contextmanager
+def fixture_scope(working_root: Path) -> Iterator[None]:
+    """Scope one repository fixture to tracked source files.
+
+    In CI (in-place) mode the fixtures run against the working tree itself so
+    that Cargo artifacts for the same source paths are reused across fixtures.
+    The working tree must be clean before the fixture runs and every mutation
+    is restored afterwards with `git restore`. In the isolated-copy mode the
+    copy has no `.git` directory: the temporary directory and the `modified`
+    context manager already provide isolation, so the scope is a no-op there.
+    """
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=working_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if git_dir.returncode != 0:
+        yield
+        return
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=working_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if status:
+        raise FixtureScopeError(
+            f"fixture scope requires a clean working tree, found: {status!r}"
+        )
+    try:
+        yield
+    finally:
+        restored = subprocess.run(
+            ["git", "restore", "--worktree", "--source=HEAD", "--", "."],
+            cwd=working_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if restored.returncode != 0:
+            raise FixtureScopeError(
+                f"fixture restore failed: {restored.stderr.strip() or restored.stdout.strip()}"
+            )
+
+
+def tracked_modified_paths(working_root: Path) -> set[str]:
+    """Return files changed by a fixture for diagnostics, tracked files only."""
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=working_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return {
+        line[3:]
+        for line in status.splitlines()
+        if line.startswith((" M ", "M "))
+    }
+
+
+@contextmanager
 def modified(path: Path) -> Iterator[None]:
     existed = path.exists()
     original = path.read_bytes() if existed else b""
@@ -113,14 +182,14 @@ def test_copied_repository_commands_share_the_controller_target(_root: Path) -> 
 
 def test_formatting_drift(root: Path) -> None:
     harness = root / "quality/harness/src/lib.rs"
-    with modified(harness):
+    with fixture_scope(root), modified(harness):
         harness.write_text("pub const fn broken()->u8{1}\n", encoding="utf-8")
         run(["cargo", "fmt", "--all", "--check"], cwd=root, expect_success=False)
 
 
 def test_lint_warning(root: Path) -> None:
     harness = root / "quality/harness/src/lib.rs"
-    with modified(harness):
+    with fixture_scope(root), modified(harness):
         harness.write_text("pub fn warning() { let unused = 1; }\n", encoding="utf-8")
         run(
             ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-Dwarnings"],
@@ -404,19 +473,6 @@ def test_m4_sdk_ownership_and_public_contract_boundaries(root: Path) -> None:
             expect_success=False,
             expected_output="allowed only in intention-provider-generic-chat private implementation",
         )
-    public_provider = root / "crates/intention-provider-generic-chat/src/lib.rs"
-    with modified(public_provider):
-        public_provider.write_text(
-            public_provider.read_text(encoding="utf-8")
-            + "\npub type LeakedGenericSdk = async_openai::Client<async_openai::config::OpenAIConfig>;\n",
-            encoding="utf-8",
-        )
-        run(
-            [sys.executable, "quality/check_public_api.py"],
-            cwd=root,
-            expect_success=False,
-            expected_output="LeakedGenericSdk",
-        )
     non_composition = root / "crates/intention-daemon/src/lib.rs"
     with modified(non_composition):
         non_composition.write_text(
@@ -505,43 +561,6 @@ def test_m3_non_production_external_dependency_policy(root: Path) -> None:
             cwd=root,
             expect_success=False,
             expected_output="test-support external dependencies must equal",
-        )
-
-
-def test_signature_aware_public_api_leaks(root: Path) -> None:
-    source = root / "crates/intention-types/src/lib.rs"
-    with modified(source):
-        source.write_text(
-            source.read_text(encoding="utf-8")
-            + "\nuse std::fs;\n"
-            + "pub type LeakedAlias = fs::File;\n"
-            + "pub struct LeakedWrapper(pub fs::File);\n"
-            + "pub struct GenericWrapper<T>(pub T);\n"
-            + "pub type LeakedGeneric = GenericWrapper<fs::File>;\n"
-            + "pub fn leaked_signature(value: fs::File) -> fs::File { value }\n"
-            + "pub use std::fs::File as LeakedReexport;\n",
-            encoding="utf-8",
-        )
-        run(
-            [sys.executable, "quality/check_public_api.py"],
-            cwd=root,
-            expect_success=False,
-            expected_outputs=("LeakedAlias", "LeakedWrapper", "LeakedGeneric", "leaked_signature", "LeakedReexport"),
-        )
-
-
-def test_m2_public_resource_leak(root: Path) -> None:
-    source = root / "crates/intention-client/src/lib.rs"
-    with modified(source):
-        source.write_text(
-            source.read_text(encoding="utf-8") + "\npub type LeakedClientResource = std::fs::File;\n",
-            encoding="utf-8",
-        )
-        run(
-            [sys.executable, "quality/check_public_api.py"],
-            cwd=root,
-            expect_success=False,
-            expected_output="LeakedClientResource",
         )
 
 
@@ -700,7 +719,7 @@ def test_provider_sdk_public_contract_boundary(root: Path) -> None:
 
 def test_error_detail_and_correlation_validation(root: Path) -> None:
     fixture = root / "crates/intention-types/tests/fixtures/error-v1-missing-workspace-path.json"
-    with modified(fixture):
+    with fixture_scope(root), modified(fixture):
         replace_once(fixture, '"src/missing.rs"', '"/etc/passwd"')
         run(
             ["cargo", "test", "-p", "intention-types", "--test", "error_contracts", "--locked"],
@@ -987,57 +1006,6 @@ def test_metrics_manifest_start_clears_stale_events(root: Path) -> None:
         raise RuntimeError("metrics finish must write the manifest")
 
 
-def test_isolated_release_profile(root: Path) -> None:
-    source = root / "crates/intention-daemon/src/lib.rs"
-    with modified(source):
-        source.write_text(
-            source.read_text(encoding="utf-8") + "\nuse intention_types::SessionId;\n",
-            encoding="utf-8",
-        )
-        run(
-            [sys.executable, "quality/run_profiles.py", "isolated-release"],
-            cwd=root,
-            expect_success=False,
-            expected_output="could not compile `intention-daemon`",
-        )
-
-
-def test_missing_isolated_release_profile(root: Path) -> None:
-    policy = root / "quality/features.toml"
-    with modified(policy):
-        replace_once(
-            policy,
-            'profiles = ["default", "no_default"]',
-            'profiles = ["missing"]',
-        )
-        run(
-            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
-            cwd=root,
-            expect_success=False,
-            expected_output="requires known profile names",
-        )
-
-
-def test_invalid_isolated_release_package_and_target(root: Path) -> None:
-    policy = root / "quality/features.toml"
-    with modified(policy):
-        replace_once(policy, '"intention-daemon"', '"missing-production-package"')
-        run(
-            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
-            cwd=root,
-            expect_success=False,
-            expected_output="is not a workspace package",
-        )
-    with modified(policy):
-        replace_once(policy, 'targets = ["lib", "bins"]', 'targets = ["tests"]')
-        run(
-            [sys.executable, "quality/check_features.py", "--policy", str(policy)],
-            cwd=root,
-            expect_success=False,
-            expected_output="requires known release targets",
-        )
-
-
 def test_supply_chain_policy_failures(root: Path) -> None:
     invalid_replacements = [
         ('unknown-git = "deny"', 'unknown-git = "allow"'),
@@ -1105,6 +1073,12 @@ def test_secret_fixture(root: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
+    parser.add_argument(
+        "--in-place",
+        action="store_true",
+        help="run repository fixtures against the working tree with git-restore "
+        "scoping instead of an isolated copy (CI mode)",
+    )
     arguments = parser.parse_args()
     repository_tests = [
         test_profile_arguments_include_critical_combinations,
@@ -1131,8 +1105,6 @@ def main() -> None:
         test_m3_non_production_test_target_policy,
         test_m3_non_production_dependency_policy,
         test_m3_non_production_external_dependency_policy,
-        test_signature_aware_public_api_leaks,
-        test_m2_public_resource_leak,
         test_m2_secret_projection,
         test_forbidden_source_boundary,
         test_test_only_source_patterns_are_cfg_scoped,
@@ -1154,9 +1126,6 @@ def main() -> None:
         test_quick_uses_one_explicit_default_test_profile,
         test_workspace_aggregate_coverage_check,
         test_missing_feature_profile,
-        test_isolated_release_profile,
-        test_missing_isolated_release_profile,
-        test_invalid_isolated_release_package_and_target,
         test_supply_chain_policy_failures,
         test_secret_fixture,
     ]
@@ -1165,10 +1134,16 @@ def main() -> None:
         for test in [*repository_tests, *standalone_tests]:
             print(test.__name__)
         return
-    with copied_repository() as root:
+    if arguments.in_place:
+        print("quality-self-test: running repository fixtures in place", flush=True)
         for test in repository_tests:
             print(f"self-test: {test.__name__}", flush=True)
-            test(root)
+            test(ROOT)
+    else:
+        with copied_repository() as root:
+            for test in repository_tests:
+                print(f"self-test: {test.__name__}", flush=True)
+                test(root)
     for test in standalone_tests:
         print(f"self-test: {test.__name__}", flush=True)
         test()

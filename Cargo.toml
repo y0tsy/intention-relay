@@ -66,3 +66,14 @@ todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
 undocumented_unsafe_blocks = "deny"
+
+[profile.dev]
+# Line tables instead of full debug info: smaller artifacts and faster
+# linking in the CI pipeline while preserving backtraces for tests.
+debug = 1
+
+# Optimize every package in the graph for the dev profile so test binaries
+# execute faster; the saved time compounds across the repeated test,
+# coverage, and fixture passes in CI.
+[profile.dev.package."*"]
+opt-level = 2
