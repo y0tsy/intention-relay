@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterator
 from contextlib import contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,188 @@ FIXTURE_TRACKED_SUFFIXES = {".json", ".lock", ".py", ".toml"}
 
 class FixtureScopeError(RuntimeError):
     """Raised when a fixture would mutate untracked or binary repository files."""
+
+
+def load_quality_module(name: str) -> object:
+    """Import a quality script from the repository as a plain module."""
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "quality" / f"{name}.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load quality/{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_sccache_collector_parses_pinned_v017_schema() -> None:
+    """The sccache collector parses the pinned sccache v0.17.0 stats schema."""
+    collector = load_quality_module("collect_sccache_metrics")
+    cache_location = f"Local disk: {tempfile.gettempdir()}"
+    # Mirror of sccache v0.17.0 `--show-stats --stats-format json` output
+    # (src/server.rs ServerInfo/ServerStats serialization): scalar counters,
+    # per-language counter objects, and an integer cache_size.
+    json_output = json.dumps(
+        {
+            "stats": {
+                "compile_requests": 9,
+                "requests_unsupported_compiler": 0,
+                "requests_not_compile": 1,
+                "requests_not_cacheable": 2,
+                "requests_executed": 9,
+                "cache_errors": {"counts": {"c/c++": 1}, "adv_counts": {}},
+                "cache_hits": {"counts": {"c/c++": 5, "Rust": 2}, "adv_counts": {}},
+                "cache_misses": {"counts": {"Rust": 3}, "adv_counts": {}},
+                "cache_timeouts": 0,
+                "cache_read_errors": 0,
+                "non_cacheable_compilations": 2,
+                "forced_recaches": 0,
+                "cache_write_errors": 0,
+                "cache_writes": 7,
+                "cache_write_duration": {"secs": 0, "nanos": 100},
+                "cache_read_hit_duration": {"secs": 0, "nanos": 200},
+                "compilations": 5,
+                "compiler_write_duration": {"secs": 0, "nanos": 300},
+                "compile_fails": 0,
+                "not_cached": {},
+                "dist_compiles": {},
+                "dist_errors": 0,
+                "multi_level": None,
+            },
+            "cache_location": cache_location,
+            "cache_size": 1048576,
+            "max_cache_size": 5368709120,
+            "use_preprocessor_cache_mode": False,
+            "version": "0.17.0",
+            "basedirs": [],
+        }
+    )
+    stats, size, location = collector._json_stats(json_output)
+    if stats.get("cache_hits") != 7 or stats.get("cache_misses") != 3:
+        raise RuntimeError(f"per-language counters not aggregated: {stats!r}")
+    if stats.get("cache_errors") != 1:
+        raise RuntimeError(f"per-language cache_errors not aggregated: {stats!r}")
+    if stats.get("compile_requests") != 9 or stats.get("compile_fails") != 0:
+        raise RuntimeError(f"scalar counters not parsed: {stats!r}")
+    if size != 1048576:
+        raise RuntimeError(f"cache_size not parsed as integer: {size!r}")
+    if location != cache_location:
+        raise RuntimeError(f"cache_location not parsed: {location!r}")
+    if collector._hit_rate(stats) != 0.7:
+        raise RuntimeError(f"unexpected hit rate: {collector._hit_rate(stats)!r}")
+
+    # Mirror of v0.17.0 non-advanced human `--show-stats` output.
+    text_output = (
+        "Compile requests                     10\n"
+        "Compile requests executed             9\n"
+        "Cache hits                            7\n"
+        "Cache hits (C/C++)                    5\n"
+        "Cache hits (Rust)                     2\n"
+        "Cache misses                          3\n"
+        "Cache misses (Rust)                   3\n"
+        "Cache hits rate                   70.00 %\n"
+        "Cache hits rate (C/C++)             100.00 %\n"
+        "Cache hits rate (Rust)              40.00 %\n"
+        "Cache timeouts                        0\n"
+        "Cache read errors                     0\n"
+        "Forced recaches                       0\n"
+        "Cache write errors                    0\n"
+        "Cache errors                          1\n"
+        "Cache errors (C/C++)                  1\n"
+        "Compilations                          5\n"
+        "Compilation failures                  0\n"
+        "Non-cacheable compilations            2\n"
+        "Non-cacheable calls                   2\n"
+        "Non-compilation calls                 1\n"
+        "Unsupported compiler calls            0\n"
+        "Average cache write                0.000 s\n"
+        "Average compiler                   0.000 s\n"
+        "Average cache read hit              0.000 s\n"
+        "Failed distributed compilations       0\n"
+        "Cache location                        " + cache_location + "\n"
+        "Base directories                      (none)\n"
+        "Use direct/preprocessor mode?         yes\n"
+        "Version (client)                      0.17.0\n"
+        "Cache size                            1.0 MiB\n"
+        "Max cache size                        5.0 GiB\n"
+    )
+    stats, size, location = collector._text_stats(text_output)
+    if stats.get("cache_hits") != 7 or stats.get("cache_misses") != 3:
+        raise RuntimeError(f"text per-language aggregate not parsed: {stats!r}")
+    if stats.get("cache_errors") != 1:
+        raise RuntimeError(f"text cache_errors not parsed: {stats!r}")
+    if stats.get("requests_executed") != 9 or stats.get("compile_fails") != 0:
+        raise RuntimeError(f"text name overrides not applied: {stats!r}")
+    if stats.get("requests_not_cacheable") != 2 or stats.get("requests_not_compile") != 1:
+        raise RuntimeError(f"text name overrides not applied: {stats!r}")
+    if size != 1048576:
+        raise RuntimeError(f"text cache size not parsed: {size!r}")
+
+
+def test_sccache_collector_rejects_malformed_counters() -> None:
+    """Bools and negative counters are rejected without crashing diagnostics."""
+    collector = load_quality_module("collect_sccache_metrics")
+    malformed = json.dumps(
+        {
+            "stats": {
+                "compile_requests": -1,
+                "cache_timeouts": True,
+                "cache_hits": {"counts": {"c/c++": True, "Rust": 2}, "adv_counts": {}},
+                "cache_misses": {"counts": {"Rust": -3}, "adv_counts": {}},
+                "cache_errors": {"counts": {"c/c++": 1}, "adv_counts": {}},
+            },
+            "cache_location": None,
+            "cache_size": -1048576,
+        }
+    )
+    stats, size, location = collector._json_stats(malformed)
+    if "compile_requests" in stats or "cache_timeouts" in stats:
+        raise RuntimeError(f"bool and negative scalar counters must be rejected: {stats!r}")
+    if stats.get("cache_hits") != 2:
+        raise RuntimeError(f"malformed per-language entries must be ignored, valid ones summed: {stats!r}")
+    if "cache_misses" in stats or stats.get("cache_errors") != 1:
+        raise RuntimeError(f"per-language malformed handling is wrong: {stats!r}")
+    if size is not None or location is not None:
+        raise RuntimeError("malformed cache_size and cache_location must become unavailable")
+    text_stats, text_size, _text_location = collector._text_stats(
+        "Compile requests                     10\n"
+        "Cache hits                           -1\n"
+        "Cache errors                          1\n"
+        "Cache size                            1.0 MiB\n"
+    )
+    if "cache_hits" in text_stats or text_stats.get("cache_errors") != 1:
+        raise RuntimeError(f"negative text counters must be rejected: {text_stats!r}")
+    if text_size != 1048576:
+        raise RuntimeError(f"valid text cache size must still parse: {text_size!r}")
+
+
+def test_benchmark_jobs_parsing() -> None:
+    """The --jobs benchmark parses values and aggregates durations."""
+    benchmark = load_quality_module("benchmark_cargo_jobs")
+    if benchmark.parse_jobs("2,4,8") != ["2", "4", "8"]:
+        raise RuntimeError("benchmark --jobs parsing failed")
+    if benchmark.parse_jobs("") != [] or benchmark.parse_jobs(" , ") != []:
+        raise RuntimeError("empty --jobs must yield the baseline-only configuration")
+    if benchmark.parse_jobs("2, ,4") != ["2", "4"]:
+        raise RuntimeError("blank entries within --jobs must be skipped")
+    for invalid in ("x", "0", "-1", "2.5"):
+        try:
+            benchmark.parse_jobs(invalid)
+        except ValueError:
+            continue
+        raise RuntimeError(f"invalid --jobs value {invalid!r} must be rejected")
+    if benchmark.aggregate([1.0, 2.0, 3.0]) != {
+        "p50": 2.0,
+        "p95": 3.0,
+        "mean": 2.0,
+        "min": 1.0,
+        "max": 3.0,
+    }:
+        raise RuntimeError("benchmark aggregation failed")
+    if benchmark.build_command("cargo", benchmark.BASELINE) != ["cargo", "build", "--workspace", "--locked"]:
+        raise RuntimeError("baseline command must omit --jobs")
+    if benchmark.build_command("cargo", "4") != ["cargo", "build", "--workspace", "--locked", "--jobs=4"]:
+        raise RuntimeError("configured command must include --jobs=N")
 
 
 def test_profile_arguments_include_critical_combinations(_root: Path) -> None:
@@ -748,6 +931,15 @@ def coverage_report(root: Path, files: list[tuple[str, int, int]]) -> str:
     })
 
 
+def metadata_snapshot(root: Path, crates: list[str]) -> str:
+    return json.dumps({
+        "packages": [
+            {"name": crate, "manifest_path": str(root / "crates" / crate / "Cargo.toml")}
+            for crate in crates
+        ],
+    })
+
+
 def test_coverage_failures(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/coverage-low.json"
@@ -767,6 +959,36 @@ def test_coverage_failures(root: Path) -> None:
             cwd=root,
             expect_success=False,
         )
+def test_coverage_tier_policy_requires_exact_numeric_tiers(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/coverage-low.json"
+    with modified(policy), modified(report):
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 100)]),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 100.00% satisfies tier A",
+        )
+        invalid_tiers = [
+            ("missing-tier", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\n"),
+            ("extra-tier", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\nC = 85.0\nD = 80.0\n"),
+            ("non-numeric", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\nC = \"high\"\n"),
+        ]
+        for _name, old, new in invalid_tiers:
+            policy.write_text(
+                policy.read_text(encoding="utf-8").replace(old, new, 1),
+                encoding="utf-8",
+            )
+            run(
+                [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
+                cwd=root,
+                expect_success=False,
+                expected_output="tiers must define numeric A, B, and C thresholds",
+            )
 def test_coverage_exclusion_semantics(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/m1plus-coverage.json"
@@ -987,6 +1209,205 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
         )
 
 
+def test_coverage_metadata_snapshot(root: Path) -> None:
+    report = root / "quality/fixtures/coverage-low.json"
+    metadata = root / "quality/fixtures/coverage-metadata.json"
+    with modified(report), modified(metadata):
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 100)]),
+            encoding="utf-8",
+        )
+        metadata.write_text(
+            metadata_snapshot(root, ["intention-types", "intention-daemon"]),
+            encoding="utf-8",
+        )
+        run(
+            [
+                sys.executable,
+                "quality/check_coverage.py",
+                "--report",
+                str(report),
+                "--crate",
+                "intention-types",
+                "--metadata",
+                str(metadata),
+            ],
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 100.00% satisfies tier A",
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-daemon/src/main.rs", 1, 0),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [
+                sys.executable,
+                "quality/check_coverage.py",
+                "--report",
+                str(report),
+                "--workspace-aggregate",
+                "--metadata",
+                str(metadata),
+            ],
+            cwd=root,
+            expect_success=True,
+            expected_outputs=(
+                "excluding crates/intention-daemon/src/main.rs from intention-daemon denominator",
+                "workspace aggregate line coverage 100.000% (100/100)",
+            ),
+        )
+
+
+def test_coverage_metadata_standalone_fallback(root: Path) -> None:
+    report = root / "quality/fixtures/coverage-low.json"
+    with modified(report):
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 100)]),
+            encoding="utf-8",
+        )
+        run(
+            [
+                sys.executable,
+                "quality/check_coverage.py",
+                "--report",
+                str(report),
+                "--crate",
+                "intention-types",
+            ],
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 100.00% satisfies tier A",
+        )
+
+
+def test_coverage_metadata_invalid_snapshot(root: Path) -> None:
+    report = root / "quality/fixtures/coverage-low.json"
+    with tempfile.TemporaryDirectory() as temporary:
+        missing = Path(temporary) / "missing.json"
+        malformed = Path(temporary) / "malformed.json"
+        malformed.write_text("{not json", encoding="utf-8")
+        structural = Path(temporary) / "structural.json"
+        structural.write_text(json.dumps({"packages": [{"name": "intention-types"}]}), encoding="utf-8")
+        with modified(report):
+            report.write_text(
+                coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 100)]),
+                encoding="utf-8",
+            )
+            run(
+                [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(missing)],
+                cwd=root,
+                expect_success=False,
+                expected_output="coverage metadata snapshot is missing",
+            )
+            run(
+                [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(malformed)],
+                cwd=root,
+                expect_success=False,
+                expected_output="coverage metadata snapshot is not valid JSON",
+            )
+            run(
+                [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(structural)],
+                cwd=root,
+                expect_success=False,
+                expected_output="must define name and manifest_path",
+            )
+
+
+def test_coverage_metadata_escape_rejected(root: Path) -> None:
+    report = root / "quality/fixtures/coverage-low.json"
+    metadata = root / "quality/fixtures/coverage-metadata.json"
+    with modified(report), modified(metadata):
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 100)]),
+            encoding="utf-8",
+        )
+        invalid_snapshots = [
+            (
+                "traversal",
+                {"packages": [{"name": "intention-types", "manifest_path": str(root / "crates/intention-types/../../../outside/Cargo.toml")}]},
+            ),
+            (
+                "outside-root",
+                {"packages": [{"name": "intention-types", "manifest_path": str(root.parent / "outside/Cargo.toml")}]},
+            ),
+        ]
+        for _name, payload in invalid_snapshots:
+            metadata.write_text(json.dumps(payload), encoding="utf-8")
+            run(
+                [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(metadata)],
+                cwd=root,
+                expect_success=False,
+                expected_output="manifest_path must not escape workspace root",
+            )
+        # Ordinary absolute and in-root traversal manifest paths stay accepted.
+        metadata.write_text(
+            json.dumps(
+                {"packages": [{"name": "intention-types", "manifest_path": str(root / "crates/intention-types/../intention-types/Cargo.toml")}]}
+            ),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(metadata)],
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 100.00% satisfies tier A",
+        )
+
+
+def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
+    namespace = {
+        "__file__": str(ROOT / "quality/run_coverage.py"),
+        "__name__": "quality.run_coverage",
+    }
+    exec((ROOT / "quality/run_coverage.py").read_text(encoding="utf-8"), namespace)
+    captured: list[list[str]] = []
+    payload = json.dumps({"packages": [{"name": "fixture", "manifest_path": "/tmp/fixture/Cargo.toml"}]})
+
+    class FakeCompleted:
+        def __init__(self, returncode: int, stdout: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run_command(command: list[str], **_kwargs: object) -> FakeCompleted:
+        captured.append(command)
+        if command[:2] == ["cargo", "metadata"]:
+            return FakeCompleted(0, payload)
+        return FakeCompleted(0)
+
+    namespace["run_command"] = fake_run_command
+    previous_argv = sys.argv
+    sys.argv = ["quality/run_coverage.py", "--profile", "default"]
+    try:
+        namespace["main"]()
+    finally:
+        sys.argv = previous_argv
+    metadata_calls = [command for command in captured if command[:2] == ["cargo", "metadata"]]
+    if metadata_calls != [["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]]:
+        raise RuntimeError(f"coverage metadata must be collected exactly once per run: {metadata_calls!r}")
+    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
+    if not snapshot.is_file() or snapshot.read_text(encoding="utf-8") != payload:
+        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
+    checker_calls = [
+        command
+        for command in captured
+        if len(command) > 1 and command[0] == sys.executable and "check_coverage.py" in command[1]
+    ]
+    if not checker_calls:
+        raise RuntimeError("coverage runner must invoke the coverage checker")
+    for command in checker_calls:
+        if command.count("--metadata") != 1 or command[command.index("--metadata") + 1] != str(snapshot):
+            raise RuntimeError(f"every checker invocation must receive the collected metadata snapshot: {command!r}")
+    if not any("--workspace-aggregate" in command for command in checker_calls):
+        raise RuntimeError("coverage runner must check a workspace aggregate with the metadata snapshot")
+
+
 def test_metrics_manifest_start_clears_stale_events(root: Path) -> None:
     reports = root / "quality" / "reports"
     reports.mkdir(parents=True, exist_ok=True)
@@ -1122,17 +1543,29 @@ def main() -> None:
         test_provider_sdk_public_contract_boundary,
         test_error_detail_and_correlation_validation,
         test_coverage_failures,
+        test_coverage_tier_policy_requires_exact_numeric_tiers,
         test_coverage_exclusion_semantics,
         test_coverage_runner_policy_and_profile_names,
         test_coverage_target_narrowing_requires_exact_inventory,
         test_metrics_manifest_start_clears_stale_events,
         test_quick_uses_one_explicit_default_test_profile,
         test_workspace_aggregate_coverage_check,
+        test_coverage_metadata_snapshot,
+        test_coverage_metadata_standalone_fallback,
+        test_coverage_metadata_invalid_snapshot,
+        test_coverage_metadata_escape_rejected,
+        test_coverage_metadata_collected_once_and_forwarded,
         test_missing_feature_profile,
         test_supply_chain_policy_failures,
         test_secret_fixture,
     ]
-    standalone_tests = [test_unused_dependency, test_outdated_dependency]
+    standalone_tests = [
+        test_unused_dependency,
+        test_outdated_dependency,
+        test_sccache_collector_parses_pinned_v017_schema,
+        test_sccache_collector_rejects_malformed_counters,
+        test_benchmark_jobs_parsing,
+    ]
     if arguments.list:
         for test in [*repository_tests, *standalone_tests]:
             print(test.__name__)

@@ -34,6 +34,48 @@ def package_source_roots(root: Path) -> dict[str, Path]:
     }
 
 
+def package_source_roots_from_metadata(metadata: object, root: Path) -> dict[str, Path]:
+    """Extract package source roots from a Cargo metadata snapshot."""
+    if not isinstance(metadata, dict):
+        fail("Cargo metadata snapshot must be a JSON object")
+    packages = metadata.get("packages")
+    if not isinstance(packages, list):
+        fail("Cargo metadata snapshot does not expose a packages list")
+    roots: dict[str, Path] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            fail("Cargo metadata snapshot packages must be JSON objects")
+        name = package.get("name")
+        manifest_path = package.get("manifest_path")
+        if not isinstance(name, str) or not isinstance(manifest_path, str):
+            fail("Cargo metadata snapshot packages must define name and manifest_path strings")
+        manifest = Path(manifest_path)
+        if not manifest.is_absolute():
+            manifest = root / manifest
+        # Resolve before containment so symlinked and traversed manifest
+        # paths are checked at their actual location, and derive the source
+        # root from that resolved location.
+        resolved_manifest = manifest.resolve()
+        if not is_under(resolved_manifest, root):
+            fail(
+                f"coverage metadata package {name!r} manifest_path must not escape workspace root: {manifest_path}"
+            )
+        roots[name] = (resolved_manifest.parent / "src").resolve()
+    return roots
+
+
+def metadata_source_roots(metadata_path: Path, root: Path) -> dict[str, Path]:
+    """Read and validate the runner's Cargo metadata snapshot."""
+    try:
+        with metadata_path.open(encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+    except FileNotFoundError:
+        fail(f"coverage metadata snapshot is missing: {metadata_path}")
+    except (json.JSONDecodeError, OSError) as error:
+        fail(f"coverage metadata snapshot is not valid JSON: {metadata_path}: {error}")
+    return package_source_roots_from_metadata(metadata, root)
+
+
 def report_files(report: object) -> list[dict[str, object]]:
     if not isinstance(report, dict):
         fail("coverage report must be a JSON object")
@@ -167,6 +209,7 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--crate")
     parser.add_argument("--workspace-aggregate", action="store_true")
+    parser.add_argument("--metadata", type=Path, help="Cargo metadata snapshot captured by the coverage runner")
     arguments = parser.parse_args()
 
     root = arguments.root.resolve()
@@ -181,9 +224,8 @@ def main() -> None:
     exclusions = policy.get("exclusions", [])
     if not isinstance(tiers, dict) or not isinstance(policy_state, dict) or not isinstance(classifications, dict):
         fail("coverage policy is missing required tables")
-    for tier, threshold in tiers.items():
-        if tier not in {"A", "B", "C"} or not isinstance(threshold, (int, float)):
-            fail("tiers must define numeric A, B, and C thresholds")
+    if set(tiers) != {"A", "B", "C"} or not all(isinstance(threshold, (int, float)) for threshold in tiers.values()):
+        fail("tiers must define numeric A, B, and C thresholds")
 
     production_crates = policy_state.get("production_crates")
     if not isinstance(production_crates, list) or not all(isinstance(crate, str) for crate in production_crates):
@@ -197,7 +239,10 @@ def main() -> None:
         if arguments.crate not in production_set:
             fail(f"coverage crate {arguments.crate!r} is not an active production crate")
         production_crates = [arguments.crate]
-    source_roots = package_source_roots(root)
+    if arguments.metadata is not None:
+        source_roots = metadata_source_roots(arguments.metadata, root)
+    else:
+        source_roots = package_source_roots(root)
     files = report_files(report)
     require_branch_metrics(files)
     if arguments.workspace_aggregate:

@@ -2289,14 +2289,14 @@ mod tests {
                         vec![
                             intention_tools::BoundedText::new("/C").expect("arg"),
                             intention_tools::BoundedText::new(
-                                "echo started> sentinel.txt & ping -n 30 127.0.0.1",
+                                "echo started> sentinel.txt & ping -n 2 127.0.0.1",
                             )
                             .expect("arg"),
                         ]
                     } else {
                         vec![
                             intention_tools::BoundedText::new("-c").expect("arg"),
-                            intention_tools::BoundedText::new("printf x > sentinel.txt; sleep 30")
+                            intention_tools::BoundedText::new("printf x > sentinel.txt; sleep 2")
                                 .expect("arg"),
                         ]
                     },

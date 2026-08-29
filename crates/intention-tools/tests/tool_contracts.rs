@@ -320,10 +320,16 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
     let service = ToolService::new(workspace);
     let cancellation = CancellationSignal::new();
     let canceller = cancellation.clone();
-    std::thread::spawn(move || {
-        // Give the child a chance to spawn before requesting cancellation.
-        // The longer fixture is deterministic on both Unix and Windows.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    let cancellation_helper = std::thread::spawn(move || {
+        // Wait for a confirmed child spawn instead of racing a fixed sleep:
+        // the cancellation then provably lands while the child is running,
+        // so the tool classifies the external effect as unknown. The short
+        // fixture stays alive long enough on both Unix and Windows, and its
+        // trap ignores termination signals.
+        assert!(
+            canceller.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
+            "execute child was never observed after spawn"
+        );
         canceller.cancel();
     });
     let error = service
@@ -335,19 +341,22 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
                 args: if cfg!(windows) {
                     vec![
                         BoundedText::new("-n").unwrap(),
-                        BoundedText::new("30").unwrap(),
+                        BoundedText::new("2").unwrap(),
                         BoundedText::new("127.0.0.1").unwrap(),
                     ]
                 } else {
                     vec![
                         BoundedText::new("-c").unwrap(),
-                        BoundedText::new("trap '' TERM; sleep 30").unwrap(),
+                        BoundedText::new("trap '' TERM; sleep 2").unwrap(),
                     ]
                 },
             }),
             cancellation,
         )
         .expect_err("cancellation");
+    cancellation_helper
+        .join()
+        .expect("cancellation helper completes");
     assert_eq!(error.code(), "tool_execute_external_effect_unknown");
 }
 
