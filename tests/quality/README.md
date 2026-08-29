@@ -7,9 +7,11 @@ compatibility, credential-free snapshots, and malformed wire rejection.
 
 M1+ extends `quality/self_test.py` with isolated expected-failure proofs for
 policy-aligned workspace cycles, exact Cargo integration test targets,
-signature-aware public API resource leaks, and exact-file coverage exclusion
-semantics. The public API checker reads pinned-nightly rustdoc JSON; the coverage
-checker validates ownership and report membership before changing a denominator.
+provider SDK namespace ownership, and exact-file coverage exclusion
+semantics. The architecture checker restricts `async_openai::` and
+`openrouter_rs::` to their owner crate's private implementation; the coverage
+checker validates ownership and report membership before changing a
+denominator.
 
 Every fixture uses only recognizable fake credentials; no test fixture contains
 a real credential.

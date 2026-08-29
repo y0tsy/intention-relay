@@ -121,7 +121,7 @@ M1+ strengthens the executable quality policy without adding M2 product behavior
 
 - a policy-aligned workspace dependency cycle reports its deterministic closed path before a normal Cargo compile gate;
 - every active crate's declared `test_targets` exactly equals Cargo metadata integration targets, while M1 skeletons declare and expose none;
-- nightly rustdoc JSON rejects forbidden public type exposure through aliases, tuple wrappers, nested generics, function signatures, and re-exports;
+- provider SDK namespaces (`async_openai::`, `openrouter_rs::`) are rejected outside their owner crate's private implementation;
 - an enabled coverage exclusion is an owned, exact reported source file and changes only that crate's coverage denominator; unsafe, unowned, unreported, duplicate, and all-source exclusions fail.
 
 The M1+ baseline and criterion-to-fixture evidence are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md).

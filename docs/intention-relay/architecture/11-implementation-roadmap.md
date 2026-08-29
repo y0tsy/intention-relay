@@ -149,9 +149,9 @@ are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-har
 - machine-readable Cargo integration `test_targets` for every planned crate,
   exact metadata enforcement for active M1 crates, and empty target sets for
   M1 skeletons;
-- pinned-nightly rustdoc JSON analysis of public reachable active-crate APIs,
-  including aliases, fields, nested generic arguments, function signatures,
-  trait surfaces, and re-exports;
+- source-level provider SDK namespace ownership analysis restricting
+  `async_openai::` and `openrouter_rs::` to their owner crate's private
+  implementation;
 - exact-file coverage-exclusion policy with owner, report-path, and denominator
   enforcement;
 - isolated expected-failure fixtures for every new quality rule.
@@ -161,8 +161,8 @@ are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-har
 - a policy-aligned workspace dependency cycle fixture that reports its closed
   path;
 - unknown, duplicate, and skeleton integration-target declaration fixtures;
-- public API alias, wrapper, generic, signature, and re-export resource-leak
-  fixtures;
+- provider SDK namespace leak fixtures outside the owner crate's private
+  implementation;
 - valid denominator-reduction and invalid coverage-exclusion fixtures for
   missing metadata, unsafe paths, wrong owner, absent report path, duplicates,
   and all-source removal.
@@ -173,8 +173,8 @@ are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-har
   compile gate and reports the involved packages;
 - every active M1 crate's declared integration targets exactly equal Cargo
   metadata and are included by the standard all-targets test gate;
-- public contract leaks fail from rustdoc JSON rather than only literal source
-  scans;
+- provider SDK namespaces are rejected outside their owner crate private
+  implementation by source-level ownership analysis;
 - `make coverage` applies only valid exact-file exclusions before per-crate
   coverage arithmetic and rejects exception misuse;
 - all new rules are proved by isolated failure fixtures and final `make verify`
