@@ -17,56 +17,177 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Per-phase toolchain/tool scoping keeps every job lean: each phase
+          # installs and validates only what it runs. The union of all scopes
+          # equals the complete pinned toolset.
           - os: ubuntu-24.04
-            phase: source
+            phase: lint-arch
+            stable: true
+            nightly: false
+            stable_components: "rustfmt, clippy"
+            nightly_components: ""
+            tools: ""
+            scope: lint-arch
+            rustflags: "-C link-arg=-fuse-ld=mold"
           - os: ubuntu-24.04
-            phase: coverage
+            phase: test
+            stable: true
+            nightly: false
+            stable_components: ""
+            nightly_components: ""
+            tools: "cargo-nextest@0.9.140"
+            scope: test
+            rustflags: "-C link-arg=-fuse-ld=mold"
+          - os: ubuntu-24.04
+            phase: coverage-default
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: "-C link-arg=-fuse-ld=mold"
+          - os: ubuntu-24.04
+            phase: coverage-no-default
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: "-C link-arg=-fuse-ld=mold"
+          - os: ubuntu-24.04
+            phase: coverage-all
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: "-C link-arg=-fuse-ld=mold"
+          - os: ubuntu-24.04
+            phase: selftest
+            stable: true
+            nightly: false
+            stable_components: "rustfmt, clippy"
+            nightly_components: ""
+            tools: "cargo-machete@0.9.2,cargo-outdated@0.19.0,cargo-about@0.9.1"
+            scope: selftest
+            rustflags: "-C link-arg=-fuse-ld=mold"
           - os: ubuntu-24.04
             phase: deps
+            stable: true
+            nightly: true
+            stable_components: ""
+            nightly_components: ""
+            tools: "cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-about@0.9.1,cargo-outdated@0.19.0,cargo-machete@0.9.2,cargo-udeps@0.1.61"
+            scope: deps
+            rustflags: "-C link-arg=-fuse-ld=mold"
           - os: windows-2025
-            phase: source
+            phase: lint-arch
+            stable: true
+            nightly: false
+            stable_components: "rustfmt, clippy"
+            nightly_components: ""
+            tools: ""
+            scope: lint-arch
+            rustflags: ""
           - os: windows-2025
-            phase: coverage
+            phase: test
+            stable: true
+            nightly: false
+            stable_components: ""
+            nightly_components: ""
+            tools: "cargo-nextest@0.9.140"
+            scope: test
+            rustflags: ""
+          - os: windows-2025
+            phase: coverage-default
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: ""
+          - os: windows-2025
+            phase: coverage-no-default
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: ""
+          - os: windows-2025
+            phase: coverage-all
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            rustflags: ""
+          - os: windows-2025
+            phase: selftest
+            stable: true
+            nightly: false
+            stable_components: "rustfmt, clippy"
+            nightly_components: ""
+            tools: "cargo-machete@0.9.2,cargo-outdated@0.19.0,cargo-about@0.9.1"
+            scope: selftest
+            rustflags: ""
           - os: windows-2025
             phase: deps
+            stable: true
+            nightly: true
+            stable_components: ""
+            nightly_components: ""
+            tools: "cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-about@0.9.1,cargo-outdated@0.19.0,cargo-machete@0.9.2,cargo-udeps@0.1.61"
+            scope: deps
+            rustflags: ""
     env:
       CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      CI_TOOLS_SCOPE: ${{ matrix.scope }}
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Restore Cargo registry cache
-        uses: actions/cache@v4
+      - name: Restore Cargo and build caches
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/advisory-db
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
+          prefix-key: ${{ matrix.phase }}
 
-      - name: Restore Cargo git cache
-        uses: actions/cache@v4
+      - name: Install stable Rust toolchain
+        if: matrix.stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          path: ~/.cargo/git
-          key: cargo-git-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-git-${{ runner.os }}-
+          toolchain: 1.97.1
+          components: ${{ matrix.stable_components }}
 
-      - name: Restore Rustup cache
-        uses: actions/cache@v4
+      - name: Install nightly Rust toolchain
+        if: matrix.nightly
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          path: ~/.rustup
-          key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
-          restore-keys: rustup-${{ runner.os }}-
+          toolchain: nightly-2026-07-31
+          components: ${{ matrix.nightly_components }}
 
-      - name: Restore quality tools cache
-        uses: actions/cache@v4
+      - name: Install pinned quality tools
+        if: matrix.tools != ''
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
         with:
-          path: ~/.cargo/bin
-          key: quality-tools-${{ runner.os }}-${{ hashFiles('quality/tools.toml') }}
-          restore-keys: quality-tools-${{ runner.os }}-
+          tool: ${{ matrix.tools }}
+          fallback: cargo-binstall
+
+      - name: Install mold linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mold
 
       - name: Set canonical Rust homes
         run: |
@@ -74,63 +195,22 @@ jobs:
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Configure bounded CI build directory
-        run: |
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/intention-relay-target" >> "$GITHUB_ENV"
-
-      - name: Install pinned Rust toolchains
-        run: |
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup toolchain install nightly-2026-07-31 --profile minimal
-          rustup component add rustfmt clippy llvm-tools-preview --toolchain 1.97.1
-          rustup component add rustfmt clippy llvm-tools-preview --toolchain nightly-2026-07-31
-
-      - name: Install pinned quality tools
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
-        with:
-          tool: |
-            cargo-nextest@0.9.140
-            cargo-llvm-cov@0.8.7
-            cargo-deny@0.20.2
-            cargo-audit@0.22.2
-            cargo-udeps@0.1.61
-            cargo-machete@0.9.2
-            cargo-about@0.9.1
-            cargo-outdated@0.19.0
-          fallback: cargo-binstall
-
       - name: Report disk space before quality gate
-        run: |
-          df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
-          for path in "${CARGO_TARGET_DIR}" quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
-            if [ -e "$path" ]; then
-              du -sh "$path"
-            else
-              printf '%s: absent\n' "$path"
-            fi
-          done
+        run: df -h . "$HOME"
 
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}
 
       - name: Report disk space after quality gate
         if: always()
-        run: |
-          df -h . "$HOME" "${RUNNER_TEMP:-/tmp}"
-          for path in "${CARGO_TARGET_DIR}" quality/reports "$HOME/.cargo/registry" "$HOME/.rustup"; do
-            if [ -e "$path" ]; then
-              du -sh "$path"
-            else
-              printf '%s: absent\n' "$path"
-            fi
-          done
+        run: df -h . "$HOME"
 
       - name: Upload quality reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-reports-${{ runner.os }}-${{ matrix.phase }}
           if-no-files-found: ignore
           path: |
             quality/reports
-            ${{ runner.temp }}/intention-relay-target/nextest
+            target/nextest

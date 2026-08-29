@@ -41,7 +41,7 @@ flowchart LR
   V --> CI[Blocking CI]
 ```
 
-`make quick` is the fast inner-loop signal and runs the profile-based lint matrix without duplicating the default test suite. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking its assigned gate on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI splits the blocking gate into three parallel matrix jobs per OS so independent phases no longer wait for the whole check gate: `ci-source` runs the complete `check` gate, `ci-coverage` runs coverage with its generated-artifact cleanup and the isolated self-test, and `ci-deps` runs the online dependency gates. Each job writes a job-scoped metrics manifest (`quality-run-<job>.json`), and branch protection requires the six resulting status checks. CI uses a fresh runner-temporary Cargo target directory rather than restoring build artifacts, preventing ordinary and LLVM-instrumented builds from exhausting runner disk; only registries and toolchains are cached, while quality reports are uploaded fresh per run. CI records free space and relevant artifact-directory sizes before and after the quality gate as operational diagnostics; those reports never change a gate's verdict. Human-readable timing records identify Makefile phases, profiles, crates, coverage stages, dependency checks, durations, and outcomes without recording secrets. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
+`make quick` is the fast inner-loop signal and runs the profile-based lint matrix without duplicating the default test suite. `make verify` is the complete reproducible merge/release signal. `make ci` aliases `make verify` so local and CI verification behavior cannot drift. A clean CI runner performs explicit pinned-tool setup before invoking its assigned gate on required Linux and Windows runners; CI installs exact tool releases through checksum-verified `taiki-e/install-action` rather than source-compiling every tool on each cache miss. CI splits the blocking gate into seven parallel matrix jobs per OS so independent phases no longer wait for the whole check gate: `ci-lint-arch` runs formatting, feature profiles, lint, docs, and architecture checks; `ci-test` runs check-cargo, nextest, and doctests; `ci-coverage-default`/`ci-coverage-no-default`/`ci-coverage-all` run one coverage profile each (the slowest profile becomes the coverage critical path instead of the sum of all three) and clean their generated LLVM artifacts; `ci-selftest` runs the fixture self-check in place; and `ci-deps` runs the online dependency gates. Each job writes a job-scoped metrics manifest (`quality-run-<job>.json`), and branch protection requires the fourteen resulting status checks. Each job installs only the toolchains, components, and tools its phase uses (`CI_TOOLS_SCOPE` feeds `check_tools.py --scope`); the union of the scopes equals the complete pinned toolset, so no pinned tool or version escapes validation. CI restores Cargo registries and build artifacts through `Swatinem/rust-cache` (per-phase keys), installs pinned toolchains through `dtolnay/rust-toolchain`, links with the mold linker on Linux, disables incremental compilation, and keeps dev-profile dependencies optimized with line tables. CI records free space before and after the quality gate as an operational diagnostic; those reports never change a gate's verdict. Human-readable timing records identify Makefile phases, profiles, crates, coverage stages, dependency checks, durations, and outcomes without recording secrets. Windows acceptance exercises the named-pipe transport fixture rather than relying on cross-compilation alone.
 
 ## Reproducible tooling
 
@@ -77,8 +77,8 @@ A subsequent milestone may add a tool only through a documented quality-policy u
 ### Tool management targets
 
 - `make bootstrap-tools` is the sole installer for external quality tools. It is explicitly mutating and networked. It retains a matching restored tool binary and reinstalls an absent or version-mismatched one with an exact pinned version, never selecting an unpinned version.
-- `make tools-check` validates the pinned Rust version, required components, external tool availability, and exact versions. It is non-mutating.
-- `make check`, `make verify`, `make ci`, `ci-source`, `ci-coverage`, and `ci-deps` call `tools-check` but never call `bootstrap-tools`.
+- `make tools-check` validates the pinned Rust version, required components, external tool availability, and exact versions. It is non-mutating. CI scopes the validation per job with `check_tools.py --scope` through the `CI_TOOLS_SCOPE` environment variable; local runs always validate the complete pinned set.
+- `make check`, `make verify`, `make ci`, `ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-selftest`, and `ci-deps` call `tools-check` but never call `bootstrap-tools`.
 
 ## Formatting and lint policy
 
@@ -113,12 +113,12 @@ The policy deliberately does **not** deny all `pedantic` or all `restriction` li
 
 - direct process-CWD fallback in checked source;
 - listed provider SDK namespaces and HTTP/runtime resources from active model/config/domain/runtime/application/storage/protocol/transport/client/daemon/adapter source, while allowing `openrouter-rs` only in private `intention-provider-openrouter` implementation and `async-openai` only in private `intention-provider-generic-chat` implementation;
-- provider SDK/resource types from public rustdoc-visible APIs of every active crate;
+- provider SDK/resource types from source-level ownership analysis of every active crate;
 - direct application/runtime/storage implementation access from Tauri/TUI adapters;
 - `unsafe` and process-level escape hatches without an approved, local explanation;
 - raw debug output or secret-bearing errors reaching checked paths.
 
-`make architecture` detects workspace dependency cycles, validates that active-crate machine-readable integration targets exactly equal Cargo metadata, and prevents direct forbidden source patterns. It also runs `quality/check_public_api.py`, which uses the pinned nightly rustdoc JSON output to reject forbidden implementation resources and provider SDK namespaces in public reachable aliases, fields, wrappers, nested generic arguments, function signatures, trait surfaces, and re-exports. Private-only implementation details are outside this public-contract check.
+`make architecture` detects workspace dependency cycles, validates that active-crate machine-readable integration targets exactly equal Cargo metadata, prevents direct forbidden source patterns, and restricts provider SDK namespaces (`async_openai::`, `openrouter_rs::`, `reqwest::`) to their owner crate's private implementation via source-level analysis. Private-only implementation details are outside this check.
 
 ## Coverage policy
 
@@ -169,12 +169,7 @@ This is intentionally not an exhaustive combinatorial matrix. M1 has no enabled 
 
 The feature-profile policy is machine-readable and verified by `make features`. M4's selected provider SDK dependencies do not add a workspace feature flag or critical combination; default, no-default, and all-features profiles therefore remain the required coverage for their private SDK integration.
 
-Some production packages additionally declare isolated release profiles in the
-same policy. `make isolated-release` checks each declared package's explicit
-release targets, currently the daemon library and binary, once per declared
-profile without `--workspace` or test targets. This prevents workspace feature
-unification from hiding a standalone default or `--no-default-features` release
-build failure. `make check`, `make verify`, and CI require this gate.
+The final product is a single daemon binary, so an isolated per-crate release-build check is not part of the gate: workspace feature unification is exactly what the shipped binary uses, and the complete `check`/`test` matrix already compiles every declared target under every required profile.
 
 ## Makefile contract
 
@@ -189,24 +184,31 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make fmt-check` | No | Verify formatting without changing files. |
 | `make notices` | Yes | Regenerate `THIRD_PARTY_NOTICES.md` from the locked dependency graph and committed notice policy/template. |
 | `make notices-check` | No | Regenerate notices in a temporary file and fail if committed notices are missing or stale. |
-| `make features` | No | Check default, no-default, all-features, critical combinations, and the machine-readable isolated-release declaration. |
-| `make isolated-release` | No | Check each declared production package's declared library/binary release targets per isolated feature profile, without workspace feature unification. |
+| `make features` | No | Check default, no-default, all-features, and critical combinations. |
 | `make lint` | No | Run strict lint policy with warnings denied for all feature profiles. |
 | `make test` | No | Run nextest suites and doctests for all feature profiles. |
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
-| `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and public-API boundary checks. |
+| `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and provider-SDK ownership boundary checks. |
 | `make coverage` | No | Collect coverage and apply the tier policy. |
+| `make coverage-default` | No | Collect coverage for the default profile only (`run_coverage.py --profile default`). |
+| `make coverage-no-default` | No | Collect coverage for the no-default profile only (`run_coverage.py --profile no_default`). |
+| `make coverage-all` | No | Collect coverage for the all-features profile only (`run_coverage.py --profile all`). |
 | `make coverage-artifacts-clean` | Yes, generated artifacts only | Remove `target/llvm-cov-target` after coverage's JSON reports are checked; it preserves reports and ordinary Cargo artifacts. |
 | `make deps` | No | Run locked metadata, third-party-notice freshness, deny, audit, unused-dependency, manifest, stale-direct-dependency, and duplicate-version checks. |
 | `make quick` | No | Run tools-check, fmt-check, and the profile-based lint matrix without duplicating the full test gate. |
 | `make check` | No | Run complete source-quality checks: tools, formatting, features, lint, all tests, doctests, docs, and architecture. |
 | `make verify` | No | Run `check` plus coverage and dependency/supply-chain checks. |
-| `make ci` | No | Alias the blocking local CI gate: initialize metrics, run `verify`, then finalize the metrics manifest. GitHub Actions invokes the three job aliases below in parallel matrix jobs instead. |
-| `make ci-source` | No | Run the CI source-quality job: job-scoped metrics, `check`, then job-scoped metrics finalize. |
-| `make ci-coverage` | No | Run the CI coverage job: job-scoped metrics, `coverage`, generated-artifact cleanup, `quality-self-test`, then job-scoped metrics finalize. |
+| `make ci` | No | Alias the blocking local CI gate: initialize metrics, run `verify`, then finalize the metrics manifest. GitHub Actions invokes the per-job aliases below in parallel matrix jobs instead. |
+| `make ci-source` | No | Local convenience alias for the complete `check` gate with job-scoped metrics. |
+| `make ci-lint-arch` | No | Run the CI lint/architecture job: job-scoped metrics, `fmt-check`, `features`, `lint`, `docs-check`, `architecture`, then job-scoped metrics finalize. |
+| `make ci-test` | No | Run the CI test job: job-scoped metrics, `check-cargo`, `test`, `doctest`, then job-scoped metrics finalize. |
+| `make ci-coverage-default` | No | Run the CI coverage job for the default profile: job-scoped metrics, `coverage-default`, generated-artifact cleanup, then job-scoped metrics finalize. |
+| `make ci-coverage-no-default` | No | Run the CI coverage job for the no-default profile: job-scoped metrics, `coverage-no-default`, generated-artifact cleanup, then job-scoped metrics finalize. |
+| `make ci-coverage-all` | No | Run the CI coverage job for the all-features profile: job-scoped metrics, `coverage-all`, generated-artifact cleanup, then job-scoped metrics finalize. |
+| `make ci-selftest` | No | Run the CI fixture self-check job: job-scoped metrics, the in-place `quality-self-test-in-place`, then job-scoped metrics finalize. |
 | `make ci-deps` | No | Run the CI dependency job: job-scoped metrics, `deps`, then job-scoped metrics finalize. |
 
-`make verify` runs `check`, `coverage`, and `deps`, then removes only the generated LLVM coverage target before `quality-self-test`; coverage reports remain available for CI upload. `make ci` wraps `verify` with `metrics-start` and `metrics-finish`, which write `quality/reports/quality-run.json` and a JSONL event stream for human-readable phase, profile, crate, stage, duration, and outcome records. The CI job aliases scope the same records per job as `quality-run-<job>.json` while sharing the runner-local event stream; parallel matrix jobs run on separate runners with separate checkouts, so per-job manifests never overwrite each other. Metrics are observational only and never change a gate's verdict; the event stream is cleared at the start of each run so stale records cannot leak into a new manifest. `quality-self-test` still copies and mutates an isolated source tree, but its copied-repository Cargo commands reuse the controller workspace `target` directory. Quality scripts resolve Cargo-generated artifacts through `CARGO_TARGET_DIR` when it is set. Cargo fingerprints the copied source paths and contents, so intentional fixture defects still recompile affected crates and must produce their required failures without allocating a second complete target tree in the temporary directory. `make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
+`make verify` runs `check`, `coverage`, and `deps`, then removes only the generated LLVM coverage target before `quality-self-test`; coverage reports remain available for CI upload. `make ci` wraps `verify` with `metrics-start` and `metrics-finish`, which write `quality/reports/quality-run.json` and a JSONL event stream for human-readable phase, profile, crate, stage, duration, and outcome records. The CI job aliases scope the same records per job as `quality-run-<job>.json` while sharing the runner-local event stream; parallel matrix jobs run on separate runners with separate checkouts, so per-job manifests never overwrite each other. Metrics are observational only and never change a gate's verdict; the event stream is cleared at the start of each run so stale records cannot leak into a new manifest. `quality-self-test` copies and mutates an isolated source tree and its copied-repository Cargo commands reuse the controller workspace `target` directory, while the CI job runs the same fixtures in place with `quality-self-test-in-place`: the working tree must be clean before each fixture and `git restore` scopes every mutation, so warm Cargo artifacts for the same source paths are reused instead of rebuilding the copied tree. Quality scripts resolve Cargo-generated artifacts through `CARGO_TARGET_DIR` when it is set. Cargo fingerprints the copied source paths and contents, so intentional fixture defects still recompile affected crates and must produce their required failures without allocating a second complete target tree in the temporary directory. `make check`, `make verify`, and `make ci` fail rather than modify source, update a lockfile, install tools, or resolve dependencies differently from committed state.
 
 ### Cargo command coverage
 
@@ -308,7 +310,7 @@ M0 is accepted because its implementation establishes that:
 
 - formatting, compilation, linting, tests, documentation, architecture checks, coverage, and supply-chain checks are blocking;
 - tool versions are pinned and checked before every reproducible quality run;
-- Makefile commands orchestrate every non-mutating quality gate and CI invokes the `ci-source`, `ci-coverage`, and `ci-deps` job aliases as its sole verification commands after explicit setup;
+- Makefile commands orchestrate every non-mutating quality gate and CI invokes the `ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-selftest`, and `ci-deps` job aliases as its sole verification commands after explicit setup;
 - coverage thresholds apply immediately by crate tier with no unreviewed escape hatch;
 - adapters use mapping/contract/outcome evidence rather than a misleading aggregate UI line target;
 - linting is strict but pragmatic, with narrow justified exceptions rather than a blanket unworkable lint set;

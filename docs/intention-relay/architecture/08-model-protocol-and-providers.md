@@ -33,7 +33,7 @@ Core DTO families:
 | `FinishReasonDto` | Typed terminal reason. |
 | `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
 
-Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use only in `intention-provider-openrouter` private implementation and `async_openai` only in `intention-provider-generic-chat`; rustdoc JSON rejects either SDK plus HTTP/runtime resources in every active public API.
+Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use only in `intention-provider-openrouter` private implementation and `async_openai` only in `intention-provider-generic-chat`; source-level ownership analysis rejects either SDK plus HTTP/runtime resources outside those owners.
 
 ## Durable model facts
 
