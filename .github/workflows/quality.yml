@@ -20,6 +20,16 @@ jobs:
           # Per-phase toolchain/tool scoping keeps every job lean: each phase
           # installs and validates only what it runs. The union of all scopes
           # equals the complete pinned toolset.
+          #
+          # lint-arch and test run on both Linux and Windows; coverage (all
+          # three profiles), selftest, and deps run on Linux only. Those three
+          # phases are platform-invariant: coverage measures the same source
+          # and toolchain, the selftest fixtures are Python/git subprocess
+          # checks, and the dependency gates read the same lockfile and
+          # registries. The Windows coverage trio dominated the CI critical
+          # path at roughly twenty minutes while running identical work about
+          # 1.7x slower than Linux; Windows correctness stays covered by the
+          # test job's named-pipe and platform-native symlink fixtures.
           - os: ubuntu-24.04
             phase: lint-arch
             stable: true
@@ -100,51 +110,6 @@ jobs:
             nightly_components: ""
             tools: "cargo-nextest@0.9.140"
             scope: test
-            rustflags: ""
-          - os: windows-2025
-            phase: coverage-default
-            stable: false
-            nightly: true
-            stable_components: ""
-            nightly_components: "llvm-tools-preview"
-            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
-            scope: coverage
-            rustflags: ""
-          - os: windows-2025
-            phase: coverage-no-default
-            stable: false
-            nightly: true
-            stable_components: ""
-            nightly_components: "llvm-tools-preview"
-            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
-            scope: coverage
-            rustflags: ""
-          - os: windows-2025
-            phase: coverage-all
-            stable: false
-            nightly: true
-            stable_components: ""
-            nightly_components: "llvm-tools-preview"
-            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
-            scope: coverage
-            rustflags: ""
-          - os: windows-2025
-            phase: selftest
-            stable: true
-            nightly: false
-            stable_components: "rustfmt, clippy"
-            nightly_components: ""
-            tools: "cargo-machete@0.9.2,cargo-outdated@0.19.0,cargo-about@0.9.1"
-            scope: selftest
-            rustflags: ""
-          - os: windows-2025
-            phase: deps
-            stable: true
-            nightly: true
-            stable_components: ""
-            nightly_components: ""
-            tools: "cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-about@0.9.1,cargo-outdated@0.19.0,cargo-machete@0.9.2,cargo-udeps@0.1.61"
-            scope: deps
             rustflags: ""
     env:
       CARGO_TERM_COLOR: never
