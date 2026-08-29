@@ -97,7 +97,7 @@ not expose SDK resources.
 
 ### Generic Chat Completion
 
-`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.29.3 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser.
+`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.41.3 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser.
 
 It owns:
 

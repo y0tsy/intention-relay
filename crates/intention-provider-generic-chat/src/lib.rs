@@ -10,7 +10,7 @@ use async_openai::{
     Client,
     config::OpenAIConfig,
     error::OpenAIError,
-    types::{
+    types::chat::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestAssistantMessageContent,
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
         ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
@@ -379,7 +379,7 @@ impl FunctionToolFragments {
         &mut self,
         id: Option<String>,
         kind: Option<String>,
-        function: Option<async_openai::types::FunctionCallStream>,
+        function: Option<async_openai::types::chat::FunctionCallStream>,
     ) -> Result<(), ()> {
         merge_constant(&mut self.id, id)?;
         merge_constant(&mut self.kind, kind)?;
@@ -402,7 +402,7 @@ impl FunctionToolFragments {
 
     fn merge_legacy(
         &mut self,
-        function: async_openai::types::FunctionCallStream,
+        function: async_openai::types::chat::FunctionCallStream,
     ) -> Result<(), ()> {
         merge_constant(&mut self.name, function.name)?;
         if let Some(arguments) = function.arguments {
@@ -464,10 +464,10 @@ fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
     let retryable = match error {
         OpenAIError::Reqwest(_) | OpenAIError::StreamError(_) => true,
         OpenAIError::ApiError(error) => matches!(
-            error.r#type.as_deref(),
+            error.api_error.r#type.as_deref(),
             None | Some("rate_limit_exceeded" | "server_error")
         ),
-        OpenAIError::JSONDeserialize(_)
+        OpenAIError::JSONDeserialize(..)
         | OpenAIError::FileSaveError(_)
         | OpenAIError::FileReadError(_)
         | OpenAIError::InvalidArgument(_) => false,
@@ -502,7 +502,8 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletio
         .model(request.model())
         .messages(messages)
         .stream_options(ChatCompletionStreamOptions {
-            include_usage: true,
+            include_usage: Some(true),
+            include_obfuscation: None,
         })
         .build()
         .map_err(|_| {
@@ -562,7 +563,7 @@ mod tests {
             .merge(
                 Some("first".to_owned()),
                 Some("function".to_owned()),
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("{\"path\"".to_owned()),
                 }),
@@ -572,7 +573,7 @@ mod tests {
             .merge(
                 Some("second".to_owned()),
                 Some("function".to_owned()),
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("search".to_owned()),
                     arguments: Some("{\"query\"".to_owned()),
                 }),
@@ -582,7 +583,7 @@ mod tests {
             .merge(
                 None,
                 None,
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: None,
                     arguments: Some(":\"src\"}".to_owned()),
                 }),
@@ -592,7 +593,7 @@ mod tests {
             .merge(
                 None,
                 None,
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: None,
                     arguments: Some(":\"model\"}".to_owned()),
                 }),
@@ -621,7 +622,7 @@ mod tests {
             .merge(
                 Some("call".to_owned()),
                 Some("function".to_owned()),
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("{}".to_owned()),
                 }),
@@ -638,7 +639,7 @@ mod tests {
             .merge(
                 Some("call".to_owned()),
                 Some("function".to_owned()),
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("not-json".to_owned()),
                 }),
@@ -651,13 +652,13 @@ mod tests {
     fn legacy_function_fragments_complete_only_at_terminal() {
         let mut fragments = FunctionToolFragments::default();
         fragments
-            .merge_legacy(async_openai::types::FunctionCallStream {
+            .merge_legacy(async_openai::types::chat::FunctionCallStream {
                 name: Some("inspect".to_owned()),
                 arguments: Some("{\"path\"".to_owned()),
             })
             .expect("legacy initial fragment is valid");
         fragments
-            .merge_legacy(async_openai::types::FunctionCallStream {
+            .merge_legacy(async_openai::types::chat::FunctionCallStream {
                 name: None,
                 arguments: Some(":\"src\"}".to_owned()),
             })
@@ -668,7 +669,7 @@ mod tests {
         assert!(FunctionToolFragments::default().finish_legacy().is_err());
         let mut malformed = FunctionToolFragments::default();
         malformed
-            .merge_legacy(async_openai::types::FunctionCallStream {
+            .merge_legacy(async_openai::types::chat::FunctionCallStream {
                 name: Some("inspect".to_owned()),
                 arguments: Some("not-json".to_owned()),
             })
@@ -676,14 +677,14 @@ mod tests {
         assert!(malformed.finish_legacy().is_err());
         let mut conflicting = FunctionToolFragments::default();
         conflicting
-            .merge_legacy(async_openai::types::FunctionCallStream {
+            .merge_legacy(async_openai::types::chat::FunctionCallStream {
                 name: Some("inspect".to_owned()),
                 arguments: Some("{}".to_owned()),
             })
             .expect("legacy initial fragment is valid");
         assert!(
             conflicting
-                .merge_legacy(async_openai::types::FunctionCallStream {
+                .merge_legacy(async_openai::types::chat::FunctionCallStream {
                     name: Some("other".to_owned()),
                     arguments: None,
                 })
@@ -693,17 +694,23 @@ mod tests {
 
     #[test]
     fn native_errors_preserve_safe_retry_guidance() {
-        let rate_limited = OpenAIError::ApiError(async_openai::error::ApiError {
-            message: "secret provider text".to_owned(),
-            r#type: Some("rate_limit_exceeded".to_owned()),
-            param: None,
-            code: None,
+        let rate_limited = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
+            status_code: http::StatusCode::TOO_MANY_REQUESTS,
+            api_error: async_openai::error::ApiError {
+                message: "secret provider text".to_owned(),
+                r#type: Some("rate_limit_exceeded".to_owned()),
+                param: None,
+                code: None,
+            },
         });
-        let permanent = OpenAIError::ApiError(async_openai::error::ApiError {
-            message: "secret provider text".to_owned(),
-            r#type: Some("invalid_request_error".to_owned()),
-            param: None,
-            code: None,
+        let permanent = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
+            status_code: http::StatusCode::BAD_REQUEST,
+            api_error: async_openai::error::ApiError {
+                message: "secret provider text".to_owned(),
+                r#type: Some("invalid_request_error".to_owned()),
+                param: None,
+                code: None,
+            },
         });
         assert_eq!(
             map_openai_error(&rate_limited).retry(),
@@ -714,12 +721,19 @@ mod tests {
             intention_types::ErrorRetryDto::Never
         );
         assert_eq!(
-            map_openai_error(&OpenAIError::StreamError("secret provider text".to_owned())).retry(),
+            map_openai_error(&OpenAIError::StreamError(Box::new(
+                async_openai::error::StreamError::EventStream("secret provider text".to_owned())
+            )))
+            .retry(),
             intention_types::ErrorRetryDto::Delayed
         );
     }
 
     #[test]
+    #[allow(
+        deprecated,
+        reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
+    )]
     fn usage_only_final_chunk_maps_before_finish() {
         let mut state = GenericStreamState::new(
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
@@ -734,7 +748,7 @@ mod tests {
             service_tier: None,
             system_fingerprint: None,
             object: "chat.completion.chunk".to_owned(),
-            usage: Some(async_openai::types::CompletionUsage {
+            usage: Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 2,
                 completion_tokens: 3,
                 total_tokens: 5,
@@ -771,7 +785,7 @@ mod tests {
             .merge(
                 Some("modern".to_owned()),
                 Some("function".to_owned()),
-                Some(async_openai::types::FunctionCallStream {
+                Some(async_openai::types::chat::FunctionCallStream {
                     name: Some("inspect".to_owned()),
                     arguments: Some("{}".to_owned()),
                 }),
@@ -779,7 +793,7 @@ mod tests {
             .expect("modern fixture is valid");
         let mut legacy = FunctionToolFragments::default();
         legacy
-            .merge_legacy(async_openai::types::FunctionCallStream {
+            .merge_legacy(async_openai::types::chat::FunctionCallStream {
                 name: Some("inspect".to_owned()),
                 arguments: Some("{}".to_owned()),
             })
@@ -797,9 +811,13 @@ mod tests {
         ));
     }
 
+    #[allow(
+        deprecated,
+        reason = "The private fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
+    )]
     fn chunk(
-        choices: Vec<async_openai::types::ChatChoiceStream>,
-        usage: Option<async_openai::types::CompletionUsage>,
+        choices: Vec<async_openai::types::chat::ChatChoiceStream>,
+        usage: Option<async_openai::types::chat::CompletionUsage>,
     ) -> CreateChatCompletionStreamResponse {
         CreateChatCompletionStreamResponse {
             id: "fixture".to_owned(),
@@ -819,10 +837,10 @@ mod tests {
     )]
     fn delta(
         content: Option<&str>,
-        tool_calls: Option<Vec<async_openai::types::ChatCompletionMessageToolCallChunk>>,
+        tool_calls: Option<Vec<async_openai::types::chat::ChatCompletionMessageToolCallChunk>>,
         finish_reason: Option<FinishReason>,
-    ) -> async_openai::types::ChatChoiceStream {
-        async_openai::types::ChatChoiceStream {
+    ) -> async_openai::types::chat::ChatChoiceStream {
+        async_openai::types::chat::ChatChoiceStream {
             index: 0,
             delta: ChatCompletionStreamResponseDelta {
                 content: content.map(str::to_owned),
@@ -843,11 +861,11 @@ mod tests {
             vec![delta(
                 Some("answer"),
                 Some(vec![
-                    async_openai::types::ChatCompletionMessageToolCallChunk {
+                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
                         index: 0,
                         id: Some("call".to_owned()),
-                        r#type: Some(async_openai::types::ChatCompletionToolType::Function),
-                        function: Some(async_openai::types::FunctionCallStream {
+                        r#type: Some(async_openai::types::chat::FunctionType::Function),
+                        function: Some(async_openai::types::chat::FunctionCallStream {
                             name: Some("inspect".to_owned()),
                             arguments: Some("{}".to_owned()),
                         }),
@@ -899,7 +917,7 @@ mod tests {
             GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         invalid_usage.accept_chunk(chunk(
             Vec::new(),
-            Some(async_openai::types::CompletionUsage {
+            Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 1,
                 completion_tokens: 1,
                 total_tokens: 1,
@@ -918,11 +936,11 @@ mod tests {
             vec![delta(
                 None,
                 Some(vec![
-                    async_openai::types::ChatCompletionMessageToolCallChunk {
+                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
                         index: 0,
                         id: Some("call".to_owned()),
-                        r#type: Some(async_openai::types::ChatCompletionToolType::Function),
-                        function: Some(async_openai::types::FunctionCallStream {
+                        r#type: Some(async_openai::types::chat::FunctionType::Function),
+                        function: Some(async_openai::types::chat::FunctionCallStream {
                             name: None,
                             arguments: Some("{}".to_owned()),
                         }),
