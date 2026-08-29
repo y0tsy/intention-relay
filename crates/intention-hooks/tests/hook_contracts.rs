@@ -117,6 +117,7 @@ fn every_hook_phase_maps_to_its_typed_context() {
     });
     let result = ToolResult::Execute(intention_tools::TextResult {
         text: BoundedText::new("ok").expect("result"),
+        truncated: false,
     });
     let contexts = [
         (
@@ -308,6 +309,7 @@ fn input_context(phase: Phase) -> PhaseContext {
 fn result_context(phase: Phase) -> PhaseContext {
     let result = ToolResult::Execute(intention_tools::TextResult {
         text: BoundedText::new("ok").expect("result"),
+        truncated: false,
     });
     match phase {
         Phase::AfterToolExecution => PhaseContext::Executed {
@@ -365,6 +367,7 @@ fn input_transforms_are_rejected_for_every_result_phase() {
 fn result_transforms_are_rejected_for_every_input_phase() {
     let result = ToolResult::Execute(intention_tools::TextResult {
         text: BoundedText::new("changed").expect("result"),
+        truncated: false,
     });
     for phase in [
         Phase::BeforeToolInvocation,

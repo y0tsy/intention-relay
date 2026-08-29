@@ -659,6 +659,7 @@ fn local_tool_invalid_result_outcome_is_rejected_before_execution() {
             outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("x").expect("text"),
+                    truncated: false,
                 },
             )),
         }))
@@ -988,6 +989,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
                 outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                     intention_tools::TextResult {
                         text: intention_tools::BoundedText::new("changed").expect("text"),
+                        truncated: false,
                     },
                 )),
             }))
@@ -1303,6 +1305,7 @@ fn local_tool_workspace_and_execution_hooks_cover_transform_and_rejections() {
             outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("changed").expect("text"),
+                    truncated: false,
                 },
             )),
         }))
@@ -1335,6 +1338,7 @@ fn local_tool_hook_transform_result_before_execution_is_rejected() {
             outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("x").expect("text"),
+                    truncated: false,
                 },
             )),
         }))
@@ -1378,6 +1382,7 @@ fn local_tool_covers_workspace_reject_and_all_post_execution_outcomes() {
             HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("x").expect("text"),
+                    truncated: false,
                 },
             )),
             "invalid_hook_outcome",
@@ -1477,6 +1482,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
                 outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                     intention_tools::TextResult {
                         text: intention_tools::BoundedText::new("changed").expect("text"),
+                        truncated: false,
                     },
                 )),
             }))
@@ -1689,6 +1695,7 @@ fn local_tool_covers_invocation_and_workspace_invalid_hook_outcomes() {
                 outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                     intention_tools::TextResult {
                         text: intention_tools::BoundedText::new("x").expect("text"),
+                        truncated: false,
                     },
                 )),
                 id: "invalid-result",
@@ -1741,6 +1748,7 @@ fn local_tool_covers_execution_and_result_hook_invalid_outcomes() {
             outcome: HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("x").expect("text"),
+                    truncated: false,
                 },
             )),
             id: "execution-invalid-result",
@@ -2039,6 +2047,7 @@ fn hello_workspace(root: &std::path::Path) -> WorkspaceRoot {
 fn hello_read_result() -> intention_tools::ToolResult {
     intention_tools::ToolResult::Read(intention_tools::TextResult {
         text: intention_tools::BoundedText::new("hello").expect("text"),
+        truncated: false,
     })
 }
 
@@ -2171,6 +2180,7 @@ fn after_publish_transform_outcomes_are_invalidated_without_extra_failures() {
             HookOutcome::TransformResult(intention_tools::ToolResult::Read(
                 intention_tools::TextResult {
                     text: intention_tools::BoundedText::new("changed").expect("text"),
+                    truncated: false,
                 },
             )),
             "published result cannot be transformed",

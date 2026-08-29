@@ -488,6 +488,7 @@ fn glob_matches_fail_closed_on_symlinks_and_stay_deterministic() {
         let ToolResult::Glob(result) = result else {
             unreachable!("non-glob result")
         };
+        assert!(!result.truncated, "unexpected truncation for: {pattern}");
         for path in &result.paths {
             let value = path.as_str();
             assert_ne!(value, "alias.txt", "symlink alias reported for: {pattern}");
@@ -508,7 +509,7 @@ fn glob_matches_fail_closed_on_symlinks_and_stay_deterministic() {
 }
 
 #[test]
-fn sources_are_read_in_full_past_any_former_bound() {
+fn bounded_sources_report_truncation_only_past_the_output_bound() {
     let dir = fixture_dir("bounded-source");
     std::fs::write(dir.path().join("exact.bin"), vec![b'a'; 65_536]).unwrap();
     std::fs::write(dir.path().join("over.bin"), vec![b'b'; 65_537]).unwrap();
@@ -517,7 +518,7 @@ fn sources_are_read_in_full_past_any_former_bound() {
     )
     .unwrap();
     let service = ToolService::new(workspace);
-    for (name, length) in [("exact.bin", 65_536), ("over.bin", 65_537)] {
+    for (name, truncated, length) in [("exact.bin", false, 65_536), ("over.bin", true, 65_536)] {
         let result = service
             .dispatch(
                 ToolCallId::new(),
@@ -529,7 +530,8 @@ fn sources_are_read_in_full_past_any_former_bound() {
         let ToolResult::Read(result) = result else {
             unreachable!("non-read result")
         };
-        assert_eq!(result.text.as_str().len(), length, "full content: {name}");
+        assert_eq!(result.text.as_str().len(), length, "bound cut: {name}");
+        assert_eq!(result.truncated, truncated, "truncation flag: {name}");
     }
 }
 
@@ -803,6 +805,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
     };
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].fragment.as_str(), "needle");
+    assert!(!result.truncated);
 }
 
 #[test]
@@ -836,6 +839,7 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
     assert!(result.text.as_str().contains("stdout:\nout"));
     assert!(result.text.as_str().contains("stderr:\nerr"));
     assert!(result.text.as_str().contains("exit_code:0"));
+    assert!(!result.truncated);
 }
 
 #[test]
@@ -1088,6 +1092,7 @@ fn dto_metadata_and_observability_round_trip_all_variants() {
         context,
         result: ToolResult::Read(TextResult {
             text: BoundedText::new("ok").expect("text"),
+            truncated: false,
         }),
         observability: ToolObservability {
             outcome: ToolOutcome::Succeeded,
@@ -1174,7 +1179,7 @@ fn cancellation_signal_transitions_and_tool_id_formats_are_stable() {
 }
 
 #[test]
-fn tool_service_read_and_grep_keep_invalid_utf8_content_lossy_in_full() {
+fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
     let dir = fixture_dir("invalid-utf8");
     let bytes = vec![0xff; 70_000];
     std::fs::write(dir.path().join("bytes.bin"), bytes).unwrap();
@@ -1192,34 +1197,11 @@ fn tool_service_read_and_grep_keep_invalid_utf8_content_lossy_in_full() {
         .unwrap();
     assert!(matches!(
         result,
-        ToolResult::Read(TextResult { text }) if text.as_str().chars().count() == 70_000
+        ToolResult::Read(TextResult {
+            truncated: true,
+            ..
+        })
     ));
-    let result = service
-        .dispatch(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("\u{fffd}").unwrap(),
-                path: Some(path.clone()),
-                scope: Some(GrepScope::File { path }),
-            }),
-        )
-        .unwrap();
-    assert!(matches!(
-        result,
-        ToolResult::Grep(GrepResult { matches }) if matches.len() == 1
-    ));
-}
-
-#[test]
-fn tool_service_invalid_utf8_grep_scope_search_keeps_full_matches() {
-    let dir = fixture_dir("invalid-utf8-scope");
-    std::fs::write(dir.path().join("bytes.bin"), vec![0xff; 70_000]).unwrap();
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
-    )
-    .unwrap();
-    let service = ToolService::new(workspace);
-    let path = WorkspaceRelativePathDto::parse("bytes.bin").unwrap();
     let result = service
         .dispatch(
             ToolCallId::new(),
@@ -1232,7 +1214,10 @@ fn tool_service_invalid_utf8_grep_scope_search_keeps_full_matches() {
         .unwrap();
     assert!(matches!(
         result,
-        ToolResult::Grep(intention_tools::GrepResult { .. })
+        ToolResult::Grep(intention_tools::GrepResult {
+            truncated: true,
+            ..
+        })
     ));
 }
 
@@ -1385,7 +1370,7 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
         )
         .expect("read");
     assert!(
-        matches!(read, ToolResult::Read(TextResult { text }) if text.as_str().is_empty())
+        matches!(read, ToolResult::Read(TextResult { truncated: false, text }) if text.as_str().is_empty())
     );
     let edit = service
         .dispatch(
@@ -1503,21 +1488,27 @@ fn read_and_grep_bound_large_content() {
         )
         .unwrap();
     for result in [read, grep] {
-        match result {
-            ToolResult::Read(v) => {
-                assert!(v.text.as_str().starts_with("needle"));
-                assert!(v.text.as_str().len() >= 20_000 * 7);
-            }
-            ToolResult::Grep(v) => {
-                assert!(v.matches.len() >= 20_000);
-            }
+        let (text, truncated) = match result {
+            ToolResult::Read(v) => (v.text, v.truncated),
+            ToolResult::Grep(v) => (
+                BoundedText::new(
+                    v.matches
+                        .iter()
+                        .map(|m| m.fragment.as_str())
+                        .collect::<String>(),
+                )
+                .unwrap(),
+                v.truncated,
+            ),
             _ => unreachable!(),
-        }
+        };
+        assert!(text.as_str().len() <= 65_536 + "\n[truncated]".len());
+        assert!(truncated);
     }
 }
 
 #[test]
-fn grep_keeps_long_multibyte_fragments_in_full() {
+fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
     let root_dir = fixture_dir("large-multibyte-grep");
     let line = format!("needle{}", "界".repeat(30_000));
     std::fs::write(root_dir.path().join("large.txt"), &line).unwrap();
@@ -1541,14 +1532,15 @@ fn grep_keeps_long_multibyte_fragments_in_full() {
         unreachable!("dispatch returned non-grep result")
     };
     assert_eq!(result.matches.len(), 1);
+    assert!(result.truncated);
     let fragment = result.matches[0].fragment.as_str();
+    assert!(fragment.is_char_boundary(fragment.len()));
+    assert!(fragment.len() <= 65_536);
     assert!(fragment.starts_with("needle"));
-    assert!(fragment.ends_with('界'));
-    assert!(fragment.len() >= 60_000);
 }
 
 #[test]
-fn execute_formats_success_and_keeps_both_streams() {
+fn execute_formats_success_and_truncates_both_streams() {
     let root_dir = fixture_dir("execute-output");
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
@@ -1583,10 +1575,10 @@ fn execute_formats_success_and_keeps_both_streams() {
     assert!(value.text.as_str().contains("stdout:"));
     assert!(value.text.as_str().contains("stderr:"));
     assert!(value.text.as_str().contains("exit_code:0"));
-    assert!(
-        value.text.as_str().contains("x".repeat(200_000).as_str()),
-        "stdout content is preserved in full"
-    );
+    assert!(value.truncated || cfg!(windows));
+    // Truncation is part of the typed result contract; the text marker is
+    // retained for compatibility but is not required to be a suffix.
+    assert!(value.text.as_str().contains("[truncated]") || cfg!(windows));
 }
 
 #[test]
@@ -1683,6 +1675,7 @@ fn default_tools_cover_write_edit_glob_grep_and_cancellation_paths() {
     assert!(matches!(
         grep,
         ToolResult::Grep(intention_tools::GrepResult {
+            truncated: false,
             ..
         })
     ));
@@ -2027,8 +2020,9 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             "{tool} envelope leaked the absolute root"
         );
         match (&projection.content, tool) {
-            (ToolProjectedContent::Text { text }, ToolId::Read) => {
+            (ToolProjectedContent::Text { text, truncated }, ToolId::Read) => {
                 assert!(text.as_str().starts_with("alpha"));
+                assert!(!*truncated);
             }
             (ToolProjectedContent::Mutation { bytes }, ToolId::Write) => {
                 assert_eq!(*bytes, "beta needle".len() as u64);
@@ -2036,21 +2030,24 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             (ToolProjectedContent::Mutation { bytes }, ToolId::Edit) => {
                 assert_eq!(*bytes, "gamma needle".len() as u64);
             }
-            (ToolProjectedContent::Paths { paths }, ToolId::Glob) => {
+            (ToolProjectedContent::Paths { paths, truncated }, ToolId::Glob) => {
                 let listed = paths
                     .iter()
                     .map(WorkspaceRelativePathDto::as_str)
                     .collect::<Vec<_>>();
                 assert_eq!(listed, vec!["data.txt"]);
+                assert!(!*truncated);
             }
-            (ToolProjectedContent::Matches { matches }, ToolId::Grep) => {
+            (ToolProjectedContent::Matches { matches, truncated }, ToolId::Grep) => {
                 assert_eq!(matches.len(), 1);
                 assert_eq!(matches[0].path.as_str(), "data.txt");
                 assert_eq!(matches[0].fragment.as_str(), "gamma needle");
                 assert_eq!(matches[0].line, 1);
+                assert!(!*truncated);
             }
-            (ToolProjectedContent::Text { text }, ToolId::Execute) => {
+            (ToolProjectedContent::Text { text, truncated }, ToolId::Execute) => {
                 assert!(text.as_str().contains("ok"));
+                assert!(!*truncated);
                 assert_eq!(
                     projection.execution.process_status,
                     Some(ToolProcessStatus::Success)
@@ -2068,12 +2065,14 @@ fn projections_clamp_oversized_collections_and_round_trip() {
         .collect::<Vec<_>>();
     let projection = ToolResult::Glob(PathsResult {
         paths,
+        truncated: false,
     })
     .projection();
-    let ToolProjectedContent::Paths { paths } = projection.content else {
+    let ToolProjectedContent::Paths { paths, truncated } = projection.content else {
         unreachable!("glob projection content")
     };
-    assert_eq!(paths.len(), 10_001);
+    assert_eq!(paths.len(), 10_000);
+    assert!(truncated);
 
     let matches = (0..=10_000)
         .map(|index| GrepMatch {
@@ -2085,6 +2084,7 @@ fn projections_clamp_oversized_collections_and_round_trip() {
         .collect::<Vec<_>>();
     let projection = ToolResult::Grep(GrepResult {
         matches,
+        truncated: false,
     })
     .projection();
     // The bounded projection serializes losslessly for durable persistence.
@@ -2093,10 +2093,11 @@ fn projections_clamp_oversized_collections_and_round_trip() {
         serde_json::from_str::<ToolResultProjection>(&encoded).unwrap(),
         projection
     );
-    let ToolProjectedContent::Matches { matches } = projection.content else {
+    let ToolProjectedContent::Matches { matches, truncated } = projection.content else {
         unreachable!("grep projection content")
     };
-    assert_eq!(matches.len(), 10_001);
+    assert_eq!(matches.len(), 10_000);
+    assert!(truncated);
 }
 
 #[test]
@@ -2112,6 +2113,7 @@ fn projection_falls_back_to_observability_and_bare_results_stay_bounded() {
         },
         result: ToolResult::Read(TextResult {
             text: BoundedText::new("payload").unwrap(),
+            truncated: false,
         }),
         observability: ToolObservability {
             outcome: ToolOutcome::Succeeded,

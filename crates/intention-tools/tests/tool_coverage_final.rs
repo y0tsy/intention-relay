@@ -47,7 +47,10 @@ fn exercises_plain_grep_and_envelope_fallback() {
             run_id: intention_types::RunId::new(),
             call_id: ToolCallId::new(),
         },
-        result: ToolResult::Read(TextResult { text: text("ok") }),
+        result: ToolResult::Read(TextResult {
+            text: text("ok"),
+            truncated: false,
+        }),
         observability: ToolObservability {
             outcome: ToolOutcome::Succeeded,
             policy: ToolPolicy::Denied,
@@ -93,11 +96,22 @@ fn exercises_projection_variants_and_bounded_text_validation() {
     assert!(BoundedText::new("a\0b").is_err());
     let p = ToolResult::Glob(PathsResult {
         paths: vec![path("a")],
+        truncated: false,
     })
     .projection();
     assert!(matches!(p.content, ToolProjectedContent::Paths { .. }));
-    let p = ToolResult::Grep(GrepResult { matches: vec![] }).projection();
-    assert!(matches!(p.content, ToolProjectedContent::Matches { .. }));
+    let p = ToolResult::Grep(GrepResult {
+        matches: vec![],
+        truncated: true,
+    })
+    .projection();
+    assert!(matches!(
+        p.content,
+        ToolProjectedContent::Matches {
+            truncated: true,
+            ..
+        }
+    ));
     let p = ToolResult::Write(WriteResult { bytes: 3 }).projection();
     assert!(matches!(
         p.content,

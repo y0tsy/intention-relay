@@ -385,6 +385,7 @@ mod tests {
             }),
             result: ToolResult::Execute(intention_tools::TextResult {
                 text: BoundedText::new("x").unwrap(),
+                truncated: false,
             }),
         }
     }
@@ -397,6 +398,7 @@ mod tests {
             priority: 2,
             outcome: Outcome::TransformResult(ToolResult::Execute(intention_tools::TextResult {
                 text: BoundedText::new("b").unwrap(),
+                truncated: false,
             })),
             phases: &P,
         }))
@@ -406,6 +408,7 @@ mod tests {
             priority: 1,
             outcome: Outcome::TransformResult(ToolResult::Execute(intention_tools::TextResult {
                 text: BoundedText::new("a").unwrap(),
+                truncated: false,
             })),
             phases: &P,
         }))
@@ -507,6 +510,7 @@ mod tests {
                 seen: seen.clone(),
                 result: Some(ToolResult::Execute(intention_tools::TextResult {
                     text: BoundedText::new("changed").unwrap(),
+                    truncated: false,
                 })),
                 reject: false,
             }))
@@ -546,6 +550,7 @@ mod tests {
         let input = ctx_input();
         let result = ToolResult::Execute(intention_tools::TextResult {
             text: BoundedText::new("ok").unwrap(),
+            truncated: false,
         });
         let cases = [
             (
@@ -663,6 +668,7 @@ mod tests {
             call: ToolCallId::new(),
             result: ToolResult::Execute(intention_tools::TextResult {
                 text: BoundedText::new("ok").unwrap(),
+                truncated: false,
             }),
         };
         assert_eq!(registry.dispatch(&published).unwrap(), Outcome::Continue);
@@ -745,6 +751,7 @@ mod tests {
             input: ctx_input(),
             result: ToolResult::Execute(intention_tools::TextResult {
                 text: BoundedText::new("result").unwrap(),
+                truncated: false,
             }),
         };
         assert!(registry.dispatch(&context).is_err());
@@ -759,6 +766,7 @@ mod tests {
         ];
         let result = ToolResult::Execute(intention_tools::TextResult {
             text: BoundedText::new("changed").unwrap(),
+            truncated: false,
         });
         let mut registry = Registry::new();
         registry
@@ -869,6 +877,7 @@ mod tests {
 
         let result = ToolResult::Execute(intention_tools::TextResult {
             text: BoundedText::new("final").unwrap(),
+            truncated: false,
         });
         let mut reject = Registry::new();
         reject

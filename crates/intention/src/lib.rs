@@ -1285,6 +1285,7 @@ mod tests {
     fn hello_read_result() -> ToolResult {
         ToolResult::Read(intention_tools::TextResult {
             text: intention_tools::BoundedText::new("hello").expect("fixture text"),
+            truncated: false,
         })
     }
 
