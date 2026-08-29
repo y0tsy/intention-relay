@@ -94,34 +94,28 @@ impl ModelRunFactKindDto {
     }
 }
 
-/// The bounded outcome of one recorded tool result.
+/// The outcome of one recorded tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ToolResultOutcomeDto {
-    /// The tool call completed with bounded normalized content.
+    /// The tool call completed with normalized content.
     Succeeded { content: String },
     /// The tool call failed safely.
     Failed { failure: RunFailureDto },
 }
 
 impl ToolResultOutcomeDto {
-    /// Creates a bounded successful tool-result outcome.
+    /// Creates a successful tool-result outcome.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank or exceeds 4 KiB.
+    /// Returns a validation error when content is blank.
     pub fn succeeded(content: impl Into<String>) -> DtoResult<Self> {
         let content = non_blank(
             content.into(),
             "invalid_tool_result_content",
             "tool result content must not be empty",
         )?;
-        if content.len() > MAX_ASSISTANT_CONTENT_BYTES {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_content",
-                "tool result content must not exceed 4 KiB",
-            ));
-        }
         Ok(Self::Succeeded { content })
     }
 

@@ -748,7 +748,7 @@ pub enum DomainEventDto {
     PlanStatusChanged(PlanStatusChangedEventDto),
     /// A typed local tool lifecycle fact was recorded.
     ToolLifecycle(ToolLifecycleEventDto),
-    /// A normalized, bounded local tool result was recorded for durable persistence.
+    /// A normalized, safe local tool result was recorded for durable persistence.
     ToolResultRecorded(ToolResultRecordedEventDto),
 }
 
@@ -890,7 +890,7 @@ impl ToolLifecycleEventDto {
     ) -> DtoResult<Self> {
         let tool_id = tool_id.into();
         let detail = detail.into();
-        if tool_id.trim().is_empty() || detail.len() > 4096 || detail.contains('\0') {
+        if tool_id.trim().is_empty() || detail.contains('\0') {
             return Err(ErrorDto::validation(
                 "invalid_tool_lifecycle",
                 "tool lifecycle evidence is invalid",
@@ -936,15 +936,6 @@ impl ToolLifecycleEventDto {
     }
 }
 
-/// The maximum persisted normalized tool-result content in bytes.
-const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 4 * 1024;
-/// The maximum number of persisted structured tool-result metadata entries.
-const MAX_TOOL_RESULT_METADATA_ENTRIES: usize = 16;
-/// The maximum persisted tool-result metadata key length in bytes.
-const MAX_TOOL_RESULT_METADATA_KEY_BYTES: usize = 128;
-/// The maximum persisted tool-result metadata value length in bytes.
-const MAX_TOOL_RESULT_METADATA_VALUE_BYTES: usize = 1024;
-
 /// The terminal outcome recorded for one local tool result.
 ///
 /// The taxonomy is deliberately closed to terminal outcomes: admission,
@@ -975,7 +966,7 @@ impl ToolResultStatusDto {
     }
 }
 
-/// One bounded, credential-free structured metadata entry of a tool result.
+/// One credential-free structured metadata entry of a tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ToolResultMetadataEntryDto {
     key: String,
@@ -999,24 +990,19 @@ impl<'de> Deserialize<'de> for ToolResultMetadataEntryDto {
 }
 
 impl ToolResultMetadataEntryDto {
-    /// Creates one bounded metadata entry with a non-blank key.
+    /// Creates one metadata entry with a non-blank key.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the key is blank or either field exceeds
-    /// its documented bound or contains a NUL character.
+    /// Returns a validation error when the key is blank or either field
+    /// contains a NUL character.
     pub fn new(key: impl Into<String>, value: impl Into<String>) -> DtoResult<Self> {
         let key = key.into();
         let value = value.into();
-        if key.trim().is_empty()
-            || key.len() > MAX_TOOL_RESULT_METADATA_KEY_BYTES
-            || value.len() > MAX_TOOL_RESULT_METADATA_VALUE_BYTES
-            || key.contains('\0')
-            || value.contains('\0')
-        {
+        if key.trim().is_empty() || key.contains('\0') || value.contains('\0') {
             return Err(ErrorDto::validation(
                 "invalid_tool_result_metadata",
-                "tool result metadata must be bounded with a non-blank key",
+                "tool result metadata must have a non-blank key",
             ));
         }
         Ok(Self { key, value })
@@ -1028,7 +1014,7 @@ impl ToolResultMetadataEntryDto {
         &self.key
     }
 
-    /// Returns the bounded metadata value.
+    /// Returns the metadata value.
     #[must_use]
     pub fn value(&self) -> &str {
         &self.value
@@ -1037,9 +1023,9 @@ impl ToolResultMetadataEntryDto {
 
 /// The durable record of one normalized safe local tool result.
 ///
-/// The payload is typed and bounded by construction and carries no credential,
-/// configuration path, raw operating-system error, or unbounded content: it
-/// persists only the normalized safe result supplied by the tool boundary.
+/// The payload is typed by construction and carries no credential, configuration
+/// path, or raw operating-system error: it persists only the normalized safe
+/// result supplied by the tool boundary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ToolResultRecordedEventDto {
     session_id: SessionId,
@@ -1086,12 +1072,12 @@ impl<'de> Deserialize<'de> for ToolResultRecordedEventDto {
 }
 
 impl ToolResultRecordedEventDto {
-    /// Creates a bounded durable record of one safe local tool result.
+    /// Creates a durable record of one safe local tool result.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the tool identity is blank, the normalized
-    /// content or metadata exceeds its documented bound, or metadata keys are duplicated.
+    /// content contains a NUL character, or metadata keys are duplicated.
     #[expect(
         clippy::too_many_arguments,
         reason = "The closed M5 tool-result payload keeps one flat validating constructor."
@@ -1108,14 +1094,10 @@ impl ToolResultRecordedEventDto {
     ) -> DtoResult<Self> {
         let tool_id = tool_id.into();
         let normalized_content = normalized_content.into();
-        if tool_id.trim().is_empty()
-            || normalized_content.len() > MAX_TOOL_RESULT_CONTENT_BYTES
-            || normalized_content.contains('\0')
-            || structured_metadata.len() > MAX_TOOL_RESULT_METADATA_ENTRIES
-        {
+        if tool_id.trim().is_empty() || normalized_content.contains('\0') {
             return Err(ErrorDto::validation(
                 "invalid_tool_result_record",
-                "tool result record needs a tool identity and bounded safe content",
+                "tool result record needs a tool identity and safe content",
             ));
         }
         let mut seen_keys = std::collections::HashSet::with_capacity(structured_metadata.len());
@@ -1176,7 +1158,7 @@ impl ToolResultRecordedEventDto {
         &self.normalized_content
     }
 
-    /// Returns the bounded structured metadata entries.
+    /// Returns the structured metadata entries.
     #[must_use]
     pub fn structured_metadata(&self) -> &[ToolResultMetadataEntryDto] {
         &self.structured_metadata

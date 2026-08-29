@@ -96,6 +96,7 @@ fn tool_lifecycle_event_round_trips_and_rejects_unsafe_detail() {
         )
         .is_err()
     );
+    // Detail beyond the former 4 KiB cap is accepted; NUL content is not.
     assert!(
         ToolLifecycleEventDto::new(
             SessionId::new(),
@@ -106,7 +107,7 @@ fn tool_lifecycle_event_round_trips_and_rejects_unsafe_detail() {
             "x".repeat(4097),
             TimestampDto::from_unix_seconds(1_700_000_000).expect("timestamp"),
         )
-        .is_err()
+        .is_ok()
     );
     assert_eq!(event.session_id(), event.session_id());
     assert_eq!(event.run_id(), event.run_id());
