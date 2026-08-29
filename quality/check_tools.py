@@ -61,7 +61,7 @@ def scope_tools(scope: str, policy: dict[str, object]) -> list[dict[str, object]
         "lint-arch": set(),
         "test": {"cargo-nextest"},
         "coverage": {"cargo-nextest", "cargo-llvm-cov"},
-        "selftest": {"cargo-machete", "cargo-outdated"},
+        "selftest": {"cargo-machete", "cargo-outdated", "cargo-about"},
         "deps": {
             "cargo-deny",
             "cargo-audit",
