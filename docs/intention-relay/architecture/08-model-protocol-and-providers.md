@@ -127,7 +127,7 @@ and conversion of a model tool call into typed durable evidence and execution
 through the daemon-owned registry: it records `ToolCallRecorded` before the
 local effect, persists the correlated `ToolResultRecorded`, and continues the
 provider exchange with assistant-tool-call and tool-role messages until the
-provider finishes or the bounded round limit is exceeded.
+provider finishes.
 
 Provider drivers do not invoke local tools directly. The application builds
 the typed invocation from a provider-emitted tool call, and the daemon-owned

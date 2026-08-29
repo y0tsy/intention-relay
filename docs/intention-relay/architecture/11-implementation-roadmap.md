@@ -348,7 +348,7 @@ closed until those gates are run at an immutable implementation baseline.
 - mandatory `WorkspaceRoot` policy;
 - typed hook dispatcher and deterministic ordering;
 - tool lifecycle persistence/events;
-- daemon-owned invocation path consumed by the bounded model-tool loop.
+- daemon-owned invocation path consumed by the model-tool loop.
 
 ### Tests first
 

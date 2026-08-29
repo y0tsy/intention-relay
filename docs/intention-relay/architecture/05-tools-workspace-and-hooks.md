@@ -116,8 +116,8 @@ The model-tool loop feeds this pipeline: a provider-emitted tool call becomes
 a typed invocation built by the application, executes through the daemon-owned
 registry, and its durable result is persisted before publication and returned
 to the provider exchange as a tool-role message. Provider adapters never
-execute local tools. The runtime owns the bounded provider continuation, and
-the loop is bounded by the immutable run execution policy.
+execute local tools. The runtime owns the provider continuation until the
+provider finishes.
 
 ## Hook system
 

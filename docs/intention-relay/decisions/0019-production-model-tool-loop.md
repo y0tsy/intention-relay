@@ -21,9 +21,6 @@ model-tool loop:
 - The provider exchange continues with assistant-tool-call and tool-role
   `ModelMessageDto` values carrying the recorded results, and the run
   terminalizes `Completed` on provider finish.
-- Continuation is bounded to eight tool rounds (`MAX_TOOL_ROUNDS = 8`). A
-  round past the bound appends the typed terminal failure
-  `tool_round_limit_exceeded` and the run terminalizes `Failed`.
 - Tool calls are never re-executed after a daemon restart; recorded facts are
   replayed to clients, and interrupted work is never automatically resumed.
 - The M4 no-port denial path remains byte-identical: when no tool executor is
@@ -57,9 +54,7 @@ preserves the no-resume rule.
    or treated as rolled back.
 7. The provider exchange continues only with assistant-tool-call and
    tool-role messages built from recorded calls and results.
-8. The loop is bounded by the immutable run execution policy; the typed
-   `tool_round_limit_exceeded` failure is terminal.
-9. M3/M4 historical bytes and the closed M4 baseline remain unchanged; the
+8. M3/M4 historical bytes and the closed M4 baseline remain unchanged; the
    no-port denial path stays as the M4-compatible fallback.
 
 ## Failure semantics
@@ -114,10 +109,12 @@ Linux/Windows CI matrix. The following tests prove the loop:
 - runtime `m5_tool_loop` tests: `tool_call_executes_tool_records_result_and_completes`,
   `multiple_tool_calls_execute_sequentially_in_provider_order`,
   `repeated_tool_rounds_continue_until_finished`,
-  `tool_round_limit_terminalizes_typed_failure`,
   `tool_failure_records_result_and_terminalizes_without_retry`,
   `port_infrastructure_error_terminalizes_without_leaking_text`,
-  `cancellation_during_tool_execution_suppresses_continuation`, and
+  `cancellation_during_tool_execution_suppresses_continuation`,
+  `cancellation_during_provider_round_cancels_run`,
+  `cancellation_before_port_invocation_suppresses_tool`,
+  `provider_failure_after_tool_round_is_terminal_without_retry`, and
   `no_port_preserves_m4_denial`;
 - wiring `m5_tool_loop_wiring` tests:
   `daemon_tool_executor_executes_real_read_tool_through_loop` and
@@ -133,6 +130,6 @@ Linux/Windows CI matrix. The following tests prove the loop:
 ## Non-goals
 
 This decision does not add OpenRouter or OpenAI Responses tool mapping,
-parallel tool execution, tool-failure-to-model continuation, configurable
-round bounds, or Mandate/architecture-15 loop activation. MCP, kernel, VFR,
-Headroom, and Plan features remain outside this decision.
+parallel tool execution, tool-failure-to-model continuation, or
+Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and
+Plan features remain outside this decision.
