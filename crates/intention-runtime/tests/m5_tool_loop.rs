@@ -5,7 +5,7 @@
 
 use std::{cell::RefCell, collections::VecDeque, future, sync::mpsc, time::Duration};
 
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
@@ -20,8 +20,9 @@ use intention_model::{
     ProviderErrorDto, ToolCallDto,
 };
 use intention_runtime::{
-    ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort, ToolExecutionPort,
+    ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
+    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
+    ToolExecutionPort,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
@@ -105,7 +106,10 @@ struct FakeRepository {
     transitions: RefCell<Vec<TransitionRunInputDto>>,
     config_error: RefCell<Option<ErrorDto>>,
     append_failure: RefCell<Option<ErrorDto>>,
+    fail_append_at: RefCell<Option<usize>>,
+    append_count: RefCell<usize>,
     cancel_before_first_append: RefCell<bool>,
+    cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
     transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
 }
 
@@ -121,7 +125,10 @@ impl FakeRepository {
             transitions: RefCell::new(Vec::new()),
             config_error: RefCell::new(None),
             append_failure: RefCell::new(None),
+            fail_append_at: RefCell::new(None),
+            append_count: RefCell::new(0),
             cancel_before_first_append: RefCell::new(false),
+            cancel_after_append: RefCell::new(None),
             transition_failure: RefCell::new(None),
         }
     }
@@ -235,6 +242,21 @@ impl StorageRepositoryDto for FakeRepository {
         }
         if let Some(error) = self.append_failure.borrow_mut().take() {
             return Err(error);
+        }
+        let append_index = {
+            *self.append_count.borrow_mut() += 1;
+            *self.append_count.borrow()
+        };
+        if self.fail_append_at.borrow().as_ref() == Some(&append_index) {
+            return Err(ErrorDto::unavailable(
+                "fixture_append_failure",
+                "the scripted append failed",
+            ));
+        }
+        if let Some((index, signal)) = self.cancel_after_append.borrow().as_ref()
+            && index == &append_index
+        {
+            signal.cancel();
         }
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
@@ -355,6 +377,136 @@ impl ModelExecutionDriver for ScriptedDriver {
         self.requests.borrow_mut().push(request);
         let events = self.events.borrow_mut().remove(0);
         Box::pin(stream::iter(events))
+    }
+}
+
+/// Emits one started event, then cancels the run signal from inside the stream.
+///
+/// The round's next iteration observes the already-cancelled signal at its
+/// pre-stream check and commits the cancellation deterministically, without
+/// racing the provider timeout.
+struct SelfCancellingDriver {
+    signal: ModelCancellationSignal,
+    executions: std::sync::Mutex<usize>,
+}
+
+impl ModelDriver for SelfCancellingDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+}
+
+impl ModelExecutionDriver for SelfCancellingDriver {
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        *self
+            .executions
+            .lock()
+            .expect("driver recorder is available") += 1;
+        let signal = self.signal.clone();
+        Box::pin(
+            stream::once(async move {
+                signal.cancel();
+                Ok(ModelEventDto::started())
+            })
+            .chain(stream::pending::<Result<ModelEventDto, ProviderErrorDto>>()),
+        )
+    }
+}
+
+/// Emits one started event, signals the test, then blocks forever.
+///
+/// Used to hold the provider round mid-stream so the test can cancel the run
+/// while the round's select is waiting on the provider and its timeout.
+struct PendingAfterStartedDriver {
+    entered_tx: mpsc::Sender<()>,
+    executions: std::sync::Mutex<usize>,
+}
+
+impl ModelDriver for PendingAfterStartedDriver {
+    fn capabilities(&self) -> ModelCapabilitiesDto {
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+    }
+}
+
+impl ModelExecutionDriver for PendingAfterStartedDriver {
+    fn execute(
+        &self,
+        _request: ModelRequestDto,
+        _cancellation: ModelCancellationSignal,
+    ) -> ModelEventStream {
+        *self
+            .executions
+            .lock()
+            .expect("driver recorder is available") += 1;
+        let entered_tx = self.entered_tx.clone();
+        Box::pin(
+            stream::once(async move {
+                entered_tx
+                    .send(())
+                    .expect("the test observes the started event");
+                Ok(ModelEventDto::started())
+            })
+            .chain(stream::pending::<Result<ModelEventDto, ProviderErrorDto>>()),
+        )
+    }
+}
+
+/// A time port whose sleeps stay pending until the test sets the release flag.
+///
+/// Poll-based, so it never blocks the executor thread; the round timeout only
+/// becomes ready when the test decides, which keeps the round's cancellation
+/// race deterministic.
+struct FlagTime {
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FlagTime {
+    const fn new(release: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self { release }
+    }
+}
+
+impl ModelTimePort for FlagTime {
+    fn now(&self) -> TimestampDto {
+        time(2)
+    }
+
+    fn sleep(&self, _duration: Duration) -> ModelSleepFuture<'_> {
+        let release = self.release.clone();
+        Box::pin(futures_util::future::poll_fn(move |context| {
+            if release.load(std::sync::atomic::Ordering::Relaxed) {
+                std::task::Poll::Ready(())
+            } else {
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }))
+    }
+}
+
+/// Records every committed model-run snapshot.
+struct RecordingCommitObserver {
+    commits: std::sync::Mutex<Vec<ModelRunCommitDto>>,
+}
+
+impl RecordingCommitObserver {
+    const fn new() -> Self {
+        Self {
+            commits: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ModelRunCommitObserver for RecordingCommitObserver {
+    fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
+        self.commits
+            .lock()
+            .expect("observer recorder is available")
+            .push(committed);
     }
 }
 
@@ -708,66 +860,6 @@ fn repeated_tool_rounds_continue_until_finished() {
 }
 
 #[test]
-fn tool_round_limit_terminalizes_typed_failure() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = snapshot("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let rounds = (0..9)
-        .map(|_| {
-            vec![
-                Ok(ModelEventDto::started()),
-                Ok(ModelEventDto::tool_call(
-                    ToolCallDto::new(ToolCallId::new(), "loop", "{}").expect("call is valid"),
-                )),
-            ]
-        })
-        .collect::<Vec<_>>();
-    let driver = ScriptedDriver::with_rounds(rounds);
-    let port = ScriptedPort::new(
-        (0..8)
-            .map(|_| Ok(ToolResultOutcomeDto::succeeded("ok").expect("content is valid")))
-            .collect(),
-    );
-
-    let outcome = execute(
-        &repository,
-        &driver,
-        &port,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("the round limit commits a typed failure");
-
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(18)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 9);
-    assert_eq!(
-        port.calls
-            .lock()
-            .expect("port call recorder is available")
-            .len(),
-        8
-    );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends.last().expect("terminal failure append").facts(),
-        [ModelRunFactInputDto::Failed { failure }]
-            if failure.code() == "tool_round_limit_exceeded"
-                && failure.retry() == ErrorRetryDto::Never
-    ));
-    assert_eq!(
-        appends.last().expect("terminal failure append").status(),
-        Some(RunStatusDto::Failed)
-    );
-}
-
-#[test]
 fn tool_failure_records_result_and_terminalizes_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -992,4 +1084,298 @@ fn no_port_preserves_m4_denial() {
         ] if failure.code() == "tool_execution_unavailable"
     ));
     assert_eq!(appends[1].status(), Some(RunStatusDto::Failed));
+}
+
+#[test]
+fn provider_failure_after_tool_round_is_terminal_without_retry() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![Err(ProviderErrorDto::unavailable(
+            "provider_broken",
+            false,
+            None,
+        )
+        .expect("fixture provider error is valid"))],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded("hello world").expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("provider failure after a tool round terminalizes");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Failed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 2);
+    assert_eq!(
+        port.calls
+            .lock()
+            .expect("port call recorder is available")
+            .len(),
+        1,
+        "a provider failure after a tool result never re-executes the tool"
+    );
+    let appends = repository.appends.borrow();
+    assert_eq!(appends.len(), 4);
+    assert!(matches!(
+        appends[3].facts(),
+        [ModelRunFactInputDto::Failed { failure }]
+            if failure.code() == "provider_broken"
+    ));
+    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
+}
+
+#[test]
+fn cancellation_during_provider_round_cancels_run() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = ModelCancellationSignal::new();
+    let driver = SelfCancellingDriver {
+        signal: signal.clone(),
+        executions: std::sync::Mutex::new(0),
+    };
+    let port = ScriptedPort::new(Vec::new());
+    let clock = ImmediateTime::new();
+
+    let outcome = futures_executor::block_on(
+        ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port).execute(
+            ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                signal,
+            ),
+        ),
+    )
+    .expect("round cancellation commits");
+
+    assert!(
+        matches!(outcome, ModelRunExecutionOutcomeDto::Cancelled { .. }),
+        "the round cancellation commits as a cancelled run, got {outcome:?}"
+    );
+    let appends = repository.appends.borrow();
+    assert!(appends.iter().all(|input| {
+        !input
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolCallRecorded { .. }))
+    }));
+    assert_eq!(
+        repository
+            .transitions
+            .borrow()
+            .iter()
+            .map(TransitionRunInputDto::status)
+            .collect::<Vec<_>>(),
+        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+    );
+}
+
+#[test]
+fn cancellation_before_port_invocation_suppresses_tool() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::new(vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::tool_call(call)),
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded("never used").expect("content is valid")
+    )]);
+    let signal = ModelCancellationSignal::new();
+    repository
+        .cancel_after_append
+        .borrow_mut()
+        .replace((2, signal.clone()));
+    let clock = ImmediateTime::new();
+
+    let outcome = futures_executor::block_on(
+        ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port).execute(
+            ModelRunExecutionInputDto::new(
+                session_id,
+                run_id,
+                request(run_id, "fixture"),
+                config,
+                signal,
+            ),
+        ),
+    )
+    .expect("cancellation before the port commits");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Cancelled {
+            cursor: RunEventCursorDto::new(2)
+        }
+    );
+    assert_eq!(
+        port.calls
+            .lock()
+            .expect("port call recorder is available")
+            .len(),
+        0,
+        "a cancelled run never invokes the tool"
+    );
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[1].facts(),
+        [ModelRunFactInputDto::ToolCallRecorded { .. }]
+    ));
+    assert!(appends.iter().all(|input| {
+        !input
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolResultRecorded { .. }))
+    }));
+}
+
+#[test]
+fn tool_loop_with_commit_observer_executes_and_observes() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded("hello world").expect("content is valid")
+    )]);
+    let observer = RecordingCommitObserver::new();
+    let clock = ImmediateTime::new();
+
+    let outcome = futures_executor::block_on(
+        ModelRunExecutionService::with_commit_observer_and_tool_executor(
+            &repository,
+            &driver,
+            &clock,
+            &observer,
+            &port,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            ModelCancellationSignal::new(),
+        )),
+    )
+    .expect("the tool loop with an observer completes");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+    assert!(
+        observer
+            .commits
+            .lock()
+            .expect("observer recorder is available")
+            .len()
+            >= 5
+    );
+    assert!(matches!(
+        observer
+            .commits
+            .lock()
+            .expect("observer recorder is available")
+            .last()
+            .expect("a terminal commit is observed")
+            .snapshot()
+            .run_projection()
+            .status(),
+        RunStatusDto::Completed
+    ));
+}
+
+#[test]
+fn cancellation_while_round_is_waiting_cancels_run() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let signal = ModelCancellationSignal::new();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let driver = PendingAfterStartedDriver {
+        entered_tx,
+        executions: std::sync::Mutex::new(0),
+    };
+    let port = ScriptedPort::new(Vec::new());
+    let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let clock = FlagTime::new(std::sync::Arc::clone(&release));
+    let execution_signal = signal.clone();
+
+    let execution = std::thread::spawn(move || {
+        let outcome = futures_executor::block_on(
+            ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port)
+                .execute(ModelRunExecutionInputDto::new(
+                    session_id,
+                    run_id,
+                    request(run_id, "fixture"),
+                    config,
+                    execution_signal,
+                )),
+        );
+        (outcome, repository)
+    });
+    entered_rx.recv().expect("the provider round started");
+    signal.cancel();
+    let (outcome, repository) = execution.join().expect("execution thread completes");
+    let outcome = outcome.expect("round cancellation commits");
+
+    assert!(
+        matches!(outcome, ModelRunExecutionOutcomeDto::Cancelled { .. }),
+        "the round cancellation commits as a cancelled run, got {outcome:?}"
+    );
+    let appends = repository.appends.borrow();
+    assert!(appends.iter().all(|input| {
+        !input
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolCallRecorded { .. }))
+    }));
+    assert_eq!(
+        repository
+            .transitions
+            .borrow()
+            .iter()
+            .map(TransitionRunInputDto::status)
+            .collect::<Vec<_>>(),
+        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+    );
 }

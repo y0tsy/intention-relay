@@ -181,7 +181,6 @@ where
 }
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
-const MAX_TOOL_ROUNDS: u8 = 8;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Appends one atomic manual-retry failure for exactly a current starting run.
@@ -698,17 +697,25 @@ where
                     return self.cancel_attempt(input.session_id, input.run_id, cursor);
                 }
                 RoundOutcome::Failed {
-                    cursor,
+                    cursor: failed_cursor,
                     failure,
                     retryable,
                 } => {
                     if tool_round == 0 {
                         return Ok(AttemptResult::Failed {
-                            cursor,
+                            cursor: failed_cursor,
                             failure,
                             retryable,
                         });
                     }
+                    let facts = vec![ModelRunFactInputDto::failed(failure)];
+                    let cursor = self.append(
+                        input.session_id,
+                        input.run_id,
+                        failed_cursor,
+                        facts,
+                        Some(RunStatusDto::Failed),
+                    )?;
                     return Ok(AttemptResult::FailedTerminal { cursor });
                 }
                 RoundOutcome::ToolCalls {
@@ -718,16 +725,17 @@ where
                     cursor = calls_cursor;
                     match self.tool_executor {
                         None => {
+                            let failure = RunFailureDto::new(
+                                "tool_execution_unavailable",
+                                ErrorRetryDto::Never,
+                                None,
+                            )?;
                             let mut facts = calls
                                 .iter()
                                 .cloned()
                                 .map(ModelRunFactInputDto::tool_call_recorded)
                                 .collect::<Vec<_>>();
-                            facts.push(ModelRunFactInputDto::failed(RunFailureDto::new(
-                                "tool_execution_unavailable",
-                                ErrorRetryDto::Never,
-                                None,
-                            )?));
+                            facts.push(ModelRunFactInputDto::failed(failure));
                             cursor = self.append(
                                 input.session_id,
                                 input.run_id,
@@ -738,29 +746,17 @@ where
                             return Ok(AttemptResult::FailedTerminal { cursor });
                         }
                         Some(port) => {
-                            if tool_round >= MAX_TOOL_ROUNDS {
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    vec![ModelRunFactInputDto::failed(RunFailureDto::new(
-                                        "tool_round_limit_exceeded",
-                                        ErrorRetryDto::Never,
-                                        None,
-                                    )?)],
-                                    Some(RunStatusDto::Failed),
-                                )?;
-                                return Ok(AttemptResult::FailedTerminal { cursor });
-                            }
                             tool_round += 1;
                             messages
                                 .push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
                             for call in calls {
+                                let facts =
+                                    vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
                                 cursor = self.append(
                                     input.session_id,
                                     input.run_id,
                                     cursor,
-                                    vec![ModelRunFactInputDto::tool_call_recorded(call.clone())],
+                                    facts,
                                     None,
                                 )?;
                                 if input.cancellation.is_cancelled() {
@@ -776,13 +772,13 @@ where
                                 {
                                     Ok(outcome) => outcome,
                                     Err(error) => {
+                                        let failure = failure_from_error(&error)?;
+                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
                                         cursor = self.append(
                                             input.session_id,
                                             input.run_id,
                                             cursor,
-                                            vec![ModelRunFactInputDto::failed(failure_from_error(
-                                                &error,
-                                            )?)],
+                                            facts,
                                             Some(RunStatusDto::Failed),
                                         )?;
                                         return Ok(AttemptResult::FailedTerminal { cursor });
@@ -795,30 +791,32 @@ where
                                         cursor,
                                     );
                                 }
+                                let fact = ModelRunFactInputDto::tool_result_recorded(
+                                    call.call_id(),
+                                    outcome.clone(),
+                                )?;
+                                let facts = vec![fact];
                                 cursor = self.append(
                                     input.session_id,
                                     input.run_id,
                                     cursor,
-                                    vec![ModelRunFactInputDto::tool_result_recorded(
-                                        call.call_id(),
-                                        outcome.clone(),
-                                    )?],
+                                    facts,
                                     None,
                                 )?;
                                 *durable_output = true;
                                 match outcome {
                                     ToolResultOutcomeDto::Succeeded { content } => {
-                                        messages.push(ModelMessageDto::tool_result(
-                                            call.call_id(),
-                                            content,
-                                        )?);
+                                        let message =
+                                            ModelMessageDto::tool_result(call.call_id(), content)?;
+                                        messages.push(message);
                                     }
                                     ToolResultOutcomeDto::Failed { failure } => {
+                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
                                         cursor = self.append(
                                             input.session_id,
                                             input.run_id,
                                             cursor,
-                                            vec![ModelRunFactInputDto::failed(failure)],
+                                            facts,
                                             Some(RunStatusDto::Failed),
                                         )?;
                                         return Ok(AttemptResult::FailedTerminal { cursor });
