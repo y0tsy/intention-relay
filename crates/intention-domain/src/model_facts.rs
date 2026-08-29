@@ -105,23 +105,17 @@ pub enum ToolResultOutcomeDto {
 }
 
 impl ToolResultOutcomeDto {
-    /// Creates a bounded successful tool-result outcome.
+    /// Creates a successful tool-result outcome.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank or exceeds 4 KiB.
+    /// Returns a validation error when content is blank.
     pub fn succeeded(content: impl Into<String>) -> DtoResult<Self> {
         let content = non_blank(
             content.into(),
             "invalid_tool_result_content",
             "tool result content must not be empty",
         )?;
-        if content.len() > MAX_ASSISTANT_CONTENT_BYTES {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_content",
-                "tool result content must not exceed 4 KiB",
-            ));
-        }
         Ok(Self::Succeeded { content })
     }
 
