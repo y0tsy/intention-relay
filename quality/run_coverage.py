@@ -102,12 +102,12 @@ def main() -> None:
                 continue
             seen_effective.add(effective)
             # Target narrowing is intentionally disabled: explicit target sets
-            # do not reliably reproduce the --all-targets coverage set on every
-            # supported platform (Windows integration-target behavior differs),
-            # so the runner always uses --all-targets to keep per-crate
-            # thresholds comparable across Linux and Windows. Boundary crates
-            # use `cargo test` instead of nextest so the library test harness
-            # is merged into the coverage report on Windows.
+            # do not reliably reproduce the --all-targets coverage set
+            # (Windows integration-target behavior differs, so the coverage
+            # gate runs on Linux), and the runner always uses --all-targets to
+            # keep per-crate thresholds comparable across coverage runs.
+            # Boundary crates use `cargo test` instead of nextest so the
+            # library test harness is merged into the coverage report.
             target_flags = ["--all-targets"]
             command = [
                 "cargo",
