@@ -775,8 +775,7 @@ where
                                         // A tool infrastructure error is a typed failed
                                         // tool result: record it first, then terminalize.
                                         let failure = failure_from_error(&error)?;
-                                        let outcome =
-                                            ToolResultOutcomeDto::failed(failure.clone());
+                                        let outcome = ToolResultOutcomeDto::failed(failure.clone());
                                         let fact = ModelRunFactInputDto::tool_result_recorded(
                                             call.call_id(),
                                             outcome,
