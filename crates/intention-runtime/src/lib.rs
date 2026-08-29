@@ -772,7 +772,23 @@ where
                                 {
                                     Ok(outcome) => outcome,
                                     Err(error) => {
+                                        // A tool infrastructure error is a typed failed
+                                        // tool result: record it first, then terminalize.
                                         let failure = failure_from_error(&error)?;
+                                        let outcome =
+                                            ToolResultOutcomeDto::failed(failure.clone());
+                                        let fact = ModelRunFactInputDto::tool_result_recorded(
+                                            call.call_id(),
+                                            outcome,
+                                        )?;
+                                        cursor = self.append(
+                                            input.session_id,
+                                            input.run_id,
+                                            cursor,
+                                            vec![fact],
+                                            None,
+                                        )?;
+                                        *durable_output = true;
                                         let facts = vec![ModelRunFactInputDto::failed(failure)];
                                         cursor = self.append(
                                             input.session_id,
