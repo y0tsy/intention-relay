@@ -34,7 +34,7 @@ clean checkout.
 | Environment | Linux `7.1.8-200.fc44.x86_64`, `x86_64` GNU/Linux; repository reports stable Rust toolchain via `rust-toolchain.toml` |
 | Coverage scope and result | `default`, `no_default`, and `all` feature profiles; current report shows `intention-tools` at 90%+ actual coverage. Threshold evaluation passed with the configured profile scope. |
 | Coverage policy exception | None. All Tier B crates, including `intention-tools` and `intention-hooks`, use the standard 90% line threshold. |
-| CI matrix | Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) has not been run for this closeout; Windows behavior is therefore not independently evidenced. |
+| CI matrix | Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) is green on both platforms for head `bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3): `ubuntu-24.04 make ci` PASS 21m37s, `windows-2025 make ci` PASS 39m40s. See the CI verification section below. |
 | Immutable documents | `m4plus_concept2.md` and other immutable documents were not edited |
 
 ## Acceptance evidence
@@ -107,11 +107,40 @@ cross-platform fixtures are future obligations. No M5 test is counted as
 satisfying them, and this closeout claims neither implementation nor execution
 of architecture-15 gates.
 
+## CI verification (2026-08-28)
+
+The full quality matrix ran green on both supported platforms for the merged
+head, closing the previously unrun CI limitation.
+
+| Item | Ubuntu 24.04 | Windows 2025 |
+| --- | --- | --- |
+| Run and head | 33186533012, `bd3ab01` (PR #3, merged as `e915e12`) | same run |
+| `make ci` verdict | PASS (21m37s) | PASS (39m40s) |
+| Workspace crate line coverage | 95.11% (tier B) | 95.11% (tier B) |
+| Workspace aggregate line coverage | 93.445% (14626/15652) | 93.709% (14494/15467) |
+| Coverage failures across the matrix | none | none |
+
+The workspace crate previously failed the Windows tier at 84.81% while passing
+on Linux at 91.49%: the Linux denominator included `cfg(unix)`-only test
+lines, so the symlink-rejection branches were never exercised on Windows and
+the report measured only production lines there. The fix ported every symlink
+fixture to platform-native APIs (`std::os::unix::fs::symlink` and
+`std::os::windows::fs::symlink_file`/`symlink_dir`) so the fail-closed symlink
+policy is exercised on both OSes, and deduplicated the three inline
+`ErrorDto::with_detail().unwrap_or_else()` error constructions into one
+`unavailable_path_error` helper. The same head also carries the quality-gate
+performance work: `make ci` is wrapped by the metrics manifest
+(`quality/reports/quality-run.json` plus a JSONL event stream), the CI cache is
+split into four keys (registry+advisory-db, git, rustup, quality tools),
+dependency gates run in a bounded pool, and `make quick` runs one explicit
+default-profile test pass instead of duplicating the nextest gate.
+
 ## Known limitations and follow-up
 
-- Required `ubuntu-24.04` and `windows-2025` `make ci` results are not recorded
-  for this M5 baseline. Linux/Windows CI remains unrun; Windows named-pipe and
-  filesystem behavior is therefore not independently evidenced.
+- Linux/Windows CI is green on both platforms for the merged head (run
+  33186533012); Windows named-pipe and filesystem behavior is independently
+  evidenced by that run. Earlier rows above predate the CI runs and are
+  retained as the historical focused evidence.
 - The current worktree contains parent-agent changes in production crates,
   tests, this policy, and this evidence file; this closeout
   does not stage, commit, or normalize them. The baseline above identifies the
@@ -123,10 +152,11 @@ of architecture-15 gates.
 
 ## Closeout rule
 
-This is a documentation-only evidence record for the current uncommitted M5
-implementation baseline. `make quick`, `make verify`, the 501-test full
-nextest run, architecture/public-API/docs/self-test checks, ToolResult
-persistence/fault-injection/reopen evidence, adapter parity, trusted
-environment policy, and proven-in-root symlink policy are recorded as passing.
-The Linux/Windows CI matrix remains unrun before M5 is declared fully closed
-across supported platforms.
+This is a documentation-only evidence record for the M5 implementation
+baseline now merged to `main` at `e915e12` (PR #3). `make quick`, `make
+verify`, the 501-test full nextest run, architecture/public-API/docs/self-test
+checks, ToolResult persistence/fault-injection/reopen evidence, adapter
+parity, trusted environment policy, and proven-in-root symlink policy are
+recorded as passing. The Linux/Windows CI matrix (`ubuntu-24.04` and
+`windows-2025` `make ci`) is green on both platforms for the merged head
+(run 33186533012), so M5 is closed across supported platforms.
