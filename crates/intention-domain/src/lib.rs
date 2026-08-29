@@ -16,7 +16,7 @@ mod model_facts;
 pub use model_facts::{
     ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
     ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
-    RunSnapshotDto,
+    RunSnapshotDto, ToolResultOutcomeDto,
 };
 
 /// The agent policy active for a run.
@@ -736,6 +736,8 @@ pub enum DomainEventDto {
     UsageRecorded(ModelRunFactEventDto),
     /// Tool-call evidence was recorded with a durable run cursor.
     ToolCallRecorded(ModelRunFactEventDto),
+    /// A model-loop tool result was recorded with a durable run cursor.
+    ModelToolResultRecorded(ModelRunFactEventDto),
     /// A provider finish reason was recorded with a durable run cursor.
     Finished(ModelRunFactEventDto),
     /// A safe terminal failure was recorded with a durable run cursor.
