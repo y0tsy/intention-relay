@@ -46,6 +46,34 @@ def normalized_flags(flags: object) -> tuple[str, ...]:
     return tuple(flags)
 
 
+METADATA_COMMAND = ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]
+
+
+def metadata_snapshot_path(root: Path) -> Path:
+    """Root-relative locked Cargo metadata snapshot path."""
+    return root / "quality" / "reports" / "coverage-metadata.json"
+
+
+def collect_metadata(root: Path) -> Path:
+    """Capture the locked Cargo metadata snapshot once per coverage run."""
+    completed = run_command(
+        METADATA_COMMAND,
+        cwd=root,
+        phase="coverage",
+        gate="coverage",
+        stage="metadata",
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise subprocess.CalledProcessError(completed.returncode, METADATA_COMMAND)
+    snapshot = metadata_snapshot_path(root)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    temporary = snapshot.with_name(snapshot.name + ".tmp")
+    temporary.write_text(completed.stdout, encoding="utf-8")
+    temporary.replace(snapshot)
+    return snapshot
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect branch-aware coverage.")
     parser.add_argument(
@@ -81,6 +109,10 @@ def main() -> None:
             raise ValueError(f"coverage profile {arguments.profile!r} is not configured")
 
     REPORTS.mkdir(parents=True, exist_ok=True)
+    # Collect the locked workspace metadata snapshot once; every checker
+    # invocation below receives the same snapshot so source-root resolution
+    # does not re-run `cargo metadata` per report.
+    metadata = collect_metadata(ROOT)
     for crate in coverage_crates:
         seen_effective: set[tuple[str, ...]] = set()
         for name, flags in combinations:
@@ -134,6 +166,8 @@ def main() -> None:
                     str(report),
                     "--crate",
                     crate,
+                    "--metadata",
+                    str(metadata),
                 ],
                 profile=name,
                 crate=crate,
@@ -152,7 +186,7 @@ def main() -> None:
         ], profile=name, stage="collect")
         run([
             sys.executable, "quality/check_coverage.py", "--report", str(report),
-            "--workspace-aggregate",
+            "--workspace-aggregate", "--metadata", str(metadata),
         ], profile=name, stage="check")
 
 
