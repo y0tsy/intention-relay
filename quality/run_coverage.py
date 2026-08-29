@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import subprocess
 import sys
@@ -19,8 +20,22 @@ COVERAGE_POLICY = ROOT / "quality" / "coverage.toml"
 REPORTS = ROOT / "quality" / "reports"
 
 
-def run(command: list[str]) -> None:
-    completed = run_command(command, cwd=ROOT, phase="coverage", gate="coverage")
+def run(
+    command: list[str],
+    *,
+    profile: str = "",
+    crate: str = "",
+    stage: str = "command",
+) -> None:
+    completed = run_command(
+        command,
+        cwd=ROOT,
+        phase="coverage",
+        gate="coverage",
+        profile=profile,
+        crate=crate,
+        stage=stage,
+    )
     if completed.returncode != 0:
         raise subprocess.CalledProcessError(completed.returncode, command)
 
@@ -32,6 +47,13 @@ def normalized_flags(flags: object) -> tuple[str, ...]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Collect branch-aware coverage.")
+    parser.add_argument(
+        "--profile",
+        choices=["default", "no_default", "all"],
+        help="run only one coverage profile instead of all three",
+    )
+    arguments = parser.parse_args()
     with POLICY.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
     with COVERAGE_POLICY.open("rb") as policy_file:
@@ -51,6 +73,12 @@ def main() -> None:
         for entry in policy.get("critical_combinations", [])
         if entry["enabled"]
     )
+    if arguments.profile is not None:
+        combinations = [
+            (name, flags) for name, flags in combinations if name == arguments.profile
+        ]
+        if not combinations:
+            raise ValueError(f"coverage profile {arguments.profile!r} is not configured")
 
     REPORTS.mkdir(parents=True, exist_ok=True)
     for crate in coverage_crates:
@@ -97,9 +125,7 @@ def main() -> None:
                 "--package",
                 crate,
             ]
-            run(
-                command,
-            )
+            run(command, profile=name, crate=crate, stage="collect")
             run(
                 [
                     sys.executable,
@@ -108,7 +134,10 @@ def main() -> None:
                     str(report),
                     "--crate",
                     crate,
-                ]
+                ],
+                profile=name,
+                crate=crate,
+                stage="check",
             )
 
     for name, flags in combinations:
@@ -120,11 +149,11 @@ def main() -> None:
             "cargo", "+nightly-2026-07-31", "llvm-cov", "--branch", "--json",
             "--summary-only", "--output-path", str(report), "nextest",
             "--all-targets", "--workspace", "--locked", *flags,
-        ])
+        ], profile=name, stage="collect")
         run([
             sys.executable, "quality/check_coverage.py", "--report", str(report),
             "--workspace-aggregate",
-        ])
+        ], profile=name, stage="check")
 
 
 if __name__ == "__main__":

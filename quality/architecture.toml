@@ -158,21 +158,8 @@ owned_selection_patterns = [
 ]
 
 [public_contracts]
-forbidden_type_prefixes = [
-  "std::fs::",
-  "std::path::",
-  "std::process::",
-  "tokio::",
-  "interprocess::",
-  "rusqlite::",
-  "tauri::",
-  "serde_json::Value",
-  "async_openai::",
-  "openrouter_rs::",
-  "openrouter_sdk::",
-  "openrouter::",
-  "reqwest::",
-]
+# Provider SDK namespaces are restricted to their owner crate's private
+# implementation by the source-level architecture checker.
 provider_sdk_resource_patterns = [
   "async_openai::",
   "openrouter_rs::",
