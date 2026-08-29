@@ -101,7 +101,7 @@ ci-source: metrics-start-source check metrics-finish-source ## CI source-quality
 ci-lint-arch: metrics-start-lint-arch fmt-check features lint docs-check architecture metrics-finish-lint-arch ## CI lint/architecture job: metrics, formatting, features, lint, docs, architecture, metrics.
 	@true
 
-ci-test: metrics-start-test check-cargo test metrics-finish-test ## CI test job: metrics, checks, nextest and doctests, metrics.
+ci-test: metrics-start-test test metrics-finish-test ## CI test job: metrics, nextest and doctests, metrics.
 	@true
 
 ci-coverage: metrics-start-coverage coverage coverage-artifacts-clean metrics-finish-coverage ## CI coverage job (all profiles, local convenience): metrics, coverage, generated-artifact cleanup, metrics.

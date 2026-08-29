@@ -189,10 +189,13 @@ def test_formatting_drift(root: Path) -> None:
 
 def test_lint_warning(root: Path) -> None:
     harness = root / "quality/harness/src/lib.rs"
+    # quality-harness is a dependency-free workspace member, so scoping the
+    # fixture to that crate proves the lint gate rejects a warning without
+    # recompiling the whole workspace a second time.
     with fixture_scope(root), modified(harness):
         harness.write_text("pub fn warning() { let unused = 1; }\n", encoding="utf-8")
         run(
-            ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-Dwarnings"],
+            ["cargo", "clippy", "-p", "quality-harness", "--all-targets", "--locked", "--", "-Dwarnings"],
             cwd=root,
             expect_success=False,
         )
