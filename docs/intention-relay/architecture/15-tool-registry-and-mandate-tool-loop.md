@@ -7,7 +7,7 @@
 - Normative owner: architecture 15.
 - Decision record: [`0007`](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
 - Detail decision: [`0025`](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) (base-tool contracts and tool-loop bounds).
-- Reconciliation topics: `TLS-002..009, MTL-001..004`.
+- Reconciliation topics: `TLS-002..011, MTL-001..007`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -68,7 +68,7 @@ Each `ToolId` has one immutable intended owner and at most one active canonical 
 
 A `Reserved` entry has no input/result schema, executor, model-function schema, or model visibility. A direct, stale, or malformed request for it has the known pre-effect terminal outcome `ExecutionUnavailable`. Reservation neither invents undelivered DTOs nor requires every owner to ship together. Only its intended owner may activate it through composition; activation creates new descriptor and registry revisions. Active status alone does not establish model visibility or live readiness.
 
-An active descriptor has credential-free semantic fields for its `ToolId`, intended owner, typed input/result schema references, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema revision, safe-result-projection revision, observation-contract revision, and stream shape. `display_name` is safe presentation metadata, not semantic identity. Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources, and implementation errors.
+An active descriptor has credential-free semantic fields for its `ToolId`, intended owner, typed input/result schema references, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema revision, safe-result-projection revision, observation-contract revision, and stream shape. It also declares `model_schema_availability`: whether it can supply a code-owned function schema to a compatible model subset. Active status alone does not establish model visibility or live readiness. `display_name` is safe presentation metadata, not semantic identity. Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources, and implementation errors.
 
 `ToolEffectProfile` describes direct declared effects, including workspace read or write, process start, network retrieval, user interaction, session mutation, retained-content read, and future child controls. It is neither authority, confirmation policy, sandbox, nor a complete inventory of indirect effects.
 
@@ -95,7 +95,9 @@ side-effect-free remote retrieval. No flag itself requires confirmation.
 `grep`, and `expand` (default base for relative paths and initial CWD for
 `execute`, not an access boundary; absolute paths and `..` are accepted, with no
 path-based denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`,
-`sub_agent`, and `mcp` get no fictional workspace path. In Plan mode, ordinary
+`sub_agent`, and `mcp` get no fictional workspace path; their owners may instead
+require a typed URL, question, todo, retained-content, plan, child-agent, or
+MCP-method reference. In Plan mode, ordinary
 `write`/`edit` are denied; plan mutation remains plan-policy work.
 
 `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and nested selection records use the `IRCR` / `typed-tlv-v1` / SHA-256 policy owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md). They must not define a competing codec. Semantic changes require a new record version or tag; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
@@ -190,7 +192,7 @@ Build admits otherwise compatible selected descriptors. In Plan mode, ordinary p
 
 ## Model-to-tool-to-model lifecycle
 
-The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused. A group contains at most **16 calls**; a provider step that emits more than 16 calls fails closed before any local effect with the typed `provider_tool_group_invalid` outcome.
+The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused. A group contains at most **16 calls**; a provider step that emits more than 16 calls fails closed before any local effect with the typed `provider_tool_group_invalid` outcome. The same closed outcome applies to a step that has calls but lacks the `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group, or later provider facts for an already closed step.
 
 ```mermaid
 sequenceDiagram
@@ -273,8 +275,13 @@ identity, a captured upper cursor, non-empty ascending tool facts, bounded by
 the existing **256 facts and 512 KiB per page**. The final
 `RunToolHistoryCompletedDto` repeats the identity and upper cursor. The
 publication gate serializes `RunReplayDto`, tool-history pages, completion, then
-live frames. Sparse shared cursors are valid. Missing or incomplete history
-requires typed resynchronization and never causes a live-tool retry.
+live frames. When the same subscription also negotiates the normalized
+reasoning stream, the combined gate serializes `RunReplayDto`, reasoning pages
+and completion, tool-history pages and completion, then live frames; if either
+history class is absent, its pages and completion frame are omitted and the
+remaining frames retain this order. Sparse shared cursors are valid. Missing or
+incomplete history requires typed resynchronization and never causes a live-tool
+retry.
 
 An unnegotiated client subscribing to a run containing post-M4 model-tool-loop
 facts fails closed with `model_tool_loop_required`, never a partially understood

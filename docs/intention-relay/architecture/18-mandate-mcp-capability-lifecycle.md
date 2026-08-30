@@ -26,7 +26,7 @@ This document owns only MCP-specific nested-selection semantics and capability l
 
 Dynamic acquisition means immutable **run-local capabilities beneath the one fixed `mcp` ToolId**. It never creates another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future Mandate work supersedes retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and confirmation/corridor/quota/root-origin gates. It preserves the one gateway, typed boundary, private resources, idempotency, redaction, commit/reread publication, cancellation/disposal, and no-resume law.
 
-Architecture 14 supplies canonical `IRCR` / `typed-tlv-v1` / SHA-256 policy. This document owns the field semantics of these conceptual records:
+Architecture 14 supplies canonical `IRCR` / `typed-tlv-v1` / SHA-256 policy. This document owns the field semantics of these conceptual records. The concept2 names `MandateMcpCapabilitySourceDto`, `MandateMcpDiscoveryDto`, and `MandateMcpCapabilityRevisionDto` are research-only; the authoritative names are the `V1` records below, whose fields (private endpoint/credential generation references, acquisition operation identity, requesting run and tool call, server revision digest, attempt evidence, effect classification, invocation operation identity) supersede the concept2 reduced field sets:
 
 ```text
 MandateMcpCapabilitySourceV1

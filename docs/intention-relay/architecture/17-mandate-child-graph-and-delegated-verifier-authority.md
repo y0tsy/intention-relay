@@ -7,7 +7,7 @@
 - Normative owner: architecture 17.
 - Decision record: [`0009`](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).
 - Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (child detail).
-- Reconciliation topics: `CHD-001..018, VER-001..011`.
+- Reconciliation topics: `CHD-001..019, VER-001..011`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -287,7 +287,10 @@ parent receives the summary reference once in the next eligible model exchange,
 never a raw transcript or output. Summaries aggregate state and provenance;
 they never make child success complete a parent, child failure fail a parent,
 or child evidence satisfy a parent acceptance contract. Usage aggregation
-dedupes original `RunId` values. A child `Paused`/`NeedsRework`/`Stopped` does
+dedupes original `RunId` values. The first scope does not require a token
+ceiling from providers that cannot report usage: when a provider reports no
+usage component, the tree aggregates only the components it reports, and no
+synthetic ceiling, price, or inferred cost is introduced. A child `Paused`/`NeedsRework`/`Stopped` does
 not implicitly change the parent; a child `ExternalEffectUnknown` pauses that
 child, emits an urgent graph safety observation, and blocks only automatic
 parent continuation that depends on its result.

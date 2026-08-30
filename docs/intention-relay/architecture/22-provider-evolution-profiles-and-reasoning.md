@@ -7,7 +7,7 @@
 - Normative owner: architecture 22.
 - Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction).
-- Reconciliation topics: `PRV-001..012, RSN-001..015`.
+- Reconciliation topics: `PRV-001..012, RSN-001..017`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -126,10 +126,12 @@ silently narrow, add, or reinterpret capabilities. Unknown taxonomy, invalid
 intersection, mismatched cross-binding, or unsupported driver contract blocks
 provider work before effect without current-state fallback.
 
-The initial closed taxonomy is text-only:
+The initial closed taxonomy is text-only, versioned by the closed value
+`model-capability-taxonomy-v1`:
 
 ```text
 ModelCapabilitySetV1
+  taxonomy_version = model-capability-taxonomy-v1
   input = TextOnly
   text_streaming = Enabled | Disabled
   structured_output = Unsupported
@@ -138,7 +140,9 @@ ModelCapabilitySetV1
   context_preservation = LocalDurableHistoryV1 { reasoning_input_contract }
 ```
 
-Non-text input and structured output require a new taxonomy version. Capability,
+`reasoning_input_contract` is the selected cross-turn reasoning transfer
+contract (the concept2 `reasoning_history_transfer` name is research-only;
+architecture 22 owns the field name). Non-text input and structured output require a new taxonomy version. Capability,
 provider kind, endpoint, driver, or execution kind is never inferred from a
 model ID, including `gpt-*`, `o*`, or `codex*`.
 
@@ -285,7 +289,13 @@ ReasoningSummaryDeltaDto
 ```
 
 Accepted fragments commit individually; equal text is not deduplicated and
-adjacent fragments are not merged. Summaries are distinct from reasoning, never
+adjacent fragments are not merged. `Primary` is the main textual reasoning
+representation and `Detail` is a separate detailed representation; when one
+native response contains both allowed representations, the descriptor emits both
+as separate ordered facts. The descriptor owns the fixed field-path and
+array-index order for values originating in one native response; that order is
+code-owned descriptor metadata, never inferred from a model name, endpoint, or
+equal text. Summaries are distinct from reasoning, never
 raw chain-of-thought, and never automatic model context. Malformed,
 duplicate-where-forbidden, out-of-order, unknown, or post-terminal values fail
 safely with the closed `provider_reasoning_stream_invalid` failure and without

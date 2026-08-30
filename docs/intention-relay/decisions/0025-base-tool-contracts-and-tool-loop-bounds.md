@@ -28,7 +28,14 @@ The following detail from
   `ToolCallResultRecorded`, per-call positive positions, `tool_result_stream_invalid`);
 - the 16-call tool-group maximum and its `provider_tool_group_invalid` outcome
   (a provider step emitting more than 16 calls fails closed before any local
-  effect);
+  effect; the same closed outcome applies to a step with calls but lacking the
+  `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or
+  malformed group, or later provider facts for an already closed step);
+- the descriptor `model_schema_availability` field (whether an active
+  descriptor can supply a code-owned function schema to a compatible model
+  subset) and the typed-reference alternatives for non-path tools (typed URL,
+  question, todo, retained-content, plan, child-agent, or MCP-method reference);
+- the explicit statement that the first scope adds no numeric model-step limit;
 - the first-scope bounds (512 KiB per canonical fact, 4 MiB combined per group,
   `tool_output_limit_exceeded`);
 - the closed terminal outcome taxonomy (`Succeeded`,
@@ -37,7 +44,10 @@ The following detail from
   `ExternalEffectUnknown`); and
 - tool-history replay negotiation (`RunToolHistoryPageDto` /
   `RunToolHistoryCompletedDto`, 256 facts / 512 KiB per page,
-  `model_tool_loop_required`).
+  `model_tool_loop_required`), including the combined publication-gate order
+  when the same subscription also negotiates the normalized reasoning stream
+  (`RunReplayDto` → reasoning pages/completion → tool pages/completion → live
+  frames, with omit-if-absent for either history class).
 
 Each direction keeps M3/M4 behavior authoritative (including the byte-identical
 `tool_execution_unavailable` denial), affects fresh runs only after a later
@@ -76,6 +86,10 @@ implemented without code evidence.
   its call receives `tool_output_limit_exceeded`; remaining calls continue.
 - Missing/incomplete tool history requires typed resynchronization and never
   causes a live-tool retry.
+- `provider_tool_group_invalid` is one closed outcome for every invalid group
+  shape: more than 16 calls, calls without the closing `ToolCalls` reason, a
+  `ToolCalls` reason without calls, a duplicate or malformed group, or later
+  provider facts for the closed step; all fail before any local effect.
 
 ## Compatibility and supersession
 

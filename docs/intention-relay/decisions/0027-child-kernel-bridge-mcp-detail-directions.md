@@ -40,23 +40,35 @@ respective authoritative packages:
   outlives its parent; after restart neither a reply nor a follow-up can resume
   the interrupted child and the selected automatic continuation is permitted
   only while the same daemon process still owns the same active child run and
-  the matching reply arrives before its deadline);
+  the matching reply arrives before its deadline; the first scope requires no
+  token ceiling from providers that cannot report usage);
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family,
   60-minute idle / 16 live kernels / 10-minute cell bounds,
   `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed kinds, the 6
-  closed `kernel_*` safe failures, and the explicit negatives that
+  closed `kernel_*` safe failures, the explicit negatives that
   `StopRunCommandDto` remains the only first-scope run cancellation command and
-  that the daemon does not wait for the cell to acknowledge an interrupt;
+  that the daemon does not wait for the cell to acknowledge an interrupt, idle
+  disposal discarding the in-memory namespace after recording only the safe
+  checkpoint metadata that already exists without canceling or altering an
+  unrelated durable run, the terminal result never being reconstructed from a
+  formatted footer, kernel diagnostics containing only safe status, bounded
+  sizes, failure codes, and correlation references, and background in-memory
+  results being captured only by a later successful foreground cell;
 - **Architecture 19 (bridge)**: `BridgeRunGrantDto`,
   `BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`,
   `BridgeInvocationAcceptedDto`, 16 unfinished operations, the 1-MiB frame /
   64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds, the 6
-  closed `bridge_*`/`daemon_tool_gateway_required` safe failures, and the
+  closed `bridge_*`/`daemon_tool_gateway_required` safe failures, the
   explicit negative that the first bridge contract adds no per-`ToolCallId`
-  cancellation command;
+  cancellation command, and the slow-peer non-delay property (the bounded
+  64-frame/10-second path never delays durable execution or healthy
+  subscribers);
 - **Architecture 18 (MCP)**: the bounded `McpMethodDto` gateway, connection
-  scope and local-stdio process lifecycle, and the 6 closed `mcp_*` safe
-  failures.
+  scope and local-stdio process lifecycle, the 6 closed `mcp_*` safe failures,
+  and the supersession of the concept2 `MandateMcpCapabilitySourceDto`/
+  `DiscoveryDto`/`CapabilityRevisionDto` names by the authoritative
+  `MandateMcpCapabilitySourceV1`/`MandateMcpDiscoveryV1`/
+  `MandateMcpCapabilityRevisionV1` records.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after
 a later activating specification, and is bound to Milestone 5+ in the roadmap.

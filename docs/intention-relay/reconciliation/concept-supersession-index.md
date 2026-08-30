@@ -29,6 +29,11 @@
 | Bridge and kernel cancellation boundaries | BRG-015, KER-019 | Adopted for post-M5 fresh runs; no per-`ToolCallId` cancellation command and `StopRunCommandDto`-only kernel cancellation are owned by architectures 19/20. | Architectures 19 and 20. |
 | Durable-fact and historical-version rules | DUR-004..006, RUN-003..005 | Adopted for post-M5 fresh runs; no-new-sequence, hook-before-transaction, publication-gate, crate version-ownership, Skill-decoder, and `fork-model-context-v1` trilemma rules are owned by architectures 04/14/23. | Architectures 04, 14, and 23. |
 | Accepted deferred directions | ACT-015..016, RSN-015 | Tree-level metadata, semantic content inspection, and per-call cancellation are adopted for post-M5 fresh runs under ADR 0032. | Architectures 24, 22, and 19. |
+| Tool-loop detail: schema availability, group shapes, step limit, typed references, combined gate | TLS-010..011, MTL-005..007 | Adopted for post-M5 fresh runs; `model_schema_availability`, the closed `provider_tool_group_invalid` shape matrix, no numeric step limit, typed-reference alternatives, and the combined reasoning+tool publication gate are owned by architecture 15 (and 19 for the gate). | Architecture 15. |
+| Bridge slow-peer non-delay | BRG-016 | Adopted for post-M5 fresh runs; the bounded slow-peer path never delays durable execution or healthy subscribers. | Architecture 19. |
+| Kernel disposal, diagnostics, background capture | KER-020..022 | Adopted for post-M5 fresh runs; idle disposal, no formatted-footer reconstruction, diagnostics content, and later-cell background capture are owned by architecture 20. | Architecture 20. |
+| Child usage no-token-ceiling | CHD-019 | Adopted for post-M5 fresh runs; no token ceiling from providers that cannot report usage. | Architecture 17. |
+| Taxonomy version and MCP name supersession | RSN-016, MCP | The taxonomy value `model-capability-taxonomy-v1` and the `reasoning_input_contract` field name are owned by architecture 22; the concept2 `MandateMcpCapabilitySourceDto`/`DiscoveryDto`/`CapabilityRevisionDto` names are superseded by the `V1` records in architecture 18. | Architectures 22 and 18. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.

@@ -7,7 +7,7 @@
 - Normative owner: architecture 19.
 - Decision record: [`0011`](../decisions/0011-mandate-gateway-rlm-bridge.md).
 - Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (bridge detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (per-call cancellation direction).
-- Reconciliation topics: `BRG-001..015`.
+- Reconciliation topics: `BRG-001..016`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -301,10 +301,16 @@ first-scope limits are:
 - **256 facts or 512 KiB** per initial-history page.
 
 There is no broader buffer, alternate deadline, truncation rule, or unbounded
-queue. A detached peer recovers only from durable history: reconnect,
+queue. The bounded slow-peer path never delays durable execution or healthy
+subscribers: a slow, resyncing, or detached peer receives typed
+resynchronization and is bounded by the 64-frame/10-second path without
+blocking execution, persistence, or healthy peers. A detached peer recovers
+only from durable history: reconnect,
 renegotiate, request the run from the last accepted cursor, and receive captured
 replay, reasoning pages/completion, tool-history pages/completion, then later
-live frames in the selected order. The bridge never treats channel state as
+live frames in the selected order; if either history class is absent, its pages
+and completion frame are omitted and the remaining frames retain this order. The
+bridge never treats channel state as
 authoritative, persists a last-published cursor, or repeats external work.
 
 The closed bridge safe failures through `ErrorDto` are:

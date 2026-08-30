@@ -7,7 +7,7 @@
 - Normative owner: architecture 20.
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
 - Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
-- Reconciliation topics: `KER-001..019`.
+- Reconciliation topics: `KER-001..022`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -258,7 +258,10 @@ A kernel is session-scoped: one daemon-owned session actor owns at most one
 IPython kernel, never shared across sessions/projects/users/daemon instances,
 inheriting the session's `WorkspaceRoot` as context metadata without owning it.
 It is created lazily on the first admitted IPython execution and disposed on
-archive, idle expiry, shutdown, or clean restart. The first-scope kernel limits
+archive, idle expiry, shutdown, or clean restart. Idle disposal discards the
+kernel's in-memory namespace after recording only the safe checkpoint metadata
+that already exists; it does not cancel or alter a durable run unrelated to that
+kernel. The first-scope kernel limits
 are:
 
 - an idle kernel is retained at most **60 minutes**;
@@ -277,7 +280,11 @@ ordered typed `KernelOutputChunkDto` values with closed kind `Stdout`, `Stderr`,
 `ToolOutputDeltaRecorded` content stream and one terminal typed result; rich
 MIME, binary, raw tracebacks, arbitrary display metadata, and raw Jupyter frames
 are omitted or produce the closed `kernel_output_unrepresentable` before
-publication, with content never truncated or partly committed.
+publication, with content never truncated or partly committed. The terminal
+result is never reconstructed from a formatted footer. Kernel diagnostics
+contain only safe status, bounded sizes, failure codes, and correlation
+references; they never include raw output, Python values, tracebacks, frames,
+or implementation resources.
 
 The first-scope canonical checkpoint representation is `kernel-state-snapshot-v1`:
 a typed, deterministic, size-bounded collection of values accepted by the
@@ -303,7 +310,8 @@ background code must carry the grant of the currently attached foreground
 execution; after expiry it fails immediately and is never queued. Background
 output after termination is discarded; tasks are not included in checkpoints and
 are terminated by cancellation, kernel failure, idle disposal, daemon shutdown,
-or checkpoint restoration.
+or checkpoint restoration. Their in-memory results may be captured only by a
+later successful foreground cell.
 
 The closed kernel safe failures through `ErrorDto` are:
 

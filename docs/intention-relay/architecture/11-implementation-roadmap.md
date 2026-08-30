@@ -1142,7 +1142,11 @@ profile, quality-policy target, or implementation milestone.
 - 512 KiB per fact / 4 MiB per group and `tool_output_limit_exceeded`;
 - the closed terminal outcome taxonomy; and
 - `RunToolHistoryPageDto`/`RunToolHistoryCompletedDto` replay with
-  `model_tool_loop_required`.
+  `model_tool_loop_required`, including the combined publication-gate order
+  when the same subscription also negotiates the normalized reasoning stream;
+- the descriptor `model_schema_availability` field, the closed
+  `provider_tool_group_invalid` shape matrix, the no-numeric-step-limit
+  statement, and the typed-reference alternatives for non-path tools.
 
 ### Exit criteria
 
@@ -1196,10 +1200,13 @@ profile, quality-policy target, or implementation milestone.
   Light/Medium/Heavy (64/256/1,024);
 - the 60-minute clarification sublimit and the 17 closed `sub_agent_*`/
   `model_stream_progress_timeout` failures;
-- kernel idle/concurrency/cell bounds and the 6 closed `kernel_*` failures;
-- bridge DTOs, the 16-operation and frame/group/history bounds, and the 6
-  closed `bridge_*` failures;
-- the MCP bounded gateway and the 6 closed `mcp_*` failures.
+- kernel idle/concurrency/cell bounds and the 6 closed `kernel_*` failures,
+  plus idle-disposal, no-formatted-footer, diagnostics-content, and
+  later-cell-background-capture detail;
+- bridge DTOs, the 16-operation and frame/group/history bounds, the 6
+  closed `bridge_*` failures, and the slow-peer non-delay property;
+- the MCP bounded gateway and the 6 closed `mcp_*` failures, with the
+  authoritative `V1` record names superseding the concept2 `*Dto` names.
 
 ### Exit criteria
 
@@ -1227,7 +1234,11 @@ profile, quality-policy target, or implementation milestone.
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
   minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
-- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`.
+- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`;
+- the taxonomy value `model-capability-taxonomy-v1`, the
+  `reasoning_input_contract` field name (superseding the concept2
+  `reasoning_history_transfer`), and the descriptor-owned field-path/
+  array-index order.
 
 ### Exit criteria
 
