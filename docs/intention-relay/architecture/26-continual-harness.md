@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 26.
 - Decision record: [`0021`](../decisions/0021-continual-harness-directions.md).
-- Detail decision: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (closed safe failures and selection-record detail).
-- Reconciliation topics: `CHR-001..010`.
+- Detail decisions: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (closed safe failures and selection-record detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (autonomous goal mode, post-disconnect work, export).
+- Reconciliation topics: `CHR-001..013`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
@@ -278,8 +278,15 @@ after client disconnection; attachments, images, binary, rich-MIME, or
 multimodal payloads; a plug-in, extension, skill/MCP installation, or dynamic
 tool registration system; administration of long-lived processes, workers,
 leases, attach/detach, force-kill, or supervisor recovery; physical deletion,
-export, garbage collection, or destructive history cleanup. Each requires a
-separate future decision.
+export, garbage collection, or destructive history cleanup. Autonomous harness
+goal mode, work/continuation/requeue after client disconnection, and export are
+accepted post-M5 future directions under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+: goal-directed rule continuation is separately
+admitted and never a free-running agent; post-disconnect work is an explicit
+durable contract that never silently resumes old external work; export is
+bounded and credential-free. None of these directions are activated here. Each
+of the remaining exclusions requires a separate future decision.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and

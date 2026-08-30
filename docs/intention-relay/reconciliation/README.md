@@ -72,7 +72,13 @@ implementation specification can be prepared:
   ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md));
 - post-M5 accepted deferred directions: activity-tree metadata, semantic
   content inspection, and per-call cancellation
-  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
+  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
+- post-M5 accepted execution directions: raw-TOML/configuration editing, model
+  discovery, arbitrary headers, provider-native preservation, server-side
+  parser, fork tool-result/child-agent execution, export, cross-workspace
+  clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM
+  packaging
+  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -136,6 +142,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Continual-harness safe failures and selection record | architectures 26/28 | decision 0030 |
 | Autonomous continuation | architecture 13 | decision 0031 |
 | Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
+| Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

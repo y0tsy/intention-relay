@@ -423,6 +423,13 @@ inspection, and per-call cancellation
 - the accepted deferred directions: tree-level activity metadata, semantic
   content inspection, and owner-specific per-call cancellation
   ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
+- the accepted execution directions: provider-profile UI and raw-TOML
+  editing, configuration editing, model discovery, arbitrary authentication
+  headers, provider-native preservation controls, server-side parser setup,
+  tool-result and child-agent execution in forks, export, cross-workspace
+  clone/rebind, autonomous harness goal mode, work/requeue after client
+  disconnection, and consolidated RLM packaging
+  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
 - consolidation of any retrospective changes to M0-M5 code required by these
   directions, each in its own activating specification.
 
@@ -1359,4 +1366,34 @@ profile, quality-policy target, or implementation milestone.
   versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
 - the directions are non-authorizing and never expose raw content or partially
   cancel work; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted execution directions package
+
+**Documentation-only package extending architectures 25, 22, 23, 26, 28, 18,
+24, and 29.** It records thirteen deliberately deferred concept items as
+accepted future directions to be executed in Milestone 5+, adopted by
+[decision 0033](../decisions/0033-accepted-m5plus-execution-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- provider-profile UI and raw-TOML editing, configuration editing, and model
+  discovery (architecture 25);
+- arbitrary authentication headers, provider-native preservation controls, and
+  server-side parser setup (architecture 22);
+- tool-result and child-agent execution in forks, export, and cross-workspace
+  clone/rebind (architectures 23/24/26);
+- autonomous harness goal mode and work/requeue after client disconnection
+  (architectures 26/28/18);
+- consolidated RLM packaging (architectures 17/24).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- each direction affects fresh runs only, is non-authorizing before its own
+  activating specification, never resumes old external work, and never
+  rewrites historical bytes; M3/M4 bytes remain unchanged; and
 - activation remains excluded pending a later M5+ specification.

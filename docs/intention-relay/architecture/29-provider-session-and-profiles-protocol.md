@@ -103,6 +103,11 @@ catalog reads, catalog status, session default query/command, safe per-turn and
 fork overrides, resolved-selection projections, pending-removal accept/reject,
 and explicit admission of a held recovered run. It does not imply live reload,
 configuration editing, profile testing, credential entry, or model discovery.
+Configuration editing is an accepted post-M5 future direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+ through the atomic reload contract of
+[architecture 25](25-configuration-provider-control-plane.md); it is not
+activated here.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable
 `ProfileId`, carries the active `CatalogRevisionId`, and returns `has_more`; a

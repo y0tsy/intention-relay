@@ -63,6 +63,8 @@ contradiction register.
 | CFG-006 | Pricing and budget policy is product policy, never a Mandate admission ceiling, quota, reservation, or entitlement. | future | Adopt | `25-configuration-provider-control-plane.md` | Numeric values require intrinsic/capacity/product classification. | M5+ | pricing classification fixture planned |
 | CFG-007 | Profile UI and configuration control plane consume only the shared typed client and existing projections. | future | Adopt | `25-configuration-provider-control-plane.md` | No second authority, transport, registry, or adapter path. | M5+ | control-plane projection fixture planned |
 | CFG-008 | Every retrospective code change is consolidated in Milestone 5+ and activated by its own accepted specification. | future | Adopt | `11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment` | No production activation from documentation alone. | M5+ | M5+ activation evidence |
+| CFG-009 | Raw-TOML editing and configuration editing are accepted post-M5 directions (ADR 0033): a safe validated surface over the shared typed client producing a candidate snapshot through the atomic reload contract, never in-place mutation of an admitted run or recorded snapshot. | future | Adopt | `25-configuration-provider-control-plane.md` | Fail-closed on non-atomic application; no credential/resource exposure. | M5+ | edit fixture planned |
+| CFG-010 | Model discovery is an accepted post-M5 direction (ADR 0033, extends CFG-005): non-authorizing typed records, never model-name routing. | future | Adopt | `25-configuration-provider-control-plane.md` | No fallback routing or selection. | M5+ | discovery fixture planned |
 
 ## Post-M5 continual-harness topics
 
@@ -78,6 +80,9 @@ contradiction register.
 | CHR-008 | Dossiers, checkpoints, and conclusions are bounded (512 KiB) and rejected rather than truncated; redaction stays central. | future | Adopt | `26-continual-harness.md` | Oversized content rejects; no credential/path/resource leaks. | M5+ | bound fixture planned |
 | CHR-009 | The 15 closed `harness_*` safe failures are known typed pre-effect rejections that disclose no credential, path, dossier content, Python value, grant, provider resource, process topology, or raw transcript. | future | Adopt | `26-continual-harness.md` | No truncation, partial commit, or external effect in the transition transaction. | M5+ | failure fixture planned |
 | CHR-010 | `ContinualHarnessSelectionV1` is a separately versioned credential-free nested record of `run-execution-meaning-v4` (harness identity, active rule revision, durable trigger reason, class resolution, dossier digest, checkpoint reference, time-zone application, immutable bounds). | future | Adopt | `26-continual-harness.md`, `28-goal-domain-and-verification.md` | Historical M4 and non-harness runs acquire no synthetic harness record. | M5+ | selection fixture planned |
+| CHR-011 | Autonomous harness goal mode is an accepted post-M5 direction (ADR 0033): goal-directed rule continuation, separately admitted, never a free-running agent. | future | Adopt | `26-continual-harness.md` | No autonomous free-running agent. | M5+ | goal-mode fixture planned |
+| CHR-012 | Work/requeue after client disconnection is an accepted post-M5 direction (ADR 0033): an explicit durable contract that never silently resumes old external work. | future | Adopt | `26-continual-harness.md`, `28-goal-domain-and-verification.md`, `18-mandate-mcp-capability-lifecycle.md` | No silent resumption of old work. | M5+ | disconnect fixture planned |
+| CHR-013 | Export of harness records is an accepted post-M5 direction (ADR 0033): bounded and credential-free, never destructive. | future | Adopt | `26-continual-harness.md` | No raw content or destructive deletion. | M5+ | export fixture planned |
 
 ## Post-M5 programmatic-caller policy topics
 
@@ -105,6 +110,7 @@ contradiction register.
 | GOL-010 | Working memory, roles, and templates are first-class typed durable records with explicit replacement/rollback. | future | Adopt | `28-goal-domain-and-verification.md` | No implicit conflict resolution; full content only via explicit `retrieve`. | M5+ | memory fixture planned |
 | GOL-011 | Model proposals are one coalesced draft per owner scope/record kind; acceptance validates the exact base revision. | future | Adopt | `28-goal-domain-and-verification.md` | Stale base is a typed conflict; rejection changes no record. | M5+ | proposal fixture planned |
 | GOL-012 | Compaction is a versioned model-context projection with one cumulative summary plus suffix; original facts remain authoritative. | future | Adopt | `28-goal-domain-and-verification.md` | No hidden continuation; correction is a new immutable revision. | M5+ | compaction fixture planned |
+| GOL-013 | Work/requeue after client disconnection is an accepted post-M5 direction (ADR 0033): an explicit durable contract that never silently resumes old external work. | future | Adopt | `28-goal-domain-and-verification.md` | No silent resumption of old work. | M5+ | disconnect fixture planned |
 
 ## Post-M5 Goal verification topics
 
@@ -293,6 +299,7 @@ concept anchor and an evidence status from the controlled vocabulary.
 | MCP-014 | Cancellation/restart disposes private resources and never repeats old work. | future Mandate | Adopt | architecture 18 | Later work needs fresh run/acquisition identities. | MCP lifecycle | recovery fixture planned |
 | MCP-015 | MCP readiness is non-authorizing and cannot discover or select capabilities. | future Mandate | Adopt | architecture 18 | Scheduler retains reason, cannot start MCP work. | MCP lifecycle | readiness fixture planned |
 | MCP-016 | Dynamic acquisition supersedes retained bounded rules only for future Mandates. | future/historical | Adapt | architecture 18 | M3/M4 and retained bounded-MCP history stay unchanged. | MCP lifecycle | compatibility fixture planned |
+| MCP-017 | Work/requeue after client disconnection is an accepted post-M5 direction (ADR 0033): an explicit durable contract that never silently resumes old external work. | future | Adopt | architecture 18 | No silent resumption of old work. | M5+ | disconnect fixture planned |
 
 ## Session branching topics
 
@@ -316,6 +323,10 @@ concept anchor and an evidence status from the controlled vocabulary.
 | FRK-016 | Forks copy no active work, grant, request, queue, or unfinished effect. | future/all | Adopt | architecture 23 | Recovery never resumes transferred work. | Session branching | recovery matrix planned |
 | FRK-017 | Child runs bind their own provider meaning; default is non-authorizing. | future ordinary Session | Adopt | architecture 23 | No credential/client/request continuation or model-name routing. | Session branching | selection fixture planned |
 | FRK-018 | Historical records gain no synthetic fork execution state. | historical-only | Adopt | architecture 23 | Preserve readable ordinary history. | Session branching | compatibility fixture planned |
+| FRK-019 | Tool-result execution in forks is an accepted post-M5 direction (ADR 0033): a separately admitted ordinary action from frozen references, never silent re-execution and never Mandate authority. | future | Adopt | architecture 23 | No silent re-execution or authority. | M5+ | execution fixture planned |
+| FRK-020 | Child-agent execution in forks is an accepted post-M5 direction (ADR 0033): a separately admitted ordinary action, never Mandate child edges and never verifier authority. | future | Adopt | architecture 23 | No Mandate/verifier authority. | M5+ | execution fixture planned |
+| FRK-021 | Export is an accepted post-M5 direction (ADR 0033): a bounded credential-free surface for fork/activity/harness records, never a history rewrite and never destructive. | future | Adopt | architectures 23/24/26 | No raw content or destructive deletion. | M5+ | export fixture planned |
+| FRK-022 | Cross-workspace clone/rebind is an accepted post-M5 direction (ADR 0033): explicit user-authorized only, never implicit, never live-state transfer. | future | Adopt | architecture 23 | No live-state/authority transfer. | M5+ | rebind fixture planned |
 
 ## Activity, UI, and adapter topics
 
@@ -337,6 +348,7 @@ concept anchor and an evidence status from the controlled vocabulary.
 | ACT-014 | A terminal child conclusion is one mandatory direct-pair terminal-result availability reference included once in the next eligible parent exchange. | future Mandate | Adopt | architecture 24 | No `AwaitResult`, parent step, or parent delay. | M6 activity/UI | terminal fixture planned |
 | ACT-015 | Tree-level metadata is an accepted post-M5 future direction (ADR 0032): bounded, credential-free, distinct from journal/notification state, never authority or a second sequence. | future | Adopt | architecture 24 | No activity/notification/lifecycle authority. | M5+ | metadata fixture planned |
 | ACT-016 | Per-call cancellation and owner-specific semantics beyond direct-pair are accepted post-M5 future directions (ADR 0032); the first-scope `StopRunCommandDto`/direct-pair boundary remains authoritative. | future | Adopt | architectures 19/24 | No partial cancellation or delivery. | M5+ | cancellation fixture planned |
+| ACT-017 | Export of activity records is an accepted post-M5 direction (ADR 0033): bounded, credential-free, never a history rewrite and never destructive. | future | Adopt | architecture 24 | No raw content or destructive deletion. | M5+ | export fixture planned |
 
 ## Coverage ledger
 
@@ -391,3 +403,6 @@ The selected concept headings listed in [Concept Supersession Index](concept-sup
 | RSN-015 | Semantic content inspection of reasoning or provider content is an accepted post-M5 future direction (ADR 0032); it never substitutes for central redaction and never rewrites stored facts. | future | Adopt | architecture 22 | Non-authorizing; no raw content exposure. | M5+ | inspection fixture planned |
 | RSN-016 | The unified model-capability taxonomy is versioned by the closed value `model-capability-taxonomy-v1`; the concept2 `reasoning_history_transfer` field name is research-only (architecture 22 owns `LocalDurableHistoryV1 { reasoning_input_contract }`). | future Mandate | Adopt | architecture 22 | No competing taxonomy version or field name. | Provider evolution | taxonomy fixture planned |
 | RSN-017 | The descriptor owns the fixed field-path and array-index order for values originating in one native response; that order is code-owned descriptor metadata, never inferred from a model name, endpoint, or equal text. | future Mandate | Adopt | architecture 22 | No model-name or endpoint inference. | Provider evolution | ordering fixture planned |
+| RSN-018 | Arbitrary authentication headers are an accepted post-M5 direction (ADR 0033): a closed code-owned typed header policy beyond bearer/one-selected-header, bound to a descriptor/kind revision, never durable/public identity. | future | Adopt | architecture 22 | No raw header maps or secret interpolation. | M5+ | header fixture planned |
+| RSN-019 | Provider-native preservation controls are an accepted post-M5 direction (ADR 0033): explicit typed controls under the local-history-first law, never remote continuation. | future | Adopt | architecture 22 | No remote continuation or provider-managed history. | M5+ | preservation fixture planned |
+| RSN-020 | Server-side parser setup is an accepted post-M5 direction (ADR 0033): explicit typed configuration where a closed descriptor declares it, never raw JSON/templates and never unbounded parsing. | future | Adopt | architecture 22 | No arbitrary parser administration. | M5+ | parser fixture planned |

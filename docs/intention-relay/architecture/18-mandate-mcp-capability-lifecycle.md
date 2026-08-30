@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 18.
 - Decision record: [`0010`](../decisions/0010-mandate-mcp-capability-lifecycle.md).
-- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (MCP detail).
-- Reconciliation topics: `MCP-001..016`.
+- Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (MCP detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (post-disconnect work).
+- Reconciliation topics: `MCP-001..017`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -226,6 +226,11 @@ autonomous continuation, work after client disconnection,
 attachments/images/binary/rich-MIME input, dynamic extensions and installation,
 dynamic tool registration, physical deletion, and administration of long-lived
 workers, leases, attach/detach, force-kill, or supervisor recovery.
+Work/continuation/requeue after client disconnection is an accepted post-M5
+future direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+ as an explicit durable contract that never silently
+resumes old external work; it is not activated here.
 
 ## Dependencies and non-goals
 

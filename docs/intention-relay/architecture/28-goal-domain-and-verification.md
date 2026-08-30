@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 28.
 - Decision record: [`0023`](../decisions/0023-goal-domain-and-verification-directions.md).
-- Detail decision: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (harness selection-record content).
-- Reconciliation topics: `GOL-004..012, VGT-001..006`.
+- Detail decisions: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (harness selection-record content), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (post-disconnect work).
+- Reconciliation topics: `GOL-004..013, VGT-001..006`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
@@ -497,7 +497,11 @@ autonomous continuation, work after client disconnection,
 attachments/images/binary/rich-MIME input, dynamic extensions and
 installation, dynamic tool registration, physical deletion, and administration
 of long-lived workers, leases, attach/detach, force-kill, or supervisor
-recovery.
+recovery. Work/continuation/requeue after client disconnection is an accepted
+post-M5 future direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+ as an explicit durable contract that never silently
+resumes old external work; it is not activated here.
 
 ## Compatibility and historical preservation
 

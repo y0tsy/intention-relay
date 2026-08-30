@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 23.
 - Decision record: [`0015`](../decisions/0015-non-destructive-session-branching-and-regeneration.md).
-- Detail decision: [`0026`](../decisions/0026-session-branching-detail-directions.md) (session-branching detail).
-- Reconciliation topics: `FRK-001..018`.
+- Detail decisions: [`0026`](../decisions/0026-session-branching-detail-directions.md) (session-branching detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (tool-result/child-agent execution, export, clone/rebind).
+- Reconciliation topics: `FRK-001..022`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -383,6 +383,21 @@ security, verification, and quality policies. It does not define Mandate
 association, activity/UI implementation, workspace cloning/rebinding, autonomous
 model/IPython forking, provider implementation, destructive deletion/GC/export,
 schema, migrations, crates, Cargo, Makefile/CI, or production activation.
+
+Tool-result execution, child-agent execution, export, and cross-workspace
+clone/rebind are accepted post-M5 future directions under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+:
+
+- tool-result execution and child-agent execution are separately admitted
+  ordinary fork actions from frozen references, never silent re-execution,
+  never Mandate child edges, and never verifier authority;
+- export is a bounded, credential-free surface for fork lineage and activity
+  records, never a history rewrite and never destructive deletion;
+- cross-workspace clone/rebind is explicit user-authorized only, never
+  implicit, and never transfers live state or authority.
+
+None of these directions are activated here.
 
 ## Required evidence before implementation
 

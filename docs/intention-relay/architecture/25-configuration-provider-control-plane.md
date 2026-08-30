@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 25.
 - Decision record: [`0020`](../decisions/0020-configuration-provider-control-plane-directions.md).
-- Reconciliation topics: `CFG-001..008`.
+- Detail decision: [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (raw-TOML editing and configuration editing).
+- Reconciliation topics: `CFG-001..010`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a
   later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
@@ -125,6 +126,23 @@ presentation direction:
   endpoint material, SDK objects, or live resources;
 - profile edits surface through the reload and catalog contracts above and
   affect fresh runs only.
+
+## Raw-TOML editing and configuration editing
+
+Raw-TOML editing and a validated configuration-editing surface are accepted
+future directions under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+:
+
+- a safe, validated raw-TOML editing surface over the shared typed client
+  produces a new candidate snapshot through the same atomic reload contract;
+  it is never adapter authority and never in-place mutation of an admitted
+  run or recorded snapshot;
+- configuration editing surfaces validated edits that fail closed when they
+  cannot be applied atomically, leaving the running daemon on its recorded
+  snapshot;
+- edits affect fresh runs only and never expose credentials, private endpoint
+  material, SDK objects, or raw provider payloads on durable/public surfaces.
 
 ## Compatibility and historical preservation
 

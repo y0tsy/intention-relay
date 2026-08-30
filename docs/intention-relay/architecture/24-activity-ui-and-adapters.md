@@ -15,8 +15,8 @@ classifies them as intrinsic bounds, capacity availability, or ordinary policy.
 
 - Normative owner: architecture 24.
 - Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
-- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction).
-- Reconciliation topics: `ACT-001..018`.
+- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (export).
+- Reconciliation topics: `ACT-001..019`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -298,6 +298,11 @@ Tree-level metadata is an accepted post-M5 future direction under
 a future bounded, credential-free metadata surface on activity trees, distinct
 from journal records and notification state, that never becomes activity,
 authority, or a second sequence. It is not activated here.
+
+Export of activity records is an accepted post-M5 future direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+ as a bounded, credential-free surface that never
+rewrites history and is never destructive; it is not activated here.
 
 ## Notifications and acknowledgement
 
