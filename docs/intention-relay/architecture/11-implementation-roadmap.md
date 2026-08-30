@@ -17,6 +17,10 @@ flowchart TD
   P --> D[M4 Model and one run]
   P --> E[M5 Tools workspace hooks]
   E --> K[M5+ Post-M5 alignment]
+  K --> F[M6 Tauri bridge UI]
+  K --> G[M7 Plan Build artifacts]
+  K --> H[M8 VFR Headroom]
+  K --> I[M9 End to end hardening]
   P --> F[M6 Tauri bridge UI]
   P --> G[M7 Plan Build artifacts]
   P --> H[M8 VFR Headroom]
@@ -381,25 +385,35 @@ typed ordering and short-circuiting.
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
-**Documentation-approved future milestone.** Milestone 5+ is the consolidation
-point for all retrospective changes to already-implemented M0-M5 code that the
-accepted post-M5 directions require, and the activation home for the
+**Activation home for the complete post-M5 stack; hard prerequisite for
+M6-M9.** Milestone 5+ is the consolidation point for all retrospective changes
+to already-implemented M0-M5 code that the accepted post-M5 directions
+require, and the activation home for the full post-M5 package stack: the
 [Configuration and Provider Control Plane](25-configuration-provider-control-plane.md)
-cluster adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
-It does not renumber, replace, or claim delivery of Milestones 6-9; it may run
-in parallel with them and does not block their activation. The full
-authoritative package review of 2026-08-30 confirmed that the
-[`m4plus_concept2.md`](../m4plus_concept2.md) research directions are otherwise
-covered by architectures 13-24 and decisions 0001-0019; M5+ closes the
-identified configuration/provider control-plane gap and hosts every
-retrospective code change. The fifth review wave of 2026-08-30 additionally
-closed the remaining unmapped detail: the continual-harness closed safe
-failures and selection record ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md)),
+cluster adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+the continual-harness, programmatic-caller, Goal-domain, provider
+session-selection, and base-tool contracts adopted by
+[ADR 0021-0025](../decisions/README.md), and the detail packages adopted by
+[ADR 0026-0034](../decisions/README.md). It does not renumber, replace, or
+claim delivery of Milestones 6-9; it is their declared prerequisite in the
+dependency graph and activates only preparatory foundation work, never direct
+M6-M9 boundary implementation. The full authoritative package review of
+2026-08-30 confirmed that the [`m4plus_concept2.md`](../m4plus_concept2.md)
+research directions are otherwise covered by architectures 13-24 and decisions
+0001-0019; M5+ closes the identified configuration/provider control-plane gap
+and hosts every retrospective code change. The fifth review wave of 2026-08-30
+additionally closed the remaining unmapped detail: the continual-harness
+closed safe failures and selection record
+([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md)),
 the autonomous continuation direction
 ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md)), and the
 accepted deferred directions of tree-level activity metadata, semantic content
 inspection, and per-call cancellation
 ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
+A new edition of this milestone, prepared as the complete foundation for all
+subsequent milestones, is delivered as a pre-approved sequence of activating
+slices (contracts/versions, control plane, harness, UI foundation) approved
+together as one package.
 
 ### Deliver
 
@@ -436,7 +450,9 @@ inspection, and per-call cancellation
   activity numeric limit classification
   ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
 - consolidation of any retrospective changes to M0-M5 code required by these
-  directions, each in its own activating specification.
+  directions, delivered as a pre-approved sequence of activating slices
+  (contracts/versions, control plane, harness, UI foundation) approved together
+  as one package.
 
 ### Tests first
 
