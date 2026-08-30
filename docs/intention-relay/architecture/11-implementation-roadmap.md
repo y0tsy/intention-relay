@@ -413,73 +413,110 @@ inspection, and per-call cancellation
 A new edition of this milestone, prepared as the complete foundation for all
 subsequent milestones, is delivered as a pre-approved sequence of activating
 slices (contracts/versions, control plane, harness, UI foundation) approved
-together as one package.
+together as one package. The activation decision is recorded in
+[ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md).
 
 ### Deliver
 
-- controlled configuration live reload: validated TOML applied to a running
-  daemon through an explicit contract, transaction, and outcome test,
-  affecting fresh runs only;
-- credential rotation: private-material replacement without altering frozen
-  per-run meaning or selection;
-- provider health-check service: non-authorizing typed readiness evidence;
-- provider/model discovery: non-authorizing, never model-name routing;
-- pricing and budget policy: product policy, never a Mandate admission
-  ceiling;
-- provider profile UI and configuration control plane over the shared typed
-  client;
-- the continual-harness closed safe failures and `ContinualHarnessSelectionV1`
-  selection-record content
-  ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md));
-- the autonomous continuation direction: Continue autonomously creates or
-  activates a Build-mode Mandate by default
-  ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md));
-- the accepted deferred directions: tree-level activity metadata, semantic
-  content inspection, and owner-specific per-call cancellation
-  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
-- the accepted execution directions: provider-profile UI and raw-TOML
-  editing, configuration editing, model discovery, arbitrary authentication
-  headers, provider-native preservation controls, server-side parser setup,
-  tool-result and child-agent execution in forks, export, cross-workspace
-  clone/rebind, autonomous harness goal mode, work/requeue after client
-  disconnection, and consolidated RLM packaging
-  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
-- the accepted retained-deferral directions: rich MIME/raw kernel output
-  projection, physical deletion/GC of historical work, worker/process
-  supervision topology, calendar/interval/time-zone/DST semantics, and
-  activity numeric limit classification
-  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
-- consolidation of any retrospective changes to M0-M5 code required by these
-  directions, delivered as a pre-approved sequence of activating slices
-  (contracts/versions, control plane, harness, UI foundation) approved together
-  as one package.
+The complete foundation package is delivered as one pre-approved sequence of
+activating slices, all approved together as one package
+([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md)). No
+slice may ship in a half-ready state, and later slices consume only contracts
+activated by earlier slices in this order:
+
+1. **Contracts and versions** — the versioned protocol/schema/
+   execution-meaning/DTO contract ledger for the full post-M5 stack: local
+   protocol and schema version advancement; `run-execution-meaning-v3`/`v4`
+   field tables (`ProgrammaticCallerPolicySelectionV1`, `GoalRunSelectionV1`,
+   `AgentActivitySelectionV1`, `ContinualHarnessSelectionV1`); the negotiated
+   capability families (`provider_profiles_v1`, `session_fork_v1`,
+   `normalized_reasoning_stream_v1`, `agent_activity_v1`,
+   `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`);
+   additive storage migration with M3/M4 byte preservation; canonical tags
+   and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
+   ownership, feature-profile, and coverage-tier declarations for every
+   activated family.
+2. **Control plane** — the ADR 0020 cluster and provider session selection
+   (architectures 25/29/22): controlled live reload; credential rotation;
+   provider health checks; model discovery; pricing policy; provider profile
+   UI and raw-TOML/configuration editing; arbitrary authentication headers;
+   provider-native preservation controls; server-side parser setup; session
+   defaults and per-turn/fork overrides; unavailable-queue promotion and
+   reconciliation; `provider_profiles_v1`; pending-removal and degraded
+   recovery; and the provider reasoning/catalog surface.
+3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
+   and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
+   0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
+   execution classes; the 15 closed `harness_*` safe failures; the two closed
+   root origins; corridors and reservations; the Goal tree and Verification
+   Mandates; and Build-mode autonomous continuation.
+4. **UI foundation** — session branching, activity/notification, reasoning/
+   catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
+   0028/0029/0032/0033/0034): `session_fork_v1`; activity journal and
+   notification projections; normalized reasoning delivery; the legacy M4
+   selection bridge; RLM packaging and export; and the exact typed
+   client/protocol surface that M6 consumes.
+
+Each direction from ADR 0020-0034 remains bound to its slice; every
+retrospective change to M0-M5 code required by these directions is activated
+inside its slice, each with its own contract, transaction, and outcome test.
 
 ### Tests first
 
-- reload transaction fault injection: atomic commit or fail-closed, no
-  partial snapshot, no mutation of existing runs;
-- rotation redaction and no-frozen-meaning-change fixtures;
-- health/discovery non-authority fixtures: no RunId/reason/selection created,
-  no model-name routing, no fallback;
-- pricing non-ceiling classification fixtures;
-- control-plane safe-projection fixtures: no raw TOML, credentials, or
-  resources cross public or durable boundaries;
-- M3/M4 byte/meaning/replay/recovery preservation and fake-secret regression
-  across logs, errors, snapshots, events, and adapter DTOs.
+- slice 1: DTO round-trip and golden digest fixtures; version-negotiation
+  fixtures (compatible minor, incompatible major, unnegotiated capability
+  fail-closed); additive migration fixtures proving M3/M4 values unchanged;
+  future-schema rejection; canonical-tag and digest goldens;
+- slice 2: reload transaction fault injection (atomic commit or fail-closed,
+  no partial snapshot, no mutation of existing runs); rotation redaction and
+  no-frozen-meaning-change; health/discovery non-authority (no RunId/reason/
+  selection created, no model-name routing, no fallback); pricing non-ceiling
+  classification; promotion/reconciliation limits; catalog acceptance and
+  recovery; control-plane safe-projection (no raw TOML, credentials, or
+  resources cross public or durable boundaries);
+- slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
+  conclusion bounds; class resolution; corridor admission and reservation
+  atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
+  cancellation cascade and restart `Interrupted`;
+- slice 4: fork boundary/snapshot/rate-limit; activity journal/notification
+  bounds and urgent dedup; reasoning history and paged delivery; replay/
+  resync; adapter parity;
+- shared: M3/M4 byte/meaning/replay/recovery preservation and fake-secret
+  regression across logs, errors, snapshots, events, and adapter DTOs for
+  every slice.
 
 ### Acceptance outcomes
 
-- M3/M4 startup-only configuration, recorded revisions, and persisted run
-  snapshots remain authoritative and unchanged;
-- every retrospective change to implemented code is activated by its own
-  accepted specification and passes `make quick`, `make verify`, and
-  Linux/Windows CI;
+- M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts
+  without any retroactive protocol, DTO, schema, crate-boundary, migration, or
+  quality-policy change;
+- M3/M4 startup-only configuration, recorded revisions, persisted run
+  snapshots, queue tickets, sessions, runs, events, and bytes remain
+  authoritative and unchanged;
 - health, discovery, and pricing create no RunId, reason, lifecycle
   transition, scheduler candidate, tool permission, child edge, verifier
   authority, MCP capability, bridge grant, kernel epoch, context projection,
   branch, or reconciliation result;
 - applicable crates meet their declared coverage tiers without excluding
-  policy or boundary logic.
+  policy or boundary logic; every activated slice passes `make quick`,
+  `make verify`, and Linux/Windows CI;
+- no slice ships half-ready: every activated contract ships with its version,
+  owner, tests, policy mapping, migration behavior, and evidence together.
+
+### Exit criteria
+
+- all four slices are complete in order; every slice is fully ready before the
+  next slice begins shipping;
+- the contract ledger declares every post-M5 protocol, schema, DTO,
+  execution-meaning, configuration, migration, compatibility, and error
+  contract with an owner and evidence anchor;
+- the dependency graph and milestone wording identify M5+ as the hard
+  prerequisite of M6-M9;
+- no M6-M9 boundary behavior is implemented; no second runtime, registry,
+  scheduler, persistence authority, or sandbox is introduced;
+- reconciliation registers (source-of-truth matrix, evidence, ownership,
+  contradiction, deferred/excluded) carry ADR 0035-keyed activation rows;
+- the M5+ evidence package passes the repository quality gates.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 

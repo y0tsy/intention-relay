@@ -83,7 +83,12 @@ implementation specification can be prepared:
   projection, physical deletion/GC of historical work, worker/process
   supervision topology, calendar/interval/time-zone/DST semantics, and
   activity numeric limit classification
-  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md)).
+  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
+- post-M5 complete foundation activation: Milestone 5+ as the hard
+  prerequisite of M6-M9 and the single activation home for the complete
+  post-M5 stack, delivered as one pre-approved four-slice sequence
+  (contracts/versions, control plane, harness, UI foundation)
+  ([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -149,6 +154,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
 | Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
 | Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
+| M5+ complete foundation activation | architectures 25-30, 23, 22, 24, roadmap | decision 0035 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,
