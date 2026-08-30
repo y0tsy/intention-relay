@@ -82,6 +82,7 @@ flowchart TD
 14. [Activity, UI, and adapters](24-activity-ui-and-adapters.md)
 15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 16. [VFR and Headroom](06-vfr-and-headroom.md)
+17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
 
 ### Agent operation
 
@@ -311,3 +312,14 @@ detailed authority for future activity trees, safe projections, direct-pair
 messages, notifications, acknowledgement projections, and shared-client adapter
 behavior. It preserves historical Session/Run contracts and cannot become an
 authority or a second transport path.
+
+### Configuration and provider control-plane owner
+
+[Configuration and provider control plane](25-configuration-provider-control-plane.md)
+is the sole detailed authority for the accepted post-M5 configuration/provider
+control-plane directions: controlled live reload, credential rotation, provider
+health checks, discovery, pricing policy, and the profile UI/control plane,
+adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+It preserves M3/M4 startup-only configuration and cannot become a second
+authority, transport, registry, scheduler, or sandbox.

@@ -15,6 +15,7 @@
 | Provider, reasoning, execution meaning | PRV-001..020, RSN-001..015, RUN-001..012 | Envelope/canonical compatibility remains architecture 14; provider and reasoning payload semantics adopted for future Mandates. | Architectures 14 and 22, provider evolution package. |
 | Forks and lineage | FRK-001..018 | Adopted for future ordinary Session branching; M3/M4 and Mandate authority remain separate. | Architecture 23, session branching package. |
 | Verification portfolio, checklist, deferred work | DUR-001..003, QLT-001, RDM-001 (remaining topics require atomic inventory) | Evidence and delivery rules mapped. | Quality and later roadmap reconciliation. |
+| Provider profiles, configuration reload, control plane | CFG-001..008 | Adopted for post-M5 fresh runs; M3/M4 startup-only configuration and recorded snapshots remain authoritative. | Architecture 25, configuration and provider control plane. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.

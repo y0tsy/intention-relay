@@ -44,7 +44,10 @@ implementation specification can be prepared:
 - external-effect uncertainty and no-resume recovery;
 - historical non-reinterpretation;
 - ownership and dependency direction;
-- traceability, compatibility, and delivery sequencing.
+- traceability, compatibility, and delivery sequencing;
+- post-M5 configuration and provider control-plane directions
+  ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+  [Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -95,6 +98,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Provider/reasoning | architecture 22 | decision 0014 |
 | Session branching | architecture 23 | decision 0015 |
 | Activity/UI/adapters | architecture 24 | decision 0016 |
+| Configuration/provider control plane | architecture 25 | decision 0020 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

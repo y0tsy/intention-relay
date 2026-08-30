@@ -27,6 +27,12 @@ semantics. `openrouter` and `generic-chat-completion-api` remain the only M4
 kinds. Retained provider/profile/reasoning material is research provenance where
 it conflicts with architectures 13--21.
 
+The configuration/provider control-plane cluster (profile UI/control plane,
+live reload, credential rotation, discovery, pricing, health checks) is owned
+by [architecture 25](25-configuration-provider-control-plane.md), adopted as
+accepted future directions by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact
@@ -323,6 +329,12 @@ rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, arbitrary headers, plugin drivers, remote continuation,
 provider-side parser administration, session defaults/overrides, while architecture 23 owns forks and lineage,
 UI, Cargo, Makefile/CI, or production activation.
+
+The profile picker/editor, credential rotation, health test, discovery,
+pricing, telemetry, and live reload items are accepted post-M5 directions
+owned by [architecture 25](25-configuration-provider-control-plane.md) and
+activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
+they are not activated here.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and

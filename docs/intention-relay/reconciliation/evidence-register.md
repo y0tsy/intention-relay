@@ -30,6 +30,7 @@ states.
 | EVD-009 | MCP/bridge | Dynamic acquisition, grant, replay and no-bypass fixtures | Planned | `architecture/18-mandate-mcp-capability-lifecycle.md`; `architecture/19-mandate-gateway-rlm-bridge.md` | Architectures 18/19 |
 | EVD-010 | Activity/UI | Compatibility projection, notification and adapter parity fixtures | Planned | `architecture/24-activity-ui-and-adapters.md#Historical-projections-and-limits` | Architecture 24 |
 | EVD-011 | Documentation quality | Full Markdown/link/status/claim inventory checks | Planned | Future documentation validation command and CI artifact | Reconciliation |
+| EVD-012 | Configuration/provider control plane (M5+) | Reload fault injection, rotation redaction, health/discovery non-authority, pricing classification, control-plane safe-projection, and M3/M4 preservation fixtures | Planned | `architecture/25-configuration-provider-control-plane.md#Dependencies-and-non-goals` | Architecture 25 |
 
 ## Interpretation rule
 

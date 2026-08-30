@@ -44,9 +44,11 @@ own immutable selected snapshot/revision.
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies
 an edit to an already-running daemon. A changed TOML file therefore takes effect
 only after a restart; the new startup snapshot applies to new runs, while
-existing persisted runs retain their recorded revision. Live reload is future
-work and must be introduced by an explicit contract, transaction, and outcome
-test.
+existing persisted runs retain their recorded revision. Controlled live reload
+is the accepted future direction ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+[Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment))
+and must be introduced by an explicit contract, transaction, and outcome test;
+it affects fresh runs only and never mutates a recorded snapshot.
 
 ### M3 lifecycle rules
 
@@ -54,7 +56,7 @@ test.
 - The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
 - An accepted or promoted run receives an immutable copy of its selected snapshot/revision.
 - Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due to a configuration edit.
-- TOML application is **daemon-restart-only** in M3. The precise user experience for detecting or requesting the restart remains open; future live reload must never be implied.
+- TOML application is **daemon-restart-only** in M3. The precise user experience for detecting or requesting the restart remains open; controlled live reload is the accepted future direction under [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md) and must never be implied by M3/M4 behavior.
 - Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls back to process CWD.
 
 ### M4 provider execution policy and startup material
@@ -66,7 +68,11 @@ The optional TOML table `[provider.execution]` resolves into the credential-free
 These M4 configuration and credential-isolation rules are implemented and
 verified at the M4 closure baseline. They remain startup-only behavior; a
 follow-on milestone must not imply live reload, credential persistence, or
-rotation without new contracts and outcome evidence.
+rotation without new contracts and outcome evidence. The configuration and
+provider control-plane directions (controlled reload, rotation, health
+checks, discovery, pricing, profile UI) are adopted as accepted future
+directions under [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+and [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
 ## Open-text provider credentials
 
@@ -168,11 +174,16 @@ Makefile](12-quality-gates-and-makefile.md).
 
 ## Post-M4 selection and observability boundary
 
-This Foundation preserves M3/M4 startup-only TOML application and adds no live
-reload, credential rotation, profile editing, discovery, pricing, or health
-behavior. Future execution meanings and attempt evidence must remain
-credential-free and exclude SDK objects, process handles, kernel state, bridge
-grants, raw provider/MCP payloads, and private endpoint material.
+This Foundation preserves M3/M4 startup-only TOML application. The
+configuration/provider control-plane cluster (controlled live reload,
+credential rotation, profile editing, discovery, pricing, and health
+behavior) is adopted as accepted future directions under
+[ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+and [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment),
+and adds no implemented behavior. Future execution meanings and attempt
+evidence must remain credential-free and exclude SDK objects, process
+handles, kernel state, bridge grants, raw provider/MCP payloads, and private
+endpoint material.
 
 Future observability may expose typed capacity outcomes and safe Mandate/attempt
 references, but it cannot convert logs, notifications, activity, or provider

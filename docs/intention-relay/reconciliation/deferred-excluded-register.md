@@ -7,10 +7,10 @@ not sufficient evidence.
 
 | ID | Topic | Disposition | Applicability | Reason | Reconsideration owner/trigger |
 | --- | --- | --- | --- | --- | --- |
-| EXC-001 | Live provider/profile reload | Defer | future | Requires explicit lifecycle, race and persistence contract | Provider owner, approved reload proposal |
-| EXC-002 | Credential rotation during admitted work | Defer | future | Must not alter frozen meaning or private resource binding | Provider/security owner, rotation contract |
-| EXC-003 | Provider health-check service | Defer | future | Readiness semantics and worker topology are not activated | Scheduler/provider owner, readiness design |
-| EXC-004 | Pricing/budget policy | Exclude | future Mandate | Product ceilings are not part of direct Mandate admission | New product decision only |
+| EXC-001 | Live provider/profile reload | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0020; requires explicit lifecycle, race and persistence contract | [Architecture 25](../architecture/25-configuration-provider-control-plane.md), M5+ activating specification |
+| EXC-002 | Credential rotation during admitted work | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0020; must not alter frozen meaning or private resource binding | [Architecture 25](../architecture/25-configuration-provider-control-plane.md), M5+ activating specification |
+| EXC-003 | Provider health-check service | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0020; readiness semantics and worker topology are not activated | [Architecture 25](../architecture/25-configuration-provider-control-plane.md), M5+ activating specification |
+| EXC-004 | Pricing/budget policy | Adopt for M5+ (future direction) | future Mandate | Adopted as accepted post-M5 direction under ADR 0020; product ceilings are not part of direct Mandate admission | [Architecture 25](../architecture/25-configuration-provider-control-plane.md), M5+ activating specification |
 | EXC-005 | Dynamic ToolId/registry creation | Exclude | future Mandate | Fixed registry and one capability path are required | Architecture decision superseding 15 |
 | EXC-006 | Sandbox/container authority | Exclude | all current packages | WorkspaceRoot and hooks are not OS security boundaries | Separate security architecture |
 | EXC-007 | Remote continuation/provider state | Exclude | future Mandate | Recovery is local-history-first and never resumes old work | New explicit continuation architecture |
@@ -30,3 +30,6 @@ not sufficient evidence.
 
 All rows remain non-authorizing until a new approved decision updates this
 register and the relevant owner architecture, roadmap, policy, and evidence.
+Rows EXC-001..004 are adopted as accepted future directions by
+[ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+and remain non-authorizing until a later M5+ activating specification.

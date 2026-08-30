@@ -39,6 +39,19 @@ contradiction register.
 | QLT-001 | Later implementation requires declared owners, test targets, coverage tiers, feature treatment, architecture fixtures, and outcome evidence. | future | Adopt | TDD verification | No production activation from research alone. | Foundation | quality review |
 | RDM-001 | M4+ Foundation is documentation-only; M5-M9 are not silently renumbered or replaced. | all | Adopt | roadmap | A later roadmap decision is required for delivery changes. | Foundation | roadmap review |
 
+## Post-M5 configuration and provider control-plane topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CFG-001 | M3/M4 startup-only TOML application and recorded revisions remain authoritative for existing runs. | all | PreserveHistorical | `09-configuration-security-and-observability.md`, `25-configuration-provider-control-plane.md` | No direction rewrites a recorded snapshot or run revision. | M5+ | historical fixtures planned |
+| CFG-002 | Controlled configuration live reload applies a validated TOML change to a running daemon through an explicit contract, transaction, and outcome test, affecting fresh runs only. | future | Adopt | `25-configuration-provider-control-plane.md` | Fail-closed on non-atomic application; never mutate existing runs. | M5+ | reload fault fixture planned |
+| CFG-003 | Credential rotation replaces private material only and never alters frozen meaning, selection, digest, or canonical bytes. | future | Adopt | `25-configuration-provider-control-plane.md` | Rotation that would change frozen meaning rejects before replacement. | M5+ | rotation redaction fixture planned |
+| CFG-004 | Provider health checks are non-authorizing typed readiness evidence. | future | Adopt | `25-configuration-provider-control-plane.md` | No RunId/reason/selection created; restoration only reevaluates. | M5+ | health non-authority fixture planned |
+| CFG-005 | Provider/model discovery is non-authorizing and never routes by model identifier. | future | Adopt | `25-configuration-provider-control-plane.md` | Discovered records are additive; no fallback routing. | M5+ | discovery fixture planned |
+| CFG-006 | Pricing and budget policy is product policy, never a Mandate admission ceiling, quota, reservation, or entitlement. | future | Adopt | `25-configuration-provider-control-plane.md` | Numeric values require intrinsic/capacity/product classification. | M5+ | pricing classification fixture planned |
+| CFG-007 | Profile UI and configuration control plane consume only the shared typed client and existing projections. | future | Adopt | `25-configuration-provider-control-plane.md` | No second authority, transport, registry, or adapter path. | M5+ | control-plane projection fixture planned |
+| CFG-008 | Every retrospective code change is consolidated in Milestone 5+ and activated by its own accepted specification. | future | Adopt | `11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment` | No production activation from documentation alone. | M5+ | M5+ activation evidence |
+
 ## Later topic families
 
 Family rows are navigation summaries only. Atomic topic rows below are the
@@ -58,7 +71,7 @@ concept anchor and an evidence status from the controlled vocabulary.
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Adopt for future Mandate execution; M3/M4 provider behavior preserved | `22-provider-evolution-profiles-and-reasoning.md` |
 | FRK-001..018 | session forks | Adopt for future ordinary Session branching; M3/M4 behavior preserved | `23-non-destructive-session-branching-and-regeneration.md` |
-| EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | Exclude or Defer as recorded in concept | explicit later decision only |
+| EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | EXC-001..004 adopted for M5+ (future directions, ADR 0020); remaining rows Exclude or Defer as recorded in concept | explicit later decision only |
 
 ## Tool registry and Mandate-loop topics
 

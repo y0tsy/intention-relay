@@ -16,6 +16,7 @@ flowchart TD
   P --> C[M3 Storage sessions events]
   P --> D[M4 Model and one run]
   P --> E[M5 Tools workspace hooks]
+  E --> K[M5+ Post-M5 alignment]
   P --> F[M6 Tauri bridge UI]
   P --> G[M7 Plan Build artifacts]
   P --> H[M8 VFR Headroom]
@@ -377,6 +378,64 @@ The implemented M5 registry has six active tools (`read`, `write`, `edit`,
 owns registry/workspace/hook assembly, application owns durable lifecycle and
 result persistence/publication, and the hook dispatcher owns deterministic
 typed ordering and short-circuiting.
+
+## Milestone 5+: Post-M5 retrospective alignment
+
+**Documentation-approved future milestone.** Milestone 5+ is the consolidation
+point for all retrospective changes to already-implemented M0-M5 code that the
+accepted post-M5 directions require, and the activation home for the
+[Configuration and Provider Control Plane](25-configuration-provider-control-plane.md)
+cluster adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
+It does not renumber, replace, or claim delivery of Milestones 6-9; it may run
+in parallel with them and does not block their activation. The full
+authoritative package review of 2026-08-30 confirmed that the
+[`m4plus_concept2.md`](../m4plus_concept2.md) research directions are otherwise
+covered by architectures 13-24 and decisions 0001-0019; M5+ closes the
+identified configuration/provider control-plane gap and hosts every
+retrospective code change.
+
+### Deliver
+
+- controlled configuration live reload: validated TOML applied to a running
+  daemon through an explicit contract, transaction, and outcome test,
+  affecting fresh runs only;
+- credential rotation: private-material replacement without altering frozen
+  per-run meaning or selection;
+- provider health-check service: non-authorizing typed readiness evidence;
+- provider/model discovery: non-authorizing, never model-name routing;
+- pricing and budget policy: product policy, never a Mandate admission
+  ceiling;
+- provider profile UI and configuration control plane over the shared typed
+  client;
+- consolidation of any retrospective changes to M0-M5 code required by these
+  directions, each in its own activating specification.
+
+### Tests first
+
+- reload transaction fault injection: atomic commit or fail-closed, no
+  partial snapshot, no mutation of existing runs;
+- rotation redaction and no-frozen-meaning-change fixtures;
+- health/discovery non-authority fixtures: no RunId/reason/selection created,
+  no model-name routing, no fallback;
+- pricing non-ceiling classification fixtures;
+- control-plane safe-projection fixtures: no raw TOML, credentials, or
+  resources cross public or durable boundaries;
+- M3/M4 byte/meaning/replay/recovery preservation and fake-secret regression
+  across logs, errors, snapshots, events, and adapter DTOs.
+
+### Acceptance outcomes
+
+- M3/M4 startup-only configuration, recorded revisions, and persisted run
+  snapshots remain authoritative and unchanged;
+- every retrospective change to implemented code is activated by its own
+  accepted specification and passes `make quick`, `make verify`, and
+  Linux/Windows CI;
+- health, discovery, and pricing create no RunId, reason, lifecycle
+  transition, scheduler candidate, tool permission, child edge, verifier
+  authority, MCP capability, bridge grant, kernel epoch, context projection,
+  branch, or reconciliation result;
+- applicable crates meet their declared coverage tiers without excluding
+  policy or boundary logic.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -854,9 +913,12 @@ implementation milestone.
 - provider state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
   bridge, kernel, context, branch, or reconciliation authority;
 - M3/M4 provider bytes and meanings remain explicitly unchanged; and
-- SDK/parser activation, profile UI/control plane, live reload, credential
-  rotation, discovery, pricing, session branching, schema, and activation remain
-  excluded.
+- SDK/parser activation, session branching, schema, and activation remain
+  excluded; profile UI/control plane, live reload, credential rotation,
+  discovery, and pricing are accepted post-M5 directions
+  ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+  [Milestone 5+](#milestone-5-post-m5-retrospective-alignment)) and are
+  activated only by a later M5+ specification.
 
 ## Post-M4 non-destructive session branching and regeneration package
 
