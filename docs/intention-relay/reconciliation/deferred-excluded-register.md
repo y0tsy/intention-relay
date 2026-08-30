@@ -14,14 +14,14 @@ not sufficient evidence.
 | EXC-005 | Dynamic ToolId/registry creation | Exclude | future Mandate | Fixed registry and one capability path are required | Architecture decision superseding 15 |
 | EXC-006 | Sandbox/container authority | Exclude | all current packages | WorkspaceRoot and hooks are not OS security boundaries | Separate security architecture |
 | EXC-007 | Remote continuation/provider state | Exclude | future Mandate | Recovery is local-history-first and never resumes old work | New explicit continuation architecture |
-| EXC-008 | Rich MIME/raw kernel output | Defer | future kernel | Safe public projections remain text-only | Kernel owner, projection contract |
-| EXC-009 | Physical deletion/GC of historical work | Defer | historical | Retention/deletion policy is outside non-destructive packages | Storage owner, retention decision |
-| EXC-010 | Worker/process supervision topology | Defer | future | No production supervisor is activated by documentation | Runtime owner, supervision design |
-| EXC-011 | Calendar/interval/time-zone/DST semantics | Defer | future scheduler | Scheduler contract currently covers readiness and fresh admission only | Scheduler owner, calendar package |
+| EXC-008 | Rich MIME/raw kernel output | Adopt for M5+ (future direction) | future kernel | Adopted as accepted post-M5 direction under ADR 0034; bounded credential-free projection, closed text-only safe projection remains authoritative | [Architecture 20](../architecture/20-ipython-kernel-lifecycle.md), M5+ activating specification |
+| EXC-009 | Physical deletion/GC of historical work | Adopt for M5+ (future direction) | historical | Adopted as accepted post-M5 direction under ADR 0034; explicit user-authorized retention/deletion policy, never destructive to descendants or audit dependencies | [Architecture 04](../architecture/04-sessions-runs-events-and-storage.md), M5+ activating specification |
+| EXC-010 | Worker/process supervision topology | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0034; production supervision topology, never a second runtime, registry, scheduler, persistence authority, or sandbox | [Architecture 03](../architecture/03-daemon-transport-and-adapters.md), M5+ activating specification |
+| EXC-011 | Calendar/interval/time-zone/DST semantics | Adopt for M5+ (future direction) | future scheduler | Adopted as accepted post-M5 direction under ADR 0034; typed calendar/interval/time-zone/DST semantics, never a Mandate admission quota; harness schedule/time semantics remain owned by architecture 26 | [Architecture 16](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md), M5+ activating specification |
 | EXC-012 | Autonomous background scheduling by kernel | Exclude | future kernel | Kernel background work cannot create authority or schedule runs | Architecture 20 owner |
 | EXC-013 | User-created bounded MCP catalog as Mandate source | Exclude | future Mandate | Dynamic typed acquisition supersedes retained catalog rules | MCP owner, explicit supersession decision |
 | EXC-014 | OS push/inbox notification delivery | Exclude | future activity/UI | Notifications are in-app protocol summaries only | UI product decision |
-| EXC-015 | Activity numeric product ceilings | Defer | future activity/UI | Values require intrinsic/capacity/ordinary classification | Activity owner, M6 activation |
+| EXC-015 | Activity numeric product ceilings | Adopt for M5+ (future direction) | future activity/UI | Adopted as accepted post-M5 direction under ADR 0034; values require intrinsic/capacity/ordinary classification at M5+ activation, never Mandate quotas or child-graph limits | [Architecture 24](../architecture/24-activity-ui-and-adapters.md), M5+ activating specification |
 | EXC-016 | Automatic verifier authority inheritance | Exclude | future VerifierMandate | Authority must be explicit, target-scoped and revisioned | Verifier owner, explicit authority decision |
 | EXC-017 | Parent/child indirect lifecycle authority | Exclude | future Mandate | Parentage is not lifecycle or mutation authority | Child/lifecycle owners |
 | EXC-018 | Alternate adapter transport or gateway | Exclude | all future adapters | Shared typed client and one daemon ingress are required | Transport owner, new transport decision |
@@ -65,3 +65,6 @@ EXC-027 by [ADR 0031](../decisions/0031-autonomous-continuation-direction.md),
 EXC-028..030 by [ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
 and EXC-031..043 by [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md);
 all remain non-authorizing until a later M5+ activating specification.
+Rows EXC-008, EXC-009, EXC-010, EXC-011, and EXC-015 are adopted as accepted
+future directions by [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md)
+and remain non-authorizing until a later M5+ activating specification.

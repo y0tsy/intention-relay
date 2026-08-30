@@ -7,6 +7,11 @@ views computed without synthetic activity identity, journal, message,
 notification, or acknowledgement state. Numeric values retained in research are
 not implementation limits for this package until an activating M6 specification
 classifies them as intrinsic bounds, capacity availability, or ordinary policy.
+Activity numeric limit classification is an accepted post-M5 future direction
+under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md):
+the numeric values require intrinsic/capacity/ordinary classification at M5+
+activation, never Mandate quotas or child-graph limits; it is not activated
+here.
 
 
 ## Status and scope
@@ -15,7 +20,7 @@ classifies them as intrinsic bounds, capacity availability, or ordinary policy.
 
 - Normative owner: architecture 24.
 - Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
-- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (export).
+- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (export), [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (activity numeric limit classification).
 - Reconciliation topics: `ACT-001..019`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

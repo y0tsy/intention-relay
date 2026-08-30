@@ -296,6 +296,15 @@ Session, run, queue, event, snapshot, and transaction tests are mandatory `make 
 - Automatic continuation after restart.
 - Distributed replication or cross-device synchronization.
 
+Physical deletion and garbage collection of historical work are an accepted
+post-M5 future direction under
+[ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+to be executed in Milestone 5+ as an explicit user-authorized
+retention/deletion/garbage-collection policy that never rewrites or corrupts
+history, never destroys descendants or audit dependencies, and is never a
+silent automatic cleanup; archive-only retention remains the first-scope
+default. It is not activated here.
+
 ## Post-M4 Mandate foundation boundary
 
 This section preserves the current Session/Run model and records only the

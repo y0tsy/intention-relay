@@ -78,7 +78,12 @@ implementation specification can be prepared:
   parser, fork tool-result/child-agent execution, export, cross-workspace
   clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM
   packaging
-  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md)).
+  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
+- post-M5 accepted retained-deferral directions: rich MIME/raw kernel output
+  projection, physical deletion/GC of historical work, worker/process
+  supervision topology, calendar/interval/time-zone/DST semantics, and
+  activity numeric limit classification
+  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -143,6 +148,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Autonomous continuation | architecture 13 | decision 0031 |
 | Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
 | Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
+| Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

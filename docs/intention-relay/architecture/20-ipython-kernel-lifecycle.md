@@ -7,7 +7,8 @@
 - Normative owner: architecture 20.
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
 - Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
-- Reconciliation topics: `KER-001..022`.
+- Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (rich MIME/raw kernel output projection).
+- Reconciliation topics: `KER-001..023`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -138,6 +139,11 @@ facts, cursor, terminal result, post-commit reread, and publication gate. Partia
 output is observational only; only a complete safe terminal projection may enter
 a later model step. Unrepresentable output fails before public publication without
 truncation or partial commit.
+Rich MIME/raw kernel output projection is an accepted post-M5 future direction
+under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+to be executed in Milestone 5+ as a bounded, credential-free surface that never
+substitutes for this closed text-only safe projection and never crosses public
+or durable boundaries unredacted; it is not activated here.
 
 Kernel host requests consume architecture 19. Every request carries a current
 grant and new `BridgeOperationId`; architecture 19 binds the operation and

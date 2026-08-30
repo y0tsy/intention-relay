@@ -35,6 +35,7 @@
 | Child usage no-token-ceiling | CHD-019 | Adopted for post-M5 fresh runs; no token ceiling from providers that cannot report usage. | Architecture 17. |
 | Taxonomy version and MCP name supersession | RSN-016, MCP | The taxonomy value `model-capability-taxonomy-v1` and the `reasoning_input_contract` field name are owned by architecture 22; the concept2 `MandateMcpCapabilitySourceDto`/`DiscoveryDto`/`CapabilityRevisionDto` names are superseded by the `V1` records in architecture 18. | Architectures 22 and 18. |
 | Accepted execution directions | CFG-009..010, RSN-018..020, FRK-019..022, CHR-011..013, GOL-013, MCP-017, ACT-017 | Raw-TOML/configuration editing, model discovery, arbitrary headers, provider-native preservation, server-side parser, fork tool-result/child-agent execution, export, cross-workspace clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM packaging are adopted for post-M5 execution under ADR 0033. | Architectures 25, 22, 23, 26, 28, 18, 24, and 29. |
+| Accepted retained-deferral directions | KER-023, DUR-007, SCH-012..013, ACT-018 | Rich MIME/raw kernel output projection, physical deletion/GC of historical work, worker/process supervision topology, calendar/interval/time-zone/DST semantics, and activity numeric limit classification are adopted for post-M5 execution under ADR 0034. | Architectures 20, 04, 03, 16, and 24. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.

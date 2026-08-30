@@ -430,6 +430,11 @@ inspection, and per-call cancellation
   clone/rebind, autonomous harness goal mode, work/requeue after client
   disconnection, and consolidated RLM packaging
   ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
+- the accepted retained-deferral directions: rich MIME/raw kernel output
+  projection, physical deletion/GC of historical work, worker/process
+  supervision topology, calendar/interval/time-zone/DST semantics, and
+  activity numeric limit classification
+  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
 - consolidation of any retrospective changes to M0-M5 code required by these
   directions, each in its own activating specification.
 
@@ -1388,6 +1393,39 @@ profile, quality-policy target, or implementation milestone.
 - autonomous harness goal mode and work/requeue after client disconnection
   (architectures 26/28/18);
 - consolidated RLM packaging (architectures 17/24).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- each direction affects fresh runs only, is non-authorizing before its own
+  activating specification, never resumes old external work, and never
+  rewrites historical bytes; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted retained-deferral directions package
+
+**Documentation-only package extending architectures 20, 04, 03, 16, and
+24.** It records five register-deferred concept items as accepted future
+directions to be executed in Milestone 5+, adopted by
+[decision 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- rich MIME/raw kernel output projection, bounded and credential-free, never
+  substituting for the closed text-only safe projection (architecture 20);
+- physical deletion/GC of historical work as an explicit user-authorized
+  retention/deletion/garbage-collection policy, never destructive to
+  descendants or audit dependencies (architecture 04);
+- worker/process supervision topology, never a second runtime, registry,
+  scheduler, persistence authority, or sandbox (architecture 03);
+- calendar/interval/time-zone/DST semantics for Mandate scheduler triggers,
+  never a Mandate admission quota; harness schedule/time semantics remain
+  owned by architecture 26 (architecture 16);
+- activity numeric limit classification as intrinsic/capacity/ordinary at
+  activation, never Mandate quotas or child-graph limits (architecture 24).
 
 ### Exit criteria
 

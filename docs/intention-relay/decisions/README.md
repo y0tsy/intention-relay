@@ -51,3 +51,4 @@ provenance.
 | [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
 | [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation |
 | [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, harness autonomy, and RLM packaging |
+| [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |

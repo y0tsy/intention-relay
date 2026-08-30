@@ -37,6 +37,7 @@ contradiction register.
 | DUR-004 | A new fact type does not create a new sequence merely for convenience; a separate sequence requires an independent aggregate with dedicated bounded queries. | future | Adopt | `04-sessions-runs-events-and-storage.md` | No replacement or filtering of the ordinary session event sequence. | Foundation | sequence fixture planned |
 | DUR-005 | A filesystem-dependent validation or hook finishes before the transition transaction; a stale result is a typed known pre-effect outcome. | future | Adopt | `04-sessions-runs-events-and-storage.md` | No unrecorded second external check inside the transaction. | Foundation | transaction fixture planned |
 | DUR-006 | Catalog and lineage audit records are read through their own bounded queries and do not enter the run publication gate. | future | Adopt | `04-sessions-runs-events-and-storage.md` | No publication-gate coupling by user-operation relation. | Foundation | publication fixture planned |
+| DUR-007 | Physical deletion/GC of historical work is an accepted post-M5 direction (ADR 0034): an explicit user-authorized retention/deletion/garbage-collection policy, never rewriting or corrupting history, never destructive to descendants or audit dependencies, and never a silent automatic cleanup; archive-only retention remains the first-scope default. | historical | Adopt | `04-sessions-runs-events-and-storage.md` | No silent cleanup or audit-dependency erasure. | M5+ | retention fixture planned |
 | MAN-004 | Unknown terminal effect pauses the owning Mandate until exact reconciliation. | mandate | Adopt | `13-mandate-domain-and-durable-lifecycle.md` | No retry, reattach, rediscovery, next step, or automatic continuation. | Mandate lifecycle | crash matrix planned |
 | MAN-005 | User lifecycle/revision commands win optimistic conflicts with daemon or verifier mutations. | mandate | Adopt | `13-mandate-domain-and-durable-lifecycle.md` | Conflicting non-user mutation rejects safely. | Mandate lifecycle | race fixture planned |
 | MAN-006 | Intrinsic bounds remain correctness constraints; capacity is typed observable unavailability; product ceilings cannot silently govern Mandate admission. | mandate | Adopt | principles/scope | Unclassified retained numeric limits are not Mandate quotas. | Foundation | policy review |
@@ -146,16 +147,16 @@ concept anchor and an evidence status from the controlled vocabulary.
 | --- | --- | --- | --- |
 | TLS-002..015 | direct descriptor admission, registry, WorkspaceRoot | Adopt for future Mandate execution; ordinary behavior preserved | `15-tool-registry-and-mandate-tool-loop.md` |
 | MTL-001..018 | model-tool loop | Adopt for future Mandate execution | `15-tool-registry-and-mandate-tool-loop.md` |
-| SCH-001..012 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval semantics deferred | `16-mandate-scheduler-and-readiness-driven-admission.md` |
+| SCH-001..013 | durable scheduler and readiness-driven admission | Adopt for future Mandate execution; calendar/interval/time-zone/DST semantics and worker topology adopted for M5+ (ADR 0034) | `16-mandate-scheduler-and-readiness-driven-admission.md` |
 | BRG-001..015 | Gateway/RLM bridge | Adopt for future Mandate execution; historical bridge/RLM preserved | `19-mandate-gateway-rlm-bridge.md` |
-| KER-001..019 | Run-scoped IPython kernel lifecycle | Adopt for future Mandate execution; retained IPython/RLM preserved | `20-ipython-kernel-lifecycle.md` |
+| KER-001..023 | Run-scoped IPython kernel lifecycle | Adopt for future Mandate execution; retained IPython/RLM preserved; rich MIME/raw output projection adopted for M5+ (ADR 0034) | `20-ipython-kernel-lifecycle.md` |
 | CHD-001..018, VER-001..011 | child graph and verifier authority | Adopt for future Mandate execution; retained RLM and ordinary history preserved | `17-mandate-child-graph-and-delegated-verifier-authority.md` |
 | ACT-001..018 | general activity and notifications | Adopt for future projections; historical M3/M4 compatibility only | `24-activity-ui-and-adapters.md` |
 | GOL-001..012, SKL-001..015, MEM-001..006, CMP-001..006 | Goals, Skills, memory, compaction | Adopt for future Mandate execution; historical context preserved | `21-goals-skills-context-memory-and-compaction.md` |
 | MCP-001..016 | Mandate MCP capability lifecycle | Adopt for future Mandate execution; retained bounded-MCP history preserved | `18-mandate-mcp-capability-lifecycle.md` |
 | PRV-001..020, RSN-001..015 | responses, profiles, reasoning | Adopt for future Mandate execution; M3/M4 provider behavior preserved | `22-provider-evolution-profiles-and-reasoning.md` |
 | FRK-001..018 | session forks | Adopt for future ordinary Session branching; M3/M4 behavior preserved | `23-non-destructive-session-branching-and-regeneration.md` |
-| EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME and worker supervision | EXC-001..004 adopted for M5+ (future directions, ADR 0020); remaining rows Exclude or Defer as recorded in concept | explicit later decision only |
+| EXC-001..020 | live reload, pricing, discovery, plugin packages, sandboxing, remote continuation, dynamic ToolId, rich MIME, worker supervision, physical deletion, calendar semantics, activity ceilings | EXC-001..004 adopted for M5+ (ADR 0020); EXC-008..011 and EXC-015 adopted for M5+ (ADR 0034); remaining rows Exclude as recorded in concept | explicit later decision only |
 
 ## Tool registry and Mandate-loop topics
 
@@ -226,6 +227,7 @@ concept anchor and an evidence status from the controlled vocabulary.
 | KER-020 | Idle disposal discards the in-memory namespace after recording only the safe checkpoint metadata that already exists; it does not cancel or alter a durable run unrelated to that kernel. | future Mandate | Adopt | architecture 20 | No unrelated-run mutation. | Kernel lifecycle | disposal fixture planned |
 | KER-021 | The terminal kernel result is never reconstructed from a formatted footer; kernel diagnostics contain only safe status, bounded sizes, failure codes, and correlation references. | future Mandate | Adopt | architecture 20 | No raw output, Python value, traceback, frame, or resource in diagnostics. | Kernel lifecycle | diagnostics fixture planned |
 | KER-022 | Background in-memory results may be captured only by a later successful foreground cell. | future Mandate | Adopt | architecture 20 | No capture after termination or checkpoint exclusion. | Kernel lifecycle | background fixture planned |
+| KER-023 | Rich MIME/raw kernel output projection is an accepted post-M5 direction (ADR 0034): a bounded credential-free projection surface, never substituting for the closed text-only safe projection and never crossing public/durable boundaries unredacted. | future | Adopt | architecture 20 | Raw frames, MIME, binary, objects, tracebacks, and resources stay private. | M5+ | projection fixture planned |
 
 ## Scheduler and readiness topics
 
@@ -242,7 +244,8 @@ concept anchor and an evidence status from the controlled vocabulary.
 | SCH-009 | Scheduler replay is Mandate-local, negotiated, and fail-closed. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Replay never repeats wakeups, admissions, or effects. | Trigger scheduler | protocol fixture planned |
 | SCH-010 | Scheduler introduces no product ceiling, lease, claim, reservation, or fairness entitlement. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Retained numeric bounds require intrinsic/capacity classification. | Trigger scheduler | taxonomy fixture planned |
 | SCH-011 | M3 queue promotion and M4 scheduling behavior remain unchanged. | historical-only | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | Queue tickets never become Mandate reasons. | Trigger scheduler | historical fixture planned |
-| SCH-012 | Calendar/interval/time-zone/DST semantics and worker topology remain deferred. | future Mandate | Defer | Later scheduler package | No historical harness rule silently governs Mandates. | Later scheduler work | later decision |
+| SCH-012 | Calendar/interval/time-zone/DST semantics are an accepted post-M5 direction (ADR 0034): typed calendar/interval/time-zone/DST semantics for Mandate scheduler triggers, never a Mandate admission quota; harness schedule/time semantics remain owned by architecture 26. | future Mandate | Adopt | `16-mandate-scheduler-and-readiness-driven-admission.md` | No historical harness rule silently governs Mandates. | M5+ | calendar fixture planned |
+| SCH-013 | Worker/process supervision topology is an accepted post-M5 direction (ADR 0034): a future production supervision topology, never a second runtime, registry, scheduler, persistence authority, or sandbox. | future | Adopt | `03-daemon-transport-and-adapters.md` | No production supervisor activated by documentation. | M5+ | supervision fixture planned |
 
 ## Child graph and verifier topics
 
@@ -349,6 +352,7 @@ concept anchor and an evidence status from the controlled vocabulary.
 | ACT-015 | Tree-level metadata is an accepted post-M5 future direction (ADR 0032): bounded, credential-free, distinct from journal/notification state, never authority or a second sequence. | future | Adopt | architecture 24 | No activity/notification/lifecycle authority. | M5+ | metadata fixture planned |
 | ACT-016 | Per-call cancellation and owner-specific semantics beyond direct-pair are accepted post-M5 future directions (ADR 0032); the first-scope `StopRunCommandDto`/direct-pair boundary remains authoritative. | future | Adopt | architectures 19/24 | No partial cancellation or delivery. | M5+ | cancellation fixture planned |
 | ACT-017 | Export of activity records is an accepted post-M5 direction (ADR 0033): bounded, credential-free, never a history rewrite and never destructive. | future | Adopt | architecture 24 | No raw content or destructive deletion. | M5+ | export fixture planned |
+| ACT-018 | Activity numeric product ceilings are an accepted post-M5 direction (ADR 0034): the numeric values require intrinsic/capacity/ordinary classification at M5+ activation, never Mandate quotas or child-graph limits. | future | Adopt | architecture 24 | No hidden Mandate quota or child-graph limit. | M5+ | classification fixture planned |
 
 ## Coverage ledger
 
