@@ -51,7 +51,11 @@ implementation specification can be prepared:
 - post-M5 continual-harness directions
   ([ADR 0021](../decisions/0021-continual-harness-directions.md)); and
 - post-M5 programmatic-caller policy directions
-  ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md)).
+  ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md));
+- post-M5 Goal domain and verification directions
+  ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md));
+- post-M5 provider session-selection and profiles protocol directions
+  ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -105,6 +109,8 @@ following map is navigation and provenance; it does not restate their rules:
 | Configuration/provider control plane | architecture 25 | decision 0020 |
 | Continual harness | architecture 26 | decision 0021 |
 | Programmatic-caller policy | architecture 27 | decision 0022 |
+| Goal domain and verification | architecture 28 | decision 0023 |
+| Provider session selection and profiles protocol | architecture 29 | decision 0024 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

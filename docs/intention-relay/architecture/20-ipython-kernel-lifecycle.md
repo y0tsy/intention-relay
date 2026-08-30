@@ -233,6 +233,86 @@ UI state may reconstruct missing meaning. The trusted-local model remains
 explicit: direct Python OS APIs can bypass the facade and are not sandboxed or
 fully observable.
 
+## Kernel detail: DTO family, bounds, and safe failures
+
+The first-scope versioned typed DTO family for kernel execution is
+conceptually:
+
+```text
+KernelExecutionRequestDto
+KernelExecutionResultDto
+KernelOutputChunkDto
+KernelStatusDto
+KernelStateSnapshotDto
+KernelHostRequestDto
+KernelHostResponseDto
+```
+
+A kernel is session-scoped: one daemon-owned session actor owns at most one
+IPython kernel, never shared across sessions/projects/users/daemon instances,
+inheriting the session's `WorkspaceRoot` as context metadata without owning it.
+It is created lazily on the first admitted IPython execution and disposed on
+archive, idle expiry, shutdown, or clean restart. The first-scope kernel limits
+are:
+
+- an idle kernel is retained at most **60 minutes**;
+- the daemon retains at most **16 live session kernels**; exceeding this fails
+  before Python execution with `kernel_concurrency_limit_exceeded`; and
+- a foreground cell has a hard **ten-minute** execution bound, after which the
+  daemon does not wait indefinitely.
+
+The ten-minute bound is a kernel-execution policy limit, not a replacement for
+the existing 1-MiB frame, 512-KiB fact, 4-MiB group, 64-frame/10-second
+slow-peer, or 256-fact/512-KiB history limits. Idle lifetime measures the absence
+of a foreground cell and of tracked kernel-local background tasks. Output
+normalizes Jupyter `stream`, `execute_result`, `display_data`, and `error` into
+ordered typed `KernelOutputChunkDto` values with closed kind `Stdout`, `Stderr`,
+`DisplayText`, or `Error`, becoming the same post-commit
+`ToolOutputDeltaRecorded` content stream and one terminal typed result; rich
+MIME, binary, raw tracebacks, arbitrary display metadata, and raw Jupyter frames
+are omitted or produce the closed `kernel_output_unrepresentable` before
+publication, with content never truncated or partly committed.
+
+The first-scope canonical checkpoint representation is `kernel-state-snapshot-v1`:
+a typed, deterministic, size-bounded collection of values accepted by the
+code-owned serializer, with no open file/process/socket handle, task handle,
+provider SDK object, raw Jupyter frame, executable code payload, grant,
+credential, or implementation resource. Unsupported or non-serializable values
+are omitted with typed metadata. Checkpoint payload stays private to the
+daemon-owned session kernel service; public artifacts contain only safe
+generation, schema, digest, bounded size, and restoration status. An
+uncreatable or unverifiable checkpoint after a successful cell produces
+`kernel_checkpoint_unavailable`; the cell is not rerun and the run cannot
+silently continue. On restart, no execution or action resumes; the next explicit
+execution may create a new kernel and restore only the latest verified
+checkpoint; missing, corrupt, incompatible, or over-limit state produces
+`kernel_state_restore_unavailable`, the namespace starts empty, and durable
+history remains readable. Restoration never restores a grant, bridge operation,
+task, process, provider request, or unfinished run.
+
+Background computation is kernel-local recoverable convenience work within one
+session; it is not a new run, creates no child agent, harness tick, registered
+tool invocation, grant, or new daemon authority. Every bridge request by
+background code must carry the grant of the currently attached foreground
+execution; after expiry it fails immediately and is never queued. Background
+output after termination is discarded; tasks are not included in checkpoints and
+are terminated by cancellation, kernel failure, idle disposal, daemon shutdown,
+or checkpoint restoration.
+
+The closed kernel safe failures through `ErrorDto` are:
+
+```text
+kernel_concurrency_limit_exceeded
+kernel_execution_unavailable
+kernel_execution_timeout
+kernel_output_unrepresentable
+kernel_checkpoint_unavailable
+kernel_state_restore_unavailable
+```
+
+They disclose no credential, path, Python value, Jupyter frame, raw traceback,
+process resource, grant, or implementation detail.
+
 ## Dependencies, non-goals, and evidence
 
 This document depends on architectures 13--19 and decisions 0001--0011. It does

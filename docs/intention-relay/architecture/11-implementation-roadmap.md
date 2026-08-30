@@ -1044,3 +1044,63 @@ milestone.
 - M3/M4 bytes and meanings remain explicitly unchanged; historical M4 keeps
   `Disabled` policy selection; and
 - activation remains excluded pending a later M5+ specification.
+
+## Post-M5 Goal domain and verification package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool loop, child/verifier, MCP, context, provider
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative Goal domain contract](28-goal-domain-and-verification.md) and
+decision 0023, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- Goal identity, scope, and tree with obligatory children and DAG integrity;
+- Goal lifecycle, readiness, and user decision (`AcceptedWithException`);
+- leading-goal run selection (`GoalRunSelectionV1` in
+  `run-execution-meaning-v4`);
+- delegated Verification Mandates with authority, target sets, and operation
+  matrix;
+- verification gates (`ReferenceGate`/`ExecutableGate`) and evidence;
+- working memory, roles, and templates (`MemoryKindDto`);
+- model proposals (`RefinementDraftDto`) and user confirmation;
+- the conversation-compaction working form (`ConversationSummaryDto`); and
+- Goal-domain bounds and closed safe failures.
+
+### Exit criteria
+
+- GOL-004..012 and VGT-001..006 have one owner and compatibility/failure rule;
+- Goal state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 provider session selection and profiles protocol package
+
+**Documentation-only package.** It depends on provider evolution, execution
+meaning, session branching, and the configuration/provider control plane. It
+creates [the authoritative provider session-selection and profiles protocol
+contract](29-provider-session-and-profiles-protocol.md) and decision 0024, and
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- session default selection and per-turn/fork overrides;
+- unavailable-queue promotion (8 per terminal transition) and reconciliation
+  (32 per page);
+- profile-keyed usage aggregation;
+- `provider_profiles_v1` public protocol and readiness projection;
+- startup-only application with pending-removal (30-minute lifetime) and
+  degraded read-only recovery; and
+- held recovery-promoted run admission (`AdmitRecoveredRunCommandDto`).
+
+### Exit criteria
+
+- PSS-001..008 have one owner and compatibility/failure rule;
+- provider session state cannot become lifecycle, scheduler, tool, child,
+  verifier, MCP, bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; and
+- activation remains excluded pending a later M5+ specification.

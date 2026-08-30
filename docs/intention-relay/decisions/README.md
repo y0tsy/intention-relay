@@ -40,3 +40,9 @@ provenance.
 | [0020](0020-configuration-provider-control-plane-directions.md) | Accepted | Post-M5 configuration and provider control-plane directions |
 | [0021](0021-continual-harness-directions.md) | Accepted | Post-M5 continual-harness directions |
 | [0022](0022-programmatic-caller-policy-directions.md) | Accepted | Post-M5 programmatic-caller policy directions |
+| [0023](0023-goal-domain-and-verification-directions.md) | Accepted | Post-M5 Goal domain and verification directions |
+| [0024](0024-provider-session-and-profiles-protocol-directions.md) | Accepted | Post-M5 provider session selection and profiles protocol directions |
+| [0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | Accepted | Post-M5 base-tool contracts and tool-loop bounds |
+| [0026](0026-session-branching-detail-directions.md) | Accepted | Post-M5 session-branching detail directions |
+| [0027](0027-child-kernel-bridge-mcp-detail-directions.md) | Accepted | Post-M5 child, kernel, bridge, and MCP detail directions |
+| [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |

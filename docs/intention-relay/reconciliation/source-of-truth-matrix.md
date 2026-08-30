@@ -78,6 +78,33 @@ contradiction register.
 | PCP-007 | Historical M4 and earlier selections retain `Disabled` policy selection and are never rewritten or given synthetic policy state. | historical | PreserveHistorical | `27-programmatic-caller-policy-and-admission.md` | No historical bytes/meaning change. | M5+ | compatibility fixture planned |
 | PCP-008 | Policy state cannot become lifecycle, scheduler, tool, child, verifier, MCP, bridge, kernel, context, branch, or reconciliation authority. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | No authority amplification. | M5+ | authority fixture planned |
 
+## Post-M5 Goal domain topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| GOL-004 | A Goal is a user-managed immutable revisioned acceptance/evidence record; a project Goal enters a session only through an explicit durable link. | future | Adopt | `28-goal-domain-and-verification.md` | No implicit inheritance; session isolation. | M5+ | scope fixture planned |
+| GOL-005 | Every child is an obligatory component; the Goal tree is a DAG with no cycles; a parent is not technically ready until every obligatory child reaches a terminal user-decision state. | future | Adopt | `28-goal-domain-and-verification.md` | Self-link/cycle/cross-project fail before partial record. | M5+ | tree fixture planned |
+| GOL-006 | Goal lifecycle is closed (`Active`/`NeedsRework`/`Paused`/`Stopped`/`Archived`) with readiness and user-decision states; an exception names only a known failed/unavailable/expired/ambiguous gate. | future | Adopt | `28-goal-domain-and-verification.md` | Exception never creates success or `Ready`. | M5+ | lifecycle fixture planned |
+| GOL-007 | A run is ordinary or goal-directed with exactly one leading Goal; admission is atomic and never reconstructs a selection from current state. | future | Adopt | `28-goal-domain-and-verification.md` | No current-state substitution on replay/retry/fork/recovery. | M5+ | admission fixture planned |
+| GOL-008 | Verifier mutation requires exact issued, revisioned, target-scoped authority; user commands win conflicts. | future | Adopt | `28-goal-domain-and-verification.md` | Stale baseline fails closed; no authority amplification. | M5+ | authority fixture planned |
+| GOL-009 | Verification gates are closed (`ReferenceGate`/`ExecutableGate`); a gate template is user-created and typed. | future | Adopt | `28-goal-domain-and-verification.md` | No raw shell/URL/JSON; no hidden retry. | M5+ | gate fixture planned |
+| GOL-010 | Working memory, roles, and templates are first-class typed durable records with explicit replacement/rollback. | future | Adopt | `28-goal-domain-and-verification.md` | No implicit conflict resolution; full content only via explicit `retrieve`. | M5+ | memory fixture planned |
+| GOL-011 | Model proposals are one coalesced draft per owner scope/record kind; acceptance validates the exact base revision. | future | Adopt | `28-goal-domain-and-verification.md` | Stale base is a typed conflict; rejection changes no record. | M5+ | proposal fixture planned |
+| GOL-012 | Compaction is a versioned model-context projection with one cumulative summary plus suffix; original facts remain authoritative. | future | Adopt | `28-goal-domain-and-verification.md` | No hidden continuation; correction is a new immutable revision. | M5+ | compaction fixture planned |
+
+## Post-M5 provider session-selection topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PSS-001 | A session copies the global `ProviderProfileId` as a durable future default; catalog changes never cascade. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Existing-profile request is a `changed = false` no-op. | M5+ | default fixture planned |
+| PSS-002 | A per-turn or fork override affects only that run; one profile per run, no fallback chain. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Mismatch rejects before commit. | M5+ | override fixture planned |
+| PSS-003 | Unavailable promotion proceeds FIFO through at most 8 selections per terminal transition; exhaustion writes a reconciliation-needed marker. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | No reroute to a current default. | M5+ | promotion fixture planned |
+| PSS-004 | Reconciliation handles at most 32 unavailable immutable selections per page and never reroutes. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | User-only, idempotent. | M5+ | reconciliation fixture planned |
+| PSS-005 | Usage is keyed by exact profile identity and revision and is never double-counted; no price, currency, or inferred cost. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Tree aggregates deduplicate by original `RunId`. | M5+ | usage fixture planned |
+| PSS-006 | `provider_profiles_v1` is additive and negotiated; adapters never write TOML, edit profiles/kinds, enter credentials, or receive configuration paths. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Unnegotiated peers fail closed. | M5+ | protocol fixture planned |
+| PSS-007 | Profiles are startup-only with a 30-minute pending-removal lifetime and degraded read-only recovery. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Degraded mode rejects all provider state changes except the one pending candidate. | M5+ | degraded fixture planned |
+| PSS-008 | A recovery-promoted run is never auto-scheduled; admission requires the idempotent `AdmitRecoveredRunCommandDto`. | future | Adopt | `29-provider-session-and-profiles-protocol.md` | Repeat cannot schedule a second task. | M5+ | held-run fixture planned |
+
 ## Later topic families
 
 Family rows are navigation summaries only. Atomic topic rows below are the

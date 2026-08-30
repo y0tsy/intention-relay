@@ -168,6 +168,64 @@ Future MCP projections use a separately negotiated Mandate capability layered wi
 
 M3/M4 and retained bounded-MCP/RLM records gain no synthetic source, discovery, capability, selection, process, authority, or execution-kind state. M4 `ToolCallRecorded` remains denial evidence. No historical record, current server, endpoint, credential, schema, registry, configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP meaning.
 
+## MCP detail: bounded gateway, bounds, and safe failures
+
+The bounded MCP gateway is the canonical `mcp` gateway `ToolId`, owned by a
+future MCP boundary and assembled only through the existing Rust-owned registry
+and gateway; it is not a second registry. Its descriptor selects a bounded
+catalog of explicit user-approved `McpMethodDto` records, each naming exactly
+one connection and method, closed typed request/result families, canonical
+schema digest, effect classification, safe result projection, and immutable
+revision. It is never a generic string-method call, raw JSON transport,
+arbitrary header map, or automatic exposure of a discovered remote method. A
+method whose schema does not fit a supported closed family is unavailable.
+
+A connection has `Project` or `Session` scope; the user alone creates, edits,
+archives, restores, and selects a connection and methods; a model may only
+prepare a draft under the selected proposal rules. Credentials, OAuth material,
+SDK objects, sockets, child-process handles, and endpoint resources remain
+private daemon material and never enter a DTO, snapshot, fact, log, diagnostic,
+card, model context, or safe result. The selected transports are user-created
+outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/
+output services. The daemon starts a local service only upon the first selected
+MCP call in one run; that private process serves only that run and is terminated
+when the run completes, cancels, fails, or is interrupted; it is never attached
+by a later daemon, shared with another run, treated as a durable worker, or
+managed as a long-lived process.
+
+Every MCP call passes the same registry selection, daemon-bound authority, typed
+admission, confirmation, programmatic-caller-policy selection, idempotency,
+durable outcome, cancellation, redaction, and post-reread publication rules as
+another registered tool. Connection, method, schema, and gateway revisions are
+frozen in the call and run selection. A remote schema mismatch fails closed
+before an external effect; an already started ambiguous call is never repeated
+and records `ExternalEffectUnknown` when appropriate. A service may emit
+bounded safe progress through the ordinary durable output stream but cannot
+invoke `ask_user` or create a confirmation request; it cannot create a Goal,
+proposal, session, run, connection, tool registration, child agent, message, or
+another authority context. There is no MCP listener, remote attachment to the
+daemon bridge, plug-in system, Skill/MCP installation, dynamic tool
+registration, server-driven child control, autonomous continuation, or claim
+that a local service is isolated from the user's ordinary OS authority.
+
+The MCP-related closed safe failures through `ErrorDto` are:
+
+```text
+mcp_connection_unavailable
+mcp_method_unavailable
+mcp_schema_mismatch
+mcp_local_process_unavailable
+mcp_progress_limit_exceeded
+mcp_user_interaction_unavailable
+```
+
+They disclose no credential, path, raw external response, private process
+resource, grant, or implementation detail. The package continues to exclude
+autonomous continuation, work after client disconnection,
+attachments/images/binary/rich-MIME input, dynamic extensions and installation,
+dynamic tool registration, physical deletion, and administration of long-lived
+workers, leases, attach/detach, force-kill, or supervisor recovery.
+
 ## Dependencies and non-goals
 
 This document depends on architectures 13–17 and decisions 0001, 0002, 0003, 0004, 0006, 0007, 0008, and 0009. It does not define direct MCP administration, an MCP listener/inbound daemon attachment, raw string-method transport, arbitrary maps/headers/schemas, plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider evolution, bridge/IPython, Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.

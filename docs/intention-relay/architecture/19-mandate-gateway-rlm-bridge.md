@@ -213,6 +213,110 @@ then live post-commit facts after required history completes. It cannot create a
 bridge-owned sequence, resend a graph message, start a child, consume verifier
 authority, rediscover/invoke MCP, or execute external work.
 
+## Bridge detail: DTOs, limits, and safe failures
+
+The first-scope versioned typed bridge DTO families are:
+
+```text
+BridgeRunGrantDto
+  opaque_grant_identity
+  issued_protocol_revision
+
+BridgeAttachmentResponseDto
+  bridge_run_grant
+  negotiated_capabilities
+  initial_run_cursor
+
+BridgeInvocationCommandDto
+  bridge_run_grant
+  bridge_operation_id
+  typed_tool_invocation
+
+BridgeInvocationAcceptedDto
+  bridge_operation_id
+  tool_call_id
+  admission_state
+```
+
+The first bridge capability is `daemon_tool_gateway_v1`; it requires the existing
+local hello/version negotiation and the negotiated `model_tool_loop_v1`
+capability whenever the peer receives post-M4 tool-loop facts; a peer lacking
+either fails closed. The bridge reuses the existing private per-user
+Unix-socket/Windows-named-pipe endpoint, `ProtocolHelloDto` negotiation, the
+**1 MiB frame bound**, and the OS-user access boundary; there is no second
+listener, TCP/HTTP endpoint, remote attachment, credential, sandbox, or second
+daemon.
+
+A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating
+`TurnId`, and `ModelStepId` (daemon-assigned, never caller-selected). It is
+non-secret capability state for one live daemon process and never enters
+`RunExecutionMeaningDto`, a snapshot, model message, tool fact, log, diagnostic,
+or safe public history. It expires when the run becomes terminal, the run is
+interrupted, the daemon process exits, or the channel detaches. A persistent
+Python namespace may outlive an expired grant but must obtain a newly issued
+grant before invoking a tool for a later run.
+
+`BridgeOperationId` is the stable typed idempotency identity of one ingress
+request, distinct from the diagnostic `CorrelationIdDto` and the daemon-assigned
+`ToolCallId`. The facade creates and retains `BridgeOperationId`; an in-daemon
+direct-model ingress receives an equivalent stable ID from the gateway before
+admission. The daemon validates the opaque grant, resolves the selected active
+descriptor, and assigns the canonical `ToolCallId`, durably binding the
+operation to the authority context, `ToolId`, descriptor revision, and a
+non-public canonical typed-input digest before any external action. The
+operation record contains no grant value, credential, raw input, Python/Jupyter
+value, provider value, workspace root, implementation handle, or source path.
+Repeating an equal command with the same `BridgeOperationId` returns the saved
+binding, current admission state, stream attachment, or terminal safe result;
+it never admits, starts, or executes a second action. Reuse with a different
+authority context, `ToolId`, descriptor revision, or typed input fails pre-effect
+with the closed `bridge_operation_conflict`. `ToolCallId` remains the one
+canonical identity for `ToolCallRecorded`, `ToolCallStarted`,
+`ToolOutputDeltaRecorded`, and `ToolCallResultRecorded` facts. Before
+`ToolCallStarted`, a bound operation may report `Admitted` or
+`AwaitingConfirmation` (the bridge does not decide the producing policy); on
+daemon recovery an admitted operation that never reached start records
+`InterruptedBeforeStart`; once `ToolCallStarted`, a repeat is read-only and
+returns only durable evidence, never re-executing.
+
+One attached peer sends correlated attachment, invocation, operation-read, and
+run-control commands; the daemon sends correlated responses and uncorrelated
+`RunStreamFrameDto` values over the same persistent local connection. The
+first-scope limits are:
+
+- at most **sixteen** independently admitted bridge operations may be unfinished
+  on one attached peer; a seventeenth request receives the known pre-effect
+  `bridge_concurrency_limit_exceeded` and starts no external action (a transport
+  limit only, not a caller permission to invoke a tool, and not a change to the
+  group limit, policy quotas, or tool-effect serialization);
+- **1 MiB** per local frame;
+- a **64-frame, 10-second** bounded slow-peer subscription path;
+- **512 KiB** per canonical fact;
+- **4 MiB** of commit-order tool output and successful result content in one
+  group; and
+- **256 facts or 512 KiB** per initial-history page.
+
+There is no broader buffer, alternate deadline, truncation rule, or unbounded
+queue. A detached peer recovers only from durable history: reconnect,
+renegotiate, request the run from the last accepted cursor, and receive captured
+replay, reasoning pages/completion, tool-history pages/completion, then later
+live frames in the selected order. The bridge never treats channel state as
+authoritative, persists a last-published cursor, or repeats external work.
+
+The closed bridge safe failures through `ErrorDto` are:
+
+```text
+daemon_tool_gateway_required
+bridge_authority_unavailable
+bridge_authority_expired
+bridge_operation_conflict
+bridge_operation_not_found
+bridge_concurrency_limit_exceeded
+```
+
+They disclose no credential, path, grant value, raw input, Python/Jupyter
+value, provider resource, process topology, or implementation detail.
+
 ## Compatibility, dependencies, and non-goals
 
 M3 session replay and M4 run streaming remain unchanged. M4 provider kinds

@@ -158,6 +158,207 @@ their own lineage sequence. They are not tree-wide event streams. Existing M3
 session replay and M4 run streams remain unchanged; old peers fail closed for
 this additive family.
 
+## Detailed protocol DTOs, field tables, and limits
+
+The `session_fork_v1` public contract families are:
+
+```text
+ForkSessionCommandDto
+ForkSessionResultDto
+GetForkPreviewQueryDto
+ForkPreviewDto
+StartForkRunCommandDto
+GetConversationTreeQueryDto
+ConversationTreePageDto
+ConversationBranchSummaryDto
+RenameSessionCommandDto
+ArchiveSessionCommandDto
+RestoreSessionCommandDto
+```
+
+`ForkSessionCommandDto` contains source session identity, the typed boundary,
+`ForkOperationId`, expected source sequence, expected preview digest, an
+optional validated title, and an optional safe future-profile override. It never
+accepts a client-selected child ID, raw snapshot, raw event, configuration path,
+credential, workspace path, or opaque implementation value. `ForkSessionResultDto`
+is bounded and returns child and tree identities, immediate parent, accepted
+boundary, optional child-anchor `TurnId`, snapshot and context schema
+versions/digests, inherited future defaults, and the closed `unverified`
+workspace notice; it does not return the up-to-1-MiB base snapshot inside a
+transport response.
+
+`GetForkPreviewQueryDto` takes only a source session and a candidate typed
+boundary. `ForkPreviewDto` returns a fresh source sequence, the `fork-preview`
+digest, accepted boundary data, safe inherited future defaults, the
+deterministic fallback title, counts and safe types of retained terminal
+references, the count and aggregate canonical size of inherited
+reasoning-history references, and the closed `unverified` workspace state. The
+client must send the exact preview digest it accepted; it must not manufacture a
+preview digest locally.
+
+`StartForkRunCommandDto` names the child session, the immutable anchor turn, and
+a separate operation ID. It is valid only for a non-archived child created from
+a user-turn boundary whose anchor has not already started a fork run. It uses
+the anchor already included in the frozen context, resolves one immutable
+current run selection under the normal admission rules, and starts no duplicate
+user message. Its failure leaves the idle child visible.
+
+`RenameSessionCommandDto`, `ArchiveSessionCommandDto`, and
+`RestoreSessionCommandDto` each carry a session ID, expected ordinary session
+sequence, and a globally stable `SessionPresentationOperationId`; rename also
+carries a `SessionTitleDto`. Equal repeats return the original accepted result.
+A reused operation ID with different semantics fails
+`session_presentation_operation_conflict`; a stale sequence fails
+`session_changed`. A command that already observes its requested presentation
+state succeeds with `changed = false` and appends no event. Archive still
+performs its mandatory idle check before either outcome.
+
+`GetConversationTreeQueryDto` contains a `ConversationTreeId`, optional parent
+`SessionId`, optional opaque continuation token, and a requested page size from
+1 through 64. It returns the root summary, at most 64 immediate child summaries,
+`has_more`, and an opaque continuation after the final `(created_at,
+child_session_id)` sort key. A tree is intentionally live between pages: new,
+renamed, archived, restored, or otherwise changed branches may appear on later
+pages, and a continuation never promises a revision-consistent tree snapshot. A
+token with another tree, another parent, malformed contents, or an oversized
+page fails closed with `invalid_conversation_tree_page`.
+
+`ConversationBranchSummaryDto` exposes only branch identity, immediate parent,
+creation ordering data, safe title or stable fallback, archive state, mode,
+safe future-profile availability, fork point, and `unverified` workspace state.
+The immutable base snapshot and its retained source content are not list data.
+Tree and lineage reads validate that every named session belongs to the same
+tree, project, and workspace.
+
+`SessionTitleDto` is bounded to 128 Unicode scalar values after trim and NFC
+normalization, and rejects blank, control, and bidi-override characters. An
+adapter may request a title when it forks; otherwise the daemon stores a
+deterministic safe title derived from the source title or its stable fallback
+and the fork point. A migrated root session has no stored title and uses only
+the stable presentation fallback until renamed. Rename changes one session only,
+writes `SessionRenamed`, and never changes lineage, a base snapshot, or a
+tree-wide title.
+
+### Canonical field tables
+
+The retained `fork-base-snapshot-v1`, `fork-preview-v1`, and `fork-command-v1`
+records keep their existing `typed-tlv-v1` framing and SHA-256 inputs exactly.
+Their v1 field tables are:
+
+- `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`,
+  `3 source_session_id`, `4 conversation_tree_id`, `5 boundary`,
+  `6 source_boundary_sequence`, `7 source_run_cursors`,
+  `8 effective_instruction_projection`, `9 materialized_model_messages`,
+  `10 inherited_future_defaults`, `11 historical_config_policy_references`,
+  `12 safe_usage_provenance`, `13 terminal_tool_result_references`,
+  `14 policy_decision_references`, `15 terminal_child_result_references`,
+  `16 workspace_state`.
+- `fork-preview`: `1 preview_schema_version`, `2 source_session_id`,
+  `3 conversation_tree_id`, `4 boundary`, `5 source_head_sequence`,
+  `6 materialized_effective_instruction_projection`,
+  `7 materialized_model_messages`, `8 inherited_future_defaults`,
+  `9 historical_config_policy_references`, `10 safe_usage_provenance`,
+  `11 terminal_tool_result_references`, `12 policy_decision_references`,
+  `13 terminal_child_result_references`, `14 workspace_state`. Field 6 is the
+  selected boundary sequence, not the current source head observed during the
+  fork operation.
+- `fork-command` (unchanged, `typed-tlv-v1`): `1 source_session_id`,
+  `2 boundary`, `3 expected_source_sequence`, `4 expected_preview_digest`,
+  `5 title_present`, `6 requested_title`, `7 future_profile_override_present`,
+  `8 future_profile_override`.
+
+`typed-tlv-v2` preserves the v1 framing, type tags, length encoding, collection
+ordering, SHA-256 construction, and rejection behavior, changing only the
+canonicalization-version byte and the fixed field tables. New forks use
+`fork-base-snapshot-v2` and `fork-preview-v2`:
+
+- base: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
+  `4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`,
+  `7 source_run_cursors`, `8 effective_instruction_projection`,
+  `9 materialized_model_messages`, `10 inherited_future_defaults`,
+  `11 historical_config_policy_references`,
+  `12 inherited_reasoning_history_references`, `13 safe_usage_provenance`,
+  `14 terminal_tool_result_references`, `15 policy_decision_references`,
+  `16 terminal_child_result_references`, `17 workspace_state`.
+- preview: `1 preview_schema_version`, `2 source_session_id`,
+  `3 conversation_tree_id`, `4 boundary`, `5 source_head_sequence`,
+  `6 materialized_effective_instruction_projection`,
+  `7 materialized_model_messages`, `8 inherited_future_defaults`,
+  `9 historical_config_policy_references`,
+  `10 inherited_reasoning_history_references`, `11 safe_usage_provenance`,
+  `12 terminal_tool_result_references`, `13 policy_decision_references`,
+  `14 terminal_child_result_references`, `15 workspace_state`.
+
+`canonical_snapshot_digest` is SHA-256 over the record excluding the resulting
+digest field; `model_context_digest` is SHA-256 over the complete versioned
+materialized instruction projection and ordered materialized model-message
+projection, not over a later reconstructed request. The command's
+`expected_preview_digest` is a distinct version-matched digest of the
+source/tree identities, selected boundary, source head sequence, inherited
+future defaults, materialized context, retained safe references, and
+`unverified` workspace state. A `fork-command` digest protects the complete
+semantic idempotency input (source, boundary, expected sequence, expected
+preview digest, requested title, safe future-profile override) and excludes the
+daemon-assigned child ID and time.
+
+### Fixed limits and audit taxonomy
+
+The first scope uses these fixed code-owned limits, enforced inside the fork
+transaction before any partial child record exists; every limit failure is a
+typed policy result rather than an oversized transport frame, partial branch, or
+unstructured storage error:
+
+| Subject | Limit | Enforcement |
+| --- | ---: | --- |
+| Root-to-child depth | 4,096 | A root has depth 0; reject a child at depth 4,097 with `fork_tree_depth_limit`. |
+| Descendants in one tree | 16,384 | Root is not counted; reject before a 16,385th child with `fork_tree_descendant_limit`. |
+| Forks from one source boundary | 16 in a rolling hour | Count accepted operations by exact source and boundary; reject with `fork_boundary_rate_limit`. |
+| Canonical `ForkBaseSnapshotDto` | 1 MiB | Reject before persistence with `fork_snapshot_too_large`; never truncate context or references. |
+| Tree query page | 64 summaries | Reject page sizes outside 1..=64 with `invalid_conversation_tree_page`. |
+| Session title | 128 NFC Unicode scalar values | Reject invalid title before the command digest or presentation event. |
+
+The source boundary rate window uses durable accepted timestamps; a rejected,
+expired, or rolled-back attempt consumes no quota. Boundaries, base snapshots,
+lineage, and idempotency records remain indefinitely readable under the initial
+archive-only retention policy.
+
+The ordinary-session taxonomy adds `SessionForked`, `ForkAnchorMaterialized`,
+`SessionRenamed`, `SessionArchived`, and `SessionRestored` to the existing
+`SessionCreated` and run taxonomy. The separate closed lineage taxonomy is
+`ConversationTreeCreated` and `ConversationBranchLinked`. Generic metadata
+events, raw snapshot blobs, and a synthetic source-session fork event are not
+acceptable audit boundaries.
+
+Inherited usage is source provenance and is never charged to the child a second
+time. Child totals count only child-owned runs; tree aggregates deduplicate
+inherited usage by original `RunId`. Presentation must distinguish own and
+inherited usage.
+
+The closed fork safe failures through `ErrorDto` are:
+
+```text
+fork_context_schema_unsupported
+fork_snapshot_too_large
+reasoning_history_unavailable
+fork_history_unavailable
+fork_snapshot_unsupported
+fork_reference_unavailable
+fork_operation_conflict
+fork_source_changed
+fork_preview_mismatch
+fork_boundary_ineligible
+fork_tree_depth_limit
+fork_tree_descendant_limit
+fork_boundary_rate_limit
+session_archive_not_idle
+session_presentation_operation_conflict
+session_changed
+invalid_conversation_tree_page
+```
+
+They disclose no credential, path, source content, raw provider data, or
+implementation resource.
+
 ## Compatibility, dependencies, and non-goals
 
 M3/M4 historical sessions remain linear ordinary records until an additive
