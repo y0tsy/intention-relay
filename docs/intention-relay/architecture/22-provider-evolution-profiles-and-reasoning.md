@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 22.
 - Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
-- Reconciliation topics: `PRV-001..012, RSN-001..006`.
+- Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
+- Reconciliation topics: `PRV-001..012, RSN-001..020`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -26,6 +27,12 @@ retries, model facts, cursors, snapshots, replay, recovery, and M4
 semantics. `openrouter` and `generic-chat-completion-api` remain the only M4
 kinds. Retained provider/profile/reasoning material is research provenance where
 it conflicts with architectures 13--21.
+
+The configuration/provider control-plane cluster (profile UI/control plane,
+live reload, credential rotation, discovery, pricing, health checks) is owned
+by [architecture 25](25-configuration-provider-control-plane.md), adopted as
+accepted future directions by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
 ## Ownership and non-authorities
 
@@ -119,10 +126,12 @@ silently narrow, add, or reinterpret capabilities. Unknown taxonomy, invalid
 intersection, mismatched cross-binding, or unsupported driver contract blocks
 provider work before effect without current-state fallback.
 
-The initial closed taxonomy is text-only:
+The initial closed taxonomy is text-only, versioned by the closed value
+`model-capability-taxonomy-v1`:
 
 ```text
 ModelCapabilitySetV1
+  taxonomy_version = model-capability-taxonomy-v1
   input = TextOnly
   text_streaming = Enabled | Disabled
   structured_output = Unsupported
@@ -131,7 +140,9 @@ ModelCapabilitySetV1
   context_preservation = LocalDurableHistoryV1 { reasoning_input_contract }
 ```
 
-Non-text input and structured output require a new taxonomy version. Capability,
+`reasoning_input_contract` is the selected cross-turn reasoning transfer
+contract (the concept2 `reasoning_history_transfer` name is research-only;
+architecture 22 owns the field name). Non-text input and structured output require a new taxonomy version. Capability,
 provider kind, endpoint, driver, or execution kind is never inferred from a
 model ID, including `gpt-*`, `o*`, or `codex*`.
 
@@ -278,11 +289,43 @@ ReasoningSummaryDeltaDto
 ```
 
 Accepted fragments commit individually; equal text is not deduplicated and
-adjacent fragments are not merged. Summaries are distinct from reasoning, never
+adjacent fragments are not merged. `Primary` is the main textual reasoning
+representation and `Detail` is a separate detailed representation; when one
+native response contains both allowed representations, the descriptor emits both
+as separate ordered facts. The descriptor owns the fixed field-path and
+array-index order for values originating in one native response; that order is
+code-owned descriptor metadata, never inferred from a model name, endpoint, or
+equal text. Summaries are distinct from reasoning, never
 raw chain-of-thought, and never automatic model context. Malformed,
 duplicate-where-forbidden, out-of-order, unknown, or post-terminal values fail
-safely without raw native publication. Reasoning representation bounds reject
-without truncation or partial fact commit and are never Mandate quotas.
+safely with the closed `provider_reasoning_stream_invalid` failure and without
+raw native publication. Reasoning representation bounds reject without
+truncation or partial fact commit and are never Mandate quotas.
+
+The future provider/model, domain, and durable representations are closed and
+corresponding: `ModelEventDto::ReasoningDelta { category, content }` and
+`ModelEventDto::ReasoningSummaryDelta { content }` normalize provider input;
+`ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }` and
+`ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it;
+and the domain taxonomy has matching `ReasoningDeltaRecorded` and
+`ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a
+separate closed durable fact, never a provider stream event. A supported legacy
+M4 `ReasoningDeltaRecorded { content }` decodes as historical `Primary`
+reasoning evidence without rewriting its stored bytes; it has no synthetic
+summary, category field, or history manifest.
+
+The existing 512 KiB canonical individual-fact bound remains in force. The
+combined canonical reasoning fragments and summaries of one run have a fixed
+4 MiB bound. A fragment that would exceed the individual bound fails with the
+existing fact-size failure; a fragment that would exceed the combined bound
+fails with `reasoning_output_limit_exceeded`. Neither case truncates or
+partially writes the fragment. This contract does not add content inspection,
+secret substitution, or a new reasoning redaction algorithm; existing central
+redaction and credential, provider-payload, SDK-resource, and diagnostic
+exclusion rules remain in force. Semantic content inspection of reasoning or
+provider content is an accepted future direction under
+[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md);
+it is not activated here and never substitutes for central redaction.
 
 `responses` is local-history-first. Every request uses `store: false`; Conversations,
 `previous_response_id`, remote continuation, encrypted/opaque reasoning,
@@ -296,6 +339,263 @@ Future provider/reasoning delivery is separately negotiated and history-before-
 live. It exposes only safe typed projections, never raw canonical bytes, native
 payloads, remote IDs, credentials, or private resources. Unnegotiated peers fail
 closed for future facts; M3/M4 replay remains unchanged.
+
+## Reasoning capability slice and bounded `responses` v1
+
+The initial versioned capability slice selects text streaming, textual
+reasoning output, the closed supported sets of `reasoning_effort` and
+`reasoning.mode`, reasoning-summary support, and custom function-call
+admission. A kind descriptor declares the maximum protocol capability envelope;
+each profile explicitly declares a safe subset for its exact configured model,
+including reasoning availability, supported effort and mode values, summary
+availability, and custom-function-call availability. Model identifiers remain
+byte-exact and are never used to infer capabilities. Preflight rejects a
+requested capability or value that is absent from either level before any
+outbound work occurs.
+
+The resolved reasoning policy includes the closed fragment-category and
+summary support, the `ReasoningHistoryTransferDto` mode, and `compatibility_id`
+when transfer is enabled. It also records the fixed 4 MiB output/history limits
+and the optional reasoning-usage interpretation. A selection that cannot
+represent the descriptor's declared history transfer fails preflight before
+provider work; it never falls back to a different transfer policy.
+
+`responses` v1 is local-history-first. Every request sets `store: false`; the
+daemon continues to construct model context from Intention Relay durable
+history and does not use OpenAI Conversations or `previous_response_id`. It
+must neither request nor persist, publish, replay, or depend on encrypted
+reasoning, opaque response output items, remote conversation identifiers, or
+provider-managed history state. The provider-neutral contract adds closed
+`ReasoningEffortDto` values (`none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`) and a Responses-specific closed reasoning-mode projection
+(`standard` or `pro`). A profile may select only values declared in its model
+subset; an unsupported effort or mode fails preflight. The resolved execution
+policy records those values as immutable safe provenance.
+
+For a `responses` profile whose model subset declares summary support, the
+default request asks for an automatic provider reasoning summary. A returned
+summary becomes a distinct tail-only `ReasoningSummaryDelta` and corresponding
+durable fact. It is not a `ReasoningDelta`, is never raw chain-of-thought, and
+does not enter model context or a run snapshot. It follows the normalized
+reasoning cursor order, the 4 MiB per-run reasoning bound, the existing tail
+replay and publication rules, and the selected initial-delivery contract. It
+enters a typed `TextualHistoryV1` transfer together with the selected response's
+textual reasoning fragments.
+
+## Typed cross-turn reasoning history
+
+The closed transfer policy is:
+
+```text
+ReasoningHistoryTransferDto
+  Disabled
+  TextualHistoryV1 { compatibility_id }
+```
+
+`compatibility_id` is code-owned descriptor and compatibility-matrix metadata,
+never inferred from a model name, endpoint, or equal text. Under
+`TextualHistoryV1`, a run receives all causally preceding completed compatible
+assistant responses in causal `RunStarted` order, then each response's facts in
+original run-cursor order; it receives both `Primary` and `Detail` fragments and
+all summaries, placed in a separate typed reasoning history associated with the
+assistant response, never converted into ordinary `ModelMessageDto` text.
+Sharing requires the same declared `compatibility_id` and the same transfer
+semantics. Encrypted, opaque, remote-provider, or unrepresentable material is
+never transferred. Missing, corrupt, incompatible, or over-limit required
+references block only the dependent run before any provider call. The closed
+results are `reasoning_history_unavailable` (missing/corrupt durable material),
+`reasoning_history_incompatible` (transfer-policy/compatibility mismatch), and
+`reasoning_history_too_large` (aggregate bound). A run is never silently sent
+without required history.
+
+Every dependent run receives an immutable `ReasoningHistoryManifestDto` in the
+same durable transaction as its `RunStarted` fact (including repository-owned
+queued-turn promotion): schema and transfer policy, compatibility identity,
+ordered source-response references, per-entry digests and sizes, and one
+canonical manifest digest; no duplicate reasoning text. One source reference
+carries the source session/run, completed sequence, final assistant-turn
+identity when present, and ordered reasoning fact cursor/category/digest/size
+references. A compatible completed response with no reasoning is a typed empty
+reference, never an invented fragment. The same transaction appends the closed
+`ReasoningHistoryBound` audit fact with only the manifest digest, transfer
+policy, compatibility identity, source-entry count, and aggregate canonical
+size; no reasoning text. Execution verifies the manifest and referenced durable
+facts and constructs the separate typed history without rescanning a live
+session, ancestor, or sibling. `ReasoningHistoryBound` is an ordinary run-scoped
+domain audit event in the same session transaction as `RunStarted`; it is not a
+`ModelRunFactDto`, not a provider-stream event, not in a live batch, and leaves
+the new run's model-fact cursor at zero (preserving the M4 rule that only
+accepted model facts advance `RunEventCursorDto`). The complete required history
+is bounded at **4 MiB** of canonical data and must transfer as a whole or the
+dependent run is rejected before provider work. Historical M4 runs remain
+readable with no synthetic manifests.
+
+## Reasoning usage and initial delivery
+
+`UsageDto::Reported` includes an optional typed `ReasoningUsageDto` with optional
+input and output token counts; a missing value means the provider did not report
+that component, never zero. Reported reasoning values are components of the
+corresponding total input/output counts, not additional usage. Reconnect,
+replay, inheritance, and tree aggregation must not charge or count the same
+source `RunId` twice. There is no price, currency, or inferred cost.
+
+The negotiated `normalized_reasoning_stream_v1` capability provides automatic
+initial reasoning delivery through uncorrelated `RunReasoningHistoryPageDto` and
+`RunReasoningHistoryCompletedDto` frames after the existing correlated
+authoritative `RunReplayDto` snapshot response. A page carries a fixed
+session/run identity, a captured upper run cursor, and a non-empty ascending list
+of only reasoning fragment or summary facts; cursors may be sparse but strictly
+increasing across all initial pages. The completion frame repeats the fixed
+identities and captured upper cursor. Under the serialized publication gate, the
+daemon captures the upper cursor, registers the subscriber, enqueues the
+correlated snapshot response, every history page through the cursor, and the
+completion frame before any later live fact; live frames begin strictly after
+the captured cursor, and a client never receives live reasoning before the
+initial history completes. Pages expose both categories and summaries in the same
+ordinary run-subscription visibility class as live facts; the existing tail
+bounds of at most **256 facts** and **512 KiB** of canonical fact data apply and
+may be sparse relative to the shared run cursor. Unavailable or incomplete
+initial history requires typed resynchronization with no client guessing. A
+non-negotiating client subscribing to a run using post-M4 reasoning facts fails
+closed with `normalized_reasoning_stream_required`. Legacy M4 runs retain
+existing subscription behavior.
+
+## Reasoning in branches
+
+`ForkBaseSnapshotDto` stores only immutable typed references to required
+completed source response facts under `inherited_reasoning_history_references`;
+it never copies reasoning text into the snapshot. Each
+`InheritedReasoningHistoryReferenceDto` carries the source session/run and
+completed-sequence identity, final assistant-turn identity when present,
+ordered reasoning fact cursor/category/digest/size references, and the source
+descriptor's `compatibility_id`. `fork-model-context-v1` remains a text-only
+projection and does not add reasoning or summaries to ordinary model messages. A
+child run combines frozen references with its own completed compatible responses
+to construct its own `ReasoningHistoryManifestDto`; it never rescans the source
+or a sibling. An unavailable required reference blocks only the dependent
+action.
+
+## Typed stateless reasoning dialect catalog
+
+The initial user-kind catalog is broad in typed stateless textual coverage but
+closed, subject to the compatibility matrix and the profile's declared model
+subset:
+
+- Chat Completions SSE and explicitly supported native streaming framing,
+  including Ollama-native framing where a dedicated descriptor owns it;
+- textual reasoning fields `reasoning_content`, `reasoning`,
+  `reasoning_details[].text`, and `message.thinking`;
+- thinking activation as `thinking` with closed `enabled`/`adaptive`,
+  `enable_thinking`, or `think` with a closed boolean or supported closed effort
+  string, or no activation field; and
+- closed `reasoning_effort`, `thinking_budget`, and `thinking_token_budget`
+  request fields only where a descriptor declares each field and its allowed
+  values.
+
+Each accepted fragment maps to the future normalized reasoning path. No
+encrypted/opaque provider payloads, server-side vLLM/SGLang parser config, raw
+provider JSON, or generic request templates. Cross-turn policy is limited to the
+explicit typed textual history contract; provider-native `preserve_thinking`,
+`thinking.keep`, remote continuation identifiers, and non-fitting
+assistant-history requirements are excluded. Arbitrary authentication headers,
+provider-native preservation controls, and server-side parser setup are
+accepted post-M5 future directions under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+: a closed code-owned typed header policy, explicit
+typed preservation controls under the local-history-first law (never remote
+continuation), and explicit typed server-side parser configuration where a
+closed descriptor declares it (never raw JSON/templates and never unbounded
+parsing). They are not activated here. The current `async-openai` core
+Chat Completions adapter is not assumed sufficient for every descriptor; a future
+implementation must choose a pinned private SDK or an explicitly specified
+private typed decoder per closed descriptor. The descriptor registry never
+authorizes arbitrary network protocol handling, unbounded parsing, or provider
+SDK data outside its owner adapter.
+
+## Catalog lifecycle detail: limits, tombstones, and audit
+
+The first-scope fixed code-owned catalog limits are:
+
+| Subject | Limit | Enforcement |
+| --- | ---: | --- |
+| `ProviderProfileId` and user `ProviderKindId` length | 63 ASCII characters | Reject the field before canonical revision construction. |
+| Validated `display_name` length | 128 Unicode scalar values after trim and NFC normalization | Reject the field before catalog-digest construction. |
+| Profiles in one catalog | 128 | Reject the candidate as oversized. |
+| User-declared kinds in one catalog | 32 | Reject the candidate as oversized. |
+| Raw candidate input | 512 KiB | Reject before unbounded parsing or private driver construction. |
+| Safe validation issues returned | 32 | Return the first 32 deterministic issues, total count, and `truncated`. |
+| Active private registry entries | 128 | One entry per enabled profile; reject an impossible over-capacity candidate. |
+| Catalog page and removal-preview examples | 32 entries | Reject an oversized requested page; truncate examples with total count. |
+| Pending-removal lifetime | 30 minutes | Expire the candidate as specified. |
+| Unavailable queue promotions per terminal transition | 8 | Stop the cascade and persist reconciliation-needed evidence. |
+| Queue-reconciliation page | 32 selections | Process at most that many currently unavailable selections. |
+
+`ProviderKindId` is immutable after its first accepted declaration; changing
+closed stream/reasoning/activation/budget-effort/credential-transport parts
+fails with `provider_kind_immutable_mismatch`; the valid path is a new kind ID
+plus reassignment. Credential-free catalog/profile-revision rows are immutable
+append-only SQLite history. Removal writes a permanent `ProviderProfileTombstoneDto`
+(safe identity, removed catalog revision/time, provenance); a tombstoned ID
+cannot be reintroduced. Kind removal while referenced fails
+`provider_kind_has_dependents`; after removing or reassigning all dependents in
+the same candidate, accepted kind removal writes a permanent
+`ProviderKindTombstoneDto`. The audit taxonomy is:
+
+```text
+ProviderCatalogCandidatePrepared
+ProviderCatalogRemovalPending
+ProviderCatalogRemovalAccepted
+ProviderCatalogCandidateRejected
+ProviderCatalogCandidateExpired
+ProviderCatalogAccepted
+ProviderCatalogActivated
+ProviderCatalogActivationRecoveryRequired
+ProviderCatalogRecoveryCompleted
+```
+
+Ordering: every successful preparation appends `ProviderCatalogCandidatePrepared`;
+a removal candidate appends `ProviderCatalogRemovalPending`; acceptance orders
+`ProviderCatalogRemovalAccepted`, `ProviderCatalogAccepted`,
+`ProviderCatalogActivated` (no-removal: `ProviderCatalogAccepted` then
+`ProviderCatalogActivated`); rejection/expiry never emit acceptance/activation; a
+crash after acceptance orders `ProviderCatalogActivationRecoveryRequired`,
+replacement `ProviderCatalogActivated`, and `ProviderCatalogRecoveryCompleted`
+only when the exact accepted registry is active. The gate serializes catalog
+acceptance, session default changes, turn/fork admission, and registry lookups
+and never blocks active model tasks. Private enabled entries are keyed by the
+exact `(ProviderProfileId, ProviderProfileRevisionId,
+ProviderKindDescriptorRevisionId, ProviderDriverContractRevisionDto)`; each
+profile owns an independent private client/driver entry, and no SDK/credential/
+client/handle crosses a DTO, persistence, protocol, runtime public API, or
+adapter boundary.
+
+## Legacy M4 selection bridge
+
+Migration eagerly maps every persisted legacy M4 `ConfigRevisionId` to one
+immutable `LegacyM4SelectionBindingDto` for its supported safe snapshot; equal
+snapshots may share one equivalent binding. The binding references the original
+legacy ID and snapshot bytes unchanged, records validation of the supported M4
+snapshot schema, materializes a deterministic first-party `default` profile ID,
+profile revision, kind descriptor revision, capability subset, execution policy,
+and M4 driver-contract revision, and protects the bridge fields with a canonical
+binding digest; it is never recomputed from future TOML. An old queued run
+executes only when the active `default` entry exactly matches the binding AND
+the current driver explicitly supports the materialized M4 contract; otherwise
+the same closed unavailable outcome applies. It preserves the original `RunId`,
+legacy `ConfigSnapshotDto`, event history, and replay data; the old snapshot JSON
+and old UUID are never replaced with a SHA ID. A missing, malformed, or
+digest-inconsistent binding is `historical_selection_corrupt`; replay remains
+readable where possible and is never reconstructed from current TOML.
+
+## Session selection, degraded recovery, and protocol
+
+The provider session-selection layer (session default, per-turn/fork overrides,
+unavailable-queue promotion and reconciliation, profile-keyed usage,
+`provider_profiles_v1`, pending-removal accept/reject, and held recovered-run
+admission) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md)
+and adopted by [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
+This document no longer excludes "session defaults/overrides"; the detail lives
+in architecture 29 and is activated under Milestone 5+.
 
 ## Child, verifier, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -321,8 +621,21 @@ This document depends on architectures 13, 14, 15, 16, and 21 plus decisions
 database, wire tags, migrations, profile picker/editor, credential entry/keychain/
 rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
 structured output, arbitrary headers, plugin drivers, remote continuation,
-provider-side parser administration, session defaults/overrides, while architecture 23 owns forks and lineage,
+provider-side parser administration, while architecture 23 owns forks and lineage,
+architecture 29 owns session defaults/overrides and the profiles protocol,
 UI, Cargo, Makefile/CI, or production activation.
+
+Semantic content inspection of reasoning or provider content is an accepted
+post-M5 future direction under
+[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
+bound to Milestone 5+; it is not activated here, never substitutes for central
+redaction, and never rewrites stored facts.
+
+The profile picker/editor, credential rotation, health test, discovery,
+pricing, telemetry, and live reload items are accepted post-M5 directions
+owned by [architecture 25](25-configuration-provider-control-plane.md) and
+activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
+they are not activated here.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and

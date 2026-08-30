@@ -6,7 +6,9 @@
 
 - Normative owner: architecture 20.
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
-- Reconciliation topics: `KER-001..018`.
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
+- Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (rich MIME/raw kernel output projection).
+- Reconciliation topics: `KER-001..023`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -137,6 +139,11 @@ facts, cursor, terminal result, post-commit reread, and publication gate. Partia
 output is observational only; only a complete safe terminal projection may enter
 a later model step. Unrepresentable output fails before public publication without
 truncation or partial commit.
+Rich MIME/raw kernel output projection is an accepted post-M5 future direction
+under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+to be executed in Milestone 5+ as a bounded, credential-free surface that never
+substitutes for this closed text-only safe projection and never crosses public
+or durable boundaries unredacted; it is not activated here.
 
 Kernel host requests consume architecture 19. Every request carries a current
 grant and new `BridgeOperationId`; architecture 19 binds the operation and
@@ -197,9 +204,14 @@ checkpoints.
 Cancellation terminates the attached epoch without claiming rollback. Before
 start it records known pre-effect cancellation/interruption. After start, known
 terminal proof remains known; absent proof is exact `ExternalEffectUnknown` under
-architecture 13. Late cell output, host responses, fragments, and results after
-cancellation, terminalization, epoch replacement, grant expiry, or restart are
-non-authoritative and cannot append facts or repair uncertainty.
+architecture 13. `StopRunCommandDto` remains the only first-scope run
+cancellation command: the daemon commits the existing
+`Running -> Cancelling -> Cancelled` lifecycle and then terminates the attached
+kernel rather than merely leaving a potentially modified namespace alive. It
+does not wait for the cell to acknowledge an interrupt. Late cell output, host
+responses, fragments, and results after cancellation, terminalization, epoch
+replacement, grant expiry, or restart are non-authoritative and cannot append facts
+or repair uncertainty.
 
 Recovery completes before kernel readiness, attachment, scheduling, or admission.
 It invalidates grants, refuses old-sidecar adoption, classifies unfinished kernel
@@ -232,6 +244,94 @@ process, checkpoint, registry, configuration, bridge, provider, model, graph, or
 UI state may reconstruct missing meaning. The trusted-local model remains
 explicit: direct Python OS APIs can bypass the facade and are not sandboxed or
 fully observable.
+
+## Kernel detail: DTO family, bounds, and safe failures
+
+The first-scope versioned typed DTO family for kernel execution is
+conceptually:
+
+```text
+KernelExecutionRequestDto
+KernelExecutionResultDto
+KernelOutputChunkDto
+KernelStatusDto
+KernelStateSnapshotDto
+KernelHostRequestDto
+KernelHostResponseDto
+```
+
+A kernel is session-scoped: one daemon-owned session actor owns at most one
+IPython kernel, never shared across sessions/projects/users/daemon instances,
+inheriting the session's `WorkspaceRoot` as context metadata without owning it.
+It is created lazily on the first admitted IPython execution and disposed on
+archive, idle expiry, shutdown, or clean restart. Idle disposal discards the
+kernel's in-memory namespace after recording only the safe checkpoint metadata
+that already exists; it does not cancel or alter a durable run unrelated to that
+kernel. The first-scope kernel limits
+are:
+
+- an idle kernel is retained at most **60 minutes**;
+- the daemon retains at most **16 live session kernels**; exceeding this fails
+  before Python execution with `kernel_concurrency_limit_exceeded`; and
+- a foreground cell has a hard **ten-minute** execution bound, after which the
+  daemon does not wait indefinitely.
+
+The ten-minute bound is a kernel-execution policy limit, not a replacement for
+the existing 1-MiB frame, 512-KiB fact, 4-MiB group, 64-frame/10-second
+slow-peer, or 256-fact/512-KiB history limits. Idle lifetime measures the absence
+of a foreground cell and of tracked kernel-local background tasks. Output
+normalizes Jupyter `stream`, `execute_result`, `display_data`, and `error` into
+ordered typed `KernelOutputChunkDto` values with closed kind `Stdout`, `Stderr`,
+`DisplayText`, or `Error`, becoming the same post-commit
+`ToolOutputDeltaRecorded` content stream and one terminal typed result; rich
+MIME, binary, raw tracebacks, arbitrary display metadata, and raw Jupyter frames
+are omitted or produce the closed `kernel_output_unrepresentable` before
+publication, with content never truncated or partly committed. The terminal
+result is never reconstructed from a formatted footer. Kernel diagnostics
+contain only safe status, bounded sizes, failure codes, and correlation
+references; they never include raw output, Python values, tracebacks, frames,
+or implementation resources.
+
+The first-scope canonical checkpoint representation is `kernel-state-snapshot-v1`:
+a typed, deterministic, size-bounded collection of values accepted by the
+code-owned serializer, with no open file/process/socket handle, task handle,
+provider SDK object, raw Jupyter frame, executable code payload, grant,
+credential, or implementation resource. Unsupported or non-serializable values
+are omitted with typed metadata. Checkpoint payload stays private to the
+daemon-owned session kernel service; public artifacts contain only safe
+generation, schema, digest, bounded size, and restoration status. An
+uncreatable or unverifiable checkpoint after a successful cell produces
+`kernel_checkpoint_unavailable`; the cell is not rerun and the run cannot
+silently continue. On restart, no execution or action resumes; the next explicit
+execution may create a new kernel and restore only the latest verified
+checkpoint; missing, corrupt, incompatible, or over-limit state produces
+`kernel_state_restore_unavailable`, the namespace starts empty, and durable
+history remains readable. Restoration never restores a grant, bridge operation,
+task, process, provider request, or unfinished run.
+
+Background computation is kernel-local recoverable convenience work within one
+session; it is not a new run, creates no child agent, harness tick, registered
+tool invocation, grant, or new daemon authority. Every bridge request by
+background code must carry the grant of the currently attached foreground
+execution; after expiry it fails immediately and is never queued. Background
+output after termination is discarded; tasks are not included in checkpoints and
+are terminated by cancellation, kernel failure, idle disposal, daemon shutdown,
+or checkpoint restoration. Their in-memory results may be captured only by a
+later successful foreground cell.
+
+The closed kernel safe failures through `ErrorDto` are:
+
+```text
+kernel_concurrency_limit_exceeded
+kernel_execution_unavailable
+kernel_execution_timeout
+kernel_output_unrepresentable
+kernel_checkpoint_unavailable
+kernel_state_restore_unavailable
+```
+
+They disclose no credential, path, Python value, Jupyter frame, raw traceback,
+process resource, grant, or implementation detail.
 
 ## Dependencies, non-goals, and evidence
 

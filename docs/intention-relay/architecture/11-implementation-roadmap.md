@@ -16,6 +16,11 @@ flowchart TD
   P --> C[M3 Storage sessions events]
   P --> D[M4 Model and one run]
   P --> E[M5 Tools workspace hooks]
+  E --> K[M5+ Post-M5 alignment]
+  K --> F[M6 Tauri bridge UI]
+  K --> G[M7 Plan Build artifacts]
+  K --> H[M8 VFR Headroom]
+  K --> I[M9 End to end hardening]
   P --> F[M6 Tauri bridge UI]
   P --> G[M7 Plan Build artifacts]
   P --> H[M8 VFR Headroom]
@@ -377,6 +382,141 @@ The implemented M5 registry has six active tools (`read`, `write`, `edit`,
 owns registry/workspace/hook assembly, application owns durable lifecycle and
 result persistence/publication, and the hook dispatcher owns deterministic
 typed ordering and short-circuiting.
+
+## Milestone 5+: Post-M5 retrospective alignment
+
+**Activation home for the complete post-M5 stack; hard prerequisite for
+M6-M9.** Milestone 5+ is the consolidation point for all retrospective changes
+to already-implemented M0-M5 code that the accepted post-M5 directions
+require, and the activation home for the full post-M5 package stack: the
+[Configuration and Provider Control Plane](25-configuration-provider-control-plane.md)
+cluster adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+the continual-harness, programmatic-caller, Goal-domain, provider
+session-selection, and base-tool contracts adopted by
+[ADR 0021-0025](../decisions/README.md), and the detail packages adopted by
+[ADR 0026-0034](../decisions/README.md). It does not renumber, replace, or
+claim delivery of Milestones 6-9; it is their declared prerequisite in the
+dependency graph and activates only preparatory foundation work, never direct
+M6-M9 boundary implementation. The full authoritative package review of
+2026-08-30 confirmed that the [`m4plus_concept2.md`](../m4plus_concept2.md)
+research directions are otherwise covered by architectures 13-24 and decisions
+0001-0019; M5+ closes the identified configuration/provider control-plane gap
+and hosts every retrospective code change. The fifth review wave of 2026-08-30
+additionally closed the remaining unmapped detail: the continual-harness
+closed safe failures and selection record
+([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md)),
+the autonomous continuation direction
+([ADR 0031](../decisions/0031-autonomous-continuation-direction.md)), and the
+accepted deferred directions of tree-level activity metadata, semantic content
+inspection, and per-call cancellation
+([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
+A new edition of this milestone, prepared as the complete foundation for all
+subsequent milestones, is delivered as a pre-approved sequence of activating
+slices (contracts/versions, control plane, harness, UI foundation) approved
+together as one package. The activation decision is recorded in
+[ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md).
+
+### Deliver
+
+The complete foundation package is delivered as one pre-approved sequence of
+activating slices, all approved together as one package
+([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md)). No
+slice may ship in a half-ready state, and later slices consume only contracts
+activated by earlier slices in this order:
+
+1. **Contracts and versions** — the versioned protocol/schema/
+   execution-meaning/DTO contract ledger for the full post-M5 stack: local
+   protocol and schema version advancement; `run-execution-meaning-v3`/`v4`
+   field tables (`ProgrammaticCallerPolicySelectionV1`, `GoalRunSelectionV1`,
+   `AgentActivitySelectionV1`, `ContinualHarnessSelectionV1`); the negotiated
+   capability families (`provider_profiles_v1`, `session_fork_v1`,
+   `normalized_reasoning_stream_v1`, `agent_activity_v1`,
+   `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`);
+   additive storage migration with M3/M4 byte preservation; canonical tags
+   and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
+   ownership, feature-profile, and coverage-tier declarations for every
+   activated family.
+2. **Control plane** — the ADR 0020 cluster and provider session selection
+   (architectures 25/29/22): controlled live reload; credential rotation;
+   provider health checks; model discovery; pricing policy; provider profile
+   UI and raw-TOML/configuration editing; arbitrary authentication headers;
+   provider-native preservation controls; server-side parser setup; session
+   defaults and per-turn/fork overrides; unavailable-queue promotion and
+   reconciliation; `provider_profiles_v1`; pending-removal and degraded
+   recovery; and the provider reasoning/catalog surface.
+3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
+   and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
+   0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
+   execution classes; the 15 closed `harness_*` safe failures; the two closed
+   root origins; corridors and reservations; the Goal tree and Verification
+   Mandates; and Build-mode autonomous continuation.
+4. **UI foundation** — session branching, activity/notification, reasoning/
+   catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
+   0028/0029/0032/0033/0034): `session_fork_v1`; activity journal and
+   notification projections; normalized reasoning delivery; the legacy M4
+   selection bridge; RLM packaging and export; and the exact typed
+   client/protocol surface that M6 consumes.
+
+Each direction from ADR 0020-0034 remains bound to its slice; every
+retrospective change to M0-M5 code required by these directions is activated
+inside its slice, each with its own contract, transaction, and outcome test.
+
+### Tests first
+
+- slice 1: DTO round-trip and golden digest fixtures; version-negotiation
+  fixtures (compatible minor, incompatible major, unnegotiated capability
+  fail-closed); additive migration fixtures proving M3/M4 values unchanged;
+  future-schema rejection; canonical-tag and digest goldens;
+- slice 2: reload transaction fault injection (atomic commit or fail-closed,
+  no partial snapshot, no mutation of existing runs); rotation redaction and
+  no-frozen-meaning-change; health/discovery non-authority (no RunId/reason/
+  selection created, no model-name routing, no fallback); pricing non-ceiling
+  classification; promotion/reconciliation limits; catalog acceptance and
+  recovery; control-plane safe-projection (no raw TOML, credentials, or
+  resources cross public or durable boundaries);
+- slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
+  conclusion bounds; class resolution; corridor admission and reservation
+  atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
+  cancellation cascade and restart `Interrupted`;
+- slice 4: fork boundary/snapshot/rate-limit; activity journal/notification
+  bounds and urgent dedup; reasoning history and paged delivery; replay/
+  resync; adapter parity;
+- shared: M3/M4 byte/meaning/replay/recovery preservation and fake-secret
+  regression across logs, errors, snapshots, events, and adapter DTOs for
+  every slice.
+
+### Acceptance outcomes
+
+- M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts
+  without any retroactive protocol, DTO, schema, crate-boundary, migration, or
+  quality-policy change;
+- M3/M4 startup-only configuration, recorded revisions, persisted run
+  snapshots, queue tickets, sessions, runs, events, and bytes remain
+  authoritative and unchanged;
+- health, discovery, and pricing create no RunId, reason, lifecycle
+  transition, scheduler candidate, tool permission, child edge, verifier
+  authority, MCP capability, bridge grant, kernel epoch, context projection,
+  branch, or reconciliation result;
+- applicable crates meet their declared coverage tiers without excluding
+  policy or boundary logic; every activated slice passes `make quick`,
+  `make verify`, and Linux/Windows CI;
+- no slice ships half-ready: every activated contract ships with its version,
+  owner, tests, policy mapping, migration behavior, and evidence together.
+
+### Exit criteria
+
+- all four slices are complete in order; every slice is fully ready before the
+  next slice begins shipping;
+- the contract ledger declares every post-M5 protocol, schema, DTO,
+  execution-meaning, configuration, migration, compatibility, and error
+  contract with an owner and evidence anchor;
+- the dependency graph and milestone wording identify M5+ as the hard
+  prerequisite of M6-M9;
+- no M6-M9 boundary behavior is implemented; no second runtime, registry,
+  scheduler, persistence authority, or sandbox is introduced;
+- reconciliation registers (source-of-truth matrix, evidence, ownership,
+  contradiction, deferred/excluded) carry ADR 0035-keyed activation rows;
+- the M5+ evidence package passes the repository quality gates.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -854,9 +994,12 @@ implementation milestone.
 - provider state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
   bridge, kernel, context, branch, or reconciliation authority;
 - M3/M4 provider bytes and meanings remain explicitly unchanged; and
-- SDK/parser activation, profile UI/control plane, live reload, credential
-  rotation, discovery, pricing, session branching, schema, and activation remain
-  excluded.
+- SDK/parser activation, session branching, schema, and activation remain
+  excluded; profile UI/control plane, live reload, credential rotation,
+  discovery, and pricing are accepted post-M5 directions
+  ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+  [Milestone 5+](#milestone-5-post-m5-retrospective-alignment)) and are
+  activated only by a later M5+ specification.
 
 ## Post-M4 non-destructive session branching and regeneration package
 
@@ -914,3 +1057,434 @@ target, or implementation milestone.
 - M3/M4 bytes, streams, replay, recovery, and tool denial remain unchanged; and
 - production M6 activation still requires exact crate/test/coverage/feature/
   storage/wire declarations and a separate approved implementation specification.
+
+## Post-M5 continual-harness package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool loop, scheduler readiness, provider
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative continual-harness contract](26-continual-harness.md) and decision
+0021, and activates no crate, schema, migration, protocol implementation,
+feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- user-managed durable harness rules at project or ordinary-user-session scope,
+  each owning a separate daemon-owned service session with at most one active
+  run;
+- closed trigger sources, durable pre-admission capture, coalescing, and at most
+  one catch-up reason;
+- schedule/time rules, two-layer dossiers, verified checkpoints, and safe
+  conclusions bounded at 512 KiB;
+- read-and-delegate execution classes (`Light`/`Medium`/`Heavy`) with `sub_agent`
+  admitted only through a user-confirmed typed corridor under architecture 27;
+- code-owned bounds classified as intrinsic/capacity/product, never Mandate
+  quotas; and
+- cancellation cascade, restart `Interrupted`, no-resume recovery, and
+  post-commit reread publication.
+
+### Exit criteria
+
+- CHR-001..010 have one owner and compatibility/failure rule;
+- M3/M4 queue tickets, sessions, runs, events, snapshots, replay, and recovery
+  remain explicitly unchanged; no harness rule becomes a queue ticket or
+  Mandate reason;
+- harness bounds never become Mandate admission quotas or child-graph limits;
+  the 15 `harness_*` safe failures are known typed pre-effect rejections; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 programmatic-caller policy package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool registry/loop, child/verifier, MCP, bridge,
+provider evolution, activity/UI, and the continual-harness model. It creates
+[the authoritative programmatic-caller policy contract](27-programmatic-caller-policy-and-admission.md)
+and decision 0022, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- two closed root origins (`InteractiveUser`, `ContinualHarness`) with no third
+  root and immutable `ProgrammaticCallerProvenanceDto` audit records;
+- durable policy identity/scope/narrowing with most-restrictive-wins
+  intersection, child-narrowing-only, and fork shared calendar counters;
+- closed admission decisions with the `InteractiveLocalReadBaselineV1` (256/16),
+  exact confirmation, and bounded corridors;
+- policy lifecycle with live tightening, drafts, and no-reactivation-after-revoke;
+- run and calendar limits with atomic reservations and
+  `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
+- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v3`/v4 with
+  `Disabled` only for historical M4.
+
+### Exit criteria
+
+- PCP-001..008 have one owner and compatibility/failure rule;
+- policy state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; historical M4 keeps
+  `Disabled` policy selection; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 Goal domain and verification package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool loop, child/verifier, MCP, context, provider
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative Goal domain contract](28-goal-domain-and-verification.md) and
+decision 0023, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- Goal identity, scope, and tree with obligatory children and DAG integrity;
+- Goal lifecycle, readiness, and user decision (`AcceptedWithException`);
+- leading-goal run selection (`GoalRunSelectionV1` in
+  `run-execution-meaning-v4`);
+- delegated Verification Mandates with authority, target sets, and operation
+  matrix;
+- verification gates (`ReferenceGate`/`ExecutableGate`) and evidence;
+- working memory, roles, and templates (`MemoryKindDto`);
+- model proposals (`RefinementDraftDto`) and user confirmation;
+- the conversation-compaction working form (`ConversationSummaryDto`); and
+- Goal-domain bounds and closed safe failures.
+
+### Exit criteria
+
+- GOL-004..012 and VGT-001..006 have one owner and compatibility/failure rule;
+- Goal state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 provider session selection and profiles protocol package
+
+**Documentation-only package.** It depends on provider evolution, execution
+meaning, session branching, and the configuration/provider control plane. It
+creates [the authoritative provider session-selection and profiles protocol
+contract](29-provider-session-and-profiles-protocol.md) and decision 0024, and
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- session default selection and per-turn/fork overrides;
+- unavailable-queue promotion (8 per terminal transition) and reconciliation
+  (32 per page);
+- profile-keyed usage aggregation;
+- `provider_profiles_v1` public protocol and readiness projection;
+- startup-only application with pending-removal (30-minute lifetime) and
+  degraded read-only recovery; and
+- held recovery-promoted run admission (`AdmitRecoveredRunCommandDto`).
+
+### Exit criteria
+
+- PSS-001..008 have one owner and compatibility/failure rule;
+- provider session state cannot become lifecycle, scheduler, tool, child,
+  verifier, MCP, bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 base-tool contracts and tool-loop bounds package
+
+**Documentation-only package extending architecture 15.** It records the
+base-tool initial contracts, the effect-profile mapping, the fragment-stream
+contract, the terminal outcome taxonomy, the 16-call group bound, the
+512-KiB/4-MiB bounds, and tool-history replay negotiation, adopted by
+[decision 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `execute` `ShellCommandTextDto`, `fetch_url` GET/HEAD-only, `ask_user`
+  post-M4 semantics, and the trusted-local model;
+- the effect-profile flag mapping table;
+- `ToolOutputDeltaRecorded`/`ToolCallResultRecorded` fragment stream and
+  `tool_result_stream_invalid`;
+- the 16-call group maximum and `provider_tool_group_invalid`;
+- 512 KiB per fact / 4 MiB per group and `tool_output_limit_exceeded`;
+- the closed terminal outcome taxonomy; and
+- `RunToolHistoryPageDto`/`RunToolHistoryCompletedDto` replay with
+  `model_tool_loop_required`, including the combined publication-gate order
+  when the same subscription also negotiates the normalized reasoning stream;
+- the descriptor `model_schema_availability` field, the closed
+  `provider_tool_group_invalid` shape matrix, the no-numeric-step-limit
+  statement, and the typed-reference alternatives for non-path tools.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 bytes, `tool_execution_unavailable`, replay, and recovery remain
+  unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 session-branching detail package
+
+**Documentation-only package extending architecture 23.** It records the
+`session_fork_v1` DTO families, canonical field tables, fixed limits, audit
+taxonomy, inherited usage, and closed failures, adopted by
+[decision 0026](../decisions/0026-session-branching-detail-directions.md). It
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ForkSessionCommandDto`/`ForkSessionResultDto`/`GetForkPreviewQueryDto`/
+  `ForkPreviewDto`/`StartForkRunCommandDto`/tree-page/presentation DTOs;
+- `fork-base-snapshot`/`fork-preview`/`fork-command` v1 and v2 field tables;
+- the fixed limits (depth 4,096, descendants 16,384, 16 forks per rolling
+  hour, 1 MiB snapshot, 64-summary page, 128-NFC title);
+- the audit taxonomy and inherited-usage deduplication; and
+- the 17 closed `fork_*`/`session_*`/`invalid_conversation_tree_page` failures.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 linear sessions and the additive byte-preserving migration remain
+  unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 child, kernel, bridge, and MCP detail package
+
+**Documentation-only package extending architectures 17/20/19/18.** It records
+the `sub_agent` classes, tree bounds, queue limits, clarification sublimit,
+kernel limits/checkpoints, bridge DTOs/limits, and the bounded MCP gateway,
+adopted by [decision 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ParentSubAgentCommandDto`/`SubAgentHandleDto`/`RlmChildMessageOperation`
+  and `MandateChildMessageDto`/`MandateChildTerminalSummaryDto`;
+- tree bounds (16/3/0/2/64/16/360 minutes) and `SubAgentClassDto`
+  Light/Medium/Heavy (64/256/1,024);
+- the 60-minute clarification sublimit and the 17 closed `sub_agent_*`/
+  `model_stream_progress_timeout` failures;
+- kernel idle/concurrency/cell bounds and the 6 closed `kernel_*` failures,
+  plus idle-disposal, no-formatted-footer, diagnostics-content, and
+  later-cell-background-capture detail;
+- bridge DTOs, the 16-operation and frame/group/history bounds, the 6
+  closed `bridge_*` failures, and the slow-peer non-delay property;
+- the MCP bounded gateway and the 6 closed `mcp_*` failures, with the
+  authoritative `V1` record names superseding the concept2 `*Dto` names.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the RLM tree bounds never become Mandate admission quotas or child-graph
+  limits; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 provider reasoning and catalog detail package
+
+**Documentation-only package extending architecture 22.** It records typed
+cross-turn reasoning history, reasoning usage, paged delivery, the dialect
+catalog, catalog limits/tombstones/audit, and the legacy M4 selection bridge,
+adopted by [decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ReasoningHistoryTransferDto`/`TextualHistoryV1`/`ReasoningHistoryManifestDto`/
+  `ReasoningHistoryBound` with the 4-MiB aggregate bound;
+- `ReasoningUsageDto` absent-never-zero accounting;
+- `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
+- the closed dialect catalog and thinking activation fields;
+- catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
+  minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
+- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`;
+- the taxonomy value `model-capability-taxonomy-v1`, the
+  `reasoning_input_contract` field name (superseding the concept2
+  `reasoning_history_transfer`), and the descriptor-owned field-path/
+  array-index order.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 provider bytes, `openrouter`/`generic-chat-completion-api` kinds, and
+  legacy replay remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 activity and notification detail package
+
+**Documentation-only package extending architecture 24.** It records the
+agent-communication, activity-observation, and user-notification detail,
+adopted by [decision 0029](../decisions/0029-activity-and-notification-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;
+- `AgentActivityPairDto`/`AgentMessageDto`/`AgentMessageReferenceDto`/
+  `AgentActivityJournalRecordDto`/`DirectChildStatusDto`/`DescendantSummaryDto`/
+  `AgentNotificationLevelDto`;
+- the 17 closed journal record kinds;
+- the fixed activity bounds (1,024 messages, 4 MiB, 4,096 records, 64 KiB,
+  256/512-KiB page, 16 references, 60-minute clarification; 16/512-KiB per
+  direction with 1/64-KiB clarification reserve);
+- urgent conditions and one-`Urgent`-per-(tree, reason) dedup;
+- archive terminality and the 32-tree/64-KiB notification page; and
+- the 18 closed `agent_activity_*`/`agent_message_*`/`agent_notification_*`/
+  `user_notifications_*` failures.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 session/run subscriptions and replay remain unchanged; the adopted
+  numeric values are intrinsic/capacity bounds, never Mandate quotas; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 continual-harness closed safe failures and selection-record detail package
+
+**Documentation-only package extending architectures 26 and 28.** It records
+the 15 closed `harness_*` safe failures and the `ContinualHarnessSelectionV1`
+nested-record content, adopted by
+[decision 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- the 15 closed `harness_*` safe failures (`harness_rule_limit_exceeded`,
+  `harness_source_limit_exceeded`, `harness_concurrency_limit_exceeded`,
+  `harness_interval_too_short`, `harness_schedule_invalid`,
+  `harness_trigger_cycle`, `harness_dossier_too_large`,
+  `harness_source_unavailable`, `harness_checkpoint_too_large`,
+  `harness_checkpoint_unavailable`, `harness_result_too_large`,
+  `harness_not_active`, `harness_archived`, `harness_revision_conflict`,
+  `harness_cause_chain_limit_exceeded`) and their disclosure rule;
+- the `ContinualHarnessSelectionV1` nested-record content (harness identity,
+  active rule revision, durable trigger reason, class resolution, dossier
+  digest, checkpoint reference, time-zone application, immutable bounds).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the failures are known typed pre-effect rejections, never Mandate quotas;
+  historical M4 and non-harness runs acquire no synthetic harness record; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 autonomous continuation direction package
+
+**Documentation-only package extending architecture 13.** It records the
+"Continue autonomously" direction: it creates or activates a Build-mode Mandate
+by default, adopted by
+[decision 0031](../decisions/0031-autonomous-continuation-direction.md). It
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- Continue autonomously creates or activates a Build-mode Mandate by default;
+- Build mode is the default for Continue autonomously, while Plan mode remains
+  meaningfully distinct;
+- known terminal disposition returns a Mandate to `Active` with fresh-run-only
+  continuation and no hidden retry or escalation threshold.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the direction is additive to ADR 0017/0018 and never resumes old work;
+  M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted deferred directions package
+
+**Documentation-only package extending architectures 24, 22, and 19.** It
+records three deliberately deferred concept items as accepted future
+directions, adopted by
+[decision 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- tree-level activity metadata (bounded, credential-free, never authority or a
+  second sequence);
+- semantic content inspection of reasoning or provider content (never
+  substituting for central redaction, never rewriting stored facts);
+- per-call cancellation and owner-specific semantics beyond direct-pair (the
+  first-scope `StopRunCommandDto`/direct-pair boundary remains authoritative).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the directions are non-authorizing and never expose raw content or partially
+  cancel work; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted execution directions package
+
+**Documentation-only package extending architectures 25, 22, 23, 26, 28, 18,
+24, and 29.** It records thirteen deliberately deferred concept items as
+accepted future directions to be executed in Milestone 5+, adopted by
+[decision 0033](../decisions/0033-accepted-m5plus-execution-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- provider-profile UI and raw-TOML editing, configuration editing, and model
+  discovery (architecture 25);
+- arbitrary authentication headers, provider-native preservation controls, and
+  server-side parser setup (architecture 22);
+- tool-result and child-agent execution in forks, export, and cross-workspace
+  clone/rebind (architectures 23/24/26);
+- autonomous harness goal mode and work/requeue after client disconnection
+  (architectures 26/28/18);
+- consolidated RLM packaging (architectures 17/24).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- each direction affects fresh runs only, is non-authorizing before its own
+  activating specification, never resumes old external work, and never
+  rewrites historical bytes; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted retained-deferral directions package
+
+**Documentation-only package extending architectures 20, 04, 03, 16, and
+24.** It records five register-deferred concept items as accepted future
+directions to be executed in Milestone 5+, adopted by
+[decision 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- rich MIME/raw kernel output projection, bounded and credential-free, never
+  substituting for the closed text-only safe projection (architecture 20);
+- physical deletion/GC of historical work as an explicit user-authorized
+  retention/deletion/garbage-collection policy, never destructive to
+  descendants or audit dependencies (architecture 04);
+- worker/process supervision topology, never a second runtime, registry,
+  scheduler, persistence authority, or sandbox (architecture 03);
+- calendar/interval/time-zone/DST semantics for Mandate scheduler triggers,
+  never a Mandate admission quota; harness schedule/time semantics remain
+  owned by architecture 26 (architecture 16);
+- activity numeric limit classification as intrinsic/capacity/ordinary at
+  activation, never Mandate quotas or child-graph limits (architecture 24).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- each direction affects fresh runs only, is non-authorizing before its own
+  activating specification, never resumes old external work, and never
+  rewrites historical bytes; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.

@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 15.
 - Decision record: [`0007`](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
-- Reconciliation topics: `TLS-002..009, MTL-001..004`.
+- Detail decision: [`0025`](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) (base-tool contracts and tool-loop bounds).
+- Reconciliation topics: `TLS-002..011, MTL-001..007`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -67,11 +68,81 @@ Each `ToolId` has one immutable intended owner and at most one active canonical 
 
 A `Reserved` entry has no input/result schema, executor, model-function schema, or model visibility. A direct, stale, or malformed request for it has the known pre-effect terminal outcome `ExecutionUnavailable`. Reservation neither invents undelivered DTOs nor requires every owner to ship together. Only its intended owner may activate it through composition; activation creates new descriptor and registry revisions. Active status alone does not establish model visibility or live readiness.
 
-An active descriptor has credential-free semantic fields for its `ToolId`, intended owner, typed input/result schema references, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema revision, safe-result-projection revision, observation-contract revision, and stream shape. `display_name` is safe presentation metadata, not semantic identity. Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources, and implementation errors.
+An active descriptor has credential-free semantic fields for its `ToolId`, intended owner, typed input/result schema references, required model capabilities, `ToolEffectProfile`, workspace binding, mode relation, model-function schema revision, safe-result-projection revision, observation-contract revision, and stream shape. It also declares `model_schema_availability`: whether it can supply a code-owned function schema to a compatible model subset. Active status alone does not establish model visibility or live readiness. `display_name` is safe presentation metadata, not semantic identity. Public boundaries reject raw JSON/maps, unvalidated paths, provider/Python values, implementation handles, resources, and implementation errors.
 
 `ToolEffectProfile` describes direct declared effects, including workspace read or write, process start, network retrieval, user interaction, session mutation, retained-content read, and future child controls. It is neither authority, confirmation policy, sandbox, nor a complete inventory of indirect effects.
 
+The initial required effect-profile flag mapping is:
+
+| `ToolId` | Direct effect flags |
+| --- | --- |
+| `read`, `glob`, `grep`, `expand` | `workspace_read` |
+| `write` | `workspace_write` |
+| `edit` | `workspace_read`, `workspace_write` |
+| `execute` | `process_start` |
+| `fetch_url` | `network_retrieval` |
+| `ask_user` | `user_interaction` |
+| `todo`, `plan_submit` | `session_state_mutation` |
+| `retrieve` | `retained_content_read` |
+| `sub_agent` | `child_agent_start`, `child_agent_control` |
+| `mcp` | `process_start`, `network_retrieval` |
+
+The profile states only the primitive's direct declared capability;
+`process_start` does not claim a shell program cannot read/write/start
+descendants/access network, and `network_retrieval` does not claim
+side-effect-free remote retrieval. No flag itself requires confirmation.
+`WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`,
+`grep`, and `expand` (default base for relative paths and initial CWD for
+`execute`, not an access boundary; absolute paths and `..` are accepted, with no
+path-based denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`,
+`sub_agent`, and `mcp` get no fictional workspace path; their owners may instead
+require a typed URL, question, todo, retained-content, plan, child-agent, or
+MCP-method reference. In Plan mode, ordinary
+`write`/`edit` are denied; plan mutation remains plan-policy work.
+
 `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and nested selection records use the `IRCR` / `typed-tlv-v1` / SHA-256 policy owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md). They must not define a competing codec. Semantic changes require a new record version or tag; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
+
+## Base-tool initial contracts
+
+The first-scope initial contracts for the base tools are:
+
+- **`execute`** takes one `ShellCommandTextDto` value; a private
+  descriptor-selected local shell adapter interprets it, and the executable
+  path, platform resource, and parser never cross a public DTO boundary. Shell
+  syntax (pipelines, redirects, compound commands) is part of the descriptor's
+  versioned semantics. `stdout`, `stderr`, and exit status remain separate typed
+  result fields before the bounded durable stream and safe projection; they are
+  never reconstructed from a formatted text footer. `execute` runs with the
+  user's ordinary OS authority and `WorkspaceRoot` CWD, is not a sandbox, and
+  makes no claim to enumerate all effects.
+- **`fetch_url`** is network retrieval only. The closed first request form
+  permits only `GET` and `HEAD` over `HTTP` or `HTTPS`; no request body,
+  request header map, cookie jar, credential source, URL userinfo, or
+  non-HTTP(S) scheme. It permits every HTTP(S) address including public,
+  private, and literal loopback; it is deliberately not a local-network
+  boundary and does not relax the separate provider-endpoint policy. Redirects
+  remain retrievals under the same restrictions with a descriptor-fixed
+  bounded limit. The typed result distinguishes final URL, status, safe
+  content metadata, and bounded body; arbitrary response headers are not
+  model-visible by default.
+- **`ask_user`** is a normal long-running tool with `user_interaction`, not an
+  `AwaitingConfirmation` policy outcome. Once `ToolCallStarted`, the post-M4
+  run stays `Running`; other independently admitted calls may complete
+  concurrently, and the next model step waits for this question's terminal
+  safe result with every other group result. It does not transition the
+  post-M4 run to `WaitingInput` and does not rewrite M3/M4 `WaitingInput`
+  snapshots, facts, or recovery.
+
+The trusted-local model is explicit: the daemon, agent, IPython kernel, child
+agents, and Rust tools run with the same OS permissions as the user who starts
+the daemon. There is no agent sandbox, container/VM isolation, privilege
+separation, or restricted Python sidecar. `WorkspaceRoot`, Plan/Build mode,
+confirmation, hooks, audit, redaction, and the capability plane are logical
+product/safety policies, not security boundaries against a malicious or
+compromised program running as the user. An IPython kernel can bypass the
+facade via `pathlib`, `os`, and `subprocess`; this is an accepted property.
+Future work must not describe the facade, tool gateway, prompt policy, or
+audit trail as OS-level isolation.
 
 ## Frozen direct tool selection
 
@@ -121,7 +192,7 @@ Build admits otherwise compatible selected descriptors. In Plan mode, ordinary p
 
 ## Model-to-tool-to-model lifecycle
 
-The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused.
+The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused. A group contains at most **16 calls**; a provider step that emits more than 16 calls fails closed before any local effect with the typed `provider_tool_group_invalid` outcome. The same closed outcome applies to a step that has calls but lacks the `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group, or later provider facts for an already closed step.
 
 ```mermaid
 sequenceDiagram
@@ -149,6 +220,107 @@ Calls undergo independent admission and may execute concurrently. A group is not
 All provider continuations are fresh requests reconstructed from complete local typed history. Remote conversation state, opaque continuation identifiers, and provider-owned tool execution are excluded. A driver incapable of translating that local typed exchange cannot claim `model_tool_loop_v1` support.
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never Mandate product ceilings. Oversized or malformed groups fail before effects. Output cannot be partially committed; when an applicable capacity bound cannot accept a fragment, that call receives a known terminal outcome without changing other calls' order or meaning.
+
+### Fragment stream, terminal outcomes, and bounds
+
+Each call produces one ordered stream of `ToolOutputDeltaRecorded` facts followed
+by exactly one `ToolCallResultRecorded` terminal fact. An output delta contains
+the `ToolCallId`, a positive per-call fragment position, and normalized safe
+content. Position among all facts is the shared `RunEventCursorDto`; the
+fragment position orders fragments within one call only. Duplicate, missing,
+non-contiguous, post-terminal, wrong-group, or untyped fragments fail closed as
+`tool_result_stream_invalid`.
+
+Every accepted fragment is committed immediately as its own durable fact; the
+daemon performs an independent durable reread and then publishes to normal run
+subscribers. A fragment is never inserted into the next model request by itself;
+only the terminal safe result projection of every call becomes model context
+after the whole group completes.
+
+The first-scope bounds are:
+
+- the existing **512 KiB** individual canonical-fact bound applies to every
+  fragment;
+- all output fragments and successful result content in one group share a
+  **4 MiB** combined canonical-content limit, consumed in actual durable commit
+  order, with no equal reservation by call and no dependence on later scheduler
+  reconstruction;
+- content is never truncated or partly committed; if the next fragment cannot
+  fit, it is not written and only its call receives the terminal
+  `tool_output_limit_exceeded` outcome, while remaining calls continue; and
+- a small closed terminal outcome remains representable after budget
+  exhaustion.
+
+The closed initial terminal outcome taxonomy is: `Succeeded`,
+`DeniedBeforeExecution`, `FailedBeforeExternalEffect`, `CancelledBeforeStart`,
+`InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and
+`ExternalEffectUnknown`. It carries only safe model-visible projection and
+approved typed metadata; no value silently changes category during replay.
+`Succeeded`, known denials, known pre-effect failures, and the output-limit
+outcome may enter the next typed exchange; an `ExternalEffectUnknown` result
+never permits another model step.
+
+### Tool history replay and negotiation
+
+Run snapshots contain only a compact safe summary of active step/group/call
+state; no tool-output text, full terminal content, raw tool results,
+model-visible projection text, provider-native correlation data, or
+implementation resources. Tool facts retain the shared run cursor and are
+available for bounded tail replay.
+
+`model_tool_loop_v1` is a separately negotiated protocol and descriptor/model
+capability. After the correlated `RunReplayDto`, a subscribing negotiated client
+receives uncorrelated `RunToolHistoryPageDto` frames: one fixed session/run
+identity, a captured upper cursor, non-empty ascending tool facts, bounded by
+the existing **256 facts and 512 KiB per page**. The final
+`RunToolHistoryCompletedDto` repeats the identity and upper cursor. The
+publication gate serializes `RunReplayDto`, tool-history pages, completion, then
+live frames. When the same subscription also negotiates the normalized
+reasoning stream, the combined gate serializes `RunReplayDto`, reasoning pages
+and completion, tool-history pages and completion, then live frames; if either
+history class is absent, its pages and completion frame are omitted and the
+remaining frames retain this order. Sparse shared cursors are valid. Missing or
+incomplete history requires typed resynchronization and never causes a live-tool
+retry.
+
+An unnegotiated client subscribing to a run containing post-M4 model-tool-loop
+facts fails closed with `model_tool_loop_required`, never a partially understood
+snapshot or live stream. Historical M4 runs retain old replay behavior and
+`tool_execution_unavailable` semantics byte-for-byte. New run-selection
+provenance records the negotiated `model_tool_loop_v1` capability and the
+descriptor/model support needed to reconstruct local exchanges.
+
+## Model progress deadline
+
+`model_stream_progress_timeout_v1` is the selected future model-step policy for
+all post-M4 model-tool-loop steps, including roots and children. It does not
+reinterpret or alter M4's existing absolute provider-attempt deadline.
+
+After a future request is sent to a provider, the first non-empty `TextDelta`
+or `ReasoningDelta` must arrive within sixty seconds. The same sixty-second
+deadline applies between later such deltas. Only non-empty text and reasoning
+deltas reset the deadline; `Started`, usage, and other non-content facts do not.
+An accepted `ToolCall` or `Finished` before the deadline ends the provider phase
+normally. The progress deadline is active only while a provider stream for a
+model step is open. It is paused while a tool or foreground kernel cell runs,
+confirmation or `ask_user` awaits, `AwaitResult` waits for a child, a retry
+delay runs, or the run is completing or cancelling.
+
+For future post-M4 steps, this progress deadline replaces the absolute attempt
+deadline: a continuously producing stream has no additional fixed step duration.
+Before the first durable content or other irreversible fact, exactly one retry
+is permitted after `model_stream_progress_timeout`. After such a fact, no retry
+is permitted. A simultaneously committed user cancellation wins the race. A
+timeout otherwise produces a safe failed outcome, suppresses late fragments, and
+never claims success or resumes work after restart.
+
+The progress deadline is a model-step policy owned by this document. It is
+referenced by the continual-harness execution classes under
+[architecture 26](26-continual-harness.md) and by the programmatic-caller
+policy under [architecture 27](27-programmatic-caller-policy-and-admission.md);
+neither may weaken it. A timeout outcome is a known typed failure before an
+external effect when no irreversible fact preceded it, and `ExternalEffectUnknown`
+when a started effect lacks durable terminal proof.
 
 ## Effect evidence, cancellation, and recovery
 

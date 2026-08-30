@@ -57,6 +57,22 @@ preserves the no-resume rule.
 8. M3/M4 historical bytes and the closed M4 baseline remain unchanged; the
    no-port denial path stays as the M4-compatible fallback.
 
+### Common durable-fact rules
+
+The following cross-direction durable-fact rules are adopted as future detail
+owned by [architecture 04](../architecture/04-sessions-runs-events-and-storage.md):
+
+- a new fact type does not create a new sequence merely for convenience; a
+  separate sequence is permitted only for an independent aggregate with
+  dedicated bounded queries and without replacing or filtering the ordinary
+  session event sequence;
+- a filesystem-dependent validation or hook must finish before the transition
+  transaction, and any stale result becomes a typed known pre-effect outcome
+  rather than an unrecorded second external check inside the transaction; and
+- catalog and lineage audit records are read through their own bounded queries
+  and do not enter the run publication gate merely because they are related to
+  the same user operation.
+
 ## Failure semantics
 
 - Invalid tool input, workspace denial, or hook denial produces a typed failed
@@ -100,6 +116,8 @@ workspace roots, or OS error strings.
 - `reconciliation/README.md`
 - `reconciliation/contradiction-register.md`
 - `reconciliation/concept-supersession-index.md`
+- `reconciliation/source-of-truth-matrix.md`
+- `reconciliation/evidence-register.md`
 
 ## Required evidence
 

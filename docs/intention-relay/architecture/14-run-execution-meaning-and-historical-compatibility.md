@@ -248,6 +248,25 @@ A later concrete consumer may define `LegacyOrdinaryRunBridgeV1` referencing
 legacy identity/source bytes and schema class. It cannot copy, normalize,
 replace or digest-reidentify those bytes; create Mandate/verifier/Skill/MCP/child/activity/profile/policy/tool-loop state; make a legacy run Mandate-executable; or be synthesized from current configuration/registry. This package creates no bridge or migration.
 
+### Common historical-version policy
+
+The following cross-direction rules govern future version ownership and
+decoding (adopted by [ADR 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)):
+
+- `intention-domain` owns versions for domain facts, semantic snapshots, and
+  canonical record tags; `intention-storage` owns storage migrations and their
+  ordering; `intention-protocol` owns public command, query, and frame schemas;
+  an owning provider driver owns its driver-contract compatibility; a future
+  direction owns the values of its own records but cannot change a
+  cross-direction semantic record without an explicit new version;
+- Factory-aligned Skill records, frontmatter, cards, supplements, origins,
+  resolution, and selections use new tags and retained Skill decoders; no M3/M4
+  record or legacy run acquires a synthetic Skill state; and
+- materialized context projections follow the selected `fork-model-context-v1`
+  rule: a later implementation uses the stored compatible schema unchanged,
+  defines a separately versioned compatible projection, or blocks the dependent
+  operation (owned by [architecture 23](23-non-destructive-session-branching-and-regeneration.md)).
+
 ## Provider selection compatibility boundary
 
 For future meaning, provider selection is a credential-free non-authorizing
