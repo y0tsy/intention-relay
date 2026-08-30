@@ -150,6 +150,38 @@ All provider continuations are fresh requests reconstructed from complete local 
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never Mandate product ceilings. Oversized or malformed groups fail before effects. Output cannot be partially committed; when an applicable capacity bound cannot accept a fragment, that call receives a known terminal outcome without changing other calls' order or meaning.
 
+## Model progress deadline
+
+`model_stream_progress_timeout_v1` is the selected future model-step policy for
+all post-M4 model-tool-loop steps, including roots and children. It does not
+reinterpret or alter M4's existing absolute provider-attempt deadline.
+
+After a future request is sent to a provider, the first non-empty `TextDelta`
+or `ReasoningDelta` must arrive within sixty seconds. The same sixty-second
+deadline applies between later such deltas. Only non-empty text and reasoning
+deltas reset the deadline; `Started`, usage, and other non-content facts do not.
+An accepted `ToolCall` or `Finished` before the deadline ends the provider phase
+normally. The progress deadline is active only while a provider stream for a
+model step is open. It is paused while a tool or foreground kernel cell runs,
+confirmation or `ask_user` awaits, `AwaitResult` waits for a child, a retry
+delay runs, or the run is completing or cancelling.
+
+For future post-M4 steps, this progress deadline replaces the absolute attempt
+deadline: a continuously producing stream has no additional fixed step duration.
+Before the first durable content or other irreversible fact, exactly one retry
+is permitted after `model_stream_progress_timeout`. After such a fact, no retry
+is permitted. A simultaneously committed user cancellation wins the race. A
+timeout otherwise produces a safe failed outcome, suppresses late fragments, and
+never claims success or resumes work after restart.
+
+The progress deadline is a model-step policy owned by this document. It is
+referenced by the continual-harness execution classes under
+[architecture 26](26-continual-harness.md) and by the programmatic-caller
+policy under [architecture 27](27-programmatic-caller-policy-and-admission.md);
+neither may weaken it. A timeout outcome is a known typed failure before an
+external effect when no irreversible fact preceded it, and `ExternalEffectUnknown`
+when a started effect lacks durable terminal proof.
+
 ## Effect evidence, cancellation, and recovery
 
 `ToolCallStarted` is the durable boundary after which an external effect may be possible. Before it, cancellation/restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs. After it, known terminal evidence records the exact known result. A started action without durably proven terminal effect records `ExternalEffectUnknown`.

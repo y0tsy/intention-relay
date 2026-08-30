@@ -38,3 +38,5 @@ provenance.
 | [0018](0018-plan-build-autopilot-activation-scope.md) | Accepted | Plan/Build Autopilot activation scope |
 | [0019](0019-production-model-tool-loop.md) | Accepted | Production model-tool loop |
 | [0020](0020-configuration-provider-control-plane-directions.md) | Accepted | Post-M5 configuration and provider control-plane directions |
+| [0021](0021-continual-harness-directions.md) | Accepted | Post-M5 continual-harness directions |
+| [0022](0022-programmatic-caller-policy-directions.md) | Accepted | Post-M5 programmatic-caller policy directions |

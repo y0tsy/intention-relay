@@ -31,6 +31,8 @@ states.
 | EVD-010 | Activity/UI | Compatibility projection, notification and adapter parity fixtures | Planned | `architecture/24-activity-ui-and-adapters.md#Historical-projections-and-limits` | Architecture 24 |
 | EVD-011 | Documentation quality | Full Markdown/link/status/claim inventory checks | Planned | Future documentation validation command and CI artifact | Reconciliation |
 | EVD-012 | Configuration/provider control plane (M5+) | Reload fault injection, rotation redaction, health/discovery non-authority, pricing classification, control-plane safe-projection, and M3/M4 preservation fixtures | Planned | `architecture/25-configuration-provider-control-plane.md#Dependencies-and-non-goals` | Architecture 25 |
+| EVD-013 | Continual harness (M5+) | Rule lifecycle, trigger/coalescing/catch-up, schedule/time, dossier/checkpoint/conclusion bounds, corridor admission, limit/concurrency, cancellation/recovery, and M3/M4 preservation fixtures | Planned | `architecture/26-continual-harness.md#Dependencies-and-non-goals` | Architecture 26 |
+| EVD-014 | Programmatic-caller policy (M5+) | Root-origin/provenance, policy scope/narrowing, decision/corridor, lifecycle/draft, reservation/calendar, run-selection compatibility, closed safe-failure, and M3/M4 preservation fixtures | Planned | `architecture/27-programmatic-caller-policy-and-admission.md#Dependencies-and-non-goals` | Architecture 27 |
 
 ## Interpretation rule
 

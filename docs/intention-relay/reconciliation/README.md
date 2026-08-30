@@ -47,7 +47,11 @@ implementation specification can be prepared:
 - traceability, compatibility, and delivery sequencing;
 - post-M5 configuration and provider control-plane directions
   ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
-  [Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment)).
+  [Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment));
+- post-M5 continual-harness directions
+  ([ADR 0021](../decisions/0021-continual-harness-directions.md)); and
+- post-M5 programmatic-caller policy directions
+  ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -99,6 +103,8 @@ following map is navigation and provenance; it does not restate their rules:
 | Session branching | architecture 23 | decision 0015 |
 | Activity/UI/adapters | architecture 24 | decision 0016 |
 | Configuration/provider control plane | architecture 25 | decision 0020 |
+| Continual harness | architecture 26 | decision 0021 |
+| Programmatic-caller policy | architecture 27 | decision 0022 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

@@ -16,6 +16,8 @@
 | Forks and lineage | FRK-001..018 | Adopted for future ordinary Session branching; M3/M4 and Mandate authority remain separate. | Architecture 23, session branching package. |
 | Verification portfolio, checklist, deferred work | DUR-001..003, QLT-001, RDM-001 (remaining topics require atomic inventory) | Evidence and delivery rules mapped. | Quality and later roadmap reconciliation. |
 | Provider profiles, configuration reload, control plane | CFG-001..008 | Adopted for post-M5 fresh runs; M3/M4 startup-only configuration and recorded snapshots remain authoritative. | Architecture 25, configuration and provider control plane. |
+| Continual-harness model | CHR-001..008 | Adopted for post-M5 fresh runs; M3/M4 queue tickets, sessions, runs, events, and recovery remain authoritative. | Architecture 26, continual harness. |
+| Programmatic-caller policy and admission | PCP-001..008 | Adopted for post-M5 fresh runs; historical-only for new Mandate work where conflicting; M3/M4 and retained RLM history remain authoritative. | Architecture 27, programmatic-caller policy and admission. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.

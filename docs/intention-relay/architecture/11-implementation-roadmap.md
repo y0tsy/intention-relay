@@ -976,3 +976,71 @@ target, or implementation milestone.
 - M3/M4 bytes, streams, replay, recovery, and tool denial remain unchanged; and
 - production M6 activation still requires exact crate/test/coverage/feature/
   storage/wire declarations and a separate approved implementation specification.
+
+## Post-M5 continual-harness package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool loop, scheduler readiness, provider
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative continual-harness contract](26-continual-harness.md) and decision
+0021, and activates no crate, schema, migration, protocol implementation,
+feature profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- user-managed durable harness rules at project or ordinary-user-session scope,
+  each owning a separate daemon-owned service session with at most one active
+  run;
+- closed trigger sources, durable pre-admission capture, coalescing, and at most
+  one catch-up reason;
+- schedule/time rules, two-layer dossiers, verified checkpoints, and safe
+  conclusions bounded at 512 KiB;
+- read-and-delegate execution classes (`Light`/`Medium`/`Heavy`) with `sub_agent`
+  admitted only through a user-confirmed typed corridor under architecture 27;
+- code-owned bounds classified as intrinsic/capacity/product, never Mandate
+  quotas; and
+- cancellation cascade, restart `Interrupted`, no-resume recovery, and
+  post-commit reread publication.
+
+### Exit criteria
+
+- CHR-001..008 have one owner and compatibility/failure rule;
+- M3/M4 queue tickets, sessions, runs, events, snapshots, replay, and recovery
+  remain explicitly unchanged; no harness rule becomes a queue ticket or
+  Mandate reason;
+- harness bounds never become Mandate admission quotas or child-graph limits;
+  and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 programmatic-caller policy package
+
+**Documentation-only package.** It depends on Mandate lifecycle boundaries,
+execution meaning, the fixed tool registry/loop, child/verifier, MCP, bridge,
+provider evolution, activity/UI, and the continual-harness model. It creates
+[the authoritative programmatic-caller policy contract](27-programmatic-caller-policy-and-admission.md)
+and decision 0022, and activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or implementation
+milestone.
+
+### Deliver
+
+- two closed root origins (`InteractiveUser`, `ContinualHarness`) with no third
+  root and immutable `ProgrammaticCallerProvenanceDto` audit records;
+- durable policy identity/scope/narrowing with most-restrictive-wins
+  intersection, child-narrowing-only, and fork shared calendar counters;
+- closed admission decisions with the `InteractiveLocalReadBaselineV1` (256/16),
+  exact confirmation, and bounded corridors;
+- policy lifecycle with live tightening, drafts, and no-reactivation-after-revoke;
+- run and calendar limits with atomic reservations and
+  `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
+- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v3`/v4 with
+  `Disabled` only for historical M4.
+
+### Exit criteria
+
+- PCP-001..008 have one owner and compatibility/failure rule;
+- policy state cannot become lifecycle, scheduler, tool, child, verifier, MCP,
+  bridge, kernel, context, branch, or reconciliation authority;
+- M3/M4 bytes and meanings remain explicitly unchanged; historical M4 keeps
+  `Disabled` policy selection; and
+- activation remains excluded pending a later M5+ specification.

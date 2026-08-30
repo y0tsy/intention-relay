@@ -52,6 +52,32 @@ contradiction register.
 | CFG-007 | Profile UI and configuration control plane consume only the shared typed client and existing projections. | future | Adopt | `25-configuration-provider-control-plane.md` | No second authority, transport, registry, or adapter path. | M5+ | control-plane projection fixture planned |
 | CFG-008 | Every retrospective code change is consolidated in Milestone 5+ and activated by its own accepted specification. | future | Adopt | `11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment` | No production activation from documentation alone. | M5+ | M5+ activation evidence |
 
+## Post-M5 continual-harness topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| CHR-001 | A continual harness is a user-managed set of durable rules, not an autonomous agent, persistent process, or second runtime authority. | future | Adopt | `26-continual-harness.md` | Each accepted trigger admits one new independent run in a separate daemon-owned service session. | M5+ | rule lifecycle fixture planned |
+| CHR-002 | M3/M4 queue tickets, sessions, runs, events, snapshots, replay, and recovery remain authoritative; no harness rule becomes a queue ticket or Mandate reason. | historical | PreserveHistorical | `26-continual-harness.md` | Historical bytes/meaning unchanged. | M5+ | preservation fixture planned |
+| CHR-003 | Every trigger is durably captured before admission with a stable reason identity; redelivery never creates a second run; at most one coalesced catch-up reason is admitted. | future | Adopt | `26-continual-harness.md` | Coalescing retains the reason; no burst of missed slots. | M5+ | trigger fixture planned |
+| CHR-004 | Harness classes narrow inherited limits only and never weaken WorkspaceRoot, Plan/Build, hooks, confirmation, redaction, admission, or `model_stream_progress_timeout_v1`. | future | Adopt | `26-continual-harness.md` | A class cannot widen tools, limits, or timing. | M5+ | class fixture planned |
+| CHR-005 | `sub_agent` is admitted only through the user-confirmed typed corridor under architecture 27; a harness never calls `ask_user` or receives fallback authorization. | future | Adopt | `26-continual-harness.md`, `27-programmatic-caller-policy-and-admission.md` | Corridor absence/expiry/suspension/revocation fails before child admission. | M5+ | corridor fixture planned |
+| CHR-006 | Harness bounds are intrinsic/capacity/product-classified and never become Mandate admission quotas or child-graph limits. | future | Adopt | `26-continual-harness.md` | No hidden quota or reservation. | M5+ | taxonomy fixture planned |
+| CHR-007 | Recovery never resumes, retries, reattaches, or reruns old work; a later attempt is a separately admitted launch with new identities. | future | Adopt | `26-continual-harness.md` | Restart marks unfinished runs `Interrupted`; no external action resumes. | M5+ | recovery fixture planned |
+| CHR-008 | Dossiers, checkpoints, and conclusions are bounded (512 KiB) and rejected rather than truncated; redaction stays central. | future | Adopt | `26-continual-harness.md` | Oversized content rejects; no credential/path/resource leaks. | M5+ | bound fixture planned |
+
+## Post-M5 programmatic-caller policy topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PCP-001 | Every programmatic action has one daemon-assigned root origin (`InteractiveUser` or `ContinualHarness`); no third root exists in this first scope. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | A peer, task, child, MCP, provider, bridge, queue, replay, or recovery cannot become an independent root. | M5+ | origin fixture planned |
+| PCP-002 | The policy is logical product control and audit evidence, not an OS security boundary; it creates no durable autonomous actor, second daemon, second registry, or remote identity. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | No authority survives an active daemon-held run. | M5+ | authority fixture planned |
+| PCP-003 | Effective policy is the most-restrictive intersection of effect selectors and exact tool/MCP selectors; children and harness classes may only narrow. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | Inheritance widening rejects before effect. | M5+ | narrowing fixture planned |
+| PCP-004 | `execute` never receives `DirectLocalRead` or bounded-corridor admission in this first scope; `fetch_url` and `mcp` never receive direct admission. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | Only exact user confirmation admits `execute`; corridor constraints apply. | M5+ | decision fixture planned |
+| PCP-005 | A corridor belongs to one active root tree, expires on terminalization or policy revocation, and is never a lasting policy revision. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | No copy, widen, detach, retain, or cross-root application. | M5+ | corridor fixture planned |
+| PCP-006 | Reservations are created atomically before `ToolCallStarted` or not at all; on start they become permanent consumption; recovery never recreates a reservation by rerunning an action. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | Known pre-effect releases atomically; started ambiguity is `ExternalEffectUnknown`. | M5+ | reservation fixture planned |
+| PCP-007 | Historical M4 and earlier selections retain `Disabled` policy selection and are never rewritten or given synthetic policy state. | historical | PreserveHistorical | `27-programmatic-caller-policy-and-admission.md` | No historical bytes/meaning change. | M5+ | compatibility fixture planned |
+| PCP-008 | Policy state cannot become lifecycle, scheduler, tool, child, verifier, MCP, bridge, kernel, context, branch, or reconciliation authority. | future | Adopt | `27-programmatic-caller-policy-and-admission.md` | No authority amplification. | M5+ | authority fixture planned |
+
 ## Later topic families
 
 Family rows are navigation summaries only. Atomic topic rows below are the

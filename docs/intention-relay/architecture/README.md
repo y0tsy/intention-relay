@@ -83,6 +83,8 @@ flowchart TD
 15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 16. [VFR and Headroom](06-vfr-and-headroom.md)
 17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
+18. [Continual harness](26-continual-harness.md)
+19. [Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
 
 ### Agent operation
 
@@ -323,3 +325,25 @@ adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-dir
 and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 It preserves M3/M4 startup-only configuration and cannot become a second
 authority, transport, registry, scheduler, or sandbox.
+
+### Continual-harness owner
+
+[Continual harness](26-continual-harness.md) is the sole detailed authority for
+the accepted post-M5 continual-harness model: user-managed durable rules,
+trigger capture, schedule/time semantics, dossiers, verified checkpoints,
+read-and-delegate execution classes, and harness recovery, adopted by
+[ADR 0021](../decisions/0021-continual-harness-directions.md) and activated
+under Milestone 5+. It preserves M3/M4 queue/session/run/recovery behavior and
+cannot become a second runtime, scheduler, registry, or sandbox.
+
+### Programmatic-caller policy owner
+
+[Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
+is the sole detailed authority for the accepted post-M5 programmatic-caller
+policy: root origins, durable provenance, policy scope/narrowing, admission
+decisions, confirmation and bounded corridors, lifecycle, run and calendar
+limits with reservations, and run-selection compatibility, adopted by
+[ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md) and
+activated under Milestone 5+. It is logical product control, not an OS security
+boundary, and cannot become a second authority, registry, scheduler, or
+sandbox.
