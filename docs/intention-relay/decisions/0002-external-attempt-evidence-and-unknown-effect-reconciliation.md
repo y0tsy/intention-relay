@@ -24,10 +24,46 @@ reconcile the exact uncertainty to a later fresh Active path or Stopped state.
 - recovery never repeats old external work;
 - child/verifier uncertainty cannot fabricate uncertainty for a parent or target.
 
+## Shared attempt-evidence DTO family
+
+The closed shared attempt-evidence family is adopted as future detail owned by
+[architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
+
+```text
+ExternalAttemptPhaseDto
+  AdmittedBeforeStart
+  Started
+  KnownTerminal
+  UnknownTerminal
+
+ExternalAttemptEvidenceDto
+  attempt_owner_kind
+  attempt_reference
+  phase
+  durable_fact_references
+  safe_effect_digest
+```
+
+This closed family is shared by `execute`, kernel/bridge, MCP discovery and
+invocation, provider-adjacent external work, and child work. Only daemon-owned
+execution and recovery logic classifies an attempt. Before start, a result is a
+known pre-effect outcome, including `InterruptedBeforeStart`; after start
+without durable terminal proof, loss, cancellation, or restart records
+`ExternalEffectUnknown`. A known nonzero exit, typed provider/MCP failure,
+schema mismatch, or validated terminal result remains known. Unknown evidence
+atomically prevents the next model step, automatic retry or continuation,
+rediscovery, reattachment, and old-work resume; for Mandate work it atomically
+moves `Working` to `PausedAwaitingDecision`. Recovery writes missing terminal
+outcomes and the run transition to `Interrupted` atomically and never opens
+another model step, repeats a tool, or reconstructs a remote continuation.
+
 ## Compatibility and non-goals
 
-This does not alter M4 interruption behavior or define package-specific attempt
-records, verifier authority, MCP invocation, tool loop, or retry policy.
+This does not alter M4 interruption behavior or define verifier authority, MCP
+invocation, tool loop, or retry policy. The shared attempt-evidence DTO family
+above is future detail owned by architecture 13 and does not activate a crate,
+schema, migration, or wire implementation; package-specific attempt records
+remain deferred.
 
 ## Evidence
 

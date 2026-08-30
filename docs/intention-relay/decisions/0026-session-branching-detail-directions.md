@@ -33,7 +33,10 @@ The session-branching detail from
   `ConversationTreeCreated`, `ConversationBranchLinked`);
 - inherited-usage deduplication by original `RunId`; and
 - the 17 closed `fork_*`/`session_*`/`invalid_conversation_tree_page` safe
-  failures.
+  failures;
+- the `fork-model-context-v1` trilemma: a later implementation uses the stored
+  compatible schema unchanged, defines a separately versioned compatible
+  projection, or blocks the dependent operation.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after
 a later activating specification, and is bound to Milestone 5+ in the roadmap.

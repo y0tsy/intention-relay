@@ -65,7 +65,14 @@ implementation specification can be prepared:
 - post-M5 provider reasoning and catalog detail
   ([ADR 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md));
 - post-M5 activity and notification detail
-  ([ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md)).
+  ([ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md));
+- post-M5 continual-harness closed safe failures and selection-record detail
+  ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md));
+- post-M5 autonomous continuation direction
+  ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md));
+- post-M5 accepted deferred directions: activity-tree metadata, semantic
+  content inspection, and per-call cancellation
+  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -126,6 +133,9 @@ following map is navigation and provenance; it does not restate their rules:
 | Child, kernel, bridge, and MCP detail | architectures 17/20/19/18 | decision 0027 |
 | Provider reasoning and catalog detail | architecture 22 | decision 0028 |
 | Activity and notification detail | architecture 24 | decision 0029 |
+| Continual-harness safe failures and selection record | architectures 26/28 | decision 0030 |
+| Autonomous continuation | architecture 13 | decision 0031 |
+| Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

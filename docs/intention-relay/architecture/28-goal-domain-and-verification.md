@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 28.
 - Decision record: [`0023`](../decisions/0023-goal-domain-and-verification-directions.md).
+- Detail decision: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (harness selection-record content).
 - Reconciliation topics: `GOL-004..012, VGT-001..006`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
@@ -165,6 +166,14 @@ RunExecutionMeaningDto
     Disabled | ProgrammaticCallerPolicySelectionV1 { ... }
   agent_activity_selection = AgentActivitySelectionV1 { ... }
 ```
+
+A launch admitted by the selected continual-harness model carries a separately
+versioned `ContinualHarnessSelectionV1` nested record (owned by
+[architecture 26](26-continual-harness.md#selection-record-and-closed-safe-failures))
+containing the harness identity, active rule revision, durable trigger reason,
+class resolution, dossier digest, checkpoint reference, time-zone application,
+and immutable bounds. Historical M4 and other non-harness runs do not acquire a
+synthetic harness record.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision,
 scope/session-link provenance, ordered parent revision chain, effective

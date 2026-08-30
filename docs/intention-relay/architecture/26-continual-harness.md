@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 26.
 - Decision record: [`0021`](../decisions/0021-continual-harness-directions.md).
-- Reconciliation topics: `CHR-001..008`.
+- Detail decision: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (closed safe failures and selection-record detail).
+- Reconciliation topics: `CHR-001..010`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
@@ -208,6 +209,42 @@ A limit failure produces a known typed pre-effect rejection. Waiting for a free
 concurrency slot retains the coalesced reason rather than dropping it. No
 external provider, tool, kernel, process, network, or scheduler action occurs
 inside a durable transition transaction.
+
+## Selection record and closed safe failures
+
+A launch admitted by the selected continual-harness model carries a separately
+versioned credential-free `ContinualHarnessSelectionV1` nested record in
+`run-execution-meaning-v4` `harness_selection` (see
+[architecture 28](28-goal-domain-and-verification.md)). It contains the harness
+identity, active rule revision, durable trigger reason, class resolution,
+dossier digest, checkpoint reference, time-zone application, and immutable
+bounds. Historical M4 and other non-harness runs do not acquire a synthetic
+harness record.
+
+The harness adds these closed safe failures through `ErrorDto`:
+
+```text
+harness_rule_limit_exceeded
+harness_source_limit_exceeded
+harness_concurrency_limit_exceeded
+harness_interval_too_short
+harness_schedule_invalid
+harness_trigger_cycle
+harness_dossier_too_large
+harness_source_unavailable
+harness_checkpoint_too_large
+harness_checkpoint_unavailable
+harness_result_too_large
+harness_not_active
+harness_archived
+harness_revision_conflict
+harness_cause_chain_limit_exceeded
+```
+
+They disclose no credential, path, dossier content, Python value, grant,
+provider resource, process topology, or raw transcript. Every listed failure is
+known before an external effect; unknown-effect evidence is retained for work
+that had already started.
 
 ## Cancellation, recovery, and publication
 

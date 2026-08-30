@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 19.
 - Decision record: [`0011`](../decisions/0011-mandate-gateway-rlm-bridge.md).
-- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (bridge detail).
-- Reconciliation topics: `BRG-001..014`.
+- Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (bridge detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (per-call cancellation direction).
+- Reconciliation topics: `BRG-001..015`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -174,7 +174,10 @@ Known validation, denial, protocol, tool, or remote failures remain known when
 terminal effect proof exists.
 
 Channel close, slow-peer resync, and grant expiry do not cancel a run. Run
-cancellation remains owner-controlled; the bridge only propagates it. A valid
+cancellation remains owner-controlled; the bridge only propagates it. The first
+bridge contract adds no per-`ToolCallId` cancellation command: run cancellation
+uses the existing `StopRunCommandDto` and `Running -> Cancelling -> Cancelled`
+lifecycle. A valid
 durable cancellation/result race is decided by the first committing mutation;
 the loser rereads and cannot overwrite. Cancellation blocks later admissions and
 model steps. Late fragments/results after cancellation, terminalization, grant

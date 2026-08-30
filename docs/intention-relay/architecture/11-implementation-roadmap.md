@@ -392,7 +392,14 @@ authoritative package review of 2026-08-30 confirmed that the
 [`m4plus_concept2.md`](../m4plus_concept2.md) research directions are otherwise
 covered by architectures 13-24 and decisions 0001-0019; M5+ closes the
 identified configuration/provider control-plane gap and hosts every
-retrospective code change.
+retrospective code change. The fifth review wave of 2026-08-30 additionally
+closed the remaining unmapped detail: the continual-harness closed safe
+failures and selection record ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md)),
+the autonomous continuation direction
+([ADR 0031](../decisions/0031-autonomous-continuation-direction.md)), and the
+accepted deferred directions of tree-level activity metadata, semantic content
+inspection, and per-call cancellation
+([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
 
 ### Deliver
 
@@ -407,6 +414,15 @@ retrospective code change.
   ceiling;
 - provider profile UI and configuration control plane over the shared typed
   client;
+- the continual-harness closed safe failures and `ContinualHarnessSelectionV1`
+  selection-record content
+  ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md));
+- the autonomous continuation direction: Continue autonomously creates or
+  activates a Build-mode Mandate by default
+  ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md));
+- the accepted deferred directions: tree-level activity metadata, semantic
+  content inspection, and owner-specific per-call cancellation
+  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
 - consolidation of any retrospective changes to M0-M5 code required by these
   directions, each in its own activating specification.
 
@@ -1004,12 +1020,12 @@ feature profile, quality-policy target, or implementation milestone.
 
 ### Exit criteria
 
-- CHR-001..008 have one owner and compatibility/failure rule;
+- CHR-001..010 have one owner and compatibility/failure rule;
 - M3/M4 queue tickets, sessions, runs, events, snapshots, replay, and recovery
   remain explicitly unchanged; no harness rule becomes a queue ticket or
   Mandate reason;
 - harness bounds never become Mandate admission quotas or child-graph limits;
-  and
+  the 15 `harness_*` safe failures are known typed pre-effect rejections; and
 - activation remains excluded pending a later M5+ specification.
 
 ## Post-M5 programmatic-caller policy package
@@ -1250,4 +1266,86 @@ profile, quality-policy target, or implementation milestone.
   versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
 - M3/M4 session/run subscriptions and replay remain unchanged; the adopted
   numeric values are intrinsic/capacity bounds, never Mandate quotas; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 continual-harness closed safe failures and selection-record detail package
+
+**Documentation-only package extending architectures 26 and 28.** It records
+the 15 closed `harness_*` safe failures and the `ContinualHarnessSelectionV1`
+nested-record content, adopted by
+[decision 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- the 15 closed `harness_*` safe failures (`harness_rule_limit_exceeded`,
+  `harness_source_limit_exceeded`, `harness_concurrency_limit_exceeded`,
+  `harness_interval_too_short`, `harness_schedule_invalid`,
+  `harness_trigger_cycle`, `harness_dossier_too_large`,
+  `harness_source_unavailable`, `harness_checkpoint_too_large`,
+  `harness_checkpoint_unavailable`, `harness_result_too_large`,
+  `harness_not_active`, `harness_archived`, `harness_revision_conflict`,
+  `harness_cause_chain_limit_exceeded`) and their disclosure rule;
+- the `ContinualHarnessSelectionV1` nested-record content (harness identity,
+  active rule revision, durable trigger reason, class resolution, dossier
+  digest, checkpoint reference, time-zone application, immutable bounds).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the failures are known typed pre-effect rejections, never Mandate quotas;
+  historical M4 and non-harness runs acquire no synthetic harness record; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 autonomous continuation direction package
+
+**Documentation-only package extending architecture 13.** It records the
+"Continue autonomously" direction: it creates or activates a Build-mode Mandate
+by default, adopted by
+[decision 0031](../decisions/0031-autonomous-continuation-direction.md). It
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- Continue autonomously creates or activates a Build-mode Mandate by default;
+- Build mode is the default for Continue autonomously, while Plan mode remains
+  meaningfully distinct;
+- known terminal disposition returns a Mandate to `Active` with fresh-run-only
+  continuation and no hidden retry or escalation threshold.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the direction is additive to ADR 0017/0018 and never resumes old work;
+  M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 accepted deferred directions package
+
+**Documentation-only package extending architectures 24, 22, and 19.** It
+records three deliberately deferred concept items as accepted future
+directions, adopted by
+[decision 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- tree-level activity metadata (bounded, credential-free, never authority or a
+  second sequence);
+- semantic content inspection of reasoning or provider content (never
+  substituting for central redaction, never rewriting stored facts);
+- per-call cancellation and owner-specific semantics beyond direct-pair (the
+  first-scope `StopRunCommandDto`/direct-pair boundary remains authoritative).
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the directions are non-authorizing and never expose raw content or partially
+  cancel work; M3/M4 bytes remain unchanged; and
 - activation remains excluded pending a later M5+ specification.

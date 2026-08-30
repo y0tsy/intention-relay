@@ -32,6 +32,11 @@ not sufficient evidence.
 | EXC-023 | Goal aggregate domain (identity, lifecycle, gates, memory, proposals, compaction) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0023; Goals remain acceptance/evidence records | [Architecture 28](../architecture/28-goal-domain-and-verification.md), M5+ activating specification |
 | EXC-024 | Provider session selection and profiles protocol (defaults, overrides, queues, usage, protocol, held-run admission) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0024; startup-only configuration remains authoritative | [Architecture 29](../architecture/29-provider-session-and-profiles-protocol.md), M5+ activating specification |
 | EXC-025 | Activity/notification detail (DTO families, record kinds, bounds, urgent dedup, archive terminality, safe failures) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0029; numeric values are intrinsic/capacity bounds, never Mandate quotas | [Architecture 24](../architecture/24-activity-ui-and-adapters.md), M5+ activating specification |
+| EXC-026 | Continual-harness closed safe failures and `ContinualHarnessSelectionV1` selection-record content | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0030; failures are known typed pre-effect rejections, never Mandate quotas | [Architecture 26](../architecture/26-continual-harness.md), [Architecture 28](../architecture/28-goal-domain-and-verification.md), M5+ activating specification |
+| EXC-027 | Continue autonomously creates or activates a Build-mode Mandate by default | Adopt for M5+ (future direction) | future Mandate | Adopted as accepted post-M5 direction under ADR 0031; fresh-run-only continuation, additive to ADR 0017/0018 | [Architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md), M5+ activating specification |
+| EXC-028 | Tree-level metadata on activity trees | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0032; bounded, credential-free, never authority or a second sequence | [Architecture 24](../architecture/24-activity-ui-and-adapters.md), M5+ activating specification |
+| EXC-029 | Semantic content inspection of reasoning or provider content | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0032; never substitutes for central redaction, never rewrites stored facts | [Architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md), M5+ activating specification |
+| EXC-030 | Per-call cancellation and owner-specific semantics beyond direct-pair communication | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0032; first-scope `StopRunCommandDto`/direct-pair boundary remains authoritative | [Architecture 19](../architecture/19-mandate-gateway-rlm-bridge.md), [Architecture 24](../architecture/24-activity-ui-and-adapters.md), M5+ activating specification |
 
 All rows remain non-authorizing until a new approved decision updates this
 register and the relevant owner architecture, roadmap, policy, and evidence.
@@ -41,5 +46,8 @@ EXC-021 by [ADR 0021](../decisions/0021-continual-harness-directions.md),
 EXC-022 by [ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md),
 EXC-023 by [ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md),
 EXC-024 by [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md),
-and EXC-025 by [ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md);
+EXC-025 by [ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md),
+EXC-026 by [ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md),
+EXC-027 by [ADR 0031](../decisions/0031-autonomous-continuation-direction.md),
+and EXC-028..030 by [ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md);
 all remain non-authorizing until a later M5+ activating specification.

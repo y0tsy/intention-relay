@@ -28,7 +28,21 @@ from [`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by
 - archive terminality precondition;
 - the 32-tree/64-KiB notification page bound; and
 - the 18 closed `agent_activity_*`/`agent_message_*`/`agent_notification_*`/
-  `user_notifications_*` safe failures.
+  `user_notifications_*` safe failures;
+- the child-operations, delivery, and model-exchange detail: the full
+  `RlmMessageExchangeDto` field family (activity tree, recipient session/run,
+  target model step, captured activity-journal sequence, ordered messages) and
+  the provider-translation constraints (distinct from text-only
+  `ModelMessageDto` and `ModelToolExchangeDto`; no flattening into ordinary
+  history, no inferred current message, no reordering, no remote
+  continuation; daemon supplies all undelivered messages in increasing
+  `AgentActivityJournalSequenceDto` order with `AgentPairOrderDto` proof), the
+  `RlmChildMessageOperation` binding (direct parent link, child `ModelStepId`,
+  daemon-assigned `RlmMessageId`, message kind, pair order, canonical payload
+  digest; not a `ToolId`/`ToolCallId`/registry call/bridge operation/MCP
+  command; cannot create, cancel, configure, or delegate to a child), and the
+  terminal-or-cancelled-recipient delivery rejection with the original message
+  and reason retained in the activity journal.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after
 a later activating specification, and is bound to Milestone 5+ in the roadmap.
@@ -64,6 +78,19 @@ no feature is documented as implemented without code evidence.
    (tree, cancellation reason); archive requires root and descendants terminal.
 7. On restart nothing is retried or resumed; a later attempt is separately
    admitted with new identities.
+8. `RlmMessageExchangeDto` is distinct from `ModelMessageDto` and
+   `ModelToolExchangeDto`; a provider descriptor owns the private compatible
+   translation but cannot flatten an RLM message into ordinary history, infer a
+   current message, reorder it, or introduce a remote continuation; the daemon
+   supplies all undelivered messages in increasing journal order.
+9. `RlmChildMessageOperation` is bound to the direct parent link, child
+   `ModelStepId`, daemon-assigned `RlmMessageId`, message kind, pair order, and
+   canonical payload digest; it is not a `ToolId`, `ToolCallId`, registry
+   invocation, bridge operation, MCP command, or independent authority, and it
+   cannot create, cancel, configure, or delegate to a child.
+10. A terminal or cancelled recipient rejects an undelivered ordinary message
+    with a typed durable delivery outcome; the original message and its reason
+    remain in the activity journal.
 
 ## Failure semantics
 

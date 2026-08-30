@@ -47,3 +47,6 @@ provenance.
 | [0027](0027-child-kernel-bridge-mcp-detail-directions.md) | Accepted | Post-M5 child, kernel, bridge, and MCP detail directions |
 | [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
 | [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |
+| [0030](0030-continual-harness-safe-failures-and-selection-record-detail.md) | Accepted | Post-M5 continual-harness closed safe failures and selection-record detail |
+| [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
+| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation |

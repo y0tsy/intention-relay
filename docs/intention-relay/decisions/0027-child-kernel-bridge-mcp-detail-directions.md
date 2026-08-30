@@ -22,17 +22,38 @@ respective authoritative packages:
   reserve), tree bounds (16/3/0/2/64/16/360 minutes),
   `SubAgentClassDto` Light/Medium/Heavy (64/256/1,024), delegation snapshot
   bounds (512 KiB each, 4 MiB per tree), the 60-minute clarification sublimit,
-  child kernel seeding, and the 17 closed `sub_agent_*`/
-  `model_stream_progress_timeout` safe failures.
+  child kernel seeding, the 17 closed `sub_agent_*`/
+  `model_stream_progress_timeout` safe failures, the child-creation and
+  delegation fields `child_provider_capability_selection`,
+  `child_activity_graph_id`, and `required_evidence_contract_references`, and
+  the child-graph prose clauses (terminal or interrupted recipient rejects
+  delivery; composition-root-only activation of `sub_agent`; handle content
+  exclusion; a message committed before a child's terminal decision is included
+  only in its next fresh model request while one to a terminal child is
+  rejected; a stale handle cannot revive a terminal child and a child cannot
+  autonomously request another parent authority context; the durable admission
+  transaction validates the parent authority context, applicable policy,
+  selected descriptor, selected class, tree counters, and delegation snapshot;
+  no class bypasses the one-daemon authority, WorkspaceRoot, Plan/Build mode,
+  hooks, confirmation, redaction, or a stricter current admission decision and
+  no class falls back to a current default when unavailable; a child never
+  outlives its parent; after restart neither a reply nor a follow-up can resume
+  the interrupted child and the selected automatic continuation is permitted
+  only while the same daemon process still owns the same active child run and
+  the matching reply arrives before its deadline);
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family,
   60-minute idle / 16 live kernels / 10-minute cell bounds,
-  `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed kinds, and the 6
-  closed `kernel_*` safe failures.
+  `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed kinds, the 6
+  closed `kernel_*` safe failures, and the explicit negatives that
+  `StopRunCommandDto` remains the only first-scope run cancellation command and
+  that the daemon does not wait for the cell to acknowledge an interrupt;
 - **Architecture 19 (bridge)**: `BridgeRunGrantDto`,
   `BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`,
   `BridgeInvocationAcceptedDto`, 16 unfinished operations, the 1-MiB frame /
-  64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds, and the 6
-  closed `bridge_*`/`daemon_tool_gateway_required` safe failures.
+  64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds, the 6
+  closed `bridge_*`/`daemon_tool_gateway_required` safe failures, and the
+  explicit negative that the first bridge contract adds no per-`ToolCallId`
+  cancellation command;
 - **Architecture 18 (MCP)**: the bounded `McpMethodDto` gateway, connection
   scope and local-stdio process lifecycle, and the 6 closed `mcp_*` safe
   failures.

@@ -95,7 +95,10 @@ messages and only eligible final nonblank assistant messages. It excludes
 reasoning text/summaries, attempts, usage, tool calls/results, questions,
 permissions, child results, raw provider data, and opaque continuation state.
 Unsupported or oversized material rejects rather than truncates, omits, or uses
-current state.
+current state. A later implementation follows the selected
+`fork-model-context-v1` rule: it uses the stored compatible schema unchanged,
+defines a separately versioned compatible projection, or blocks the dependent
+operation (adopted by [ADR 0026](../decisions/0026-session-branching-detail-directions.md)).
 
 ## Base snapshot, reasoning references, and workspace state
 

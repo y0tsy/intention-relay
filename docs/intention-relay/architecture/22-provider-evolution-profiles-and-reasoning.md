@@ -6,8 +6,8 @@
 
 - Normative owner: architecture 22.
 - Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
-- Detail decision: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail).
-- Reconciliation topics: `PRV-001..012, RSN-001..006`.
+- Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction).
+- Reconciliation topics: `PRV-001..012, RSN-001..015`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -288,8 +288,34 @@ Accepted fragments commit individually; equal text is not deduplicated and
 adjacent fragments are not merged. Summaries are distinct from reasoning, never
 raw chain-of-thought, and never automatic model context. Malformed,
 duplicate-where-forbidden, out-of-order, unknown, or post-terminal values fail
-safely without raw native publication. Reasoning representation bounds reject
-without truncation or partial fact commit and are never Mandate quotas.
+safely with the closed `provider_reasoning_stream_invalid` failure and without
+raw native publication. Reasoning representation bounds reject without
+truncation or partial fact commit and are never Mandate quotas.
+
+The future provider/model, domain, and durable representations are closed and
+corresponding: `ModelEventDto::ReasoningDelta { category, content }` and
+`ModelEventDto::ReasoningSummaryDelta { content }` normalize provider input;
+`ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }` and
+`ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it;
+and the domain taxonomy has matching `ReasoningDeltaRecorded` and
+`ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a
+separate closed durable fact, never a provider stream event. A supported legacy
+M4 `ReasoningDeltaRecorded { content }` decodes as historical `Primary`
+reasoning evidence without rewriting its stored bytes; it has no synthetic
+summary, category field, or history manifest.
+
+The existing 512 KiB canonical individual-fact bound remains in force. The
+combined canonical reasoning fragments and summaries of one run have a fixed
+4 MiB bound. A fragment that would exceed the individual bound fails with the
+existing fact-size failure; a fragment that would exceed the combined bound
+fails with `reasoning_output_limit_exceeded`. Neither case truncates or
+partially writes the fragment. This contract does not add content inspection,
+secret substitution, or a new reasoning redaction algorithm; existing central
+redaction and credential, provider-payload, SDK-resource, and diagnostic
+exclusion rules remain in force. Semantic content inspection of reasoning or
+provider content is an accepted future direction under
+[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md);
+it is not activated here and never substitutes for central redaction.
 
 `responses` is local-history-first. Every request uses `store: false`; Conversations,
 `previous_response_id`, remote continuation, encrypted/opaque reasoning,
@@ -303,6 +329,48 @@ Future provider/reasoning delivery is separately negotiated and history-before-
 live. It exposes only safe typed projections, never raw canonical bytes, native
 payloads, remote IDs, credentials, or private resources. Unnegotiated peers fail
 closed for future facts; M3/M4 replay remains unchanged.
+
+## Reasoning capability slice and bounded `responses` v1
+
+The initial versioned capability slice selects text streaming, textual
+reasoning output, the closed supported sets of `reasoning_effort` and
+`reasoning.mode`, reasoning-summary support, and custom function-call
+admission. A kind descriptor declares the maximum protocol capability envelope;
+each profile explicitly declares a safe subset for its exact configured model,
+including reasoning availability, supported effort and mode values, summary
+availability, and custom-function-call availability. Model identifiers remain
+byte-exact and are never used to infer capabilities. Preflight rejects a
+requested capability or value that is absent from either level before any
+outbound work occurs.
+
+The resolved reasoning policy includes the closed fragment-category and
+summary support, the `ReasoningHistoryTransferDto` mode, and `compatibility_id`
+when transfer is enabled. It also records the fixed 4 MiB output/history limits
+and the optional reasoning-usage interpretation. A selection that cannot
+represent the descriptor's declared history transfer fails preflight before
+provider work; it never falls back to a different transfer policy.
+
+`responses` v1 is local-history-first. Every request sets `store: false`; the
+daemon continues to construct model context from Intention Relay durable
+history and does not use OpenAI Conversations or `previous_response_id`. It
+must neither request nor persist, publish, replay, or depend on encrypted
+reasoning, opaque response output items, remote conversation identifiers, or
+provider-managed history state. The provider-neutral contract adds closed
+`ReasoningEffortDto` values (`none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`) and a Responses-specific closed reasoning-mode projection
+(`standard` or `pro`). A profile may select only values declared in its model
+subset; an unsupported effort or mode fails preflight. The resolved execution
+policy records those values as immutable safe provenance.
+
+For a `responses` profile whose model subset declares summary support, the
+default request asks for an automatic provider reasoning summary. A returned
+summary becomes a distinct tail-only `ReasoningSummaryDelta` and corresponding
+durable fact. It is not a `ReasoningDelta`, is never raw chain-of-thought, and
+does not enter model context or a run snapshot. It follows the normalized
+reasoning cursor order, the 4 MiB per-run reasoning bound, the existing tail
+replay and publication rules, and the selected initial-delivery contract. It
+enters a typed `TextualHistoryV1` transfer together with the selected response's
+textual reasoning fragments.
 
 ## Typed cross-turn reasoning history
 
@@ -538,6 +606,12 @@ structured output, arbitrary headers, plugin drivers, remote continuation,
 provider-side parser administration, while architecture 23 owns forks and lineage,
 architecture 29 owns session defaults/overrides and the profiles protocol,
 UI, Cargo, Makefile/CI, or production activation.
+
+Semantic content inspection of reasoning or provider content is an accepted
+post-M5 future direction under
+[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
+bound to Milestone 5+; it is not activated here, never substitutes for central
+redaction, and never rewrites stored facts.
 
 The profile picker/editor, credential rotation, health test, discovery,
 pricing, telemetry, and live reload items are accepted post-M5 directions

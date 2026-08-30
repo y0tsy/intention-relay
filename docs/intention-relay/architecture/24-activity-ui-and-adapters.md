@@ -15,8 +15,8 @@ classifies them as intrinsic bounds, capacity availability, or ordinary policy.
 
 - Normative owner: architecture 24.
 - Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
-- Detail decision: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail).
-- Reconciliation topics: `ACT-001..010`.
+- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction).
+- Reconciliation topics: `ACT-001..018`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -235,6 +235,69 @@ truncates, evicts, synthesizes, or starts external work. Archive is accepted onl
 after the root and every descendant are terminal; it is read-only, retains
 everything, and physical deletion, compaction, export, and garbage collection
 remain out of scope.
+
+## Child operations, delivery, and model exchanges
+
+The daemon-internal RLM child operation is closed and bound to the child's
+immutable `RlmParentLinkDto`, current `ModelStepId`, daemon-assigned
+`RlmMessageId`, message kind, pair order, and canonical payload digest:
+
+```text
+RlmChildMessageOperation
+  Report
+  ClarificationRequest
+```
+
+It is not a `ToolId`, `ToolCallId`, model-tool registry call, bridge operation,
+or MCP command, and it cannot create, cancel, configure, or delegate to a child.
+Equal replay returns the one accepted message; a changed operation identity
+fails as a known pre-effect conflict. Messages reach a recipient only before
+that recipient's next fresh model request. They never alter an already sent
+provider request, interrupt a running model step, create a root run, or itself
+schedule a parent step. The daemon records model delivery in the same
+pre-provider durable boundary that records the recipient's next model step. A
+terminal or cancelled recipient rejects an undelivered ordinary message with a
+typed durable delivery outcome; the original message and its reason remain in
+the activity journal.
+
+The distinct typed model input is:
+
+```text
+RlmMessageExchangeDto
+  activity_tree_id
+  recipient_session_id
+  recipient_run_id
+  target_model_step_id
+  captured_activity_journal_sequence
+  ordered_messages
+```
+
+It remains distinct from text-only `ModelMessageDto` and from
+`ModelToolExchangeDto`. A provider descriptor owns the private compatible
+translation, but it cannot flatten an RLM message into an ordinary user or
+assistant history item, infer a current message, reorder it, or introduce a
+remote continuation. The daemon supplies all undelivered messages for the
+recipient in increasing `AgentActivityJournalSequenceDto` order. That order is
+the same durable order visible in the journal; an inner `AgentPairOrderDto`
+proves the order of every individual pair. No alternative sorting by child,
+class, task, timing estimate, or current projection is allowed.
+
+A daemon-created agent status, child creation, admission, tool/MCP action,
+output fragment, policy detail, or other service milestone never becomes a
+parent model message merely because it is visible in the activity journal. A
+terminal child conclusion is recorded as one mandatory direct-pair
+terminal-result availability reference and is included once in the next eligible
+parent exchange. It does not require `AwaitResult`, does not start a parent
+step, and does not delay parent terminalization. If a parent is already
+cancelling or terminal when no eligible step remains, the terminal reference
+remains readable through the direct-child result/status evidence and activity
+journal without inventing a model delivery.
+
+Tree-level metadata is an accepted post-M5 future direction under
+[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md):
+a future bounded, credential-free metadata surface on activity trees, distinct
+from journal records and notification state, that never becomes activity,
+authority, or a second sequence. It is not activated here.
 
 ## Notifications and acknowledgement
 

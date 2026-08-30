@@ -33,7 +33,29 @@ The following detail from
   candidate, 32 issues, 30-minute removal, 8 promotions, 32 reconciliation),
   tombstones, and the closed audit taxonomy; and
 - the legacy M4 selection bridge (`LegacyM4SelectionBindingDto`,
-  `historical_selection_corrupt`).
+  `historical_selection_corrupt`);
+- the normalized-reasoning-stream detail: the closed provider/model/domain/
+  durable correspondence (`ModelEventDto::ReasoningDelta { category, content }`,
+  `ModelEventDto::ReasoningSummaryDelta { content }`,
+  `ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }`,
+  `ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }`, and the
+  domain `ReasoningDeltaRecorded`/`ReasoningSummaryDeltaRecorded` variants),
+  the closed `provider_reasoning_stream_invalid` failure, the fixed 4-MiB
+  combined per-run reasoning-output bound with
+  `reasoning_output_limit_exceeded`, and the historical M4
+  `ReasoningDeltaRecorded { content }` decoding as historical `Primary`
+  reasoning evidence without rewriting its stored bytes;
+- the initial capability-slice detail: the closed supported sets of
+  `reasoning_effort` and `reasoning.mode`, and the resolved-reasoning-policy
+  contents (closed fragment-category and summary support, the
+  `ReasoningHistoryTransferDto` mode, `compatibility_id` when transfer is
+  enabled, the fixed 4-MiB output/history limits, and the optional
+  reasoning-usage interpretation);
+- the bounded `responses` v1 detail: the closed `ReasoningEffortDto` values
+  (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and the
+  Responses-specific closed reasoning-mode projection (`standard` or `pro`),
+  and the automatic-provider-reasoning-summary default request for a
+  summary-supporting `responses` profile.
 
 The session-selection layer (session defaults/overrides, `provider_profiles_v1`,
 promotion/reconciliation, held recovered-run admission) is owned by
@@ -73,6 +95,18 @@ evidence.
    permanent; a tombstoned ID cannot be reintroduced.
 7. The legacy M4 bridge is additive: original IDs, snapshot JSON, and UUIDs are
    never replaced; a missing/corrupt binding is `historical_selection_corrupt`.
+8. The normalized reasoning stream has one shared `RunEventCursorDto`; a
+   malformed, duplicate-where-forbidden, out-of-order, or post-terminal value
+   fails closed with `provider_reasoning_stream_invalid`, and the combined
+   reasoning fragments and summaries of one run are bounded at 4 MiB with
+   `reasoning_output_limit_exceeded`.
+9. `ReasoningEffortDto` and the `standard`/`pro` mode are closed; a profile may
+   select only values declared in its model subset, and an unsupported effort
+   or mode fails preflight before outbound work.
+10. For a summary-supporting `responses` profile, the default request asks for
+    an automatic provider reasoning summary; a returned summary becomes a
+    distinct tail-only `ReasoningSummaryDelta`, never raw chain-of-thought and
+    never model context.
 
 ## Failure semantics
 

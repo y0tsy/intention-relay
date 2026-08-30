@@ -143,6 +143,22 @@ contiguous live batch or status snapshot. A publisher failure never rolls back
 the already committed durable state. M3's session publisher remains a no-op; a
 later one-shot session replay reads committed durable state.
 
+### Common durable-fact rules
+
+The following cross-direction rules govern future fact families and their
+sequences (adopted by [ADR 0019](../decisions/0019-production-model-tool-loop.md)):
+
+- a new fact type does not create a new sequence merely for convenience; a
+  separate sequence is permitted only for an independent aggregate with
+  dedicated bounded queries and without replacing or filtering the ordinary
+  session event sequence;
+- a filesystem-dependent validation or hook must finish before the transition
+  transaction, and any stale result becomes a typed known pre-effect outcome
+  rather than an unrecorded second external check inside the transaction; and
+- catalog and lineage audit records are read through their own bounded queries
+  and do not enter the run publication gate merely because they are related to
+  the same user operation.
+
 Daemon-host outcome fixtures make the `Starting`/`Cancelling` first-append race
 deterministic and prove task-owned cancellation leaves cursor zero with neither
 provider execution nor model facts. They also prove a terminal promotion is

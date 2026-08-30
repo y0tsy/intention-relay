@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 13.
 - Decision record: [`0006`](../decisions/0006-mandate-lifecycle-and-admission-boundary.md).
-- Reconciliation topics: `MAN-001..006`.
+- Detail decisions: [`0001`](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md) (Mandate DTO family and limit classification), [`0002`](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) (shared attempt-evidence family), [`0031`](../decisions/0031-autonomous-continuation-direction.md) (autonomous continuation).
+- Reconciliation topics: `MAN-001..012`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -53,6 +54,62 @@ the authoritative optimistic-concurrency and event order for Mandate facts. It
 is distinct from `SessionEventSequenceDto`, `RunEventCursorDto`, and M3 queue
 tickets. Run/model facts retain their existing run cursor and link to Mandates
 only through typed identities.
+
+### Mandate DTO family
+
+The conceptual durable family is adopted as future detail:
+
+```text
+MandateDto
+  mandate_id
+  active_revision
+  lifecycle_state
+  service_session_id
+  work_state_references
+  verified_checkpoint_references
+  child_work_graph_reference
+  activity_identity
+
+MandateRevisionDto
+  mandate_id
+  revision
+  objective
+  scope
+  mode
+  trigger_configuration
+  goal_context_references
+  continuation_configuration
+  stop_conditions
+  canonical_revision_digest
+
+MandateTriggerReasonDto
+  reason_id
+  source_kind
+  first_observed_at
+  last_observed_at
+  coalesced_count
+  typed_references
+  triggering_revision
+
+MandateRunDispositionDto
+  run_id
+  terminal_kind
+  next_action = Continue | AwaitUserDecision | None
+  checkpoint_reference_when_verified
+  external_effect_reference_when_unknown
+```
+
+All records are credential-free, typed, immutable at their selected revision,
+and represented through the repository's later canonical record/version policy.
+They contain no raw prompt transcript, provider resource, live kernel
+namespace, process handle, MCP connection, bridge grant, credential, or
+unfinished external operation. A new revision changes only future fresh-run
+admission; it never rewrites historical evidence, alters the meaning of an
+admitted run, or attaches a new reason to old work. `stop_conditions` records
+the user-selected conditions under which a continuation stops; it is
+credential-free and non-authorizing. `MandateRunDispositionDto.next_action`
+records the disposition's continuation intent (`Continue`,
+`AwaitUserDecision`, or `None`); it never directly schedules a run.
 
 A Mandate revision is immutable. Revision during Mandate `Working` affects only
 later fresh admission; it never changes the admitted run, selected trigger,
@@ -153,6 +210,27 @@ Eligible selection is total: explicit user start/continuation reasons first,
 then ascending `first_observed_at`, `MandateId`, and `ReasonId`. This ordering
 is deterministic but does not reserve capacity or guarantee execution.
 
+### Autonomous continuation
+
+**Continue autonomously** creates or activates a **Build-mode Mandate** by
+default (adopted as an accepted future direction by
+[ADR 0031](../decisions/0031-autonomous-continuation-direction.md)). After a
+known terminal run disposition, the daemon records its terminal evidence and,
+when continuation remains enabled, returns the Mandate to `Active`; a pending
+coalesced continuation reason then admits a completely fresh run. There is no
+hidden retry count, automatic escalation threshold, or conversion of a known
+failure into an unknown effect. A known non-zero `execute` exit, typed
+validation failure, provider failure with durable terminal evidence, or known
+MCP result is a known outcome and may lead to the next fresh run. The user
+decides when a known failure means pause, stop, completion, revision, or
+needs-rework, except where an explicit delegated verifier has the corresponding
+operation. Build mode is the default for **Continue autonomously**; Plan mode
+remains meaningfully distinct (it denies ordinary project `write`/`edit`, and
+plan mutation remains its own typed plan operation). Neither mode is a sandbox
+or a claim to constrain programs running with the user's ordinary OS authority.
+The direction does not amend the ordinary Build Autopilot direction of ADR
+0017/0018.
+
 Architecture 16 owns readiness observations, candidate reevaluation, and
 cross-Mandate scheduler coordination. This document retains reason validity,
 captured revision, total ordering key, lifecycle eligibility, conflict
@@ -216,12 +294,40 @@ resumes or admits the old run in that terminal transaction.
 
 ## Capacity and limits
 
+```text
+MandateLimitClassDto
+  ProductCeiling
+  IntrinsicBound
+  CapacityAvailability
+
+MandateCapacityOutcomeDto
+  outcome = Available | Unavailable
+  resource_kind
+  reason
+  retry_disposition
+  trigger_reason_reference
+  observed_at
+```
+
+`ProductCeiling` is a product counter, reservation, or quota and is forbidden
+for new Mandate admission. `IntrinsicBound` is a correctness boundary of the
+canonical representation, identifier, schema, ordering, framing, or atomic
+commit; it remains mandatory and rejects without truncation.
+`CapacityAvailability` is temporary finite runtime, storage, provider,
+registry, process, kernel, or scheduler availability; it never becomes a quota
+or a successful result.
+
 An intrinsic bound rejects invalid representation, schema, identifier, ordering,
 framing, or atomic-commit input without truncation. Actual finite storage,
 provider, registry, process, kernel, or scheduler availability produces a typed
 capacity-unavailable outcome. It preserves pending reason and history, creates
 no retry counter or reservation, and may later make the same reason eligible
-for fresh admission.
+for fresh admission. An `Unavailable` outcome atomically preserves already
+committed history, the applicable pending trigger, and its projections without
+dropping, truncating, or inventing work. A later durable readiness/capacity
+observation or explicit user lifecycle action may make that trigger eligible
+for a fresh run only. Historical fixed limits and quota records remain readable
+compatibility data and cannot synthesize a Mandate restriction.
 
 No product quota, count, calendar cap, lifetime cap, output cap, concurrency
 reservation, or escalation threshold is introduced for Mandate admission here.
@@ -231,11 +337,39 @@ admission or WorkspaceRoot policy.
 
 ## External attempts, recovery, and reconciliation
 
+The closed shared attempt-evidence family is adopted as future detail:
+
+```text
+ExternalAttemptPhaseDto
+  AdmittedBeforeStart
+  Started
+  KnownTerminal
+  UnknownTerminal
+
+ExternalAttemptEvidenceDto
+  attempt_owner_kind
+  attempt_reference
+  phase
+  durable_fact_references
+  safe_effect_digest
+```
+
 Future external attempt evidence uses the Foundation phases:
 `AdmittedBeforeStart`, `Started`, `KnownTerminal`, and `UnknownTerminal`.
 `UnknownTerminal` classifies attempt evidence; `ExternalEffectUnknown` is the
 resulting Mandate condition. A known validation failure, provider failure,
-known non-zero process exit, or known MCP result is not unknown.
+known non-zero process exit, or known MCP result is not unknown. Only
+daemon-owned execution and recovery logic classifies an attempt. Before start,
+a result is a known pre-effect outcome, including `InterruptedBeforeStart`;
+after start without durable terminal proof, loss, cancellation, or restart
+records `ExternalEffectUnknown`. Unknown evidence atomically prevents the next
+model step, automatic retry or continuation, rediscovery, reattachment, and
+old-work resume; for Mandate work it atomically moves `Working` to
+`PausedAwaitingDecision`. Recovery writes missing terminal outcomes and the run
+transition to `Interrupted` atomically and never opens another model step,
+repeats a tool, or reconstructs a remote continuation. The family is shared by
+`execute`, kernel/bridge, MCP discovery and invocation, provider-adjacent
+external work, and child work.
 
 Recovery completes before readiness. It preserves revisions, reasons, immutable
 selections, verified checkpoints, and durable evidence. It terminalizes old

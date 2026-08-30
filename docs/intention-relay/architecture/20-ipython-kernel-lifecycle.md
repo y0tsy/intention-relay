@@ -7,7 +7,7 @@
 - Normative owner: architecture 20.
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
 - Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
-- Reconciliation topics: `KER-001..018`.
+- Reconciliation topics: `KER-001..019`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -198,9 +198,14 @@ checkpoints.
 Cancellation terminates the attached epoch without claiming rollback. Before
 start it records known pre-effect cancellation/interruption. After start, known
 terminal proof remains known; absent proof is exact `ExternalEffectUnknown` under
-architecture 13. Late cell output, host responses, fragments, and results after
-cancellation, terminalization, epoch replacement, grant expiry, or restart are
-non-authoritative and cannot append facts or repair uncertainty.
+architecture 13. `StopRunCommandDto` remains the only first-scope run
+cancellation command: the daemon commits the existing
+`Running -> Cancelling -> Cancelled` lifecycle and then terminates the attached
+kernel rather than merely leaving a potentially modified namespace alive. It
+does not wait for the cell to acknowledge an interrupt. Late cell output, host
+responses, fragments, and results after cancellation, terminalization, epoch
+replacement, grant expiry, or restart are non-authoritative and cannot append facts
+or repair uncertainty.
 
 Recovery completes before kernel readiness, attachment, scheduling, or admission.
 It invalidates grants, refuses old-sidecar adoption, classifies unfinished kernel
