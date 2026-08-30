@@ -2,23 +2,27 @@
 
 ## Status and purpose
 
-M5 is recorded against the current uncommitted implementation baseline after
-`299d922` (`chore(m5): align trusted execute policy`); no immutable commit SHA is
-claimed for this dirty worktree. No immutable M4+ concept document is changed by this closeout. The
+M5 is closed at the immutable merged baseline `bf40567` (`feat(tools):
+production model-tool loop with daemon-host E2E`, PR #14, merged to `main` on
+2026-08-29). The baseline passed the full Linux/Windows `make ci` matrix (run
+33265408980, 9/9 jobs green), and the current `main` head `b930c14` remains
+green (run 33273389437, 9/9 jobs; local `make quick` 527/527 on 2026-08-30).
+No immutable M4+ concept document is changed by this closeout. The
 implementation activates six executable tools (`read`, `write`, `edit`,
-`execute`, `glob`, and `grep`), fail-closed `WorkspaceRoot` resolution, and
-typed deterministic hooks. Remaining fixed registry slots are reserved.
+`execute`, `glob`, and `grep`), fail-closed `WorkspaceRoot` resolution, typed
+deterministic hooks, and the daemon-owned production model-tool loop (ADR
+0019). Remaining fixed registry slots are reserved.
 
-This document records observed evidence from the implementation baseline; the
-current worktree is not clean, so the baseline identifies HEAD rather than a
-clean checkout.
+The evidence table below records the historical pre-merge worktree results
+(after `299d922`, 2026-08-26/27); the merged-baseline CI verification is
+recorded in the CI verification section.
 
 | Item | Value |
 | --- | --- |
-| Implementation baseline | Current uncommitted implementation baseline after `299d922`; no immutable SHA claimed before commit |
-| Current repository state | Worktree is dirty with the completed M5 implementation and parent-agent edits; results below describe the current tree only where commands were run against it. |
-| Full quality gate | `make quick` — pass; `make verify` — pass, executed against the current implementation worktree |
-| Full test result | Full `nextest` run: 501 tests passed, 0 failed, 0 skipped |
+| Implementation baseline | Closed at the immutable merged baseline `bf40567` (PR #14, merged to `main` 2026-08-29); current `main` head `b930c14`. Historical rows below describe the pre-merge worktree after `299d922`. |
+| Current repository state | Historical pre-merge rows describe the dirty worktree after `299d922`; the current `main` worktree is clean at `b930c14` (closeout recorded 2026-08-30). |
+| Full quality gate | Historical (2026-08-26/27, pre-merge worktree): `make quick` — pass; `make verify` — pass. Post-merge: local `make quick` — pass, 527/527 tests, executed 2026-08-30 at `b930c14`; full `make ci` matrix green via CI runs 33265408980 and 33273389437 (see CI verification) |
+| Full test result | Historical: 501 tests passed, 0 failed, 0 skipped. Post-merge: 527 tests passed, 0 failed, 0 skipped (local `make quick`, 2026-08-30 at `b930c14`) |
 | Focused verification | `cargo test -p intention-tools -p intention-workspace -p intention-hooks` — exit status `0`, executed 2026-08-26 in the current worktree |
 | Focused result | 32 tests passed, 0 failed, 0 ignored; all three package doctest suites passed |
 | Application/runtime integration verification | `cargo test -p intention-application --test m3_application --test m4_application_scheduling && cargo test -p intention-runtime --test m4_model_execution` — exit status `0`, executed 2026-08-27 in the current worktree |
@@ -30,11 +34,11 @@ clean checkout.
 | Diff hygiene | `git diff --check` — no errors, executed 2026-08-27 in the current dirty worktree |
 | Blocker repair verification | Executed 2026-08-27 in the repaired dirty worktree: `cargo test --locked -p intention-hooks --test hook_contracts -p intention-workspace --test workspace_contract -p intention-tools --test tool_contracts` — 11, 6, and 47 tests passed respectively, 0 failed; `cargo test --locked -p intention-application --test m3_application` — 33 passed, 0 failed; `cargo test --locked -p intention --lib` — 29 passed, 0 failed; `cargo check --workspace --all-targets --locked` — exit status `0` |
 | ToolResult persistence verification | Executed 2026-08-27 in the current dirty worktree: `cargo test --locked -p intention-domain --test m5_tool_results` — 4 passed, 0 failed; `cargo test --locked -p intention-storage-sqlite --test sqlite_contracts` — 19 passed, 0 failed (including `completed_result_evidence_is_durable_across_reopen_with_redacted_payload` and the typed-result-evidence reopen and not-found cases); `cargo test --locked -p intention-application --test m3_application` — 45 passed, 0 failed (including `every_terminal_outcome_persists_one_correlated_event_before_publication` and the publication/after-publish family). Exact required/observed persistence statements are recorded in the section below; no unrun gate is attributed to these runs. |
-| Unrun gates for this dirty baseline | No CI run is recorded against this tree (the only cited CI run is historical evidence for the merged head `bd3ab01`; see limitations); `lint`, `test`, `isolated-release`, `features`, `coverage`, `deps`, and `quality-self-test` from a fresh `make verify` were not rerun against this tree; only the focused test suites and Python checkers named above are evidenced for it |
+| Unrun gates for this dirty baseline | Historical: no CI run was recorded against the pre-merge tree at the time. The full gate set (`lint`, `test`, `features`, `coverage`, `deps`, `quality-self-test`) is now covered by the merged-baseline CI runs 33265408980 and 33273389437; see CI verification below |
 | Environment | Linux `7.1.8-200.fc44.x86_64`, `x86_64` GNU/Linux; repository reports stable Rust toolchain via `rust-toolchain.toml` |
 | Coverage scope and result | `default`, `no_default`, and `all` feature profiles; current report shows `intention-tools` at 90%+ actual coverage. Threshold evaluation passed with the configured profile scope. |
 | Coverage policy exception | None. All Tier B crates, including `intention-tools` and `intention-hooks`, use the standard 90% line threshold. |
-| CI matrix | Historical baseline evidence only: the Linux/Windows CI matrix (`ubuntu-24.04` and `windows-2025`, `make ci`) is green on both platforms for the cited merged head `bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3): `ubuntu-24.04 make ci` PASS 21m37s, `windows-2025 make ci` PASS 39m40s. That run covers the cited merged head, not the current implementation baseline after `299d922`; no CI run is recorded for the current tree (see the CI verification section below). |
+| CI matrix | Merged-baseline and current-head CI evidence is recorded in the CI verification section below; the historical `bd3ab01`/`e915e12` row (run 33186533012) is retained there as the pre-loop baseline evidence |
 | Immutable documents | `m4plus_concept2.md` and other immutable documents were not edited |
 
 ## Acceptance evidence
@@ -45,7 +49,7 @@ clean checkout.
 | WorkspaceRoot policy | `intention-workspace` unit and `workspace_contract` tests cover explicit-root resolution, CWD independence, missing paths, new-file parents, acceptance of proven-in-root symlinks, and fail-closed rejection of outward, unprovable, or dangling symlinks |
 | Execute CWD | Contract tests prove execute uses the declared workspace root rather than process CWD |
 | Typed hooks | `intention-hooks` unit and `hook_contracts` tests cover phase mapping, stable ordering, duplicate rejection, chained transforms, typed rejection, and short-circuit before tool execution |
-| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. The facade-level daemon-host E2E scenario exists on this branch as `crates/intention-daemon/tests/facade_e2e.rs` (tests `real_daemon_tool_loop_executes_read_and_replays_after_restart` and `real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure`): it spawns the real daemon binary over local IPC, drives the real client transport, executes a real `read` tool through the production model-tool loop against a fake OpenAI-compatible provider, proves durable `ToolResultRecorded` facts and daemon-restart replay without re-execution, and proves the missing-file path terminalizes as `Failed` without provider retry. Pending: no run result is recorded for these tests in the current open-PR state; per this document's observed-results policy, the facade row is marked pending until a CI/run result is recorded at merge. |
+| Tool event/lifecycle boundary | The focused tool contract suite covers typed metadata and observability DTO round trips; `m3_application.rs` proves publication runs only after the durable terminal commit and that publication/after-publish failures cannot undo it; `sqlite_contracts.rs` proves the committed terminal evidence is durable across a database reopen with redacted payloads. The facade-level daemon-host E2E scenario exists on this branch as `crates/intention-daemon/tests/facade_e2e.rs` (tests `real_daemon_tool_loop_executes_read_and_replays_after_restart` and `real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure`): it spawns the real daemon binary over local IPC, drives the real client transport, executes a real `read` tool through the production model-tool loop against a fake OpenAI-compatible provider, proves durable `ToolResultRecorded` facts and daemon-restart replay without re-execution, and proves the missing-file path terminalizes as `Failed` without provider retry. Recorded at the merged baseline: both facade tests ran green on `ubuntu-24.04` and `windows-2025` in run 33265408980 (PR #14) and again in the post-merge run 33273389437 at the current head `b930c14`; locally `make quick` 527/527 includes both facade tests (2026-08-30). |
 | Real application path | Application integration tests cover accepted user turns, queued-versus-started scheduling, idempotent retry, context identity failures, typed failure persistence, hook-controlled tool execution, and durable tool lifecycle events; runtime integration tests cover ordered model facts, UTF-8 chunking, retries/timeouts, cancellation races, provider failures, and commit observation. |
 
 ## Active M5 specification criteria matrix
@@ -107,14 +111,15 @@ cross-platform fixtures are future obligations. No M5 test is counted as
 satisfying them, and this closeout claims neither implementation nor execution
 of architecture-15 gates.
 
-## CI verification (2026-08-28): historical baseline evidence for the merged head
+## CI verification
 
-This section is historical baseline evidence for the cited merged head
-`bd3ab01` (run 33186533012, PR #3, merged to `main` as `e915e12`) only: the
-full quality matrix ran green on both supported platforms for that merged
-head. It was not rerun against the current implementation baseline after
-`299d922`; no CI run is recorded for the current tree, whose CI result is the
-current open-PR state and remains pending/recorded at merge.
+### Historical pre-loop baseline (2026-08-28)
+
+This subsection is historical baseline evidence for the cited merged head
+`bd3ab01` (run 33186533012, PR #3, merged to `main` as `e915e12`): the full
+quality matrix ran green on both supported platforms for that merged head. It
+predates the daemon-owned model-tool loop; the loop and facade E2E were merged
+later at `bf40567` and are verified in the merged-baseline subsection below.
 
 | Item | Ubuntu 24.04 | Windows 2025 |
 | --- | --- | --- |
@@ -139,19 +144,44 @@ split into four keys (registry+advisory-db, git, rustup, quality tools),
 dependency gates run in a bounded pool, and `make quick` runs one explicit
 default-profile test pass instead of duplicating the nextest gate.
 
+### Merged baseline `bf40567` and current head `b930c14` (2026-08-29/30)
+
+M5 closed at the merged baseline `bf40567` (PR #14). Its `main`-branch CI run
+33265408980 passed 9/9 jobs on both platforms, including the facade E2E suite
+on `windows-2025`:
+
+| Job group | Verdict |
+| --- | --- |
+| ubuntu-24.04 test, lint-arch, deps, selftest | PASS |
+| ubuntu-24.04 coverage-default, coverage-no-default, coverage-all | PASS |
+| windows-2025 test, lint-arch | PASS |
+
+Coverage (`ubuntu-24.04 coverage-default`, run 33265408980): workspace
+aggregate 93.293% (15078/16162); M5 Tier B crates `intention-tools` 90.54%,
+`intention-workspace` 95.11%, `intention-hooks` 96.82% — all thresholds met;
+no coverage failures across the matrix.
+
+The current `main` head `b930c14` remains green: run 33273389437 (2026-08-29)
+passed 9/9 jobs; coverage-default aggregate 93.328% (15108/16188), with
+`intention-tools` 90.78%, `intention-workspace` 95.11%, `intention-hooks`
+96.82%. The intermediate main head `68d32d2` (PR #16) failed one
+`windows-2025 test` job (run 33272462368) on a facade E2E synchronization
+race; `b930c14` (PR #17) restored the facade test file to the last
+known-green synchronization and the post-merge run is green. Local `make
+quick` at `b930c14`: 527/527 tests passed (2026-08-30).
+
 ## Known limitations and follow-up
 
-- Linux/Windows CI is green on both platforms for the merged head `bd3ab01`
-  (run 33186533012, merged to `main` as `e915e12` via PR #3); that is
-  historical baseline evidence for the cited merged head, not for the current
-  tree after `299d922`, and no CI run is recorded for the current open-PR
-  branch. Windows named-pipe and filesystem behavior is independently
-  evidenced by that run. Earlier rows above predate the CI runs and are
+- The historical pre-loop CI evidence (`bd3ab01`, run 33186533012, merged to
+  `main` as `e915e12` via PR #3) is retained for the pre-loop baseline;
+  merged-baseline and current-head CI evidence is recorded in the CI
+  verification section above. Windows named-pipe and filesystem behavior is
+  independently evidenced by the green `windows-2025` jobs in runs
+  33265408980 and 33273389437. Earlier rows above predate the CI runs and are
   retained as the historical focused evidence.
-- The current worktree contains parent-agent changes in production crates,
-  tests, this policy, and this evidence file; this closeout
-  does not stage, commit, or normalize them. The baseline above identifies the
-  current implementation state, not a claim that the worktree was clean.
+- The pre-merge rows above describe the dirty worktree after `299d922`; that
+  closeout did not stage, commit, or normalize the then-uncommitted
+  parent-agent edits. Post-merge, `main` is clean at `b930c14`.
 - Later Plan/Build artifact policy remains M7 scope. M5 evidence does not claim
   physical plans, Plan mode, Build Autopilot, or UI delivery.
 - Mandate-specific architecture-15 registry, loop, recovery, replay, and
@@ -160,14 +190,14 @@ default-profile test pass instead of duplicating the nextest gate.
 
 ## Closeout rule
 
-This is a documentation-only evidence record for the M5 implementation
-baseline now merged to `main` at `e915e12` (PR #3). `make quick`, `make
-verify`, the 501-test full nextest run, architecture/public-API/docs/self-test
-checks, ToolResult persistence/fault-injection/reopen evidence, adapter
-parity, trusted environment policy, and proven-in-root symlink policy are
-recorded as passing. The Linux/Windows CI matrix (`ubuntu-24.04` and
-`windows-2025` `make ci`) is green on both platforms for the merged head
-`bd3ab01` (run 33186533012, merged to `main` as `e915e12` via PR #3); that
-run is historical baseline evidence for the cited merged head, not for the
-current tree after `299d922`, whose CI result is the current open-PR state
-and remains pending/recorded at merge.
+M5 is closed at the immutable merged baseline `bf40567` (PR #14, merged to
+`main` on 2026-08-29). The full Linux/Windows `make ci` matrix is green at
+that baseline (run 33265408980, 9/9 jobs, both platforms) and at the current
+`main` head `b930c14` (run 33273389437, 9/9 jobs; local `make quick` 527/527
+on 2026-08-30). Historical evidence rows above (pre-merge worktree after
+`299d922`: `make quick`/`make verify` pass, the 501-test nextest run,
+architecture/public-API/docs/self-test checks, ToolResult
+persistence/fault-injection/reopen evidence, adapter parity, trusted
+environment policy, and proven-in-root symlink policy) are retained as
+recorded; the merged-baseline CI verification is the authoritative closure
+evidence.

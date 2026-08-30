@@ -337,10 +337,15 @@ persistent run-scoped replay and live delivery.
 
 ## Milestone 5: Typed tools, WorkspaceRoot, and hooks
 
-Current worktree evidence is recorded in [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
-The focused M5 package tests pass, but full `make verify` and the required
-Linux/Windows CI matrix remain unrecorded; M5 must not be treated as fully
-closed until those gates are run at an immutable implementation baseline.
+**Closed at the immutable merged baseline
+[`bf40567`](../closeout/m5-closure-evidence.md) (PR #14).** The baseline
+passed the required Linux and Windows `make ci` matrix (run 33265408980, 9/9
+jobs green), and the current `main` head `b930c14` remains green (run
+33273389437, 9/9 jobs; local `make quick` 527/527 on 2026-08-30). The
+[M5 Closure Evidence](../closeout/m5-closure-evidence.md) records the
+complete verification matrix, coverage, exceptions, and retained deferrals;
+the production model-tool loop decision is recorded in
+[ADR 0019](../decisions/0019-production-model-tool-loop.md).
 
 ### Deliver
 
