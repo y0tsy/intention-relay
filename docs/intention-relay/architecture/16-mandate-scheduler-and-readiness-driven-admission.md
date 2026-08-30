@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 16.
 - Decision record: [`0008`](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md).
-- Reconciliation topics: `SCH-001..012`.
+- Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (calendar/interval/time-zone/DST semantics).
+- Reconciliation topics: `SCH-001..013`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -21,6 +22,14 @@ It applies only to future `Mandate` execution. It preserves M3/M4 ordinary
 queues, run recovery, provider behavior, tool-call denial, replay, bytes, and
 meaning. Calendar/interval source syntax, time-zone/DST semantics, timer
 topology, and worker process topology remain later work.
+Calendar/interval/time-zone/DST semantics are an accepted post-M5 future
+direction under
+[ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+to be executed in Milestone 5+ as typed calendar/interval/time-zone/DST
+semantics for Mandate scheduler triggers, never a Mandate admission quota;
+harness schedule/time semantics remain owned by architecture 26. Worker
+topology is adopted under the same direction and owned by architecture 03.
+Neither is activated here.
 
 ## Ownership and non-authorities
 
@@ -245,6 +254,11 @@ semantics, MCP capability lifecycle, bridge/IPython,
 Skills/Goals/context, provider evolution, UI, distributed coordination, leases,
 reservations, quotas, schema, migrations, crates, Cargo, Makefile/CI, or
 production implementation.
+Calendar/interval/time-zone/DST semantics for Mandate scheduler triggers and
+worker/process supervision topology are accepted post-M5 future directions
+under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+owned by architecture 16 (calendar) and architecture 03 (worker topology), and
+activated only by a later M5+ specification.
 
 ## Required evidence before implementation
 

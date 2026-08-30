@@ -37,3 +37,19 @@ provenance.
 | [0017](0017-build-autopilot-and-plan-focus-continuity.md) | Accepted | Build Autopilot and Plan focus continuity |
 | [0018](0018-plan-build-autopilot-activation-scope.md) | Accepted | Plan/Build Autopilot activation scope |
 | [0019](0019-production-model-tool-loop.md) | Accepted | Production model-tool loop |
+| [0020](0020-configuration-provider-control-plane-directions.md) | Accepted | Post-M5 configuration and provider control-plane directions |
+| [0021](0021-continual-harness-directions.md) | Accepted | Post-M5 continual-harness directions |
+| [0022](0022-programmatic-caller-policy-directions.md) | Accepted | Post-M5 programmatic-caller policy directions |
+| [0023](0023-goal-domain-and-verification-directions.md) | Accepted | Post-M5 Goal domain and verification directions |
+| [0024](0024-provider-session-and-profiles-protocol-directions.md) | Accepted | Post-M5 provider session selection and profiles protocol directions |
+| [0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | Accepted | Post-M5 base-tool contracts and tool-loop bounds |
+| [0026](0026-session-branching-detail-directions.md) | Accepted | Post-M5 session-branching detail directions |
+| [0027](0027-child-kernel-bridge-mcp-detail-directions.md) | Accepted | Post-M5 child, kernel, bridge, and MCP detail directions |
+| [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
+| [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |
+| [0030](0030-continual-harness-safe-failures-and-selection-record-detail.md) | Accepted | Post-M5 continual-harness closed safe failures and selection-record detail |
+| [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
+| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation |
+| [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, harness autonomy, and RLM packaging |
+| [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |
+| [0035](0035-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, pre-approved four-slice activation sequence |

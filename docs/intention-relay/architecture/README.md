@@ -82,6 +82,11 @@ flowchart TD
 14. [Activity, UI, and adapters](24-activity-ui-and-adapters.md)
 15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 16. [VFR and Headroom](06-vfr-and-headroom.md)
+17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
+18. [Continual harness](26-continual-harness.md)
+19. [Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
+20. [Goal domain and verification](28-goal-domain-and-verification.md)
+21. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
 
 ### Agent operation
 
@@ -311,3 +316,61 @@ detailed authority for future activity trees, safe projections, direct-pair
 messages, notifications, acknowledgement projections, and shared-client adapter
 behavior. It preserves historical Session/Run contracts and cannot become an
 authority or a second transport path.
+
+### Configuration and provider control-plane owner
+
+[Configuration and provider control plane](25-configuration-provider-control-plane.md)
+is the sole detailed authority for the accepted post-M5 configuration/provider
+control-plane directions: controlled live reload, credential rotation, provider
+health checks, discovery, pricing policy, and the profile UI/control plane,
+adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+It preserves M3/M4 startup-only configuration and cannot become a second
+authority, transport, registry, scheduler, or sandbox.
+
+### Continual-harness owner
+
+[Continual harness](26-continual-harness.md) is the sole detailed authority for
+the accepted post-M5 continual-harness model: user-managed durable rules,
+trigger capture, schedule/time semantics, dossiers, verified checkpoints,
+read-and-delegate execution classes, and harness recovery, adopted by
+[ADR 0021](../decisions/0021-continual-harness-directions.md) and activated
+under Milestone 5+. It preserves M3/M4 queue/session/run/recovery behavior and
+cannot become a second runtime, scheduler, registry, or sandbox.
+
+### Programmatic-caller policy owner
+
+[Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
+is the sole detailed authority for the accepted post-M5 programmatic-caller
+policy: root origins, durable provenance, policy scope/narrowing, admission
+decisions, confirmation and bounded corridors, lifecycle, run and calendar
+limits with reservations, and run-selection compatibility, adopted by
+[ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md) and
+activated under Milestone 5+. It is logical product control, not an OS security
+boundary, and cannot become a second authority, registry, scheduler, or
+sandbox.
+
+### Goal domain and verification owner
+
+[Goal domain and verification](28-goal-domain-and-verification.md) is the sole
+detailed authority for the accepted post-M5 Goal aggregate domain: Goal
+identity/scope/tree, lifecycle/readiness/user decision, leading-goal run
+selection, delegated Verification Mandates, verification gates, working memory/
+roles/templates, model proposals, and the conversation-compaction working form,
+adopted by [ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)
+and activated under Milestone 5+. Goals remain acceptance/evidence records, not
+the work-authorization plane, and cannot become lifecycle, scheduler, tool,
+child, verifier, MCP, bridge, kernel, context, branch, or reconciliation
+authority.
+
+### Provider session selection and profiles protocol owner
+
+[Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
+is the sole detailed authority for the accepted post-M5 provider
+session-selection layer: session defaults, per-turn/fork overrides,
+unavailable-queue promotion and reconciliation, profile-keyed usage,
+`provider_profiles_v1`, pending-removal/degraded recovery, and held
+recovery-promoted run admission, adopted by
+[ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)
+and activated under Milestone 5+. It cannot become a second runtime, registry,
+scheduler, catalog, persistence authority, or sandbox.

@@ -351,3 +351,12 @@ Architecture 24 owns additive negotiated `agent_activity_v1` and
 `user_notifications_v1` DTO families on the existing local endpoint. They are
 separate from M3 session replay and M4 run streams, use daemon-owned cursors and
 resync, and never create a second listener or adapter-owned authority.
+
+## Post-M5 supervision topology direction
+
+Worker and process supervision topology is an accepted post-M5 future direction
+under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md),
+to be executed in Milestone 5+ as a production supervision topology for
+long-lived workers and processes. It never becomes a second runtime, registry,
+scheduler, persistence authority, or sandbox, and no production supervisor is
+activated by documentation; it is not activated here.

@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 18.
 - Decision record: [`0010`](../decisions/0010-mandate-mcp-capability-lifecycle.md).
-- Reconciliation topics: `MCP-001..016`.
+- Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (MCP detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (post-disconnect work).
+- Reconciliation topics: `MCP-001..017`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -25,7 +26,7 @@ This document owns only MCP-specific nested-selection semantics and capability l
 
 Dynamic acquisition means immutable **run-local capabilities beneath the one fixed `mcp` ToolId**. It never creates another ToolId, registry entry, plugin, direct primitive path, daemon, or authority. Future Mandate work supersedes retained requirements for user-created catalogs, complete-at-admission method sets, no discovery, and confirmation/corridor/quota/root-origin gates. It preserves the one gateway, typed boundary, private resources, idempotency, redaction, commit/reread publication, cancellation/disposal, and no-resume law.
 
-Architecture 14 supplies canonical `IRCR` / `typed-tlv-v1` / SHA-256 policy. This document owns the field semantics of these conceptual records:
+Architecture 14 supplies canonical `IRCR` / `typed-tlv-v1` / SHA-256 policy. This document owns the field semantics of these conceptual records. The concept2 names `MandateMcpCapabilitySourceDto`, `MandateMcpDiscoveryDto`, and `MandateMcpCapabilityRevisionDto` are research-only; the authoritative names are the `V1` records below, whose fields (private endpoint/credential generation references, acquisition operation identity, requesting run and tool call, server revision digest, attempt evidence, effect classification, invocation operation identity) supersede the concept2 reduced field sets:
 
 ```text
 MandateMcpCapabilitySourceV1
@@ -167,6 +168,69 @@ Verifier MCP work belongs only to the verifier Mandate. An MCP result is evidenc
 Future MCP projections use a separately negotiated Mandate capability layered with `model_tool_loop_v1`: authoritative initial replay/resync/error, bounded ordered discovery/capability/selection/invocation history, then live frames through one post-commit gate. Replay is read-only and causes no discovery, invocation, process start, retry, or publication. Unnegotiated peers fail closed without a partial ordinary snapshot.
 
 M3/M4 and retained bounded-MCP/RLM records gain no synthetic source, discovery, capability, selection, process, authority, or execution-kind state. M4 `ToolCallRecorded` remains denial evidence. No historical record, current server, endpoint, credential, schema, registry, configuration, ancestry, Goal, Skill, UI, logs, or remote continuation state may reconstruct missing MCP meaning.
+
+## MCP detail: bounded gateway, bounds, and safe failures
+
+The bounded MCP gateway is the canonical `mcp` gateway `ToolId`, owned by a
+future MCP boundary and assembled only through the existing Rust-owned registry
+and gateway; it is not a second registry. Its descriptor selects a bounded
+catalog of explicit user-approved `McpMethodDto` records, each naming exactly
+one connection and method, closed typed request/result families, canonical
+schema digest, effect classification, safe result projection, and immutable
+revision. It is never a generic string-method call, raw JSON transport,
+arbitrary header map, or automatic exposure of a discovered remote method. A
+method whose schema does not fit a supported closed family is unavailable.
+
+A connection has `Project` or `Session` scope; the user alone creates, edits,
+archives, restores, and selects a connection and methods; a model may only
+prepare a draft under the selected proposal rules. Credentials, OAuth material,
+SDK objects, sockets, child-process handles, and endpoint resources remain
+private daemon material and never enter a DTO, snapshot, fact, log, diagnostic,
+card, model context, or safe result. The selected transports are user-created
+outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/
+output services. The daemon starts a local service only upon the first selected
+MCP call in one run; that private process serves only that run and is terminated
+when the run completes, cancels, fails, or is interrupted; it is never attached
+by a later daemon, shared with another run, treated as a durable worker, or
+managed as a long-lived process.
+
+Every MCP call passes the same registry selection, daemon-bound authority, typed
+admission, confirmation, programmatic-caller-policy selection, idempotency,
+durable outcome, cancellation, redaction, and post-reread publication rules as
+another registered tool. Connection, method, schema, and gateway revisions are
+frozen in the call and run selection. A remote schema mismatch fails closed
+before an external effect; an already started ambiguous call is never repeated
+and records `ExternalEffectUnknown` when appropriate. A service may emit
+bounded safe progress through the ordinary durable output stream but cannot
+invoke `ask_user` or create a confirmation request; it cannot create a Goal,
+proposal, session, run, connection, tool registration, child agent, message, or
+another authority context. There is no MCP listener, remote attachment to the
+daemon bridge, plug-in system, Skill/MCP installation, dynamic tool
+registration, server-driven child control, autonomous continuation, or claim
+that a local service is isolated from the user's ordinary OS authority.
+
+The MCP-related closed safe failures through `ErrorDto` are:
+
+```text
+mcp_connection_unavailable
+mcp_method_unavailable
+mcp_schema_mismatch
+mcp_local_process_unavailable
+mcp_progress_limit_exceeded
+mcp_user_interaction_unavailable
+```
+
+They disclose no credential, path, raw external response, private process
+resource, grant, or implementation detail. The package continues to exclude
+autonomous continuation, work after client disconnection,
+attachments/images/binary/rich-MIME input, dynamic extensions and installation,
+dynamic tool registration, physical deletion, and administration of long-lived
+workers, leases, attach/detach, force-kill, or supervisor recovery.
+Work/continuation/requeue after client disconnection is an accepted post-M5
+future direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
+executed in Milestone 5+ as an explicit durable contract that never silently
+resumes old external work; it is not activated here.
 
 ## Dependencies and non-goals
 

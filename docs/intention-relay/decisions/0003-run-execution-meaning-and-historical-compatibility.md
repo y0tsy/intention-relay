@@ -26,6 +26,25 @@ Unknown/malformed/mismatched meaning blocks that work before effect while
 preserving unrelated readable replay/audit history. Meaning is never rebuilt
 from current state.
 
+## Common historical-version policy
+
+The following cross-direction historical-version rules are adopted as future
+detail owned by [architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md):
+
+- `intention-domain` owns versions for domain facts, semantic snapshots, and
+  canonical record tags; `intention-storage` owns storage migrations and their
+  ordering; `intention-protocol` owns public command, query, and frame schemas;
+  an owning provider driver owns its driver-contract compatibility; a future
+  direction owns the values of its own records but cannot change a
+  cross-direction semantic record without an explicit new version;
+- Factory-aligned Skill records, frontmatter, cards, supplements, origins,
+  resolution, and selections use new tags and retained Skill decoders; no M3/M4
+  record or legacy run acquires a synthetic Skill state; and
+- materialized context projections follow the selected `fork-model-context-v1`
+  rule: a later implementation uses the stored compatible schema unchanged,
+  defines a separately versioned compatible projection, or blocks the dependent
+  operation (owned by [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)).
+
 ## Ownership and deferrals
 
 [Architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)

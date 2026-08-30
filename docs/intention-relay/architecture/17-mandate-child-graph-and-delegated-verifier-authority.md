@@ -6,7 +6,8 @@
 
 - Normative owner: architecture 17.
 - Decision record: [`0009`](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).
-- Reconciliation topics: `CHD-001..012, VER-001..011`.
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (child detail).
+- Reconciliation topics: `CHD-001..019, VER-001..011`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -47,11 +48,20 @@ MandateChildDelegationSnapshotV1
   child_mode
   frozen_context_references
   selected_goal_skill_evidence_references
+  required_evidence_contract_references
   continuation_configuration
   capability_selection_rule
+  provider_capability_selection
+  activity_graph_id
   typed_provenance_references
   canonical_delegation_digest
 ```
+
+`required_evidence_contract_references` freezes the explicit evidence contracts
+the child must satisfy; `provider_capability_selection` and `activity_graph_id`
+freeze the child's provider-capability selection rule and its activity-graph
+identity. They are immutable credential-free references, never live provider
+material or activity authority.
 
 The snapshot is immutable, canonical, and credential-free. It may freeze only explicitly selected child objective, scope, mode, safe context, Goal, Skill, evidence, continuation, capability and provenance references. It excludes credentials, endpoints, SDK values, handles, raw transcript/output, mutable parent state, tool permissions, provider/MCP/process/kernel/bridge connections, policy/corridor/quota/confirmation inheritance, and unfinished external effects.
 
@@ -87,7 +97,7 @@ MandateChildControlV1
 
 A child may send only `Report` and `ClarificationRequest` to its direct parent. Only the immutable direct edge may carry these controls/messages. Siblings, indirect ancestors/descendants, roots, unrelated Mandates, adapters, providers, MCP, bridge/kernel, and models outside the admitted parent loop have no graph-control authority.
 
-Messages are typed, redacted, idempotent, and ordered by one edge-local monotonic sequence shared by both directions. `GetStatus` and `AwaitTerminalSummary` are observation only. Instructions, replies, reports, and clarification requests are durable evidence, not authority: they create no `RunId`, consume no reason, revise no Mandate, mutate no already-sent provider request, and directly schedule no work. A later scheduler reread may evaluate any separately valid reason and architecture 13 alone may admit a fresh run.
+Messages are typed, redacted, idempotent, and ordered by one edge-local monotonic sequence shared by both directions. `GetStatus` and `AwaitTerminalSummary` are observation only. Instructions, replies, reports, and clarification requests are durable evidence, not authority: they create no `RunId`, consume no reason, revise no Mandate, mutate no already-sent provider request, and directly schedule no work. A later scheduler reread may evaluate any separately valid reason and architecture 13 alone may admit a fresh run. A terminal or interrupted recipient rejects delivery: an undelivered ordinary message to a terminal or interrupted child is rejected with a typed durable delivery outcome, while the original message and its reason remain in the activity journal.
 
 Parenthood cannot complete, needs-rework, revise, archive, reconcile uncertainty, issue verifier authority, or control a sibling/root/unrelated Mandate. A user can mutate every child under architecture 13. Parent controls validate the exact edge, frozen delegated control, expected Mandate sequences, expected lifecycle, and idempotent operation identity.
 
@@ -172,6 +182,239 @@ User lifecycle, revision, reconciliation, revocation, and authority-revision mut
 If verifier external work becomes unknown, pause only the verifier Mandate. Do not mutate a target, complete the audit, reuse partial evidence as qualifying verdict, or treat verifier uncertainty as target uncertainty. Recovery preserves all authority/audit/mutation history but never replays verifier evidence work or reapplies a committed mutation.
 
 Future child/verifier projections use a separately negotiated Mandate protocol family with authoritative snapshot/replay or typed resync/error and fail closed for unsupported peers. Replay is read-only. It cannot resend messages, start children, repeat a cascade, consume authority, collect evidence, or reapply a target mutation. Exact wire tags, pages, retention, SQL, migrations, and UI remain deferred.
+
+## Delegated child-agent detail (`sub_agent`)
+
+The following first-scope detail applies to future `sub_agent` child work under
+the Mandate child graph:
+
+**Identity and commands.** `sub_agent` is the canonical child-agent identifier
+in the required fourteen-slot registry; one child-agent boundary exists (no
+alias, second `ToolId`, private Python function, or direct primitive path). The
+child-agent owner activates `sub_agent` only through the composition root. The
+direct effect profile flags are `child_agent_start` and `child_agent_control`
+(descriptive only). Each admitted child is a daemon-owned independent
+`SessionId` with its own `RunId`, queue, immutable run selection, model steps,
+bridge grants, durable facts, and at most one active run. The daemon assigns
+`SubAgentId`, child session identity, and child run identity only after
+successful admission; `ToolCallId` remains the canonical identity of the parent
+`sub_agent` call, and a child never reuses the parent's `RunId`, `ModelStepId`,
+grant, or operation identity. Every new root run receives one daemon-assigned
+`AgentActivityTreeId`; every admitted child retains it with its direct-parent
+link (distinct from `ConversationTreeId` fork lineage). `RlmParentLinkDto` is a
+durable immutable runtime relationship containing parent `SessionId`, `RunId`,
+`TurnId`, `ModelStepId`, `ToolCallId`, plus child `SubAgentId`, `SessionId`, and
+initial `RunId`.
+
+The direct parent closed command family is:
+
+```text
+ParentSubAgentCommandDto
+  Create
+  GetStatus
+  AwaitResult
+  Cancel
+  EnqueueFollowUp
+
+SubAgentHandleDto
+  sub_agent_id
+  child_session_id
+  child_run_id
+  selected_class
+  status
+```
+
+Every command is a normal typed tool invocation with its own `ToolCallId`,
+admission evidence, terminal result, durable commit, and post-reread
+publication. `Create` returns `SubAgentHandleDto` immediately after atomic
+durable admission and never waits for child completion. The child's narrower
+daemon-internal RLM operation is:
+
+```text
+RlmChildMessageOperation
+  Report
+  ClarificationRequest
+```
+
+bound to the child's immutable `RlmParentLinkDto`, current `ModelStepId`,
+daemon-assigned `RlmMessageId`, and canonical payload digest; it is not a
+`ToolId`/`ToolCallId`/registry invocation/bridge operation/MCP command/
+independent authority. `GetStatus` returns a bounded safe direct-child status
+plus a bounded descendant summary. `AwaitResult` returns one child terminal
+outcome, safe conclusion, and immutable provenance reference; a pending
+clarification returns a distinct `ClarificationPending { clarification_request_id,
+deadline }` that ends only that operation, not the child run. `Cancel` cascades
+only through that child's descendant subtree. `EnqueueFollowUp` (direct parent
+of an active child only) creates an `Instruction` or `ClarificationReply
+{ clarification_request_id, content }`.
+
+**Messages and summaries.** DTOs:
+
+```text
+MandateChildMessageDto
+  message_id
+  graph_id
+  parent_link_reference
+  message_order
+  direction = ParentToChild | ChildToParent
+  kind = Instruction | Report | ClarificationRequest | ClarificationReply
+  sender_run_reference
+  recipient_mandate_reference
+  recipient_run_reference_when_live
+  safe_text
+  typed_references
+  delivery_state
+  canonical_message_digest
+
+MandateChildTerminalSummaryDto
+  child_mandate_id
+  child_revision
+  terminal_run_reference
+  terminal_kind
+  disposition
+  verified_checkpoint_reference_when_present
+  external_effect_unknown_reference_when_present
+  evidence_references
+  safe_conclusion
+  canonical_summary_digest
+```
+
+Each edge owns one durable monotonic order across both directions. Messages are
+redacted typed records (identity, revision/cursor, digest, safe visibility,
+provenance references). Equal replay returns the stored message; changed reuse
+fails before publication. A terminal child run records one redacted summary; the
+parent receives the summary reference once in the next eligible model exchange,
+never a raw transcript or output. Summaries aggregate state and provenance;
+they never make child success complete a parent, child failure fail a parent,
+or child evidence satisfy a parent acceptance contract. Usage aggregation
+dedupes original `RunId` values. The first scope does not require a token
+ceiling from providers that cannot report usage: when a provider reports no
+usage component, the tree aggregates only the components it reports, and no
+synthetic ceiling, price, or inferred cost is introduced. A child `Paused`/`NeedsRework`/`Stopped` does
+not implicitly change the parent; a child `ExternalEffectUnknown` pauses that
+child, emits an urgent graph safety observation, and blocks only automatic
+parent continuation that depends on its result.
+
+**Queue limits.** Each parent-to-child and child-to-parent direction holds at
+most sixteen undelivered messages and 512 KiB of canonical safe content. One
+slot and 64 KiB in each direction are reserved respectively for
+`ClarificationReply` and `ClarificationRequest`; ordinary `Instruction`/`Report`
+use at most fifteen slots and 448 KiB. A message is never merged, overwritten,
+or silently dropped. A message committed before a child's terminal decision is
+included only in its next fresh model request; one to a terminal child is
+rejected. The parent cannot use a stale handle to revive a terminal child, and
+the child cannot autonomously request another parent authority context. The
+handle contains no credential, path, grant, kernel value, transcript,
+implementation resource, or raw child result.
+
+**Tree bounds and classes.** Code-owned limits per one root user request (root
+run at depth zero):
+
+| Limit | Selected value |
+| --- | --- |
+| Direct children of the root run | 16 |
+| Direct children of a depth-one child | 3 |
+| Descendants of a depth-two child | 0 |
+| Maximum child depth | 2 |
+| Total descendants in one RLM tree | 64 |
+| Concurrent non-terminal children in one RLM tree | 16 |
+| Full lifetime of one child | 360 minutes from durable admission |
+
+The tree is bounded by `16 + (16 x 3) = 64` children. A seventeenth concurrent
+child is not queued; it receives a known pre-effect terminal result. Child
+lifetime includes delay before work begins and never pauses for tools,
+confirmation, `ask_user`, kernel work, or descendants. The durable admission
+transaction validates the parent authority context, applicable policy, selected
+descriptor, selected class, tree counters, and delegation snapshot before it
+assigns child identities; it atomically records the child session and run,
+`RlmParentLinkDto`, immutable delegation snapshot, class resolution, idempotent
+operation binding, and audit evidence, or records none of them. `SubAgentClassDto` is
+closed as `Light`, `Medium`, `Heavy` with fixed maximum model-step counts of 64,
+256, and 1,024 respectively; each class resolves to a complete typed profile
+(one permitted provider profile, lifetime up to 360 minutes, permitted
+registered tool subset, max depth up to 2, kernel rules, context/result limits).
+A nominally stronger class is valid only when every effective tool/input
+constraint/scope/class/quota/concurrency/lifetime limit remains narrowed. No
+class bypasses the one-daemon authority, WorkspaceRoot, Plan/Build mode, hooks,
+confirmation, redaction, or a stricter current admission decision. The daemon
+resolves and persists one immutable child selection and never accepts a raw
+model name, endpoint, or credential, nor falls back to a current default when a
+class is unavailable. Every child receives one immutable
+`SubAgentDelegationSnapshotDto` (task, bounded safe textual projection, typed
+provenance references, parent provenance, selected effective
+programmatic-caller-policy snapshot reference, inherited authorization-corridor
+reference when one exists, selected `AgentActivitySelectionV1` reference;
+excludes raw provider items, reasoning text, tool output, Python objects, live
+state, grants, credentials, paths, and implementation resources). One snapshot
+is at most 512 KiB; all snapshots in one root RLM tree total at most 4 MiB; the
+daemon rejects rather than truncates.
+
+**Child kernel state.** A child session may lazily create its own IPython
+kernel under the selected session-kernel lifecycle and the shared limit of
+sixteen live kernels; it never shares a process or live namespace with the
+parent. At first child-kernel creation, the daemon may form an independent full
+copy of the latest verified parent `kernel-state-snapshot-v1` (supported
+serializable values only; excludes grants, tasks, handles, provider resources,
+credentials; no reverse sync). No parent checkpoint failure, failed transfer,
+or unavailability blocks child admission (the child starts empty with a safe
+transfer/restoration status). The daemon never reruns a parent cell to produce a
+child copy.
+
+**Clarification and progress.** A child may enter `AwaitingClarification` only
+after its durable `ClarificationRequest` reaches the direct parent. The request
+has a fixed 60-minute deadline from durable acceptance, a sublimit of, and never
+pausing or extending, the child's 360-minute full lifetime. The direct parent
+may accept exactly one matching `ClarificationReply` before that deadline; the
+daemon then records delivery and creates the next fresh model step of that same
+active child run with the reply in the separate RLM message exchange. It does
+not create a new child, a new `RunId`, a new authority, or a new external
+action. A reply after the deadline, parent terminalization, cancellation,
+policy-driven cascade, or another reply fails closed. A child never outlives its
+parent: parent terminalization is not complete until the child subtree has
+durable terminal outcomes. On clarification deadline expiry, the
+child records the known terminal `sub_agent_clarification_timeout` outcome and
+begins no further model step. Cancellation, parent terminalization, child
+lifetime expiry, policy revocation, and daemon restart atomically invalidate
+every pending clarification; a late reply is rejected. After restart neither a
+reply nor a follow-up can resume the interrupted child; the selected automatic
+continuation is permitted only while the same daemon process still owns the
+same active child run and the matching reply arrives before its deadline. On child lifetime expiry, progress-timeout failure, child cancellation, kernel failure, executor loss, or
+daemon restart, no provider request, tool, process, kernel, bridge operation, or
+external action is resumed, reattached, retried, or rerun; an unfinished child
+run becomes `Interrupted` on daemon recovery, and a later retry creates a newly
+admitted child consuming new tree capacity. `AwaitResult` returns a closed
+terminal state, a safe conclusion of at most 512 KiB, and an immutable typed
+terminal-child-result reference (rejected rather than truncated above the
+bound). `model_stream_progress_timeout_v1` applies to every child step under
+[architecture 15](15-tool-registry-and-mandate-tool-loop.md#model-progress-deadline).
+
+**Closed safe failures.** At minimum the child model adds these `ErrorDto`
+codes:
+
+```text
+sub_agent_depth_limit_exceeded
+sub_agent_direct_child_limit_exceeded
+sub_agent_tree_descendant_limit_exceeded
+sub_agent_concurrency_limit_exceeded
+sub_agent_lifetime_exceeded
+sub_agent_class_unavailable
+sub_agent_delegation_too_large
+sub_agent_delegation_unavailable
+sub_agent_follow_up_queue_full
+sub_agent_not_active
+sub_agent_result_too_large
+sub_agent_message_operation_conflict
+sub_agent_message_direction_forbidden
+sub_agent_clarification_not_pending
+sub_agent_clarification_reply_conflict
+sub_agent_clarification_timeout
+model_stream_progress_timeout
+```
+
+They disclose no credential, path, delegation content, Python value, grant,
+provider resource, process topology, or raw transcript. The bounds above are
+RLM-tree policy and never become Mandate admission quotas or child-graph
+limits.
 
 ## Compatibility, dependencies, and non-goals
 

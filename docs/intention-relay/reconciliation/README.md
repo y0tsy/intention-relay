@@ -44,7 +44,51 @@ implementation specification can be prepared:
 - external-effect uncertainty and no-resume recovery;
 - historical non-reinterpretation;
 - ownership and dependency direction;
-- traceability, compatibility, and delivery sequencing.
+- traceability, compatibility, and delivery sequencing;
+- post-M5 configuration and provider control-plane directions
+  ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
+  [Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment));
+- post-M5 continual-harness directions
+  ([ADR 0021](../decisions/0021-continual-harness-directions.md)); and
+- post-M5 programmatic-caller policy directions
+  ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md));
+- post-M5 Goal domain and verification directions
+  ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md));
+- post-M5 provider session-selection and profiles protocol directions
+  ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md));
+- post-M5 base-tool contracts and tool-loop bounds
+  ([ADR 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md));
+- post-M5 session-branching detail
+  ([ADR 0026](../decisions/0026-session-branching-detail-directions.md));
+- post-M5 child, kernel, bridge, and MCP detail
+  ([ADR 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md));
+- post-M5 provider reasoning and catalog detail
+  ([ADR 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md));
+- post-M5 activity and notification detail
+  ([ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md));
+- post-M5 continual-harness closed safe failures and selection-record detail
+  ([ADR 0030](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md));
+- post-M5 autonomous continuation direction
+  ([ADR 0031](../decisions/0031-autonomous-continuation-direction.md));
+- post-M5 accepted deferred directions: activity-tree metadata, semantic
+  content inspection, and per-call cancellation
+  ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
+- post-M5 accepted execution directions: raw-TOML/configuration editing, model
+  discovery, arbitrary headers, provider-native preservation, server-side
+  parser, fork tool-result/child-agent execution, export, cross-workspace
+  clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM
+  packaging
+  ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
+- post-M5 accepted retained-deferral directions: rich MIME/raw kernel output
+  projection, physical deletion/GC of historical work, worker/process
+  supervision topology, calendar/interval/time-zone/DST semantics, and
+  activity numeric limit classification
+  ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
+- post-M5 complete foundation activation: Milestone 5+ as the hard
+  prerequisite of M6-M9 and the single activation home for the complete
+  post-M5 stack, delivered as one pre-approved four-slice sequence
+  (contracts/versions, control plane, harness, UI foundation)
+  ([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -95,6 +139,22 @@ following map is navigation and provenance; it does not restate their rules:
 | Provider/reasoning | architecture 22 | decision 0014 |
 | Session branching | architecture 23 | decision 0015 |
 | Activity/UI/adapters | architecture 24 | decision 0016 |
+| Configuration/provider control plane | architecture 25 | decision 0020 |
+| Continual harness | architecture 26 | decision 0021 |
+| Programmatic-caller policy | architecture 27 | decision 0022 |
+| Goal domain and verification | architecture 28 | decision 0023 |
+| Provider session selection and profiles protocol | architecture 29 | decision 0024 |
+| Base-tool contracts and tool-loop bounds | architecture 15 | decision 0025 |
+| Session-branching detail | architecture 23 | decision 0026 |
+| Child, kernel, bridge, and MCP detail | architectures 17/20/19/18 | decision 0027 |
+| Provider reasoning and catalog detail | architecture 22 | decision 0028 |
+| Activity and notification detail | architecture 24 | decision 0029 |
+| Continual-harness safe failures and selection record | architectures 26/28 | decision 0030 |
+| Autonomous continuation | architecture 13 | decision 0031 |
+| Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
+| Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
+| Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
+| M5+ complete foundation activation | architectures 25-30, 23, 22, 24, roadmap | decision 0035 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,
