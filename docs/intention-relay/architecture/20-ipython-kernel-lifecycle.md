@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 20.
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
 - Reconciliation topics: `KER-001..018`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

@@ -26,6 +26,9 @@ The following detail from
   trusted-local (no-OS-sandbox) model;
 - the fragment stream contract (`ToolOutputDeltaRecorded` +
   `ToolCallResultRecorded`, per-call positive positions, `tool_result_stream_invalid`);
+- the 16-call tool-group maximum and its `provider_tool_group_invalid` outcome
+  (a provider step emitting more than 16 calls fails closed before any local
+  effect);
 - the first-scope bounds (512 KiB per canonical fact, 4 MiB combined per group,
   `tool_output_limit_exceeded`);
 - the closed terminal outcome taxonomy (`Succeeded`,

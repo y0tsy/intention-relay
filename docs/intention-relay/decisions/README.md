@@ -46,3 +46,4 @@ provenance.
 | [0026](0026-session-branching-detail-directions.md) | Accepted | Post-M5 session-branching detail directions |
 | [0027](0027-child-kernel-bridge-mcp-detail-directions.md) | Accepted | Post-M5 child, kernel, bridge, and MCP detail directions |
 | [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
+| [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |

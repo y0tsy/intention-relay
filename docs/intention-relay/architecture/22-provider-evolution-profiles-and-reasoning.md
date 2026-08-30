@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 22.
 - Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
+- Detail decision: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail).
 - Reconciliation topics: `PRV-001..012, RSN-001..006`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

@@ -15,6 +15,7 @@ classifies them as intrinsic bounds, capacity availability, or ordinary policy.
 
 - Normative owner: architecture 24.
 - Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
+- Detail decision: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail).
 - Reconciliation topics: `ACT-001..010`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
@@ -54,6 +55,34 @@ activity authority. `AgentActivityTreeId` is distinct from `ConversationTreeId`,
 Mandate graph identity, Session sequence, Run cursor, lineage sequence, and
 notification cursor.
 
+Every new root run receives its `AgentActivityTreeId` in the same durable
+admission transaction as its immutable run selection. Every root tree begins
+with one durable `RootActivityTreeBound` journal record even when it has no
+child or message. Historical M4 and post-M4 v1/v2/v3 selections stay
+byte-for-byte readable with no synthetic identity.
+
+`run-execution-meaning-v4` carries the credential-free `AgentActivitySelectionV1`:
+
+```text
+AgentActivitySelectionV1
+  Root {
+    activity_tree_id
+    root_origin
+    activity_exchange_revision
+    activity_journal_revision
+    user_projection_revision
+    fixed_activity_limits
+  }
+  Descendant {
+    activity_tree_id
+    direct_parent_link_reference
+    activity_exchange_revision
+    activity_journal_revision
+    user_projection_revision
+    fixed_activity_limits
+  }
+```
+
 Each admitted direct child has one immutable parent/child activity pair with a
 daemon-assigned pair identity and one shared monotonic pair order. Only this
 pair may exchange the closed message kinds:
@@ -88,6 +117,48 @@ and provenance only. They never embed prompt, provider/reasoning, tool/MCP,
 path, command, credential, grant, Python/Jupyter, raw result, or diagnostic
 bodies. Retained content requires separately authorized retrieval.
 
+The first-scope DTO shapes are:
+
+```text
+AgentActivityPairDto
+  pair_id
+  activity_tree_id
+  direct_parent_link_reference
+  pair_order
+  parent_session_and_run_reference
+  child_session_and_run_reference
+
+AgentMessageDto
+  message_id
+  activity_tree_id
+  pair_id
+  pair_order
+  direction
+  kind
+  sender_run_reference
+  recipient_run_reference
+  source_model_step_reference
+  safe_text
+  typed_references
+  delivery_state
+  canonical_message_digest
+
+AgentMessageReferenceDto
+  TerminalChildResult
+  TerminalToolResult
+  PolicyDecision
+  VerificationEvidence
+  GoalRevision
+  RetainedContent
+```
+
+`safe_text` is bounded redacted presentation, never raw content; a message
+carries at most 16 typed references; `RetainedContent` is disclosed only via the
+separately admitted `retrieve` tool. Each direction holds at most 16 undelivered
+messages and 512 KiB of canonical safe content, with one slot and 64 KiB in each
+direction reserved for `ClarificationReply` and `ClarificationRequest`
+respectively; ordinary `Instruction`/`Report` use at most 15 slots and 448 KiB.
+
 Messages deliver only at the recipient's next fresh model request, in activity
 journal order. They cannot alter a sent provider request, interrupt a step,
 create a run, schedule work, or become a remote continuation. Clarification
@@ -99,10 +170,71 @@ records safely describe root binding, child/message/clarification transitions,
 terminal child state, policy observation, Goal/harness milestone, and unknown
 effect observation. No global order across trees exists.
 
+```text
+AgentActivityJournalRecordDto
+  activity_tree_id
+  record_id
+  sequence
+  occurred_at
+  root_run_reference
+  direct_pair_reference_when_present
+  record_kind
+  safe_user_projection
+  typed_references
+  canonical_record_digest
+```
+
+The 17 closed record kinds are:
+
+```text
+RootActivityTreeBound
+ChildCreated
+DirectMessageAccepted
+DirectMessageDelivered
+DirectMessageUndeliverable
+ChildAwaitingClarification
+ChildClarificationResolved
+ChildCompleted
+ChildFailed
+ChildCancelled
+ChildInterrupted
+PolicySuspensionObserved
+PolicyRevocationCancellationStarted
+PolicyRevocationCancellationCompleted
+GoalActivityMilestone
+HarnessActivityMilestone
+ExternalEffectUnknownObserved
+```
+
 A semantic transition atomically commits its activity projections, journal/index/
 snapshot state, required notification reference, acknowledgement consequences,
 and related message/child state, or commits nothing. External work occurs outside
-the transaction. Publication follows commit and exact scoped reread.
+the transaction. Publication follows commit and exact scoped reread. A
+`safe_user_projection` is limited to safe text, closed kind, safe status, bounded
+counters, reason code, and allowed typed references; it never includes tool/MCP/
+provider/reasoning data, prompts, paths, commands, grants, credentials, Python
+values, transcripts, or diagnostics. `DirectChildStatusDto` reports one child;
+`DescendantSummaryDto` reports a subtree with one journal sequence and bounded
+counts, marked incomplete when a projection is unreadable, built from durable
+safe projections only.
+
+The first-scope fixed activity bounds are:
+
+| Subject | Selected limit |
+| --- | ---: |
+| Inter-agent messages in one activity tree | 1,024 |
+| Aggregate canonical message content | 4 MiB |
+| Activity-journal records | 4,096 |
+| One canonical message or activity record | 64 KiB |
+| Activity-journal page | 256 records and 512 KiB |
+| Typed references in one message | 16 |
+| Clarification wait | 60 minutes |
+
+A limit failure is checked before a partial durable record exists; it never
+truncates, evicts, synthesizes, or starts external work. Archive is accepted only
+after the root and every descendant are terminal; it is read-only, retains
+everything, and physical deletion, compaction, export, and garbage collection
+remain out of scope.
 
 ## Notifications and acknowledgement
 
@@ -112,10 +244,39 @@ read, seen, dismissed, or accepted claim. Records contain only activity tree and
 record references, closed `Urgent` or `Ordinary` level/reason, safe counts/states,
 time, and digest. They exclude message text and all sensitive content/resources.
 
+```text
+AgentNotificationLevelDto
+  Urgent
+  Ordinary
+```
+
+`Urgent` is used for user-decision-needing-attention, policy-revocation or
+cancellation safety, `ExternalEffectUnknown`, a terminal outcome leaving
+obligatory work unfinished, and `sub_agent_clarification_timeout`. `Ordinary` is
+used only for a stable awaiting state or terminal milestone; there are no
+periodic or every-N summaries. Continual-harness `journal-only` presentation
+suppresses ordinary linked-activity entries but never an `Urgent` safety record.
+At most one `Urgent` record exists per `(AgentActivityTreeId, cancellation
+reason)`, created atomically with the cascade-start projection carrying the
+then-known safe counts; a later distinct `ExternalEffectUnknown` is its own
+urgent reason.
+
 Urgent safety records take precedence over ordinary summaries. Ordinary
 summaries may coalesce to current safe per-tree state. Reconnect returns current
 redacted summaries for affected trees, not replayed alerts. Notification replay,
 publication, archival reads, and slow-peer handling never start work.
+
+`user_notifications_v1` reuses the existing private local endpoint and transport;
+a request carries only the last accepted cursor (no read, seen, dismissed, or
+accepted claim) and returns one redacted `AgentNotificationSummaryDto` per
+affected tree, ordered by first new cursor then `AgentActivityTreeId`, at most
+32 trees and 64 KiB per page; missed notifications are never replayed as new
+alerts. Delivery, summary, replay, reconnect, archival read, and resync are
+read/presentation only and never start a model step, `ask_user`, confirmation,
+tool, MCP, child, queue promotion, provider request, or external work. Urgent
+frames are prioritized over pending ordinary summaries in one bounded subscriber
+queue; an unaccepting peer receives a typed resync then detach and never blocks
+execution, persistence, or healthy subscribers.
 
 Durable acknowledgement/read state is a separate presentation acknowledgement
 aggregate with its own typed commands and projections. It never rewrites a
@@ -131,7 +292,12 @@ captures one upper journal sequence, sends a safe snapshot and bounded ascending
 pages through that bound, sends completion, then emits only later live frames.
 Notification reconnect accepts an observation cursor and returns bounded current
 safe summaries. Unsupported, corrupt, unavailable, gapped, slow, or detached
-peers fail closed or resynchronize without blocking durable work or healthy peers.
+peers fail closed or resynchronize without blocking durable work or healthy
+peers. A peer lacking the capability receives no partially understood frame and
+the subscription fails with `agent_activity_capability_required` or
+`user_notifications_capability_required` as applicable. There is no second
+listener; the families reuse the existing private Unix-socket/Windows-named-pipe
+endpoint and `ProtocolDaemonFrameDto` transport.
 
 Adapters render daemon-owned typed projections and use `intention-client` for
 all activity, notification, acknowledgement, Session, Run, and fork commands or
@@ -141,10 +307,42 @@ in-app rendering only; TUI/REPL consume equivalent DTOs and outcomes.
 
 Recovery preserves supported durable activity, notification, and acknowledgement
 facts but never resumes messages, clarifications, model steps, notifications, or
-external work. Detached clients reconstruct only from durable safe projections.
-Historical M3/M4 compatibility projections never reconstruct missing state from
-current configuration, providers, registry, ancestry, context, kernel, bridge,
-MCP, UI, or adapter state.
+external work. On daemon restart, unfinished roots and children retain the
+no-resume outcome: journal records show only safe terminal or interrupted state,
+nothing is retried or resumed, and a later explicit retry is a separately
+admitted root or child with new identities. A detached client reconstructs only
+from durable safe projections. Historical M3/M4 compatibility projections never
+reconstruct missing state from current configuration, providers, registry,
+ancestry, context, kernel, bridge, MCP, UI, or adapter state.
+
+The closed activity/notification safe failures through `ErrorDto` are:
+
+```text
+agent_activity_tree_unavailable
+agent_activity_tree_archived
+agent_activity_pair_invalid
+agent_message_direction_forbidden
+agent_message_operation_conflict
+agent_message_queue_full
+agent_message_tree_limit_exceeded
+agent_message_too_large
+agent_message_reference_invalid
+agent_message_reference_unavailable
+agent_message_recipient_terminal
+agent_message_order_invalid
+agent_activity_history_unavailable
+agent_activity_snapshot_too_large
+agent_activity_capability_required
+agent_notification_history_unavailable
+agent_notification_summary_too_large
+user_notifications_capability_required
+```
+
+They disclose no message or reference body, tool/MCP data, prompt, path,
+credential, grant, Python value, provider resource, process topology, counter
+history, or implementation detail. Every listed failure is known before an
+external effect; unknown-effect evidence is retained for work that had already
+started.
 
 ## Compatibility, dependencies, and non-goals
 

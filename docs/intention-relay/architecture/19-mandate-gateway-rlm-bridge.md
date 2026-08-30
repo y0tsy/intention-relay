@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 19.
 - Decision record: [`0011`](../decisions/0011-mandate-gateway-rlm-bridge.md).
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (bridge detail).
 - Reconciliation topics: `BRG-001..014`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

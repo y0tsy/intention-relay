@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 18.
 - Decision record: [`0010`](../decisions/0010-mandate-mcp-capability-lifecycle.md).
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (MCP detail).
 - Reconciliation topics: `MCP-001..016`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

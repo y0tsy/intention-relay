@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 15.
 - Decision record: [`0007`](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
+- Detail decision: [`0025`](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) (base-tool contracts and tool-loop bounds).
 - Reconciliation topics: `TLS-002..009, MTL-001..004`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
@@ -189,7 +190,7 @@ Build admits otherwise compatible selected descriptors. In Plan mode, ordinary p
 
 ## Model-to-tool-to-model lifecycle
 
-The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused.
+The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused. A group contains at most **16 calls**; a provider step that emits more than 16 calls fails closed before any local effect with the typed `provider_tool_group_invalid` outcome.
 
 ```mermaid
 sequenceDiagram

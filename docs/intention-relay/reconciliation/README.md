@@ -55,7 +55,17 @@ implementation specification can be prepared:
 - post-M5 Goal domain and verification directions
   ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md));
 - post-M5 provider session-selection and profiles protocol directions
-  ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)).
+  ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md));
+- post-M5 base-tool contracts and tool-loop bounds
+  ([ADR 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md));
+- post-M5 session-branching detail
+  ([ADR 0026](../decisions/0026-session-branching-detail-directions.md));
+- post-M5 child, kernel, bridge, and MCP detail
+  ([ADR 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md));
+- post-M5 provider reasoning and catalog detail
+  ([ADR 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md));
+- post-M5 activity and notification detail
+  ([ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -111,6 +121,11 @@ following map is navigation and provenance; it does not restate their rules:
 | Programmatic-caller policy | architecture 27 | decision 0022 |
 | Goal domain and verification | architecture 28 | decision 0023 |
 | Provider session selection and profiles protocol | architecture 29 | decision 0024 |
+| Base-tool contracts and tool-loop bounds | architecture 15 | decision 0025 |
+| Session-branching detail | architecture 23 | decision 0026 |
+| Child, kernel, bridge, and MCP detail | architectures 17/20/19/18 | decision 0027 |
+| Provider reasoning and catalog detail | architecture 22 | decision 0028 |
+| Activity and notification detail | architecture 24 | decision 0029 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

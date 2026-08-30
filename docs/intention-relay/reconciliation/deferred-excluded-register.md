@@ -31,6 +31,7 @@ not sufficient evidence.
 | EXC-022 | Programmatic-caller policy and admission (origins, provenance, policies, corridors, counters, drafts) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0022; historical-only for new Mandate work where conflicting | [Architecture 27](../architecture/27-programmatic-caller-policy-and-admission.md), M5+ activating specification |
 | EXC-023 | Goal aggregate domain (identity, lifecycle, gates, memory, proposals, compaction) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0023; Goals remain acceptance/evidence records | [Architecture 28](../architecture/28-goal-domain-and-verification.md), M5+ activating specification |
 | EXC-024 | Provider session selection and profiles protocol (defaults, overrides, queues, usage, protocol, held-run admission) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0024; startup-only configuration remains authoritative | [Architecture 29](../architecture/29-provider-session-and-profiles-protocol.md), M5+ activating specification |
+| EXC-025 | Activity/notification detail (DTO families, record kinds, bounds, urgent dedup, archive terminality, safe failures) | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0029; numeric values are intrinsic/capacity bounds, never Mandate quotas | [Architecture 24](../architecture/24-activity-ui-and-adapters.md), M5+ activating specification |
 
 All rows remain non-authorizing until a new approved decision updates this
 register and the relevant owner architecture, roadmap, policy, and evidence.
@@ -39,5 +40,6 @@ Rows EXC-001..004 are adopted as accepted future directions by
 EXC-021 by [ADR 0021](../decisions/0021-continual-harness-directions.md),
 EXC-022 by [ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md),
 EXC-023 by [ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md),
-and EXC-024 by [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md);
+EXC-024 by [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md),
+and EXC-025 by [ADR 0029](../decisions/0029-activity-and-notification-detail-directions.md);
 all remain non-authorizing until a later M5+ activating specification.

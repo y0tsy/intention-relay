@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 17.
 - Decision record: [`0009`](../decisions/0009-mandate-child-graph-and-delegated-verifier-authority.md).
+- Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (child detail).
 - Reconciliation topics: `CHD-001..012, VER-001..011`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

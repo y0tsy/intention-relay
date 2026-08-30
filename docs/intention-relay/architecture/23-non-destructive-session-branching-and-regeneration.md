@@ -6,6 +6,7 @@
 
 - Normative owner: architecture 23.
 - Decision record: [`0015`](../decisions/0015-non-destructive-session-branching-and-regeneration.md).
+- Detail decision: [`0026`](../decisions/0026-session-branching-detail-directions.md) (session-branching detail).
 - Reconciliation topics: `FRK-001..018`.
 - Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.

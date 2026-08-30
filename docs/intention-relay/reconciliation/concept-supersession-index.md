@@ -20,6 +20,7 @@
 | Programmatic-caller policy and admission | PCP-001..008 | Adopted for post-M5 fresh runs; historical-only for new Mandate work where conflicting; M3/M4 and retained RLM history remain authoritative. | Architecture 27, programmatic-caller policy and admission. |
 | Goal aggregate domain and verification | GOL-004..012, VGT-001..006 | Adopted for post-M5 fresh runs; Goals remain acceptance/evidence records for new Mandate work. | Architecture 28, Goal domain and verification. |
 | Provider session selection and profiles protocol | PSS-001..008 | Adopted for post-M5 fresh runs; M3/M4 startup-only configuration and recorded selections remain authoritative. | Architecture 29, provider session selection and profiles protocol. |
+| Agent communication, observation, and notifications | ACT-001..010, ACT-011..018 | Adopted for post-M5 fresh runs; activity/notification detail (DTOs, record kinds, bounds, safe failures) is owned by architecture 24; M3/M4 compatibility-only projections remain. | Architecture 24, activity, UI, and adapters. |
 
 Every selected heading is either represented by a topic family above or is
 context-only explanatory material. This index does not alter the concept.

@@ -92,6 +92,17 @@ contradiction register.
 | GOL-011 | Model proposals are one coalesced draft per owner scope/record kind; acceptance validates the exact base revision. | future | Adopt | `28-goal-domain-and-verification.md` | Stale base is a typed conflict; rejection changes no record. | M5+ | proposal fixture planned |
 | GOL-012 | Compaction is a versioned model-context projection with one cumulative summary plus suffix; original facts remain authoritative. | future | Adopt | `28-goal-domain-and-verification.md` | No hidden continuation; correction is a new immutable revision. | M5+ | compaction fixture planned |
 
+## Post-M5 Goal verification topics
+
+| Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| VGT-001 | A Verification Mandate is an ordinary Mandate whose purpose is audit, with its own revisioned prompt/objective, tools, provider, runs, activity identity, checkpoints, child work, evidence, and recovery. | future | Adopt | `28-goal-domain-and-verification.md` | Prompt is never a security boundary; no inherited authority. | M5+ | verifier lifecycle fixture planned |
+| VGT-002 | Verifier mutation requires a separately user-issued, revisioned, active, target-scoped authority; a target set is immutable and never expands. | future | Adopt | `28-goal-domain-and-verification.md` | Missing/stale/revoked/expired/consumed authority fails before mutation. | M5+ | authority fixture planned |
+| VGT-003 | The target operation matrix is closed (`MarkCompleted`, `MarkNeedsRework`, `Pause`, `Resume`, `Stop`, `ReviseFull`, `ResolveUnknownEffect`) with lifecycle preconditions. | future | Adopt | `28-goal-domain-and-verification.md` | No implicit pause/resume or live-run rewrite. | M5+ | operation matrix planned |
+| VGT-004 | A verdict is durable evidence only, never an implicit trigger; user lifecycle/revision/reconciliation commands win conflicts. | future | Adopt | `28-goal-domain-and-verification.md` | Loser rereads without merge or changed retry. | M5+ | precedence race planned |
+| VGT-005 | `ResolveUnknownEffect` names the exact uncertainty and baseline and may yield only `Active` or `Stopped`; it never asserts rollback, absence, idempotence, repeatability, or safe replay. | future | Adopt | `28-goal-domain-and-verification.md` | No rollback/replay/safe-repeat claim. | M5+ | reconciliation fixture planned |
+| VGT-006 | Verifier uncertainty pauses only the verifier Mandate; recovery never resumes verifier/target work, repeats tools, or reapplies mutations. | future | Adopt | `28-goal-domain-and-verification.md` | Target remains untouched; later work is fresh. | M5+ | recovery fixture planned |
+
 ## Post-M5 provider session-selection topics
 
 | Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |

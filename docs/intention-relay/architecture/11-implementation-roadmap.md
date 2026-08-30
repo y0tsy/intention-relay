@@ -1104,3 +1104,150 @@ profile, quality-policy target, or implementation milestone.
   verifier, MCP, bridge, kernel, context, branch, or reconciliation authority;
 - M3/M4 bytes and meanings remain explicitly unchanged; and
 - activation remains excluded pending a later M5+ specification.
+
+## Post-M5 base-tool contracts and tool-loop bounds package
+
+**Documentation-only package extending architecture 15.** It records the
+base-tool initial contracts, the effect-profile mapping, the fragment-stream
+contract, the terminal outcome taxonomy, the 16-call group bound, the
+512-KiB/4-MiB bounds, and tool-history replay negotiation, adopted by
+[decision 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `execute` `ShellCommandTextDto`, `fetch_url` GET/HEAD-only, `ask_user`
+  post-M4 semantics, and the trusted-local model;
+- the effect-profile flag mapping table;
+- `ToolOutputDeltaRecorded`/`ToolCallResultRecorded` fragment stream and
+  `tool_result_stream_invalid`;
+- the 16-call group maximum and `provider_tool_group_invalid`;
+- 512 KiB per fact / 4 MiB per group and `tool_output_limit_exceeded`;
+- the closed terminal outcome taxonomy; and
+- `RunToolHistoryPageDto`/`RunToolHistoryCompletedDto` replay with
+  `model_tool_loop_required`.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 bytes, `tool_execution_unavailable`, replay, and recovery remain
+  unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 session-branching detail package
+
+**Documentation-only package extending architecture 23.** It records the
+`session_fork_v1` DTO families, canonical field tables, fixed limits, audit
+taxonomy, inherited usage, and closed failures, adopted by
+[decision 0026](../decisions/0026-session-branching-detail-directions.md). It
+activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ForkSessionCommandDto`/`ForkSessionResultDto`/`GetForkPreviewQueryDto`/
+  `ForkPreviewDto`/`StartForkRunCommandDto`/tree-page/presentation DTOs;
+- `fork-base-snapshot`/`fork-preview`/`fork-command` v1 and v2 field tables;
+- the fixed limits (depth 4,096, descendants 16,384, 16 forks per rolling
+  hour, 1 MiB snapshot, 64-summary page, 128-NFC title);
+- the audit taxonomy and inherited-usage deduplication; and
+- the 17 closed `fork_*`/`session_*`/`invalid_conversation_tree_page` failures.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 linear sessions and the additive byte-preserving migration remain
+  unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 child, kernel, bridge, and MCP detail package
+
+**Documentation-only package extending architectures 17/20/19/18.** It records
+the `sub_agent` classes, tree bounds, queue limits, clarification sublimit,
+kernel limits/checkpoints, bridge DTOs/limits, and the bounded MCP gateway,
+adopted by [decision 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ParentSubAgentCommandDto`/`SubAgentHandleDto`/`RlmChildMessageOperation`
+  and `MandateChildMessageDto`/`MandateChildTerminalSummaryDto`;
+- tree bounds (16/3/0/2/64/16/360 minutes) and `SubAgentClassDto`
+  Light/Medium/Heavy (64/256/1,024);
+- the 60-minute clarification sublimit and the 17 closed `sub_agent_*`/
+  `model_stream_progress_timeout` failures;
+- kernel idle/concurrency/cell bounds and the 6 closed `kernel_*` failures;
+- bridge DTOs, the 16-operation and frame/group/history bounds, and the 6
+  closed `bridge_*` failures;
+- the MCP bounded gateway and the 6 closed `mcp_*` failures.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- the RLM tree bounds never become Mandate admission quotas or child-graph
+  limits; M3/M4 bytes remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 provider reasoning and catalog detail package
+
+**Documentation-only package extending architecture 22.** It records typed
+cross-turn reasoning history, reasoning usage, paged delivery, the dialect
+catalog, catalog limits/tombstones/audit, and the legacy M4 selection bridge,
+adopted by [decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `ReasoningHistoryTransferDto`/`TextualHistoryV1`/`ReasoningHistoryManifestDto`/
+  `ReasoningHistoryBound` with the 4-MiB aggregate bound;
+- `ReasoningUsageDto` absent-never-zero accounting;
+- `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
+- the closed dialect catalog and thinking activation fields;
+- catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
+  minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
+- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 provider bytes, `openrouter`/`generic-chat-completion-api` kinds, and
+  legacy replay remain unchanged; and
+- activation remains excluded pending a later M5+ specification.
+
+## Post-M5 activity and notification detail package
+
+**Documentation-only package extending architecture 24.** It records the
+agent-communication, activity-observation, and user-notification detail,
+adopted by [decision 0029](../decisions/0029-activity-and-notification-detail-directions.md).
+It activates no crate, schema, migration, protocol implementation, feature
+profile, quality-policy target, or implementation milestone.
+
+### Deliver
+
+- `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;
+- `AgentActivityPairDto`/`AgentMessageDto`/`AgentMessageReferenceDto`/
+  `AgentActivityJournalRecordDto`/`DirectChildStatusDto`/`DescendantSummaryDto`/
+  `AgentNotificationLevelDto`;
+- the 17 closed journal record kinds;
+- the fixed activity bounds (1,024 messages, 4 MiB, 4,096 records, 64 KiB,
+  256/512-KiB page, 16 references, 60-minute clarification; 16/512-KiB per
+  direction with 1/64-KiB clarification reserve);
+- urgent conditions and one-`Urgent`-per-(tree, reason) dedup;
+- archive terminality and the 32-tree/64-KiB notification page; and
+- the 18 closed `agent_activity_*`/`agent_message_*`/`agent_notification_*`/
+  `user_notifications_*` failures.
+
+### Exit criteria
+
+- the M5+ activating specification declares exact crates, DTO/wire/storage
+  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+- M3/M4 session/run subscriptions and replay remain unchanged; the adopted
+  numeric values are intrinsic/capacity bounds, never Mandate quotas; and
+- activation remains excluded pending a later M5+ specification.
