@@ -522,25 +522,24 @@ impl RunExecutionMeaningV3Record {
     /// # Errors
     ///
     /// Returns `CanonicalError::InvalidTag` when the tag or version is not the
-    /// run-execution-meaning v3 table, and other `CanonicalError` values for
-    /// malformed or noncanonical framing.
+    /// run-execution-meaning v3 table, `CanonicalError::InvalidField` when any
+    /// of the ten mandatory fields is absent or carries the wrong wire type,
+    /// and other `CanonicalError` values for malformed or noncanonical
+    /// framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 10)?;
         if reader.tag != TagRegistry::RUN_EXECUTION_MEANING || reader.version != 3 {
             return Err(CanonicalError::InvalidTag);
         }
-        Ok(Self {
-            fields: (1..=10)
-                .map(|number| {
-                    reader
-                        .field(number, WireType::Record)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(&[])
-                        .to_vec()
-                })
-                .collect(),
-        })
+        let fields = (1..=10)
+            .map(|number| {
+                reader
+                    .field(number, WireType::Record)?
+                    .ok_or(CanonicalError::InvalidField)
+                    .map(|value| value.to_vec())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { fields })
     }
 }
 
@@ -570,9 +569,10 @@ impl RunExecutionMeaningV4Record {
     /// # Errors
     ///
     /// Returns `CanonicalError::InvalidTag` when the tag or version is not the
-    /// run-execution-meaning v4 table, `CanonicalError::InvalidField` when the
-    /// required activity-selection field is absent, and other `CanonicalError`
-    /// values for malformed or noncanonical framing.
+    /// run-execution-meaning v4 table, `CanonicalError::InvalidField` when any
+    /// of the eleven mandatory fields is absent or carries the wrong wire
+    /// type, and other `CanonicalError` values for malformed or noncanonical
+    /// framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 11)?;
         if reader.tag != TagRegistry::RUN_EXECUTION_MEANING || reader.version != 4 {
@@ -582,17 +582,16 @@ impl RunExecutionMeaningV4Record {
             .field(11, WireType::Record)?
             .ok_or(CanonicalError::InvalidField)?
             .to_vec();
+        let fields = (1..11)
+            .map(|number| {
+                reader
+                    .field(number, WireType::Record)?
+                    .ok_or(CanonicalError::InvalidField)
+                    .map(|value| value.to_vec())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            fields: (1..11)
-                .map(|number| {
-                    reader
-                        .field(number, WireType::Record)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(&[])
-                        .to_vec()
-                })
-                .collect(),
+            fields,
             agent_activity_selection,
         })
     }
@@ -1040,6 +1039,96 @@ mod tests {
         assert_eq!(
             RunExecutionMeaningV4Record::decode(&v4_without_activity)
                 .expect_err("v4 requires an activity selection field"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn meaning_records_require_every_mandatory_field() {
+        let fields = golden_meaning_fields();
+        let activity = golden_v4_record().agent_activity_selection;
+        let full: Vec<(u32, u8, &[u8])> = fields
+            .iter()
+            .enumerate()
+            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .collect();
+        for missing in 0..10 {
+            let mut partial = full.clone();
+            partial.remove(missing);
+            let v3 = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 3, &partial);
+            assert_eq!(
+                RunExecutionMeaningV3Record::decode(&v3).expect_err("missing v3 field is rejected"),
+                CanonicalError::InvalidField,
+                "missing v3 field {}",
+                missing + 1
+            );
+            let mut v4 = partial;
+            v4.push((11, WireType::Record as u8, &activity));
+            let v4_bytes = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &v4);
+            assert_eq!(
+                RunExecutionMeaningV4Record::decode(&v4_bytes)
+                    .expect_err("missing v4 field is rejected"),
+                CanonicalError::InvalidField,
+                "missing v4 field {}",
+                missing + 1
+            );
+        }
+        // Field 11 is mandatory for v4 in addition to fields 1-10.
+        let v4_without_activity = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &full);
+        assert_eq!(
+            RunExecutionMeaningV4Record::decode(&v4_without_activity)
+                .expect_err("v4 requires field 11"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn meaning_records_reject_wrong_field_wire_types() {
+        // A v3 field 1 encoded as a U64 instead of a Record is rejected.
+        let v3_wrong = raw_record(
+            TagRegistry::RUN_EXECUTION_MEANING,
+            3,
+            &[(1, WireType::U64 as u8, &[0])],
+        );
+        assert_eq!(
+            RunExecutionMeaningV3Record::decode(&v3_wrong)
+                .expect_err("wrong v3 wire type is rejected"),
+            CanonicalError::InvalidField
+        );
+        // A v4 field 1 encoded as a U64 instead of a Record is rejected even
+        // with a valid field 11 present.
+        let activity = golden_v4_record().agent_activity_selection;
+        let meaning_fields = golden_meaning_fields();
+        let mut v4_wrong: Vec<(u32, u8, &[u8])> = meaning_fields
+            .iter()
+            .enumerate()
+            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .collect();
+        v4_wrong[0] = (1, WireType::U64 as u8, &[0]);
+        v4_wrong.push((11, WireType::Record as u8, &activity));
+        assert_eq!(
+            RunExecutionMeaningV4Record::decode(&raw_record(
+                TagRegistry::RUN_EXECUTION_MEANING,
+                4,
+                &v4_wrong,
+            ))
+            .expect_err("wrong v4 wire type is rejected"),
+            CanonicalError::InvalidField
+        );
+        // A v4 field 11 encoded as a U64 instead of a Record is rejected.
+        let mut v4_wrong_activity: Vec<(u32, u8, &[u8])> = meaning_fields
+            .iter()
+            .enumerate()
+            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .collect();
+        v4_wrong_activity.push((11, WireType::U64 as u8, &[0]));
+        assert_eq!(
+            RunExecutionMeaningV4Record::decode(&raw_record(
+                TagRegistry::RUN_EXECUTION_MEANING,
+                4,
+                &v4_wrong_activity,
+            ))
+            .expect_err("wrong v4 activity wire type is rejected"),
             CanonicalError::InvalidField
         );
     }
