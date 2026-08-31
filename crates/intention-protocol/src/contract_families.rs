@@ -32,14 +32,42 @@ fn bounded<T>(items: Vec<T>, max: usize, code: &'static str) -> DtoResult<Vec<T>
         Err(ErrorDto::validation(code, "collection limit exceeded"))
     }
 }
+/// Whether `value` looks like a credential.
+///
+/// A value is credential-shaped when it carries any control character
+/// anywhere, contains the case-insensitive `key` or `token` substring, starts
+/// an `sk-` secret anywhere in the string, or holds a case-insensitive
+/// `bearer` token followed by a non-empty token. Trimmed and whitespace-padded
+/// variants are detected too. Detection is intentionally over-inclusive: it is
+/// used to fail closed on provider-adjacent fields.
 #[must_use]
 fn credential_shaped(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("key")
-        || lower.contains("token")
-        || value.contains('\n')
-        || lower.starts_with("sk-")
-        || lower.starts_with("bearer ")
+    value.chars().any(char::is_control) || {
+        let lower = value.trim().to_ascii_lowercase();
+        lower.contains("key")
+            || lower.contains("token")
+            || lower.contains("sk-")
+            || bearer_credential(&lower)
+    }
+}
+
+/// Whether `lower` (already lowercased) carries a Bearer-token shape: the
+/// word `bearer` followed, possibly after whitespace or control characters,
+/// by a non-empty token.
+#[must_use]
+fn bearer_credential(lower: &str) -> bool {
+    lower.match_indices("bearer").any(|(index, _)| {
+        let after = &lower[index + "bearer".len()..];
+        let Some(first) = after.chars().next() else {
+            return false;
+        };
+        (first.is_whitespace() || first.is_control())
+            && after
+                .trim_start_matches(|c: char| c.is_whitespace() || c.is_control())
+                .chars()
+                .next()
+                .is_some()
+    })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,12 +101,23 @@ impl ResolvedRunProviderSelectionDto {
     /// # Errors
     ///
     /// Returns `credentials_forbidden` when any field looks like a key, token,
-    /// `sk-` prefixed secret, `Bearer` credential, or contains a newline;
-    /// `invalid_endpoint` for endpoint forms carrying userinfo, query,
-    /// fragment, or control characters; and `invalid_provider_kind` for the
-    /// unnormalized `openai` kind.
+    /// `sk-` secret, `Bearer` credential, or carries a control character
+    /// anywhere; `invalid_endpoint` for endpoint forms carrying userinfo,
+    /// query, fragment, or control characters; and `invalid_provider_kind`
+    /// for the unnormalized `openai` kind.
     pub fn validate(&self) -> DtoResult<()> {
-        let fields = [
+        if self.normalized_effective_endpoint.contains(['?', '#', '@'])
+            || self
+                .normalized_effective_endpoint
+                .chars()
+                .any(char::is_control)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_endpoint",
+                "endpoint is invalid",
+            ));
+        }
+        let mut fields: Vec<&str> = vec![
             &self.selection_canonicalization_version,
             &self.profile_id,
             &self.provider_profile_revision_id,
@@ -91,28 +130,21 @@ impl ResolvedRunProviderSelectionDto {
             &self.effective_loopback_policy_or_not_applicable,
             &self.provider_driver_contract_revision,
         ];
-        if fields.iter().any(|value| {
-            let lower = value.to_ascii_lowercase();
-            lower.contains("key")
-                || lower.contains("token")
-                || value.contains('\n')
-                || lower.starts_with("sk-")
-                || lower.starts_with("bearer ")
-        }) {
+        if let Some(header) = &self.credential_transport_safe_header_name {
+            fields.push(header);
+        }
+        if let Some(source) = &self.selection_source {
+            fields.push(source);
+        }
+        fields.extend(
+            self.declared_model_capability_subset
+                .iter()
+                .map(String::as_str),
+        );
+        if fields.iter().any(|value| credential_shaped(value)) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
                 "credentials are forbidden",
-            ));
-        }
-        if self.normalized_effective_endpoint.contains(['?', '#', '@'])
-            || self
-                .normalized_effective_endpoint
-                .chars()
-                .any(char::is_control)
-        {
-            return Err(ErrorDto::validation(
-                "invalid_endpoint",
-                "endpoint is invalid",
             ));
         }
         if self.kind_id == "openai" {
@@ -191,6 +223,10 @@ impl ProviderProfileRevisionV1 {
         .any(|value| credential_shaped(value))
             || self
                 .reasoning_compatibility_id
+                .as_deref()
+                .is_some_and(credential_shaped)
+            || self
+                .safe_header_name
                 .as_deref()
                 .is_some_and(credential_shaped)
         {
@@ -577,6 +613,39 @@ pub struct ReasoningHistoryManifestDto {
     pub entries: Vec<String>,
     pub manifest_digest: String,
 }
+impl ReasoningHistoryManifestDto {
+    /// Validates the bounded reasoning-history manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `reasoning_history_manifest_invalid` for a blank, over-long, or
+    /// control-bearing compatibility ID, a manifest with more than 256
+    /// entries, or a blank or control-bearing entry, and `invalid_digest` for
+    /// a malformed manifest digest.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(
+            &self.compatibility_id,
+            256,
+            "reasoning_history_manifest_invalid",
+        )?;
+        if self.entries.len() > 256 {
+            return Err(ErrorDto::validation(
+                "reasoning_history_manifest_invalid",
+                "reasoning history manifest exceeds its 256-entry bound",
+            ));
+        }
+        for entry in &self.entries {
+            if entry.trim().is_empty() || entry.chars().any(char::is_control) {
+                return Err(ErrorDto::validation(
+                    "reasoning_history_manifest_invalid",
+                    "reasoning history manifest entry is invalid",
+                ));
+            }
+        }
+        digest(&self.manifest_digest)?;
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningHistoryTransferDto {
@@ -591,6 +660,23 @@ pub struct ContextSourceEntryV1 {
     pub revision: String,
     pub safe_label: Option<String>,
 }
+impl ContextSourceEntryV1 {
+    /// Validates the bounded context-source entry fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `context_source_manifest_invalid` for a blank, over-long, or
+    /// control-bearing entry field or safe label.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.source_id, &self.source_kind, &self.revision] {
+            valid_text(field, 256, "context_source_manifest_invalid")?;
+        }
+        if let Some(label) = &self.safe_label {
+            valid_text(label, 256, "context_source_manifest_invalid")?;
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContextSourceManifestV1 {
     pub compatibility_id: String,
@@ -603,14 +689,23 @@ impl ContextSourceManifestV1 {
     /// # Errors
     ///
     /// Returns `context_source_manifest_invalid` when the manifest carries no
-    /// entries or more than 256 entries, and `invalid_digest` for a malformed
-    /// manifest digest.
+    /// entries or more than 256 entries, or when the compatibility ID or any
+    /// entry field is blank, over-long, or control-bearing, and
+    /// `invalid_digest` for a malformed manifest digest.
     pub fn validate(&self) -> DtoResult<()> {
         if self.source_entries.is_empty() || self.source_entries.len() > 256 {
             return Err(ErrorDto::validation(
                 "context_source_manifest_invalid",
                 "context source manifest must carry between 1 and 256 entries",
             ));
+        }
+        valid_text(
+            &self.compatibility_id,
+            256,
+            "context_source_manifest_invalid",
+        )?;
+        for entry in &self.source_entries {
+            entry.validate()?;
         }
         digest(&self.manifest_digest)?;
         Ok(())
@@ -801,19 +896,37 @@ pub struct AgentMessageDto {
     pub canonical_message_digest: String,
 }
 impl AgentMessageDto {
-    /// Validates the bounded message references.
+    /// Validates the bounded message fields and digest.
     ///
     /// # Errors
     ///
-    /// Returns `agent_message_reference_invalid` when the message carries more
-    /// than sixteen typed references.
+    /// Returns `agent_message_invalid` when a required text field or the
+    /// optional safe text is blank, over-long, or control-bearing,
+    /// `agent_message_reference_invalid` when the message carries more than
+    /// sixteen typed references, and `invalid_digest` for a malformed
+    /// canonical message digest.
     pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.message_id,
+            &self.activity_tree_id.0,
+            &self.pair_id,
+            &self.sender_run_reference,
+            &self.recipient_run_reference,
+            &self.source_model_step_reference,
+            &self.delivery_state,
+        ] {
+            valid_text(field, 256, "agent_message_invalid")?;
+        }
+        if let Some(safe_text) = &self.safe_text {
+            valid_text(safe_text, 64 * 1024, "agent_message_invalid")?;
+        }
         bounded(
             self.typed_references.clone(),
             16,
             "agent_message_reference_invalid",
-        )
-        .map(|_| ())
+        )?;
+        digest(&self.canonical_message_digest)?;
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -832,11 +945,15 @@ pub struct AgentActivityJournalRecordDto {
 impl AgentActivityJournalRecordDto {
     /// Validates the bounded activity journal record.
     ///
+    /// The accounting unit is the UTF-8 byte length of every payload-bearing
+    /// field, including the typed-reference contents.
+    ///
     /// # Errors
     ///
-    /// Returns `agent_activity_record_too_large` when the string payload
-    /// exceeds the 64 KiB record bound, `agent_message_reference_invalid`
-    /// when the record carries more than sixteen typed references, and
+    /// Returns `agent_activity_record_too_large` when the string payload,
+    /// including the typed-reference contents, exceeds the 64 KiB record
+    /// bound, `agent_message_reference_invalid` when the record carries more
+    /// than sixteen typed references, and
     /// `agent_activity_journal_limit_exceeded` when the zero-based sequence
     /// is at or beyond the 4,096-record journal bound.
     pub fn validate(&self) -> DtoResult<()> {
@@ -849,7 +966,8 @@ impl AgentActivityJournalRecordDto {
                 .map_or(0, str::len)
             + self.record_kind.len()
             + self.safe_user_projection.len()
-            + self.canonical_record_digest.len();
+            + self.canonical_record_digest.len()
+            + self.typed_references.iter().map(String::len).sum::<usize>();
         if payload_bytes > 64 * 1024 {
             return Err(ErrorDto::validation(
                 "agent_activity_record_too_large",
@@ -899,9 +1017,17 @@ impl AgentNotificationRecordDto {
     ///
     /// # Errors
     ///
-    /// Returns `agent_notification_summary_too_large` when the record's text
-    /// payload exceeds the 64 KiB per-page bound.
+    /// Returns `agent_notification_record_invalid` for a blank, over-long, or
+    /// control-bearing text field, and
+    /// `agent_notification_summary_too_large` when the record's text payload
+    /// exceeds the 64 KiB per-page bound.
     pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.activity_tree_id.0, &self.activity_record_reference] {
+            valid_text(field, 256, "agent_notification_record_invalid")?;
+        }
+        for field in [&self.reason, &self.safe_counts_and_states] {
+            valid_text(field, 64 * 1024, "agent_notification_record_invalid")?;
+        }
         let payload_bytes = self.activity_record_reference.len()
             + self.reason.len()
             + self.safe_counts_and_states.len();
@@ -920,6 +1046,30 @@ pub struct BridgeRunGrantDto {
     pub opaque_grant_identity: String,
     pub issued_protocol_revision: String,
 }
+impl BridgeRunGrantDto {
+    /// Validates the bounded, credential-free grant fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `bridge_invocation_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.opaque_grant_identity, &self.issued_protocol_revision] {
+            valid_text(field, 256, "bridge_invocation_invalid")?;
+        }
+        if [&self.opaque_grant_identity, &self.issued_protocol_revision]
+            .iter()
+            .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BridgeAttachmentResponseDto {
     pub bridge_run_grant: BridgeRunGrantDto,
@@ -932,11 +1082,68 @@ pub struct BridgeInvocationCommandDto {
     pub bridge_operation_id: String,
     pub typed_tool_invocation: String,
 }
+impl BridgeInvocationCommandDto {
+    /// Validates the bounded invocation command.
+    ///
+    /// # Errors
+    ///
+    /// Returns `bridge_invocation_invalid` for a blank, over-long, or
+    /// control-bearing command field or grant field and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        self.bridge_run_grant.validate()?;
+        for field in [&self.bridge_operation_id, &self.typed_tool_invocation] {
+            valid_text(field, 256, "bridge_invocation_invalid")?;
+        }
+        if [&self.bridge_operation_id, &self.typed_tool_invocation]
+            .iter()
+            .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BridgeInvocationAcceptedDto {
     pub bridge_operation_id: String,
     pub tool_call_id: String,
     pub admission_state: String,
+}
+impl BridgeInvocationAcceptedDto {
+    /// Validates the bounded acceptance fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `bridge_invocation_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.bridge_operation_id,
+            &self.tool_call_id,
+            &self.admission_state,
+        ] {
+            valid_text(field, 256, "bridge_invocation_invalid")?;
+        }
+        if [
+            &self.bridge_operation_id,
+            &self.tool_call_id,
+            &self.admission_state,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BridgeOperationV1 {
@@ -951,6 +1158,56 @@ pub struct BridgeOperationV1 {
     pub tool_call_id: String,
     pub admission_outcome: String,
     pub attempt_reference: Option<String>,
+}
+impl BridgeOperationV1 {
+    /// Validates the bounded bridge operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `bridge_invocation_invalid` for a blank, over-long, or
+    /// control-bearing field, `invalid_digest` for a malformed typed-input
+    /// digest, and `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        digest(&self.typed_input_digest)?;
+        for field in [
+            &self.bridge_operation_id,
+            &self.run_id,
+            &self.mandate_id,
+            &self.mandate_revision,
+            &self.model_step_id,
+            &self.tool_id,
+            &self.descriptor_revision,
+            &self.tool_call_id,
+            &self.admission_outcome,
+        ] {
+            valid_text(field, 256, "bridge_invocation_invalid")?;
+        }
+        if let Some(attempt) = &self.attempt_reference {
+            valid_text(attempt, 256, "bridge_invocation_invalid")?;
+        }
+        let mut fields = vec![
+            &self.bridge_operation_id,
+            &self.run_id,
+            &self.mandate_id,
+            &self.mandate_revision,
+            &self.model_step_id,
+            &self.tool_id,
+            &self.descriptor_revision,
+            &self.typed_input_digest,
+            &self.tool_call_id,
+            &self.admission_outcome,
+        ];
+        if let Some(attempt) = &self.attempt_reference {
+            fields.push(attempt);
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunToolHistoryPageDto {
@@ -993,6 +1250,48 @@ pub struct ModelToolLoopV1 {
     pub translation_revision: String,
     pub stream_shape: String,
 }
+impl ModelToolLoopV1 {
+    /// Validates the bounded model-tool-loop shape.
+    ///
+    /// The loop may name at most sixteen active descriptors, matching the
+    /// closed sixteen-call-per-group rule, and each descriptor field is
+    /// bounded like a tool-descriptor revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_tool_loop_invalid` for a blank, over-long, or
+    /// control-bearing loop field, more than sixteen active descriptors, or
+    /// an invalid active descriptor, and `credentials_forbidden` for a
+    /// credential-shaped loop field.
+    pub fn validate(&self) -> DtoResult<()> {
+        let fields = [
+            &self.tool_registry_revision_id,
+            &self.admission_engine_revision,
+            &self.hook_pipeline_revision,
+            &self.translation_revision,
+            &self.stream_shape,
+        ];
+        for field in fields {
+            valid_text(field, 256, "model_tool_loop_invalid")?;
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        if self.active_descriptors.len() > 16 {
+            return Err(ErrorDto::validation(
+                "model_tool_loop_invalid",
+                "model tool loop exceeds its 16-active-descriptor bound",
+            ));
+        }
+        for descriptor in &self.active_descriptors {
+            descriptor.validate()?;
+        }
+        Ok(())
+    }
+}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActiveToolDescriptorSelectionV1 {
     pub tool_id: String,
@@ -1006,6 +1305,40 @@ pub struct ActiveToolDescriptorSelectionV1 {
     pub safe_result_projection_revision: String,
     pub observation_contract_revision: String,
     pub stream_shape: String,
+}
+impl ActiveToolDescriptorSelectionV1 {
+    /// Validates the credential-free active-descriptor fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_tool_loop_invalid` for blank, over-long, or
+    /// control-bearing fields and `credentials_forbidden` for
+    /// credential-shaped values.
+    pub fn validate(&self) -> DtoResult<()> {
+        let fields = [
+            &self.tool_id,
+            &self.intended_owner,
+            &self.descriptor_revision,
+            &self.input_schema_reference,
+            &self.result_schema_reference,
+            &self.required_capability_binding,
+            &self.mode_relation,
+            &self.model_function_schema_revision,
+            &self.safe_result_projection_revision,
+            &self.observation_contract_revision,
+            &self.stream_shape,
+        ];
+        for field in fields {
+            valid_text(field, 256, "model_tool_loop_invalid")?;
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolDescriptorRevision {
@@ -1067,11 +1400,27 @@ impl ToolRegistryRevision {
     ///
     /// # Errors
     ///
-    /// Returns `tool_registry_revision_too_large` when the revision carries
-    /// more than 256 descriptors or the descriptor fields exceed 512 KiB
-    /// aggregate, `duplicate_tool_descriptor` for a repeated tool ID, and the
-    /// per-descriptor failures for any invalid descriptor.
+    /// Returns `tool_registry_revision_invalid` for a blank, over-long, or
+    /// control-bearing registry field and `credentials_forbidden` for a
+    /// credential-shaped value; `tool_registry_revision_too_large` when the
+    /// revision carries more than 256 descriptors or the descriptor fields
+    /// exceed 512 KiB aggregate; `duplicate_tool_descriptor` for a repeated
+    /// tool ID; and the per-descriptor failures for any invalid descriptor.
     pub fn validate(&self) -> DtoResult<()> {
+        let fields = [
+            &self.registry_revision_id,
+            &self.admission_engine_revision,
+            &self.hook_pipeline_revision,
+        ];
+        for field in fields {
+            valid_text(field, 256, "tool_registry_revision_invalid")?;
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
         if self.descriptors.len() > 256 {
             return Err(ErrorDto::validation(
                 "tool_registry_revision_too_large",
@@ -1158,19 +1507,47 @@ pub struct LegacyM4SelectionBindingDto {
     pub driver_contract_revision: String,
 }
 impl LegacyM4SelectionBindingDto {
-    /// Validates that the binding references legacy bytes by canonical
-    /// `legacy-uuid:<canonical UUID>` reference.
+    /// Validates the binding fields and legacy reference.
     ///
     /// # Errors
     ///
     /// Returns `legacy_selection_reference_invalid` when the safe selection
     /// is not a lowercase canonical `legacy-uuid:` reference with a valid
-    /// UUID variant and version.
+    /// UUID variant and version, `legacy_selection_binding_invalid` for a
+    /// blank, over-long, or control-bearing field or capability entry, and
+    /// `credentials_forbidden` for a credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         if !is_canonical_legacy_uuid_reference(&self.legacy_safe_selection) {
             return Err(ErrorDto::validation(
                 "legacy_selection_reference_invalid",
                 "legacy selection must be a canonical legacy-uuid reference",
+            ));
+        }
+        let fields = [
+            &self.legacy_config_revision_id,
+            &self.legacy_snapshot_schema,
+            &self.legacy_safe_selection,
+            &self.default_profile_id,
+            &self.default_profile_revision_id,
+            &self.kind_descriptor_revision_id,
+            &self.execution_policy,
+            &self.driver_contract_revision,
+        ];
+        for field in fields {
+            valid_text(field, 256, "legacy_selection_binding_invalid")?;
+        }
+        for capability in &self.capability_subset {
+            valid_text(capability, 256, "legacy_selection_binding_invalid")?;
+        }
+        if fields.iter().any(|value| credential_shaped(value))
+            || self
+                .capability_subset
+                .iter()
+                .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
             ));
         }
         Ok(())
@@ -1571,11 +1948,13 @@ mod tests {
             run_id: "run-1".to_owned(),
             final_cursor: 9,
         });
-        round_trip(&ReasoningHistoryManifestDto {
+        let manifest = ReasoningHistoryManifestDto {
             compatibility_id: "compat-1".to_owned(),
             entries: vec!["entry".to_owned()],
             manifest_digest: "a".repeat(64),
-        });
+        };
+        assert!(manifest.validate().is_ok());
+        round_trip(&manifest);
         for transfer in [
             ReasoningHistoryTransferDto::Disabled,
             ReasoningHistoryTransferDto::TextualHistoryV1 {
@@ -1603,6 +1982,7 @@ mod tests {
         ] {
             round_trip(&kind);
         }
+        assert!(agent_message().validate().is_ok());
         round_trip(&agent_message());
         let journal_record = AgentActivityJournalRecordDto {
             activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
@@ -1630,7 +2010,7 @@ mod tests {
         for level in [NotificationLevel::Urgent, NotificationLevel::Ordinary] {
             round_trip(&level);
         }
-        round_trip(&AgentNotificationRecordDto {
+        let notification_record = AgentNotificationRecordDto {
             notification_cursor: AgentNotificationCursorDto(4),
             activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
             activity_record_reference: "record-1".to_owned(),
@@ -1638,7 +2018,9 @@ mod tests {
             reason: "reason".to_owned(),
             safe_counts_and_states: "counts".to_owned(),
             occurred_at: 100,
-        });
+        };
+        assert!(notification_record.validate().is_ok());
+        round_trip(&notification_record);
     }
 
     #[test]
@@ -1647,6 +2029,7 @@ mod tests {
             opaque_grant_identity: "grant-1".to_owned(),
             issued_protocol_revision: "rev-1".to_owned(),
         };
+        assert!(grant.validate().is_ok());
         round_trip(&grant);
         round_trip(&BridgeAttachmentResponseDto {
             bridge_run_grant: grant.clone(),
@@ -1656,17 +2039,21 @@ mod tests {
             ],
             initial_run_cursor: 3,
         });
-        round_trip(&BridgeInvocationCommandDto {
+        let command = BridgeInvocationCommandDto {
             bridge_run_grant: grant,
             bridge_operation_id: "operation-1".to_owned(),
             typed_tool_invocation: "invocation".to_owned(),
-        });
-        round_trip(&BridgeInvocationAcceptedDto {
+        };
+        assert!(command.validate().is_ok());
+        round_trip(&command);
+        let accepted = BridgeInvocationAcceptedDto {
             bridge_operation_id: "operation-1".to_owned(),
             tool_call_id: "call-1".to_owned(),
             admission_state: "admitted".to_owned(),
-        });
-        round_trip(&BridgeOperationV1 {
+        };
+        assert!(accepted.validate().is_ok());
+        round_trip(&accepted);
+        let operation = BridgeOperationV1 {
             bridge_operation_id: "operation-1".to_owned(),
             run_id: "run-1".to_owned(),
             mandate_id: "mandate-1".to_owned(),
@@ -1678,7 +2065,9 @@ mod tests {
             tool_call_id: "call-1".to_owned(),
             admission_outcome: "admitted".to_owned(),
             attempt_reference: Some("attempt-1".to_owned()),
-        });
+        };
+        assert!(operation.validate().is_ok());
+        round_trip(&operation);
         round_trip(&RunToolHistoryPageDto {
             session_id: "session-1".to_owned(),
             run_id: "run-1".to_owned(),
@@ -1693,7 +2082,7 @@ mod tests {
 
     #[test]
     fn tool_loop_family_round_trips() {
-        round_trip(&ModelToolLoopV1 {
+        let tool_loop = ModelToolLoopV1 {
             tool_registry_revision_id: "registry-1".to_owned(),
             admission_engine_revision: "admission-1".to_owned(),
             hook_pipeline_revision: "hooks-1".to_owned(),
@@ -1713,7 +2102,9 @@ mod tests {
             model_tool_loop_required: true,
             translation_revision: "translation-1".to_owned(),
             stream_shape: "stream".to_owned(),
-        });
+        };
+        assert!(tool_loop.validate().is_ok());
+        round_trip(&tool_loop);
         round_trip(&ModelToolExchangeDto {
             assistant_ordered_calls: vec!["call-1".to_owned()],
             canonical_call_identities: vec!["identity-1".to_owned()],
@@ -1849,6 +2240,40 @@ mod tests {
                 .expect_err("oversized record is rejected")
                 .code(),
             "agent_activity_record_too_large"
+        );
+
+        // The 64 KiB bound counts the UTF-8 bytes of every payload-bearing
+        // field, including the typed-reference contents.
+        let reference_payload_base = base_payload + "safe".len();
+        assert!(
+            record(
+                0,
+                "safe".to_owned(),
+                vec!["a".repeat(64 * 1024 - reference_payload_base)],
+            )
+            .validate()
+            .is_ok()
+        );
+        assert_eq!(
+            record(
+                0,
+                "safe".to_owned(),
+                vec!["a".repeat(64 * 1024 - reference_payload_base + 1)],
+            )
+            .validate()
+            .expect_err("oversized reference payload is rejected")
+            .code(),
+            "agent_activity_record_too_large"
+        );
+        // Reference bytes are counted alongside the scalar fields: sixteen
+        // 1 KiB references leave exactly the remaining budget for the
+        // projection.
+        let references = vec!["a".repeat(1024); 16];
+        let remaining = 64 * 1024 - reference_payload_base - 16 * 1024;
+        assert!(
+            record(0, "a".repeat(remaining), references)
+                .validate()
+                .is_ok()
         );
 
         // 16 typed references.
@@ -2160,6 +2585,449 @@ mod tests {
                 "credentials_forbidden"
             );
         }
+    }
+
+    #[test]
+    fn credential_detector_rejects_controls_and_credentials_anywhere() {
+        for value in [
+            "sk-123",
+            "SK-123",
+            "model=sk-secret",
+            "prefix sk-abc",
+            "  sk-abc  ",
+            "Bearer secret",
+            "bearer\tsecret",
+            "BEARER secret",
+            "\tBearer secret",
+            "Bearer secret trailing",
+            "token-value",
+            "api-key",
+            "line\nbreak",
+            "tab\tbreak",
+            "carriage\rreturn",
+            "\u{0000}control",
+        ] {
+            assert!(
+                credential_shaped(value),
+                "{value:?} must be credential-shaped"
+            );
+        }
+        for value in [
+            "provider-profiles",
+            "model-1",
+            "x-safe-header",
+            "legacy-uuid:11111111-1111-4111-8111-111111111111",
+            "bearer",
+            "bearer ",
+            "responses",
+        ] {
+            assert!(
+                !credential_shaped(value),
+                "{value:?} must not be credential-shaped"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_adjacent_dtos_reject_credentials_in_every_string_field() {
+        let mut header = provider_selection();
+        header.credential_transport_safe_header_name = Some("sk-header".to_owned());
+        assert_eq!(
+            header
+                .validate()
+                .expect_err("credential-shaped header is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut source = provider_selection();
+        source.selection_source = Some("Bearer grant".to_owned());
+        assert_eq!(
+            source
+                .validate()
+                .expect_err("credential-shaped selection source is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut subset = provider_selection();
+        subset.declared_model_capability_subset = vec!["sk-capability".to_owned()];
+        assert_eq!(
+            subset
+                .validate()
+                .expect_err("credential-shaped capability is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut profile = profile_revision();
+        profile.safe_header_name = Some("token-header".to_owned());
+        assert_eq!(
+            profile
+                .validate()
+                .expect_err("credential-shaped profile header is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn reasoning_manifest_and_context_source_entries_validate() {
+        let manifest = ReasoningHistoryManifestDto {
+            compatibility_id: "compat-1".to_owned(),
+            entries: (0..256).map(|i| format!("entry-{i}")).collect(),
+            manifest_digest: "a".repeat(64),
+        };
+        assert!(manifest.validate().is_ok());
+        let mut blank_compatibility = manifest.clone();
+        blank_compatibility.compatibility_id = "   ".to_owned();
+        assert_eq!(
+            blank_compatibility
+                .validate()
+                .expect_err("blank compatibility id is rejected")
+                .code(),
+            "reasoning_history_manifest_invalid"
+        );
+        let mut too_many = manifest.clone();
+        too_many.entries.push("entry-256".to_owned());
+        assert_eq!(
+            too_many
+                .validate()
+                .expect_err("257 entries are rejected")
+                .code(),
+            "reasoning_history_manifest_invalid"
+        );
+        let mut blank_entry = manifest.clone();
+        blank_entry.entries = vec!["   ".to_owned()];
+        assert_eq!(
+            blank_entry
+                .validate()
+                .expect_err("blank entry is rejected")
+                .code(),
+            "reasoning_history_manifest_invalid"
+        );
+        let mut bad_digest = manifest;
+        bad_digest.manifest_digest = "z".repeat(64);
+        assert_eq!(
+            bad_digest
+                .validate()
+                .expect_err("malformed digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+
+        let entry = |source_id: String, safe_label: Option<String>| ContextSourceEntryV1 {
+            source_id,
+            source_kind: "goal".to_owned(),
+            revision: "rev-1".to_owned(),
+            safe_label,
+        };
+        let context_manifest =
+            |source_entries: Vec<ContextSourceEntryV1>| ContextSourceManifestV1 {
+                compatibility_id: "compat-1".to_owned(),
+                source_entries,
+                manifest_digest: "a".repeat(64),
+            };
+        assert!(
+            context_manifest(vec![entry("source-1".to_owned(), None)])
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            context_manifest(vec![entry("   ".to_owned(), None)])
+                .validate()
+                .expect_err("blank entry field is rejected")
+                .code(),
+            "context_source_manifest_invalid"
+        );
+        assert_eq!(
+            context_manifest(vec![entry("source-1".to_owned(), Some("   ".to_owned()))])
+                .validate()
+                .expect_err("blank safe label is rejected")
+                .code(),
+            "context_source_manifest_invalid"
+        );
+        assert_eq!(
+            context_manifest(vec![entry("source\u{0000}-1".to_owned(), None)])
+                .validate()
+                .expect_err("control-bearing entry field is rejected")
+                .code(),
+            "context_source_manifest_invalid"
+        );
+    }
+
+    #[test]
+    fn agent_message_and_notification_records_validate_text_fields() {
+        let mut message = agent_message();
+        assert!(message.validate().is_ok());
+        message.delivery_state = "   ".to_owned();
+        assert_eq!(
+            message
+                .validate()
+                .expect_err("blank message field is rejected")
+                .code(),
+            "agent_message_invalid"
+        );
+        let mut message = agent_message();
+        message.safe_text = Some("text\u{0000}control".to_owned());
+        assert_eq!(
+            message
+                .validate()
+                .expect_err("control-bearing safe text is rejected")
+                .code(),
+            "agent_message_invalid"
+        );
+        let mut message = agent_message();
+        message.canonical_message_digest = "A".repeat(64);
+        assert_eq!(
+            message
+                .validate()
+                .expect_err("malformed digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+
+        let notification =
+            |reason: String, safe_counts_and_states: String| AgentNotificationRecordDto {
+                notification_cursor: AgentNotificationCursorDto(4),
+                activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
+                activity_record_reference: "record-1".to_owned(),
+                level: NotificationLevel::Ordinary,
+                reason,
+                safe_counts_and_states,
+                occurred_at: 100,
+            };
+        assert!(
+            notification("reason".to_owned(), "counts".to_owned())
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            notification("  ".to_owned(), "counts".to_owned())
+                .validate()
+                .expect_err("blank reason is rejected")
+                .code(),
+            "agent_notification_record_invalid"
+        );
+        let mut blank_tree = notification("reason".to_owned(), "counts".to_owned());
+        blank_tree.activity_tree_id = AgentActivityTreeId("   ".to_owned());
+        assert_eq!(
+            blank_tree
+                .validate()
+                .expect_err("blank tree id is rejected")
+                .code(),
+            "agent_notification_record_invalid"
+        );
+    }
+
+    #[test]
+    fn bridge_dtos_validate_text_digests_and_references() {
+        let grant = BridgeRunGrantDto {
+            opaque_grant_identity: "grant-1".to_owned(),
+            issued_protocol_revision: "rev-1".to_owned(),
+        };
+        assert!(grant.validate().is_ok());
+        let command = BridgeInvocationCommandDto {
+            bridge_run_grant: grant.clone(),
+            bridge_operation_id: "operation-1".to_owned(),
+            typed_tool_invocation: "invocation".to_owned(),
+        };
+        assert!(command.validate().is_ok());
+        let mut credential_grant = grant;
+        credential_grant.opaque_grant_identity = "sk-grant".to_owned();
+        assert_eq!(
+            BridgeInvocationCommandDto {
+                bridge_run_grant: credential_grant,
+                bridge_operation_id: "operation-1".to_owned(),
+                typed_tool_invocation: "invocation".to_owned(),
+            }
+            .validate()
+            .expect_err("credential-shaped grant is rejected")
+            .code(),
+            "credentials_forbidden"
+        );
+        let mut blank_command = command;
+        blank_command.typed_tool_invocation = "   ".to_owned();
+        assert_eq!(
+            blank_command
+                .validate()
+                .expect_err("blank command field is rejected")
+                .code(),
+            "bridge_invocation_invalid"
+        );
+
+        let accepted = BridgeInvocationAcceptedDto {
+            bridge_operation_id: "operation-1".to_owned(),
+            tool_call_id: "call-1".to_owned(),
+            admission_state: "admitted".to_owned(),
+        };
+        assert!(accepted.validate().is_ok());
+        let mut blank_accepted = accepted;
+        blank_accepted.admission_state = "admitted\u{0000}".to_owned();
+        assert_eq!(
+            blank_accepted
+                .validate()
+                .expect_err("control-bearing acceptance field is rejected")
+                .code(),
+            "bridge_invocation_invalid"
+        );
+
+        let operation = BridgeOperationV1 {
+            bridge_operation_id: "operation-1".to_owned(),
+            run_id: "run-1".to_owned(),
+            mandate_id: "mandate-1".to_owned(),
+            mandate_revision: "rev-1".to_owned(),
+            model_step_id: "step-1".to_owned(),
+            tool_id: "tool-1".to_owned(),
+            descriptor_revision: "descriptor-1".to_owned(),
+            typed_input_digest: "a".repeat(64),
+            tool_call_id: "call-1".to_owned(),
+            admission_outcome: "admitted".to_owned(),
+            attempt_reference: Some("attempt-1".to_owned()),
+        };
+        assert!(operation.validate().is_ok());
+        let mut bad_digest = operation.clone();
+        bad_digest.typed_input_digest = "b".repeat(63);
+        assert_eq!(
+            bad_digest
+                .validate()
+                .expect_err("malformed typed input digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+        let mut credential_attempt = operation;
+        credential_attempt.attempt_reference = Some("Bearer attempt".to_owned());
+        assert_eq!(
+            credential_attempt
+                .validate()
+                .expect_err("credential-shaped attempt reference is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn model_tool_loop_and_active_descriptors_validate() {
+        let active_descriptor = |index: usize| ActiveToolDescriptorSelectionV1 {
+            tool_id: format!("tool-{index}"),
+            intended_owner: "mandate".to_owned(),
+            descriptor_revision: "descriptor-1".to_owned(),
+            input_schema_reference: "input-1".to_owned(),
+            result_schema_reference: "result-1".to_owned(),
+            required_capability_binding: "provider_tool_group".to_owned(),
+            mode_relation: "build".to_owned(),
+            model_function_schema_revision: "schema-1".to_owned(),
+            safe_result_projection_revision: "projection-1".to_owned(),
+            observation_contract_revision: "observation-1".to_owned(),
+            stream_shape: "stream".to_owned(),
+        };
+        let tool_loop =
+            |active_descriptors: Vec<ActiveToolDescriptorSelectionV1>| ModelToolLoopV1 {
+                tool_registry_revision_id: "registry-1".to_owned(),
+                admission_engine_revision: "admission-1".to_owned(),
+                hook_pipeline_revision: "hooks-1".to_owned(),
+                active_descriptors,
+                model_tool_loop_required: true,
+                translation_revision: "translation-1".to_owned(),
+                stream_shape: "stream".to_owned(),
+            };
+        assert!(
+            tool_loop((0..16).map(active_descriptor).collect())
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            tool_loop((0..17).map(active_descriptor).collect())
+                .validate()
+                .expect_err("17 active descriptors are rejected")
+                .code(),
+            "model_tool_loop_invalid"
+        );
+        let mut blank = tool_loop(Vec::new());
+        blank.translation_revision = "   ".to_owned();
+        assert_eq!(
+            blank
+                .validate()
+                .expect_err("blank loop field is rejected")
+                .code(),
+            "model_tool_loop_invalid"
+        );
+        let mut credential = tool_loop(Vec::new());
+        credential.hook_pipeline_revision = "sk-hooks".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped loop field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut descriptor_credential = active_descriptor(0);
+        descriptor_credential.tool_id = "Bearer tool".to_owned();
+        assert_eq!(
+            descriptor_credential
+                .validate()
+                .expect_err("credential-shaped descriptor field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut descriptor_blank = active_descriptor(0);
+        descriptor_blank.mode_relation = "build\u{0001}".to_owned();
+        assert_eq!(
+            descriptor_blank
+                .validate()
+                .expect_err("control-bearing descriptor field is rejected")
+                .code(),
+            "model_tool_loop_invalid"
+        );
+    }
+
+    #[test]
+    fn legacy_m4_selection_binding_validates_all_fields() {
+        let binding = LegacyM4SelectionBindingDto {
+            legacy_config_revision_id: "config-1".to_owned(),
+            legacy_snapshot_schema: "schema-1".to_owned(),
+            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
+            default_profile_id: "profile-1".to_owned(),
+            default_profile_revision_id: "rev-1".to_owned(),
+            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+            capability_subset: vec!["text".to_owned()],
+            execution_policy: "execution-policy".to_owned(),
+            driver_contract_revision: "driver-1.0".to_owned(),
+        };
+        assert!(binding.validate().is_ok());
+        let mut blank = binding.clone();
+        blank.driver_contract_revision = "   ".to_owned();
+        assert_eq!(
+            blank
+                .validate()
+                .expect_err("blank binding field is rejected")
+                .code(),
+            "legacy_selection_binding_invalid"
+        );
+        let mut blank_capability = binding.clone();
+        blank_capability.capability_subset = vec!["  ".to_owned()];
+        assert_eq!(
+            blank_capability
+                .validate()
+                .expect_err("blank capability entry is rejected")
+                .code(),
+            "legacy_selection_binding_invalid"
+        );
+        let mut credential = binding.clone();
+        credential.default_profile_id = "sk-profile".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped binding field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut credential_capability = binding;
+        credential_capability.capability_subset = vec!["Bearer cap".to_owned()];
+        assert_eq!(
+            credential_capability
+                .validate()
+                .expect_err("credential-shaped capability is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
     }
 
     #[test]
