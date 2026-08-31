@@ -31,6 +31,15 @@ fn bounded<T>(items: Vec<T>, max: usize, code: &'static str) -> DtoResult<Vec<T>
         Err(ErrorDto::validation(code, "collection limit exceeded"))
     }
 }
+#[must_use]
+fn credential_shaped(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("key")
+        || lower.contains("token")
+        || value.contains('\n')
+        || lower.starts_with("sk-")
+        || lower.starts_with("bearer ")
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +118,84 @@ impl ResolvedRunProviderSelectionDto {
             return Err(ErrorDto::validation(
                 "invalid_provider_kind",
                 "openai must be normalized to responses",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderProfileRevisionV1 {
+    pub profile_id: String,
+    pub revision_id: String,
+    pub provider_kind_id: String,
+    pub model_id: String,
+    pub endpoint: String,
+    pub credential_transport_mode: CredentialTransportMode,
+    pub safe_header_name: Option<String>,
+    pub capability_taxonomy_revision: String,
+    pub reasoning_compatibility_id: Option<String>,
+}
+impl ProviderProfileRevisionV1 {
+    /// Validates the credential-free profile revision fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_profile_revision_invalid` for blank, over-long, or
+    /// control-bearing text fields or an invalid safe header name;
+    /// `invalid_endpoint` for endpoint forms carrying userinfo, query, or
+    /// fragment characters; and `credentials_forbidden` for credential-shaped
+    /// values.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.profile_id,
+            &self.revision_id,
+            &self.provider_kind_id,
+            &self.model_id,
+            &self.endpoint,
+            &self.capability_taxonomy_revision,
+        ] {
+            valid_text(field, 256, "provider_profile_revision_invalid")?;
+        }
+        if let Some(compatibility) = &self.reasoning_compatibility_id {
+            valid_text(compatibility, 256, "provider_profile_revision_invalid")?;
+        }
+        if self.endpoint.contains(['?', '#', '@']) {
+            return Err(ErrorDto::validation(
+                "invalid_endpoint",
+                "endpoint is invalid",
+            ));
+        }
+        if let Some(header) = &self.safe_header_name {
+            let header = header.trim();
+            if header.is_empty()
+                || header.chars().count() > 128
+                || header.chars().any(char::is_control)
+            {
+                return Err(ErrorDto::validation(
+                    "provider_profile_revision_invalid",
+                    "safe header name is invalid",
+                ));
+            }
+        }
+        if [
+            &self.profile_id,
+            &self.revision_id,
+            &self.provider_kind_id,
+            &self.model_id,
+            &self.endpoint,
+            &self.capability_taxonomy_revision,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+            || self
+                .reasoning_compatibility_id
+                .as_deref()
+                .is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
             ));
         }
         Ok(())
@@ -233,6 +320,220 @@ pub enum ForkBoundary {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ForkBaseSnapshotV1 {
+    pub schema_version: String,
+    pub context_schema_version: String,
+    pub source_session_id: String,
+    pub conversation_tree_id: String,
+    pub boundary: ForkBoundary,
+    pub source_boundary_sequence: u64,
+    pub source_run_cursors: Vec<u64>,
+    pub effective_instruction_projection: String,
+    pub materialized_model_messages: Vec<String>,
+    pub inherited_future_defaults: Vec<String>,
+    pub historical_config_policy_references: Vec<String>,
+    pub safe_usage_provenance: Vec<String>,
+    pub terminal_tool_result_references: Vec<String>,
+    pub policy_decision_references: Vec<String>,
+    pub terminal_child_result_references: Vec<String>,
+    pub workspace_state: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ForkBaseSnapshotV2 {
+    pub schema_version: String,
+    pub context_schema_version: String,
+    pub source_session_id: String,
+    pub conversation_tree_id: String,
+    pub boundary: ForkBoundary,
+    pub source_boundary_sequence: u64,
+    pub source_run_cursors: Vec<u64>,
+    pub effective_instruction_projection: String,
+    pub materialized_model_messages: Vec<String>,
+    pub inherited_future_defaults: Vec<String>,
+    pub historical_config_policy_references: Vec<String>,
+    pub inherited_reasoning_history_references: Vec<String>,
+    pub safe_usage_provenance: Vec<String>,
+    pub terminal_tool_result_references: Vec<String>,
+    pub policy_decision_references: Vec<String>,
+    pub terminal_child_result_references: Vec<String>,
+    pub workspace_state: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ForkPreviewV1 {
+    pub preview_digest: String,
+    pub source_head_sequence: u64,
+    pub page_count: u32,
+    pub snapshot_size_bytes: u64,
+    pub workspace_state: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ForkPreviewV2 {
+    pub preview_digest: String,
+    pub source_head_sequence: u64,
+    pub page_count: u32,
+    pub snapshot_size_bytes: u64,
+    pub inherited_reasoning_history_references: Vec<String>,
+    pub workspace_state: String,
+}
+
+fn validate_fork_base_snapshot_common(
+    materialized_model_messages: &[String],
+    workspace_state: &str,
+) -> DtoResult<()> {
+    if materialized_model_messages.len() > 1024
+        || materialized_model_messages
+            .iter()
+            .map(String::len)
+            .sum::<usize>()
+            > 1024 * 1024
+    {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_too_large",
+            "fork base snapshot exceeds its 1 MiB bound",
+        ));
+    }
+    if workspace_state != "unverified" {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_unsupported",
+            "workspace state must be unverified",
+        ));
+    }
+    Ok(())
+}
+fn validate_fork_preview_common(
+    preview_digest: &str,
+    page_count: u32,
+    snapshot_size_bytes: u64,
+    workspace_state: &str,
+) -> DtoResult<()> {
+    digest(preview_digest)?;
+    if page_count > 64 || snapshot_size_bytes > 1024 * 1024 {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_too_large",
+            "fork preview exceeds its snapshot or page bound",
+        ));
+    }
+    if workspace_state != "unverified" {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_unsupported",
+            "workspace state must be unverified",
+        ));
+    }
+    Ok(())
+}
+fn validate_reasoning_references(references: &[String]) -> DtoResult<()> {
+    if references.len() > 4096 {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_too_large",
+            "inherited reasoning references exceed the 1 MiB snapshot bound",
+        ));
+    }
+    for reference in references {
+        if reference.trim().is_empty() || reference.chars().any(char::is_control) {
+            return Err(ErrorDto::validation(
+                "fork_reference_unavailable",
+                "inherited reasoning reference is malformed",
+            ));
+        }
+    }
+    if references.iter().map(String::len).sum::<usize>() > 1024 * 1024 {
+        return Err(ErrorDto::validation(
+            "fork_snapshot_too_large",
+            "inherited reasoning references exceed the 1 MiB snapshot bound",
+        ));
+    }
+    Ok(())
+}
+
+impl ForkBaseSnapshotV1 {
+    /// Validates the frozen v1 base-snapshot bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `fork_snapshot_too_large` when the materialized messages
+    /// exceed 1,024 entries or 1 MiB aggregate and
+    /// `fork_snapshot_unsupported` when the workspace state is not the closed
+    /// `unverified` value.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_fork_base_snapshot_common(&self.materialized_model_messages, &self.workspace_state)
+    }
+}
+impl ForkBaseSnapshotV2 {
+    /// Validates the frozen v2 base-snapshot bounds, including the inherited
+    /// reasoning references.
+    ///
+    /// # Errors
+    ///
+    /// Returns `fork_snapshot_too_large` for message or reference overflow,
+    /// `fork_snapshot_unsupported` for a non-`unverified` workspace state, and
+    /// `fork_reference_unavailable` for a malformed reasoning reference.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_fork_base_snapshot_common(
+            &self.materialized_model_messages,
+            &self.workspace_state,
+        )?;
+        validate_reasoning_references(&self.inherited_reasoning_history_references)
+    }
+}
+impl ForkPreviewV1 {
+    /// Validates the frozen v1 preview bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_digest` for a malformed preview digest,
+    /// `fork_snapshot_too_large` for a snapshot above 1 MiB or a preview
+    /// above 64 pages, and `fork_snapshot_unsupported` for a non-`unverified`
+    /// workspace state.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_fork_preview_common(
+            &self.preview_digest,
+            self.page_count,
+            self.snapshot_size_bytes,
+            &self.workspace_state,
+        )
+    }
+}
+impl ForkPreviewV2 {
+    /// Validates the frozen v2 preview bounds, including the inherited
+    /// reasoning references.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_digest` for a malformed preview digest,
+    /// `fork_snapshot_too_large` for snapshot, page, or reference overflow,
+    /// `fork_snapshot_unsupported` for a non-`unverified` workspace state, and
+    /// `fork_reference_unavailable` for a malformed reasoning reference.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_fork_preview_common(
+            &self.preview_digest,
+            self.page_count,
+            self.snapshot_size_bytes,
+            &self.workspace_state,
+        )?;
+        validate_reasoning_references(&self.inherited_reasoning_history_references)
+    }
+}
+
+impl From<ForkPreviewV1> for ForkPreviewDto {
+    fn from(value: ForkPreviewV1) -> Self {
+        Self {
+            preview_digest: value.preview_digest,
+            page_count: value.page_count,
+            snapshot_size_bytes: value.snapshot_size_bytes,
+        }
+    }
+}
+impl From<ForkPreviewV2> for ForkPreviewDto {
+    fn from(value: ForkPreviewV2) -> Self {
+        Self {
+            preview_digest: value.preview_digest,
+            page_count: value.page_count,
+            snapshot_size_bytes: value.snapshot_size_bytes,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningFactCategory {
@@ -283,7 +584,191 @@ pub enum ReasoningHistoryTransferDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ContextSourceEntryV1 {
+    pub source_id: String,
+    pub source_kind: String,
+    pub revision: String,
+    pub safe_label: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ContextSourceManifestV1 {
+    pub compatibility_id: String,
+    pub source_entries: Vec<ContextSourceEntryV1>,
+    pub manifest_digest: String,
+}
+impl ContextSourceManifestV1 {
+    /// Validates the bounded context-source manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `context_source_manifest_invalid` when the manifest carries no
+    /// entries or more than 256 entries, and `invalid_digest` for a malformed
+    /// manifest digest.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.source_entries.is_empty() || self.source_entries.len() > 256 {
+            return Err(ErrorDto::validation(
+                "context_source_manifest_invalid",
+                "context source manifest must carry between 1 and 256 entries",
+            ));
+        }
+        digest(&self.manifest_digest)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelContextProjectionV1 {
+    pub projection_revision: String,
+    pub context_schema_version: String,
+    pub source_manifest_digest: String,
+    pub ordered_messages: Vec<String>,
+    pub model_context_digest: String,
+}
+impl ModelContextProjectionV1 {
+    /// Validates the bounded model-context projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `model_context_projection_invalid` when the ordered messages
+    /// are empty, contain a blank entry, or exceed 1,024 entries;
+    /// `model_context_projection_too_large` when they exceed 1 MiB aggregate;
+    /// and `invalid_digest` for a malformed source-manifest or model-context
+    /// digest.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.ordered_messages.is_empty()
+            || self.ordered_messages.len() > 1024
+            || self
+                .ordered_messages
+                .iter()
+                .any(|message| message.trim().is_empty())
+        {
+            return Err(ErrorDto::validation(
+                "model_context_projection_invalid",
+                "ordered messages must be nonblank and between 1 and 1,024 entries",
+            ));
+        }
+        if self.ordered_messages.iter().map(String::len).sum::<usize>() > 1024 * 1024 {
+            return Err(ErrorDto::validation(
+                "model_context_projection_too_large",
+                "model context projection exceeds its 1 MiB bound",
+            ));
+        }
+        digest(&self.source_manifest_digest)?;
+        digest(&self.model_context_digest)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentActivityTreeId(pub String);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentActivityLimitsV1 {
+    pub max_messages: u32,
+    pub max_aggregate_bytes: u64,
+    pub max_journal_records: u32,
+    pub max_record_bytes: u32,
+    pub max_page_records: u32,
+    pub max_page_bytes: u64,
+    pub max_references: u32,
+}
+impl AgentActivityLimitsV1 {
+    /// Validates that the limits match the frozen ledger values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `agent_activity_limits_invalid` unless every limit is exactly
+    /// the frozen value: 1,024 messages, 4 MiB aggregate, 4,096 journal
+    /// records, 64 KiB per record, 256 records and 512 KiB per page, and 16
+    /// references.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.max_messages != 1024
+            || self.max_aggregate_bytes != 4 * 1024 * 1024
+            || self.max_journal_records != 4096
+            || self.max_record_bytes != 64 * 1024
+            || self.max_page_records != 256
+            || self.max_page_bytes != 512 * 1024
+            || self.max_references != 16
+        {
+            return Err(ErrorDto::validation(
+                "agent_activity_limits_invalid",
+                "activity limits must match the frozen ledger values",
+            ));
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentActivityTreeV1 {
+    pub activity_tree_id: AgentActivityTreeId,
+    pub root_run_reference: String,
+    pub activity_exchange_revision: String,
+    pub activity_journal_revision: String,
+    pub user_projection_revision: String,
+    pub fixed_limits: AgentActivityLimitsV1,
+}
+impl AgentActivityTreeV1 {
+    /// Validates the tree's safe text fields and frozen limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `agent_activity_tree_invalid` for blank, over-long, or
+    /// control-bearing text fields and `agent_activity_limits_invalid` when
+    /// the fixed limits depart from the frozen ledger values.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.activity_tree_id.0,
+            &self.root_run_reference,
+            &self.activity_exchange_revision,
+            &self.activity_journal_revision,
+            &self.user_projection_revision,
+        ] {
+            valid_text(field, 256, "agent_activity_tree_invalid")?;
+        }
+        self.fixed_limits.validate()
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentActivityPairV1 {
+    pub pair_id: String,
+    pub activity_tree_id: AgentActivityTreeId,
+    pub parent_run_reference: String,
+    pub child_run_reference: String,
+    pub activity_exchange_revision: String,
+    pub activity_journal_revision: String,
+    pub user_projection_revision: String,
+    pub fixed_limits: AgentActivityLimitsV1,
+}
+impl AgentActivityPairV1 {
+    /// Validates the pair's distinct run references, safe text fields, and
+    /// frozen limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns `agent_activity_pair_invalid` when the parent and child run
+    /// references are equal or a text field is blank, over-long, or
+    /// control-bearing, and `agent_activity_limits_invalid` when the fixed
+    /// limits depart from the frozen ledger values.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.parent_run_reference == self.child_run_reference {
+            return Err(ErrorDto::validation(
+                "agent_activity_pair_invalid",
+                "parent and child run references must differ",
+            ));
+        }
+        for field in [
+            &self.pair_id,
+            &self.activity_tree_id.0,
+            &self.parent_run_reference,
+            &self.child_run_reference,
+            &self.activity_exchange_revision,
+            &self.activity_journal_revision,
+            &self.user_projection_revision,
+        ] {
+            valid_text(field, 256, "agent_activity_pair_invalid")?;
+        }
+        self.fixed_limits.validate()
+    }
+}
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMessageDirection {
@@ -479,6 +964,109 @@ pub struct ActiveToolDescriptorSelectionV1 {
     pub safe_result_projection_revision: String,
     pub observation_contract_revision: String,
     pub stream_shape: String,
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolDescriptorRevision {
+    pub tool_id: String,
+    pub descriptor_revision: String,
+    pub intended_owner: String,
+    pub input_schema_reference: String,
+    pub result_schema_reference: String,
+    pub required_capability_binding: String,
+    pub mode_relation: String,
+    pub model_function_schema_revision: String,
+    pub safe_result_projection_revision: String,
+    pub observation_contract_revision: String,
+    pub stream_shape: String,
+}
+impl ToolDescriptorRevision {
+    /// Validates the credential-free descriptor fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tool_descriptor_revision_invalid` for blank, over-long, or
+    /// control-bearing fields and `credentials_forbidden` for
+    /// credential-shaped values.
+    pub fn validate(&self) -> DtoResult<()> {
+        let fields = [
+            &self.tool_id,
+            &self.descriptor_revision,
+            &self.intended_owner,
+            &self.input_schema_reference,
+            &self.result_schema_reference,
+            &self.required_capability_binding,
+            &self.mode_relation,
+            &self.model_function_schema_revision,
+            &self.safe_result_projection_revision,
+            &self.observation_contract_revision,
+            &self.stream_shape,
+        ];
+        for field in fields {
+            valid_text(field, 256, "tool_descriptor_revision_invalid")?;
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolRegistryRevision {
+    pub registry_revision_id: String,
+    pub descriptors: Vec<ToolDescriptorRevision>,
+    pub admission_engine_revision: String,
+    pub hook_pipeline_revision: String,
+}
+impl ToolRegistryRevision {
+    /// Validates the bounded registry revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tool_registry_revision_too_large` when the revision carries
+    /// more than 256 descriptors or the descriptor fields exceed 512 KiB
+    /// aggregate, `duplicate_tool_descriptor` for a repeated tool ID, and the
+    /// per-descriptor failures for any invalid descriptor.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.descriptors.len() > 256 {
+            return Err(ErrorDto::validation(
+                "tool_registry_revision_too_large",
+                "tool registry revision exceeds its 256-descriptor bound",
+            ));
+        }
+        let mut seen_tool_ids: Vec<&str> = Vec::new();
+        let mut aggregate_bytes = 0usize;
+        for descriptor in &self.descriptors {
+            descriptor.validate()?;
+            if seen_tool_ids.contains(&descriptor.tool_id.as_str()) {
+                return Err(ErrorDto::validation(
+                    "duplicate_tool_descriptor",
+                    "duplicate tool descriptor",
+                ));
+            }
+            seen_tool_ids.push(&descriptor.tool_id);
+            aggregate_bytes += descriptor.tool_id.len()
+                + descriptor.descriptor_revision.len()
+                + descriptor.intended_owner.len()
+                + descriptor.input_schema_reference.len()
+                + descriptor.result_schema_reference.len()
+                + descriptor.required_capability_binding.len()
+                + descriptor.mode_relation.len()
+                + descriptor.model_function_schema_revision.len()
+                + descriptor.safe_result_projection_revision.len()
+                + descriptor.observation_contract_revision.len()
+                + descriptor.stream_shape.len();
+        }
+        if aggregate_bytes > 512 * 1024 {
+            return Err(ErrorDto::validation(
+                "tool_registry_revision_too_large",
+                "tool registry revision exceeds its 512 KiB bound",
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ModelToolExchangeDto {
@@ -1244,5 +1832,666 @@ mod tests {
                 "committed fixture must not contain the fake secret"
             );
         }
+    }
+
+    fn profile_revision() -> ProviderProfileRevisionV1 {
+        ProviderProfileRevisionV1 {
+            profile_id: "profile-1".to_owned(),
+            revision_id: "rev-1".to_owned(),
+            provider_kind_id: "responses".to_owned(),
+            model_id: "model-1".to_owned(),
+            endpoint: "https://provider.example".to_owned(),
+            credential_transport_mode: CredentialTransportMode::SafeHeader,
+            safe_header_name: Some("x-safe-header".to_owned()),
+            capability_taxonomy_revision: "model-capability-taxonomy-v1".to_owned(),
+            reasoning_compatibility_id: Some("compat-1".to_owned()),
+        }
+    }
+
+    fn base_snapshot_v1() -> ForkBaseSnapshotV1 {
+        ForkBaseSnapshotV1 {
+            schema_version: "1".to_owned(),
+            context_schema_version: "1".to_owned(),
+            source_session_id: "source".to_owned(),
+            conversation_tree_id: "tree-1".to_owned(),
+            boundary: ForkBoundary::CommittedUserTurn {
+                source_turn_id: "turn-1".to_owned(),
+                accepted_sequence: 7,
+            },
+            source_boundary_sequence: 7,
+            source_run_cursors: vec![3, 5],
+            effective_instruction_projection: "instruction".to_owned(),
+            materialized_model_messages: vec!["message-1".to_owned()],
+            inherited_future_defaults: vec!["default-1".to_owned()],
+            historical_config_policy_references: vec!["policy-1".to_owned()],
+            safe_usage_provenance: vec!["usage-1".to_owned()],
+            terminal_tool_result_references: vec!["tool-1".to_owned()],
+            policy_decision_references: vec!["decision-1".to_owned()],
+            terminal_child_result_references: vec!["child-1".to_owned()],
+            workspace_state: "unverified".to_owned(),
+        }
+    }
+
+    fn base_snapshot_v2() -> ForkBaseSnapshotV2 {
+        ForkBaseSnapshotV2 {
+            schema_version: "2".to_owned(),
+            context_schema_version: "1".to_owned(),
+            source_session_id: "source".to_owned(),
+            conversation_tree_id: "tree-1".to_owned(),
+            boundary: ForkBoundary::CommittedUserTurn {
+                source_turn_id: "turn-1".to_owned(),
+                accepted_sequence: 7,
+            },
+            source_boundary_sequence: 7,
+            source_run_cursors: vec![3, 5],
+            effective_instruction_projection: "instruction".to_owned(),
+            materialized_model_messages: vec!["message-1".to_owned()],
+            inherited_future_defaults: vec!["default-1".to_owned()],
+            historical_config_policy_references: vec!["policy-1".to_owned()],
+            inherited_reasoning_history_references: vec!["reasoning-1".to_owned()],
+            safe_usage_provenance: vec!["usage-1".to_owned()],
+            terminal_tool_result_references: vec!["tool-1".to_owned()],
+            policy_decision_references: vec!["decision-1".to_owned()],
+            terminal_child_result_references: vec!["child-1".to_owned()],
+            workspace_state: "unverified".to_owned(),
+        }
+    }
+
+    fn preview_v1() -> ForkPreviewV1 {
+        ForkPreviewV1 {
+            preview_digest: "a".repeat(64),
+            source_head_sequence: 7,
+            page_count: 3,
+            snapshot_size_bytes: 4096,
+            workspace_state: "unverified".to_owned(),
+        }
+    }
+
+    fn preview_v2() -> ForkPreviewV2 {
+        ForkPreviewV2 {
+            preview_digest: "a".repeat(64),
+            source_head_sequence: 7,
+            page_count: 3,
+            snapshot_size_bytes: 4096,
+            inherited_reasoning_history_references: vec!["reasoning-1".to_owned()],
+            workspace_state: "unverified".to_owned(),
+        }
+    }
+
+    fn frozen_limits() -> AgentActivityLimitsV1 {
+        AgentActivityLimitsV1 {
+            max_messages: 1024,
+            max_aggregate_bytes: 4 * 1024 * 1024,
+            max_journal_records: 4096,
+            max_record_bytes: 64 * 1024,
+            max_page_records: 256,
+            max_page_bytes: 512 * 1024,
+            max_references: 16,
+        }
+    }
+
+    fn tool_descriptor(index: usize) -> ToolDescriptorRevision {
+        ToolDescriptorRevision {
+            tool_id: format!("tool-{index}"),
+            descriptor_revision: "descriptor-1".to_owned(),
+            intended_owner: "mandate".to_owned(),
+            input_schema_reference: "input-1".to_owned(),
+            result_schema_reference: "result-1".to_owned(),
+            required_capability_binding: "provider_tool_group".to_owned(),
+            mode_relation: "build".to_owned(),
+            model_function_schema_revision: "schema-1".to_owned(),
+            safe_result_projection_revision: "projection-1".to_owned(),
+            observation_contract_revision: "observation-1".to_owned(),
+            stream_shape: "stream".to_owned(),
+        }
+    }
+
+    #[test]
+    fn provider_profile_revision_family_round_trips_and_validates() {
+        let revision = profile_revision();
+        assert!(revision.validate().is_ok());
+        round_trip(&revision);
+        let mut bearer = revision;
+        bearer.credential_transport_mode = CredentialTransportMode::Bearer;
+        round_trip(&bearer);
+    }
+
+    #[test]
+    fn provider_profile_revision_validation_rejects_invalid_fields() {
+        let too_long = "a".repeat(257);
+        let control = "a\u{0000}b";
+        for field in ["   ", too_long.as_str(), control] {
+            let mut revision = profile_revision();
+            revision.profile_id = field.to_owned();
+            assert_eq!(
+                revision
+                    .validate()
+                    .expect_err("invalid profile field is rejected")
+                    .code(),
+                "provider_profile_revision_invalid"
+            );
+        }
+        for endpoint in [
+            "https://provider.example?q=1",
+            "https://provider.example#frag",
+            "https://user@provider.example",
+        ] {
+            let mut revision = profile_revision();
+            revision.endpoint = endpoint.to_owned();
+            assert_eq!(
+                revision
+                    .validate()
+                    .expect_err("invalid endpoint is rejected")
+                    .code(),
+                "invalid_endpoint"
+            );
+        }
+        let long_header = "a".repeat(129);
+        for header in ["   ", long_header.as_str(), "header\u{0000}name"] {
+            let mut revision = profile_revision();
+            revision.safe_header_name = Some(header.to_owned());
+            assert_eq!(
+                revision
+                    .validate()
+                    .expect_err("invalid header name is rejected")
+                    .code(),
+                "provider_profile_revision_invalid"
+            );
+        }
+        for value in ["sk-123", "Bearer abc123", "token-value"] {
+            let mut revision = profile_revision();
+            revision.model_id = value.to_owned();
+            assert_eq!(
+                revision
+                    .validate()
+                    .expect_err("credential-shaped value is rejected")
+                    .code(),
+                "credentials_forbidden"
+            );
+        }
+    }
+
+    #[test]
+    fn fork_base_snapshot_families_round_trip_and_validate() {
+        let v1 = base_snapshot_v1();
+        assert!(v1.validate().is_ok());
+        round_trip(&v1);
+        let v2 = base_snapshot_v2();
+        assert!(v2.validate().is_ok());
+        round_trip(&v2);
+    }
+
+    #[test]
+    fn fork_base_snapshot_limits_accept_at_limit_and_reject_one_over() {
+        let mut snapshot = base_snapshot_v1();
+        let entry = "a".repeat(1024);
+        snapshot.materialized_model_messages = (0..1024).map(|_| entry.clone()).collect();
+        assert!(snapshot.validate().is_ok());
+        snapshot.materialized_model_messages.push("a".to_owned());
+        assert_eq!(
+            snapshot
+                .validate()
+                .expect_err("1,025 messages are rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+        let mut over_aggregate = base_snapshot_v1();
+        over_aggregate.materialized_model_messages = (0..1024).map(|_| entry.clone()).collect();
+        over_aggregate.materialized_model_messages[0] = "a".repeat(1025);
+        assert_eq!(
+            over_aggregate
+                .validate()
+                .expect_err("aggregate over 1 MiB is rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+
+        let mut v2 = base_snapshot_v2();
+        v2.inherited_reasoning_history_references =
+            (0..4096).map(|_| "reasoning".to_owned()).collect();
+        assert!(v2.validate().is_ok());
+        v2.inherited_reasoning_history_references
+            .push("reasoning".to_owned());
+        assert_eq!(
+            v2.validate()
+                .expect_err("4,097 references are rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+        let mut over_references = base_snapshot_v2();
+        over_references.inherited_reasoning_history_references =
+            (0..4096).map(|_| "a".repeat(256)).collect();
+        assert!(over_references.validate().is_ok());
+        over_references.inherited_reasoning_history_references[0] = "a".repeat(257);
+        assert_eq!(
+            over_references
+                .validate()
+                .expect_err("reference aggregate over 1 MiB is rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+        let mut malformed = base_snapshot_v2();
+        malformed.inherited_reasoning_history_references = vec!["   ".to_owned()];
+        assert_eq!(
+            malformed
+                .validate()
+                .expect_err("blank reference is rejected")
+                .code(),
+            "fork_reference_unavailable"
+        );
+        let mut unsupported = base_snapshot_v1();
+        unsupported.workspace_state = "verified".to_owned();
+        assert_eq!(
+            unsupported
+                .validate()
+                .expect_err("non-unverified workspace state is rejected")
+                .code(),
+            "fork_snapshot_unsupported"
+        );
+    }
+
+    #[test]
+    fn fork_preview_families_round_trip_validate_and_bridge_to_fork_preview_dto() {
+        let v1 = preview_v1();
+        assert!(v1.validate().is_ok());
+        round_trip(&v1);
+        let v2 = preview_v2();
+        assert!(v2.validate().is_ok());
+        round_trip(&v2);
+
+        let bridged_v1: ForkPreviewDto = v1.into();
+        assert_eq!(bridged_v1.preview_digest, "a".repeat(64));
+        assert_eq!(bridged_v1.page_count, 3);
+        assert_eq!(bridged_v1.snapshot_size_bytes, 4096);
+        let bridged_v2: ForkPreviewDto = v2.into();
+        assert_eq!(bridged_v2, bridged_v1);
+    }
+
+    #[test]
+    fn fork_preview_validation_rejects_invalid_digests_bounds_and_workspace_state() {
+        for digest in ["a".repeat(63), "A".repeat(64)] {
+            let mut preview = preview_v1();
+            preview.preview_digest = digest;
+            assert_eq!(
+                preview
+                    .validate()
+                    .expect_err("malformed digest is rejected")
+                    .code(),
+                "invalid_digest"
+            );
+        }
+        let mut large = preview_v1();
+        large.snapshot_size_bytes = 1024 * 1024 + 1;
+        assert_eq!(
+            large
+                .validate()
+                .expect_err("oversized snapshot is rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+        let mut many_pages = preview_v1();
+        many_pages.page_count = 65;
+        assert_eq!(
+            many_pages
+                .validate()
+                .expect_err("over-page preview is rejected")
+                .code(),
+            "fork_snapshot_too_large"
+        );
+        let mut unsupported = preview_v2();
+        unsupported.workspace_state = "verified".to_owned();
+        assert_eq!(
+            unsupported
+                .validate()
+                .expect_err("non-unverified workspace state is rejected")
+                .code(),
+            "fork_snapshot_unsupported"
+        );
+        let mut malformed = preview_v2();
+        malformed.inherited_reasoning_history_references = vec!["".to_owned()];
+        assert_eq!(
+            malformed
+                .validate()
+                .expect_err("blank reference is rejected")
+                .code(),
+            "fork_reference_unavailable"
+        );
+    }
+
+    #[test]
+    fn context_source_manifest_family_round_trips_and_validates() {
+        let manifest = ContextSourceManifestV1 {
+            compatibility_id: "compat-1".to_owned(),
+            source_entries: vec![ContextSourceEntryV1 {
+                source_id: "source-1".to_owned(),
+                source_kind: "goal".to_owned(),
+                revision: "rev-1".to_owned(),
+                safe_label: Some("label".to_owned()),
+            }],
+            manifest_digest: "a".repeat(64),
+        };
+        assert!(manifest.validate().is_ok());
+        round_trip(&manifest);
+        round_trip(&manifest.source_entries[0]);
+        for entries in [
+            Vec::new(),
+            (0..257)
+                .map(|i| ContextSourceEntryV1 {
+                    source_id: format!("source-{i}"),
+                    source_kind: "goal".to_owned(),
+                    revision: "rev-1".to_owned(),
+                    safe_label: None,
+                })
+                .collect(),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid.source_entries = entries;
+            assert_eq!(
+                invalid
+                    .validate()
+                    .expect_err("out-of-bounds entries are rejected")
+                    .code(),
+                "context_source_manifest_invalid"
+            );
+        }
+        let mut bad_digest = manifest;
+        bad_digest.manifest_digest = "A".repeat(64);
+        assert_eq!(
+            bad_digest
+                .validate()
+                .expect_err("malformed digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+    }
+
+    #[test]
+    fn model_context_projection_round_trips_and_validates() {
+        let projection = ModelContextProjectionV1 {
+            projection_revision: "projection-1".to_owned(),
+            context_schema_version: "1".to_owned(),
+            source_manifest_digest: "a".repeat(64),
+            ordered_messages: vec!["message-1".to_owned(), "message-2".to_owned()],
+            model_context_digest: "a".repeat(64),
+        };
+        assert!(projection.validate().is_ok());
+        round_trip(&projection);
+    }
+
+    #[test]
+    fn model_context_projection_validation_rejects_invalid_bounds_and_digests() {
+        let projection = |ordered_messages: Vec<String>| ModelContextProjectionV1 {
+            projection_revision: "projection-1".to_owned(),
+            context_schema_version: "1".to_owned(),
+            source_manifest_digest: "a".repeat(64),
+            ordered_messages,
+            model_context_digest: "a".repeat(64),
+        };
+        assert_eq!(
+            projection(Vec::new())
+                .validate()
+                .expect_err("empty projection is rejected")
+                .code(),
+            "model_context_projection_invalid"
+        );
+        assert_eq!(
+            projection((0..1025).map(|i| format!("message-{i}")).collect())
+                .validate()
+                .expect_err("1,025 messages are rejected")
+                .code(),
+            "model_context_projection_invalid"
+        );
+        assert_eq!(
+            projection(vec!["   ".to_owned()])
+                .validate()
+                .expect_err("blank message is rejected")
+                .code(),
+            "model_context_projection_invalid"
+        );
+        assert_eq!(
+            projection(vec!["a".repeat(1024 * 1024 + 1)])
+                .validate()
+                .expect_err("aggregate over 1 MiB is rejected")
+                .code(),
+            "model_context_projection_too_large"
+        );
+        let mut bad_source_digest = projection(vec!["message".to_owned()]);
+        bad_source_digest.source_manifest_digest = "b".repeat(63);
+        assert_eq!(
+            bad_source_digest
+                .validate()
+                .expect_err("malformed source digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+        let mut bad_digest = projection(vec!["message".to_owned()]);
+        bad_digest.model_context_digest = "b".repeat(65);
+        assert_eq!(
+            bad_digest
+                .validate()
+                .expect_err("malformed digest is rejected")
+                .code(),
+            "invalid_digest"
+        );
+    }
+
+    #[test]
+    fn agent_activity_limits_require_the_frozen_ledger_values() {
+        let limits = frozen_limits();
+        assert!(limits.validate().is_ok());
+        round_trip(&limits);
+
+        let mut changed = limits;
+        changed.max_messages = 1023;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered message limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_aggregate_bytes = 4 * 1024 * 1024 - 1;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered aggregate limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_journal_records = 4097;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered journal limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_record_bytes = 64 * 1024 + 1;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered record limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_page_records = 255;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered page record limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_page_bytes = 512 * 1024 - 1;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered page byte limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+        let mut changed = limits;
+        changed.max_references = 15;
+        assert_eq!(
+            changed
+                .validate()
+                .expect_err("altered reference limit is rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+    }
+
+    #[test]
+    fn agent_activity_tree_and_pair_round_trip_and_validate() {
+        let tree = AgentActivityTreeV1 {
+            activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
+            root_run_reference: "run-1".to_owned(),
+            activity_exchange_revision: "exchange-1".to_owned(),
+            activity_journal_revision: "journal-1".to_owned(),
+            user_projection_revision: "projection-1".to_owned(),
+            fixed_limits: frozen_limits(),
+        };
+        assert!(tree.validate().is_ok());
+        round_trip(&tree);
+
+        let pair = AgentActivityPairV1 {
+            pair_id: "pair-1".to_owned(),
+            activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
+            parent_run_reference: "run-1".to_owned(),
+            child_run_reference: "run-2".to_owned(),
+            activity_exchange_revision: "exchange-1".to_owned(),
+            activity_journal_revision: "journal-1".to_owned(),
+            user_projection_revision: "projection-1".to_owned(),
+            fixed_limits: frozen_limits(),
+        };
+        assert!(pair.validate().is_ok());
+        round_trip(&pair);
+
+        let mut same_runs = pair;
+        same_runs.child_run_reference = "run-1".to_owned();
+        assert_eq!(
+            same_runs
+                .validate()
+                .expect_err("equal run references are rejected")
+                .code(),
+            "agent_activity_pair_invalid"
+        );
+
+        let mut blank_tree = tree.clone();
+        blank_tree.root_run_reference = "   ".to_owned();
+        assert_eq!(
+            blank_tree
+                .validate()
+                .expect_err("blank tree field is rejected")
+                .code(),
+            "agent_activity_tree_invalid"
+        );
+
+        let mut bad_limits_tree = tree;
+        bad_limits_tree.fixed_limits.max_references = 15;
+        assert_eq!(
+            bad_limits_tree
+                .validate()
+                .expect_err("altered limits are rejected")
+                .code(),
+            "agent_activity_limits_invalid"
+        );
+    }
+
+    #[test]
+    fn tool_descriptor_and_registry_revisions_round_trip_and_validate() {
+        let descriptor = tool_descriptor(0);
+        assert!(descriptor.validate().is_ok());
+        round_trip(&descriptor);
+
+        let registry = ToolRegistryRevision {
+            registry_revision_id: "registry-1".to_owned(),
+            descriptors: vec![tool_descriptor(0), tool_descriptor(1)],
+            admission_engine_revision: "admission-1".to_owned(),
+            hook_pipeline_revision: "hooks-1".to_owned(),
+        };
+        assert!(registry.validate().is_ok());
+        round_trip(&registry);
+
+        let mut blank = descriptor.clone();
+        blank.mode_relation = "   ".to_owned();
+        assert_eq!(
+            blank
+                .validate()
+                .expect_err("blank descriptor field is rejected")
+                .code(),
+            "tool_descriptor_revision_invalid"
+        );
+        let mut credential = descriptor;
+        credential.tool_id = "sk-key-123".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped value is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut duplicate = registry;
+        duplicate.descriptors = vec![tool_descriptor(0), tool_descriptor(0)];
+        assert_eq!(
+            duplicate
+                .validate()
+                .expect_err("duplicate tool id is rejected")
+                .code(),
+            "duplicate_tool_descriptor"
+        );
+    }
+
+    #[test]
+    fn tool_registry_revision_bounds_accept_at_limit_and_reject_one_over() {
+        let small_registry = |count: usize| ToolRegistryRevision {
+            registry_revision_id: "registry-1".to_owned(),
+            descriptors: (0..count).map(tool_descriptor).collect(),
+            admission_engine_revision: "admission-1".to_owned(),
+            hook_pipeline_revision: "hooks-1".to_owned(),
+        };
+        assert!(small_registry(256).validate().is_ok());
+        assert_eq!(
+            small_registry(257)
+                .validate()
+                .expect_err("257 descriptors are rejected")
+                .code(),
+            "tool_registry_revision_too_large"
+        );
+
+        // Max-size descriptors: each carries 256 chars in ten fields plus an
+        // eight-char tool ID, so 204 fit within 512 KiB and 205 do not.
+        let max_size_descriptor = |index: usize| ToolDescriptorRevision {
+            tool_id: format!("tool-{index:0>4}"),
+            descriptor_revision: "a".repeat(256),
+            intended_owner: "a".repeat(256),
+            input_schema_reference: "a".repeat(256),
+            result_schema_reference: "a".repeat(256),
+            required_capability_binding: "a".repeat(256),
+            mode_relation: "a".repeat(256),
+            model_function_schema_revision: "a".repeat(256),
+            safe_result_projection_revision: "a".repeat(256),
+            observation_contract_revision: "a".repeat(256),
+            stream_shape: "a".repeat(256),
+        };
+        let full_registry = |count: usize| ToolRegistryRevision {
+            registry_revision_id: "registry-1".to_owned(),
+            descriptors: (0..count).map(max_size_descriptor).collect(),
+            admission_engine_revision: "admission-1".to_owned(),
+            hook_pipeline_revision: "hooks-1".to_owned(),
+        };
+        assert!(full_registry(204).validate().is_ok());
+        assert_eq!(
+            full_registry(205)
+                .validate()
+                .expect_err("205 max-size descriptors exceed 512 KiB")
+                .code(),
+            "tool_registry_revision_too_large"
+        );
     }
 }
