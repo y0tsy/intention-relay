@@ -39,8 +39,7 @@ use intention_transport::{
 #[cfg(any(test, feature = "test-support"))]
 use intention_transport::{LocalConnection, negotiate_daemon};
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto,
-    ToolCallDto,
+    CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
 };
 #[cfg(test)]
 use std::thread;
@@ -675,7 +674,7 @@ const fn run_subscription_response(
         local_protocol_version(),
         correlation_id,
         ProtocolMessageDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             ProtocolResponsePayloadDto::RunSubscription(response),
         ),
     ))
@@ -953,7 +952,7 @@ async fn serve_async_ordinary(
         let response = ProtocolResponseEnvelopeDto::new(
             local_protocol_version(),
             request.correlation_id(),
-            ProtocolMessageDto::new(SchemaVersionDto::new(1, 0), payload),
+            ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
         );
         if responses.send(&response).await.is_err() {
             return;
@@ -1378,7 +1377,7 @@ fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFa
     let response = ProtocolResponseEnvelopeDto::new(
         local_protocol_version(),
         request.correlation_id(),
-        ProtocolMessageDto::new(SchemaVersionDto::new(1, 0), payload),
+        ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
     );
     let _ = connection.send_response(&response);
 }
@@ -1430,7 +1429,8 @@ mod tests {
     };
     use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener, negotiate_client};
     use intention_types::{
-        ConfigRevisionId, CorrelationIdDto, ProjectId, TimestampDto, TurnId, WorkspaceId,
+        ConfigRevisionId, CorrelationIdDto, ProjectId, SchemaVersionDto, TimestampDto, TurnId,
+        WorkspaceId,
     };
     use tempfile::TempDir;
 
@@ -1637,7 +1637,7 @@ mod tests {
                 local_protocol_version(),
                 create_correlation,
                 ProtocolMessageDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
                         CreateSessionCommandDto::new(
                             ProjectId::new(),
@@ -1669,7 +1669,7 @@ mod tests {
                 local_protocol_version(),
                 turn_correlation,
                 ProtocolMessageDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
                         SendUserTurnCommandDto::new(session_id, TurnId::new(), "streamed turn")
                             .expect("fixture turn is valid"),
@@ -1710,13 +1710,20 @@ mod tests {
             .await
             .expect("stream client negotiates");
         let correlation = CorrelationIdDto::new();
-        let subscription =
-            SubscribeRunCommandDto::new(SchemaVersionDto::new(1, 0), session_id, run_id, None);
+        let subscription = SubscribeRunCommandDto::new(
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+            session_id,
+            run_id,
+            None,
+        );
         requests
             .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
                 local_protocol_version(),
                 correlation,
-                ProtocolMessageDto::new(SchemaVersionDto::new(1, 0), subscription),
+                ProtocolMessageDto::new(
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                    subscription,
+                ),
             ))
             .await
             .expect("stream subscription sends");
@@ -2112,7 +2119,7 @@ mod tests {
                 local_protocol_version(),
                 CorrelationIdDto::new(),
                 ProtocolMessageDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
                 ),
             ))

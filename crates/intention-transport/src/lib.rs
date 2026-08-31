@@ -663,7 +663,7 @@ pub fn negotiate_daemon(
 /// Returns the currently implemented local protocol version.
 #[must_use]
 pub const fn local_protocol_version() -> ProtocolVersionDto {
-    ProtocolVersionDto::new(1, 0)
+    intention_protocol::CURRENT_PROTOCOL_VERSION
 }
 
 fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {

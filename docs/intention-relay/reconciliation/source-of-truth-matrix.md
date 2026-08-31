@@ -53,6 +53,19 @@ contradiction register.
 | QLT-001 | Later implementation requires declared owners, test targets, coverage tiers, feature treatment, architecture fixtures, and outcome evidence. | future | Adopt | TDD verification | No production activation from research alone. | Foundation | quality review |
 | RDM-001 | M4+ Foundation is documentation-only; M5-M9 are not silently renumbered or replaced. | all | Adopt | roadmap | A later roadmap decision is required for delivery changes. | Foundation | roadmap review |
 
+## M5+ Slice 1 contract ledger
+
+| ID | Statement | Status | Disposition | Sources | Constraints | Milestone | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SL1-001 | Protocol and public DTO schemas advance to 1.1; TOML remains 1 and SQLite remains 3. | Accepted | Adopt | ADR 0036; architectures 03/02/04 | No storage migration. | M5+ Slice 1 | runtime version assertions (`CURRENT_PROTOCOL_VERSION`/`CURRENT_DTO_SCHEMA_VERSION` = 1.1, referenced by intention, intention-client, intention-transport, intention-daemon); public field-table fixtures; ADR 0036 Appendix A |
+| SL1-002 | Seven capabilities are additive; effective capability is the hello intersection and unsupported families fail closed; duplicates reject. | Accepted | Adopt | ADR 0036; architecture 03 | No partial contract/effect. | M5+ Slice 1 | negotiation fixtures (`hello-compatible-minor-v1`, `hello-incompatible-major-v2`, `hello-unnegotiated-capability-v1`, duplicate rejection); EVD-044 |
+| SL1-003 | `intention-domain` owns IRCR/typed-tlv-v1/SHA-256 canonicalization, digests, identities, and numeric tags. | Accepted | Adopt | ADR 0036; architecture 14 | Digest excludes itself, credentials, paths, display/readiness/current state. | M5+ Slice 1 | canonical codec and golden tests (v3/v4 records, envelope, activity selection, policy selection, identities, tag-registry parity); EVD-043 |
+| SL1-004 | Execution-meaning v3/v4, envelope, execution kinds, policy selection, activity selection, and fixed activity limits are frozen. | Accepted | Adopt | ADR 0036; architectures 14/24/27 | v4 adds agent activity at tag 11. | M5+ Slice 1 | public DTO round trips and ADR 0036 Appendix A field-table fixtures; EVD-042 |
+| SL1-005 | Ownership is split across domain, protocol, storage, tools, providers, daemon, composition, and adapters as recorded. | Accepted | Adopt | ADR 0036; architecture README | No new crate/dependency/feature/tier/exclusion; M6-M9 untouched. | M5+ Slice 1 | architecture and quality-policy checks; EVD-046 |
+| SL1-006 | SQLite schema 3 and all M3/M4 durable authorities remain unchanged. | Accepted | PreserveHistorical | ADR 0036; architectures 04/14 | No migration, synthetic historical records, or current-state reconstruction. | M5+ Slice 1 | schema-3 and M3/M4 byte-preservation tests against the production schema export; EVD-045 |
+| SL1-007 | Legacy M4 selection is referenced without rewriting bytes using `legacy-uuid:<canonical UUID>`. | Accepted | PreserveHistorical | ADR 0036; architecture 14 | Legacy bytes and meaning remain authoritative. | M5+ Slice 1 | legacy selection binding and byte-preservation tests (`legacy_selection_reference_invalid`, byte-for-byte round trip); EVD-045 |
+| SL1-008 | Slice 1 requires round trips, goldens, negotiation, preservation, future-schema, fake-secret, determinism, and quality-gate evidence. | Verified | Adopt | ADR 0036; roadmap; quality gates | `make quick`, `make verify`, docs-check, Linux/Windows CI. | M5+ Slice 1 | EVD-042..046; `make quick` (626 tests); `make verify`; docs-check; CI run 33397135574 passed 9/9 |
+
 ## Post-M5 configuration and provider control-plane topics
 
 | Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |

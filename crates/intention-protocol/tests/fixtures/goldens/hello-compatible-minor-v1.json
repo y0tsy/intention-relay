@@ -1,0 +1,16 @@
+{
+  "version": {
+    "major": 1,
+    "minor": 1
+  },
+  "capabilities": [
+    "provider_profiles_v1",
+    "session_fork_v1",
+    "normalized_reasoning_stream_v1",
+    "agent_activity_v1",
+    "user_notifications_v1",
+    "daemon_tool_gateway_v1",
+    "model_tool_loop_v1"
+  ],
+  "adapter_name": "fixture-adapter"
+}

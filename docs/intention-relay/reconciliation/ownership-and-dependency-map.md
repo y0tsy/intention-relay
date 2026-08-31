@@ -33,6 +33,17 @@
 
 ## Future package dependency shape
 
+## M5+ Slice 1 contract ownership
+
+| Family | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Canonical meaning and selections | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | DTO/canonical goldens | Existing declared tiers |
+| Public frames and negotiation | `intention-domain` facts | `intention-domain` nested values | `intention-domain` | existing storage owners | `intention-protocol` | negotiation/round-trip fixtures | Existing declared tiers |
+| Typed tools and loop | `intention-tools` | `intention-domain` meaning | `intention-domain` | existing storage owners | `intention-protocol` | tool contract fixtures | Existing declared tiers |
+| Provider translation | provider crates | provider-private translation | domain registry | existing storage owners | protocol DTOs | provider mapping fixtures | Existing declared tiers |
+| Process/publication and assembly | `intention-daemon` / `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
+| Adapters | `intention-client`, then TUI/Tauri | client mapping | domain facts | no adapter authority | protocol client | adapter parity fixtures | Existing declared tiers |
+
 ```mermaid
 flowchart TD
   F[Foundation] --> E[Execution meaning]

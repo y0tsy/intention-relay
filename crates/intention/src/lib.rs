@@ -61,9 +61,9 @@ use intention_types::{
 use intention_types::{ProjectId, WorkspaceId};
 use intention_workspace::WorkspaceRoot;
 
-const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
+const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
-    intention_protocol::ProtocolVersionDto::new(1, 0);
+    intention_protocol::CURRENT_PROTOCOL_VERSION;
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 
 /// Public M3 daemon application facade over a private durable composition.

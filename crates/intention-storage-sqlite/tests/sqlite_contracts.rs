@@ -818,6 +818,79 @@ fn migration_rejects_future_schema_and_config_snapshot_is_safe_to_persist() {
 }
 
 #[test]
+fn slice1_storage_schema_three_remains_authoritative() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let path = directory.path().join("storage.sqlite");
+    let _store = SqliteStorageRepository::open(
+        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned()).expect("absolute path"),
+    )
+    .expect("database opens");
+    let connection = sqlite::Connection::open(path).expect("database reopens");
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("schema version reads");
+    assert_eq!(version, 3);
+    let expected = [
+        "projects",
+        "workspace_roots",
+        "sessions",
+        "turns",
+        "runs",
+        "queued_turns",
+        "configuration_revisions",
+        "domain_events",
+        "session_snapshots",
+        "run_snapshots",
+        "run_cursors",
+        "model_run_facts",
+        "model_run_snapshots",
+        "tool_results",
+    ];
+    let future = [
+        "fork_base_snapshots",
+        "session_fork_lineage",
+        "conversation_trees",
+        "provider_profiles",
+        "reasoning_history_manifests",
+        "agent_activity_journal",
+        "agent_notifications",
+        "bridge_operations",
+        "model_steps",
+        "tool_groups",
+        "execution_meaning_records",
+        "legacy_m4_selection_bindings",
+    ];
+    for table in expected {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("table lookup");
+        assert_eq!(present, 1, "missing table {table}");
+    }
+    let active_run_object: String = connection
+        .query_row(
+            "SELECT type FROM sqlite_master WHERE name='one_active_run_per_session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active-run object lookup");
+    assert_eq!(active_run_object, "index");
+    for table in future {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .expect("table lookup");
+        assert_eq!(present, 0, "unexpected future table {table}");
+    }
+}
+
+#[test]
 fn completed_result_evidence_is_durable_across_reopen_with_redacted_payload() {
     let (directory, store) = repository();
     let session = create(&store);

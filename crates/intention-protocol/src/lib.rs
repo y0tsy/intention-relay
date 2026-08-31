@@ -70,7 +70,34 @@ pub enum ProtocolCapabilityDto {
     DaemonHealth,
     /// The peer can subscribe to dedicated persistent run streams.
     RunStreamSubscriptions,
+    ProviderProfilesV1,
+    SessionForkV1,
+    NormalizedReasoningStreamV1,
+    AgentActivityV1,
+    UserNotificationsV1,
+    DaemonToolGatewayV1,
+    ModelToolLoopV1,
 }
+
+/// The currently activated local protocol version.
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(1, 1);
+/// The currently activated public DTO schema version.
+pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
+
+/// Capabilities introduced after the M4 protocol surface.
+pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
+    ProtocolCapabilityDto::ProviderProfilesV1,
+    ProtocolCapabilityDto::SessionForkV1,
+    ProtocolCapabilityDto::NormalizedReasoningStreamV1,
+    ProtocolCapabilityDto::AgentActivityV1,
+    ProtocolCapabilityDto::UserNotificationsV1,
+    ProtocolCapabilityDto::DaemonToolGatewayV1,
+    ProtocolCapabilityDto::ModelToolLoopV1,
+];
+
+pub mod contract_families;
+pub mod negotiation;
+pub use negotiation::ProtocolNegotiationResultDto;
 
 /// A safe metadata handshake exchanged before any protocol command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1515,6 +1542,12 @@ mod tests {
                 .code(),
             "invalid_adapter_name"
         );
+    }
+
+    #[test]
+    fn current_versions_are_protocol_and_dto_schema_1_1() {
+        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(1, 1));
+        assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
     }
 
     #[test]

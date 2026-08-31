@@ -93,7 +93,7 @@ public_resource_patterns = [
 
 [external_dependencies]
 "intention-types" = ["serde", "serde_json", "uuid"]
-"intention-domain" = ["serde", "serde_json"]
+"intention-domain" = ["serde", "serde_json", "sha2"]
 "intention-config" = ["serde", "serde_json", "toml"]
 "intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
