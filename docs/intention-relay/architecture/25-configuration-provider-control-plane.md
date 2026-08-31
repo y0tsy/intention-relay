@@ -8,7 +8,7 @@
 - Decision record: [`0020`](../decisions/0020-configuration-provider-control-plane-directions.md).
 - Detail decision: [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (raw-TOML editing and configuration editing).
 - Reconciliation topics: `CFG-001..010`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a
   later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
@@ -22,7 +22,7 @@ credential store, health service, discovery client, pricing engine, profile UI,
 or production configuration behavior.
 
 The authoritative package review of 2026-08-30 confirmed that the
-[`m4plus_concept2.md`](../m4plus_concept2.md) research directions are otherwise
+[`m4plus_concept.md`](../m4plus_concept.md) research directions are otherwise
 covered by architectures 13--24 and decisions 0001--0019; this package closes
 the only identified gap by adopting this cluster as accepted future
 directions. It applies to future fresh runs only. M3/M4 startup-only TOML

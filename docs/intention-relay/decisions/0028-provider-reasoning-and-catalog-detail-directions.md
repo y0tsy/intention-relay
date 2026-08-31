@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
 [architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md):
 
 - typed cross-turn reasoning history (`ReasoningHistoryTransferDto`,
@@ -77,7 +77,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 
 The authoritative package review of 2026-08-30 confirmed the reasoning history,
 usage, paged delivery, dialect catalog, catalog limits, and legacy bridge are
-present in `m4plus_concept2.md` but absent from architecture 22, and that the
+present in `m4plus_concept.md` but absent from architecture 22, and that the
 session-selection layer was explicitly excluded. This decision adopts the detail
 so the authoritative documentation fully covers the features, while preserving
 the project rule that no feature is documented as implemented without code

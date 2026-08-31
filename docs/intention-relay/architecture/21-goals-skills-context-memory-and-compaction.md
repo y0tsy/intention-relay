@@ -7,7 +7,7 @@
 - Normative owner: architecture 21.
 - Decision record: [`0013`](../decisions/0013-goals-skills-context-memory-and-compaction.md).
 - Reconciliation topics: `GOL/SKL/CTX/MEM/CMP`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

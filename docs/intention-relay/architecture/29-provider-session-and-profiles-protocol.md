@@ -7,7 +7,7 @@
 - Normative owner: architecture 29.
 - Decision record: [`0024`](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 - Reconciliation topics: `PSS-001..008`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
 **Approved future architecture, documentation-only.** This document is the

@@ -8,7 +8,7 @@
 - Decision record: [`0008`](../decisions/0008-durable-mandate-scheduler-and-readiness-driven-admission.md).
 - Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (calendar/interval/time-zone/DST semantics).
 - Reconciliation topics: `SCH-001..013`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

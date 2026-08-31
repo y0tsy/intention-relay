@@ -44,7 +44,7 @@ Each direction:
 
 The authoritative package review of 2026-08-30 confirmed that architectures
 13--24 and decisions 0001--0019 already cover the
-[`m4plus_concept2.md`](../m4plus_concept2.md) research directions, with one
+[`m4plus_concept.md`](../m4plus_concept.md) research directions, with one
 exception: the configuration/provider control-plane cluster (live reload,
 rotation, health checks, discovery, pricing, profile UI) was excluded or
 deferred across architectures 09 and 22 and the reconciliation register. This

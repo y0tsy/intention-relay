@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The session-branching detail from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
 [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md):
 
 - the `session_fork_v1` public DTO families (`ForkSessionCommandDto`,
@@ -45,7 +45,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 
 The authoritative package review of 2026-08-30 confirmed the branching detail
 (limits, DTO families, field tables, error codes) is present in
-`m4plus_concept2.md` but only at principle level in architecture 23. This
+`m4plus_concept.md` but only at principle level in architecture 23. This
 decision adopts the detail so the authoritative documentation fully covers the
 feature, while preserving the project rule that no feature is documented as
 implemented without code evidence.

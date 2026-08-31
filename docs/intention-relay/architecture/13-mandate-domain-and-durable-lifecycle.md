@@ -8,7 +8,7 @@
 - Decision record: [`0006`](../decisions/0006-mandate-lifecycle-and-admission-boundary.md).
 - Detail decisions: [`0001`](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md) (Mandate DTO family and limit classification), [`0002`](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) (shared attempt-evidence family), [`0031`](../decisions/0031-autonomous-continuation-direction.md) (autonomous continuation).
 - Reconciliation topics: `MAN-001..012`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

@@ -62,5 +62,5 @@ and no-external-work-on-incompatibility proof.
 
 ## Provenance
 
-`m4plus_concept2.md`, Mandate execution kind, execution meaning, and historical
+`m4plus_concept.md`, Mandate execution kind, execution meaning, and historical
 version compatibility sections.

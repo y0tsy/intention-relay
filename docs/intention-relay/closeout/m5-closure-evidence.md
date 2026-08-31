@@ -39,7 +39,7 @@ recorded in the CI verification section.
 | Coverage scope and result | `default`, `no_default`, and `all` feature profiles; current report shows `intention-tools` at 90%+ actual coverage. Threshold evaluation passed with the configured profile scope. |
 | Coverage policy exception | None. All Tier B crates, including `intention-tools` and `intention-hooks`, use the standard 90% line threshold. |
 | CI matrix | Merged-baseline and current-head CI evidence is recorded in the CI verification section below; the historical `bd3ab01`/`e915e12` row (run 33186533012) is retained there as the pre-loop baseline evidence |
-| Immutable documents | `m4plus_concept2.md` and other immutable documents were not edited |
+| Immutable documents | `m4plus_concept.md` and other immutable documents were not edited |
 
 ## Acceptance evidence
 

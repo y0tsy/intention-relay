@@ -47,5 +47,5 @@ historical M4 preservation, redaction evidence, and full quality-gate acceptance
 
 ## Provenance
 
-`m4plus_concept2.md`, unified registry, direct active-descriptor admission,
+`m4plus_concept.md`, unified registry, direct active-descriptor admission,
 WorkspaceRoot, and model-tool-loop sections.

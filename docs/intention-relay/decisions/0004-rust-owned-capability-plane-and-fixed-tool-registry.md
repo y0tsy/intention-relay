@@ -29,5 +29,5 @@ fixtures, and outcome paths proving calls cannot bypass the gateway.
 
 ## Provenance
 
-`m4plus_concept2.md`, unified registry, model-tool loop, bridge, kernel, Skill,
+`m4plus_concept.md`, unified registry, model-tool loop, bridge, kernel, Skill,
 and MCP sections.

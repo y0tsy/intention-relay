@@ -29,5 +29,5 @@ existing documentation/architecture/quality gate evidence.
 
 ## Provenance
 
-`m4plus_concept2.md`, recommendation, verification portfolio, and preparation
+`m4plus_concept.md`, recommendation, verification portfolio, and preparation
 checklist sections.

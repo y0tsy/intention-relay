@@ -398,7 +398,7 @@ session-selection, and base-tool contracts adopted by
 claim delivery of Milestones 6-9; it is their declared prerequisite in the
 dependency graph and activates only preparatory foundation work, never direct
 M6-M9 boundary implementation. The full authoritative package review of
-2026-08-30 confirmed that the [`m4plus_concept2.md`](../m4plus_concept2.md)
+2026-08-30 confirmed that the [`m4plus_concept.md`](../m4plus_concept.md)
 research directions are otherwise covered by architectures 13-24 and decisions
 0001-0019; M5+ closes the identified configuration/provider control-plane gap
 and hosts every retrospective code change. The fifth review wave of 2026-08-30
@@ -646,7 +646,7 @@ The v1 implementation phase is ready to claim architectural completion only when
 Post-M4 package status uses separate terms: architecture documents are
 `Documentation-approved`, implementation remains not authorized, and evidence
 is `Planned` unless an exact artifact and observed result is cited. The immutable
-`m4plus_concept2.md` is research provenance and is not edited or used as an
+`m4plus_concept.md` is research provenance and is not edited or used as an
 implementation acceptance target.
 
 The ordinary M5-M9 delivery track remains the historical delivery sequence.

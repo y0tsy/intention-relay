@@ -30,4 +30,4 @@ This is additive future architecture only. It preserves M3/M4 queue/replay, prov
 
 ## Provenance
 
-`m4plus_concept2.md`, selected Mandate child adaptation, delegated verification Mandates, and retained RLM graph/activity material.
+`m4plus_concept.md`, selected Mandate child adaptation, delegated verification Mandates, and retained RLM graph/activity material.

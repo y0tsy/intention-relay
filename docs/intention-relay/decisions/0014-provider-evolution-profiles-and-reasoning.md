@@ -54,5 +54,5 @@ and outcome evidence through the standard quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected provider contracts, profiles, Responses, and
+`m4plus_concept.md`, selected provider contracts, profiles, Responses, and
 reasoning material, reconciled against architectures 8 and 13--21.

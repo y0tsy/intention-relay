@@ -23,7 +23,7 @@ The governing order is:
    and accepted decision records;
 2. the closed M4 baseline and its closure evidence for historical behavior;
 3. this reconciliation package as a coordination and traceability index;
-4. [`m4plus_concept2.md`](../m4plus_concept2.md) as research provenance;
+4. [`m4plus_concept.md`](../m4plus_concept.md) as research provenance;
 5. broader preserved research.
 
 A reconciliation row points to authority. It is never a second normative
@@ -111,7 +111,7 @@ provider, reasoning, fork, kernel, activity, notification, and UI packages.
 - Closed M4 implementation baseline: `d2a85370a66d63fc759e4987a74d435ecd5d5115`.
 - Documentation review baseline: branch `docs/m4plus-authoritative-replan`, reviewed at `f3ecaca` on 2026-08-26.
 - The M4 implementation baseline above is immutable; documentation review baselines are moving metadata and must be refreshed when this package changes.
-- Primary research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Primary research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 
 ## Transition rule
 

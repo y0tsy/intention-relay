@@ -8,7 +8,7 @@ timeout is retained by concept2.
 ## Purpose
 
 Remove product ceilings (product counters, reservations, quotas) from
-post-M4 production code where [`m4plus_concept2.md`](m4plus_concept2.md) marks
+post-M4 production code where [`m4plus_concept.md`](m4plus_concept.md) marks
 them as forbidden for new Mandate work or as historical-only. Intrinsic
 correctness bounds and capacity availability must remain untouched.
 

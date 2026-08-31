@@ -8,7 +8,7 @@
 - Decision record: [`0010`](../decisions/0010-mandate-mcp-capability-lifecycle.md).
 - Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (MCP detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (post-disconnect work).
 - Reconciliation topics: `MCP-001..017`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

@@ -12,7 +12,7 @@ specification at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
 [architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md):
 
 - the initial effect-profile flag mapping table (read/glob/grep/expand =
@@ -57,7 +57,7 @@ activating specification, and is bound to Milestone 5+ in the roadmap.
 
 The authoritative package review of 2026-08-30 confirmed the base-tool initial
 contracts and the loop bounds/terminal taxonomy are present in
-`m4plus_concept2.md` but only at principle level in architecture 15. This
+`m4plus_concept.md` but only at principle level in architecture 15. This
 decision adopts the detail so the authoritative documentation fully covers the
 feature, while preserving the project rule that no feature is documented as
 implemented without code evidence.

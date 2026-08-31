@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The "Continue autonomously" claim from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted as an accepted future
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted as an accepted future
 direction and owned by [architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
 
 - **Continue autonomously** creates or activates a **Build-mode Mandate** by
@@ -41,7 +41,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 
 The authoritative package review of 2026-08-30 confirmed the "Continue
 autonomously" claim (including the Build-mode Mandate default) is present in
-`m4plus_concept2.md` but absent from the authoritative documentation: no
+`m4plus_concept.md` but absent from the authoritative documentation: no
 architecture, ADR, or reconciliation row adopts it, and it is distinct from the
 ordinary Build Autopilot direction of ADR 0017/0018. This decision adopts it as
 an accepted future direction so the authoritative documentation no longer leaves

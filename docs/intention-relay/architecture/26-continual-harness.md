@@ -8,7 +8,7 @@
 - Decision record: [`0021`](../decisions/0021-continual-harness-directions.md).
 - Detail decisions: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (closed safe failures and selection-record detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (autonomous goal mode, post-disconnect work, export).
 - Reconciliation topics: `CHR-001..013`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
 **Approved future architecture, documentation-only.** This document is the sole

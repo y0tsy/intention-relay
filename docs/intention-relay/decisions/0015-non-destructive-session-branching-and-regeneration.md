@@ -46,5 +46,5 @@ evidence through the standard quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected session-branching and regeneration material,
+`m4plus_concept.md`, selected session-branching and regeneration material,
 reconciled against architectures 04 and 13--22.

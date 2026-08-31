@@ -52,5 +52,5 @@ and outcome evidence through the standard quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected typed daemon host bridge and gateway protocol,
+`m4plus_concept.md`, selected typed daemon host bridge and gateway protocol,
 Mandate bridge supersession, and retained RLM material.

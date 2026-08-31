@@ -11,7 +11,7 @@ at the start of that milestone.
 ## Decision
 
 The continual-harness model from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted as the accepted future
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
 direction and owned by the new [Continual Harness](../architecture/26-continual-harness.md)
 package:
 
@@ -40,7 +40,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the continual-harness
-model is present in `m4plus_concept2.md` but absent from the authoritative
+model is present in `m4plus_concept.md` but absent from the authoritative
 documentation: no architecture, ADR, or reconciliation row adopted it, and the
 deferred/excluded register had no row for the model itself (EXC-011 covers only
 calendar/interval/time-zone semantics). This decision adopts the model as an

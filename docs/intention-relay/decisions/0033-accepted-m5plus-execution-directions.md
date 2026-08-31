@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following items, named in the
-[`m4plus_concept2.md`](../m4plus_concept2.md) backlog as deferred or excluded,
+[`m4plus_concept.md`](../m4plus_concept.md) backlog as deferred or excluded,
 are adopted as accepted future directions for execution in Milestone 5+:
 
 **Configuration and provider control plane (owner: architecture 25):**
@@ -80,7 +80,7 @@ Each direction:
 ## Rationale
 
 The sixth-wave authoritative package review of 2026-08-30 confirmed these
-thirteen items are named in `m4plus_concept2.md` as deferred or excluded but
+thirteen items are named in `m4plus_concept.md` as deferred or excluded but
 appear in the authoritative documentation only inside non-goals of ADR
 0020/0021/0028/0031 and architectures 22/23/25/26/28/29/18, without rows in
 the deferred/excluded register and without a Milestone 5+ delivery home. This

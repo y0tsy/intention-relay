@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The programmatic-caller policy and admission model from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted as the accepted future
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
 direction and owned by the new [Programmatic Caller Policy and Admission](../architecture/27-programmatic-caller-policy-and-admission.md)
 package:
 
@@ -41,7 +41,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the programmatic-caller
-policy is present in `m4plus_concept2.md` but absent from the authoritative
+policy is present in `m4plus_concept.md` but absent from the authoritative
 documentation: the term "programmatic" appears nowhere in `architecture/`,
 `decisions/`, or `reconciliation/`, and the supersession index, deferred/excluded
 register, and contradiction register have no row for it. Its "Historical-only

@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by the
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by the
 respective authoritative packages:
 
 - **Architecture 17 (child/verifier)**: `ParentSubAgentCommandDto`,
@@ -78,7 +78,7 @@ provenance where they conflict with Mandate child-graph semantics.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed these detail layers are
-present in `m4plus_concept2.md` but absent from the authoritative packages,
+present in `m4plus_concept.md` but absent from the authoritative packages,
 which cover the semantics at principle level. This decision adopts the detail so
 the authoritative documentation fully covers the features, while preserving the
 project rule that no feature is documented as implemented without code evidence.
