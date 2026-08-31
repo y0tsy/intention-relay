@@ -61,6 +61,23 @@ pub struct ProgrammaticCallerPolicySelectionV1 {
     pub fixed_run_limits: FixedRunLimits,
 }
 
+/// Maximum messages per activity exchange, per the frozen ledger.
+pub const MAX_ACTIVITY_MESSAGES: u64 = 1024;
+/// Maximum aggregate activity bytes per root tree, per the frozen ledger.
+pub const MAX_ACTIVITY_AGGREGATE_BYTES: u64 = 4 * 1024 * 1024;
+/// Maximum journal records per activity tree, per the frozen ledger.
+pub const MAX_ACTIVITY_JOURNAL_RECORDS: u64 = 4096;
+/// Maximum bytes per activity record, per the frozen ledger.
+pub const MAX_ACTIVITY_RECORD_BYTES: u64 = 64 * 1024;
+/// Maximum records per activity page, per the frozen ledger.
+pub const MAX_ACTIVITY_PAGE_RECORDS: u64 = 256;
+/// Maximum bytes per activity page, per the frozen ledger.
+pub const MAX_ACTIVITY_PAGE_BYTES: u64 = 512 * 1024;
+/// Maximum typed references per activity record, per the frozen ledger.
+pub const MAX_ACTIVITY_TYPED_REFERENCES: u64 = 16;
+/// Maximum clarification wait seconds, per the frozen ledger.
+pub const MAX_ACTIVITY_CLARIFICATION_WAIT_SECONDS: u64 = 60 * 60;
+
 /// Fixed per-activity limits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FixedActivityLimits {
@@ -71,6 +88,99 @@ pub struct FixedActivityLimits {
     pub max_page_records: u64,
     pub max_page_bytes: u64,
     pub max_typed_references: u64,
+    pub max_clarification_wait_seconds: u64,
+}
+
+impl FixedActivityLimits {
+    /// The frozen ledger values for every activity limit.
+    #[must_use]
+    pub const fn frozen() -> Self {
+        Self {
+            max_messages: MAX_ACTIVITY_MESSAGES,
+            max_aggregate_bytes: MAX_ACTIVITY_AGGREGATE_BYTES,
+            max_journal_records: MAX_ACTIVITY_JOURNAL_RECORDS,
+            max_record_bytes: MAX_ACTIVITY_RECORD_BYTES,
+            max_page_records: MAX_ACTIVITY_PAGE_RECORDS,
+            max_page_bytes: MAX_ACTIVITY_PAGE_BYTES,
+            max_typed_references: MAX_ACTIVITY_TYPED_REFERENCES,
+            max_clarification_wait_seconds: MAX_ACTIVITY_CLARIFICATION_WAIT_SECONDS,
+        }
+    }
+
+    /// Validates that every limit equals its frozen ledger value.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::OverLimit` when any limit differs from the
+    /// frozen ledger value.
+    pub fn validate(&self) -> Result<(), CanonicalError> {
+        if *self != Self::frozen() {
+            return Err(CanonicalError::OverLimit);
+        }
+        Ok(())
+    }
+
+    /// Encodes these activity limits into their nested limits record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::OverLimit` when any limit differs from the
+    /// frozen ledger value, and `CanonicalError::DuplicateOrDescendingField`
+    /// only if the fixed field table were noncanonical; it is canonical by
+    /// construction.
+    pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
+        self.validate()?;
+        record(
+            0,
+            1,
+            (1..=8)
+                .zip([
+                    self.max_messages,
+                    self.max_aggregate_bytes,
+                    self.max_journal_records,
+                    self.max_record_bytes,
+                    self.max_page_records,
+                    self.max_page_bytes,
+                    self.max_typed_references,
+                    self.max_clarification_wait_seconds,
+                ])
+                .map(|(number, value)| (number, WireType::U64, encode_u64(value)))
+                .collect(),
+        )
+    }
+
+    /// Decodes these activity limits from their nested limits record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidField` when any of the eight limit
+    /// fields is absent or malformed, `CanonicalError::OverLimit` when any
+    /// decoded limit differs from the frozen ledger value, and other
+    /// `CanonicalError` values for malformed framing.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
+        let reader = CanonicalRecordReader::new(bytes, 8)?;
+        let values = (1..=8)
+            .map(|number| {
+                decode_u64(
+                    reader
+                        .field(number, WireType::U64)?
+                        .ok_or(CanonicalError::InvalidField)?,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let limits = Self {
+            max_messages: values[0],
+            max_aggregate_bytes: values[1],
+            max_journal_records: values[2],
+            max_record_bytes: values[3],
+            max_page_records: values[4],
+            max_page_bytes: values[5],
+            max_typed_references: values[6],
+            max_clarification_wait_seconds: values[7],
+        };
+        limits.validate()?;
+        Ok(limits)
+    }
 }
 
 /// The frozen agent activity selection record.
@@ -189,54 +299,6 @@ impl FixedRunLimits {
     }
 }
 
-fn limits_activity(limits: &FixedActivityLimits) -> Result<Vec<u8>, CanonicalError> {
-    record(
-        0,
-        1,
-        (1..=7)
-            .zip([
-                limits.max_messages,
-                limits.max_aggregate_bytes,
-                limits.max_journal_records,
-                limits.max_record_bytes,
-                limits.max_page_records,
-                limits.max_page_bytes,
-                limits.max_typed_references,
-            ])
-            .map(|(number, value)| (number, WireType::U64, encode_u64(value)))
-            .collect(),
-    )
-}
-
-/// Decodes the nested activity limits record.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::InvalidField` when any of the seven limit fields
-/// is absent or malformed, and other `CanonicalError` values for malformed
-/// framing.
-fn decode_activity_limits(bytes: &[u8]) -> Result<FixedActivityLimits, CanonicalError> {
-    let reader = CanonicalRecordReader::new(bytes, 7)?;
-    let values = (1..=7)
-        .map(|number| {
-            decode_u64(
-                reader
-                    .field(number, WireType::U64)?
-                    .ok_or(CanonicalError::InvalidField)?,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(FixedActivityLimits {
-        max_messages: values[0],
-        max_aggregate_bytes: values[1],
-        max_journal_records: values[2],
-        max_record_bytes: values[3],
-        max_page_records: values[4],
-        max_page_bytes: values[5],
-        max_typed_references: values[6],
-    })
-}
-
 impl AgentActivitySelectionV1 {
     /// Encodes this selection into its canonical record bytes.
     ///
@@ -300,7 +362,7 @@ impl AgentActivitySelectionV1 {
                 (3, WireType::U64, encode_u64(*activity_exchange_revision)),
                 (4, WireType::U64, encode_u64(*activity_journal_revision)),
                 (5, WireType::U64, encode_u64(*user_projection_revision)),
-                (6, WireType::Record, limits_activity(fixed_activity_limits)?),
+                (6, WireType::Record, fixed_activity_limits.encode()?),
             ],
         )
     }
@@ -326,7 +388,7 @@ impl AgentActivitySelectionV1 {
                 .field(1, WireType::Uuid)?
                 .ok_or(CanonicalError::InvalidField)?,
         )?;
-        let fixed_activity_limits = decode_activity_limits(
+        let fixed_activity_limits = FixedActivityLimits::decode(
             reader
                 .field(6, WireType::Record)?
                 .ok_or(CanonicalError::InvalidField)?,
@@ -1663,6 +1725,169 @@ mod tests {
     }
 
     #[test]
+    fn activity_limit_constants_match_the_ledger() {
+        assert_eq!(MAX_ACTIVITY_MESSAGES, 1024);
+        assert_eq!(MAX_ACTIVITY_AGGREGATE_BYTES, 4 * 1024 * 1024);
+        assert_eq!(MAX_ACTIVITY_JOURNAL_RECORDS, 4096);
+        assert_eq!(MAX_ACTIVITY_RECORD_BYTES, 64 * 1024);
+        assert_eq!(MAX_ACTIVITY_PAGE_RECORDS, 256);
+        assert_eq!(MAX_ACTIVITY_PAGE_BYTES, 512 * 1024);
+        assert_eq!(MAX_ACTIVITY_TYPED_REFERENCES, 16);
+        assert_eq!(MAX_ACTIVITY_CLARIFICATION_WAIT_SECONDS, 60 * 60);
+        let frozen = FixedActivityLimits::frozen();
+        assert_eq!(frozen.max_messages, MAX_ACTIVITY_MESSAGES);
+        assert_eq!(frozen.max_aggregate_bytes, MAX_ACTIVITY_AGGREGATE_BYTES);
+        assert_eq!(frozen.max_journal_records, MAX_ACTIVITY_JOURNAL_RECORDS);
+        assert_eq!(frozen.max_record_bytes, MAX_ACTIVITY_RECORD_BYTES);
+        assert_eq!(frozen.max_page_records, MAX_ACTIVITY_PAGE_RECORDS);
+        assert_eq!(frozen.max_page_bytes, MAX_ACTIVITY_PAGE_BYTES);
+        assert_eq!(frozen.max_typed_references, MAX_ACTIVITY_TYPED_REFERENCES);
+        assert_eq!(
+            frozen.max_clarification_wait_seconds,
+            MAX_ACTIVITY_CLARIFICATION_WAIT_SECONDS
+        );
+    }
+
+    /// Returns one activity limit value by its nested field number.
+    fn activity_limit_value(limits: &FixedActivityLimits, number: u32) -> u64 {
+        match number {
+            1 => limits.max_messages,
+            2 => limits.max_aggregate_bytes,
+            3 => limits.max_journal_records,
+            4 => limits.max_record_bytes,
+            5 => limits.max_page_records,
+            6 => limits.max_page_bytes,
+            7 => limits.max_typed_references,
+            8 => limits.max_clarification_wait_seconds,
+            _ => 0,
+        }
+    }
+
+    /// Builds one activity limits value with a single field replaced.
+    fn activity_limits_with(
+        limits: &FixedActivityLimits,
+        number: u32,
+        value: u64,
+    ) -> FixedActivityLimits {
+        let mut replaced = limits.clone();
+        match number {
+            1 => replaced.max_messages = value,
+            2 => replaced.max_aggregate_bytes = value,
+            3 => replaced.max_journal_records = value,
+            4 => replaced.max_record_bytes = value,
+            5 => replaced.max_page_records = value,
+            6 => replaced.max_page_bytes = value,
+            7 => replaced.max_typed_references = value,
+            8 => replaced.max_clarification_wait_seconds = value,
+            _ => {}
+        }
+        replaced
+    }
+
+    /// Encodes an activity limits record without the production validation.
+    fn raw_activity_limits_record(limits: &FixedActivityLimits) -> Vec<u8> {
+        record(
+            0,
+            1,
+            (1..=8)
+                .map(|number| {
+                    (
+                        number,
+                        WireType::U64,
+                        encode_u64(activity_limit_value(limits, number)),
+                    )
+                })
+                .collect(),
+        )
+        .expect("raw activity limits record encodes")
+    }
+
+    #[test]
+    fn activity_limit_boundaries_are_enforced_on_encode_and_decode() {
+        let frozen = FixedActivityLimits::frozen();
+        assert_eq!(frozen.validate(), Ok(()));
+        let bytes = frozen.encode().expect("frozen limits encode");
+        assert_eq!(
+            FixedActivityLimits::decode(&bytes).expect("frozen limits decode"),
+            frozen
+        );
+        // The frozen record embeds all eight ledger fields.
+        let reader = CanonicalRecordReader::new(&bytes, 8).expect("limits record parses");
+        for number in 1..=8 {
+            assert!(
+                reader
+                    .field(number, WireType::U64)
+                    .expect("field lookup succeeds")
+                    .is_some(),
+                "field {number}"
+            );
+        }
+        for number in 1..=8 {
+            let value = activity_limit_value(&frozen, number);
+            // One below the frozen value is over-limit on validate, encode,
+            // and decode.
+            let below = activity_limits_with(&frozen, number, value - 1);
+            assert_eq!(
+                below.validate(),
+                Err(CanonicalError::OverLimit),
+                "below field {number}"
+            );
+            assert!(below.encode().is_err(), "below field {number}");
+            assert_eq!(
+                FixedActivityLimits::decode(&raw_activity_limits_record(&below))
+                    .expect_err("below field is over-limit"),
+                CanonicalError::OverLimit
+            );
+            // One above the frozen value is over-limit on validate, encode,
+            // and decode.
+            let above = activity_limits_with(&frozen, number, value + 1);
+            assert_eq!(
+                above.validate(),
+                Err(CanonicalError::OverLimit),
+                "above field {number}"
+            );
+            assert!(above.encode().is_err(), "above field {number}");
+            assert_eq!(
+                FixedActivityLimits::decode(&raw_activity_limits_record(&above))
+                    .expect_err("above field is over-limit"),
+                CanonicalError::OverLimit
+            );
+        }
+    }
+
+    #[test]
+    fn activity_selection_round_trips_frozen_limits_inside_both_variants() {
+        let root = AgentActivitySelectionV1::Root {
+            activity_tree_id: [7u8; 16],
+            root_origin: ExecutionKind::Ordinary,
+            activity_exchange_revision: 1,
+            activity_journal_revision: 2,
+            user_projection_revision: 3,
+            fixed_activity_limits: FixedActivityLimits::frozen(),
+        };
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&root.encode().expect("root selection encodes"))
+                .expect("root selection decodes"),
+            root
+        );
+        let descendant = AgentActivitySelectionV1::Descendant {
+            activity_tree_id: [8u8; 16],
+            direct_parent_link_reference: [9u8; 16],
+            activity_exchange_revision: 1,
+            activity_journal_revision: 2,
+            user_projection_revision: 3,
+            fixed_activity_limits: FixedActivityLimits::frozen(),
+        };
+        assert_eq!(
+            AgentActivitySelectionV1::decode(
+                &descendant.encode().expect("descendant selection encodes"),
+            )
+            .expect("descendant selection decodes"),
+            descendant
+        );
+    }
+
+    #[test]
     fn canonical_encoding_is_byte_deterministic() {
         let v3 = fixture_v3_record();
         assert_eq!(
@@ -1742,21 +1967,16 @@ mod tests {
     }
 
     fn golden_activity_limits() -> FixedActivityLimits {
-        FixedActivityLimits {
-            max_messages: 1024,
-            max_aggregate_bytes: 4 * 1024 * 1024,
-            max_journal_records: 4096,
-            max_record_bytes: 64 * 1024,
-            max_page_records: 256,
-            max_page_bytes: 512 * 1024,
-            max_typed_references: 16,
-        }
+        FixedActivityLimits::frozen()
     }
 
     /// Encodes the fixed activity limits as their nested limits record, which
-    /// mirrors the production `limits_activity` encoding byte-for-byte.
+    /// mirrors the production `FixedActivityLimits::encode` encoding
+    /// byte-for-byte.
     fn golden_activity_limits_record() -> Vec<u8> {
-        limits_activity(&golden_activity_limits()).expect("golden activity limits record encodes")
+        golden_activity_limits()
+            .encode()
+            .expect("golden activity limits record encodes")
     }
 
     /// The fixed run-execution-meaning fields 1-10 exactly as the golden
