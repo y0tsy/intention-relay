@@ -39,8 +39,7 @@ use intention_transport::{
     negotiate_client,
 };
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto, SessionId, TurnId,
-    WorkspaceId,
+    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -498,7 +497,7 @@ fn send_command(
     connection.send_request(&ProtocolRequestEnvelopeDto::new(
         local_protocol_version(),
         correlation_id,
-        ProtocolMessageDto::new(SchemaVersionDto::new(1, 0), payload),
+        ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
     ))?;
     let response = connection.receive_response()?;
     if response.correlation_id() != correlation_id
@@ -552,7 +551,7 @@ async fn observe_terminal_snapshot(
 ) -> RunSnapshotDto {
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -599,8 +598,13 @@ async fn collect_run_facts(
             local_protocol_version(),
             correlation_id,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
-                SubscribeRunCommandDto::new(SchemaVersionDto::new(1, 0), session_id, run_id, None),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                SubscribeRunCommandDto::new(
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                    session_id,
+                    run_id,
+                    None,
+                ),
             ),
         ))
         .await
@@ -814,7 +818,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
     let mut subscription = stream_client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,

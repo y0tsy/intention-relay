@@ -24,7 +24,7 @@ use intention_types::{
     SessionId, TurnId,
 };
 
-const SCHEMA: SchemaVersionDto = SchemaVersionDto::new(1, 0);
+const SCHEMA: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 fn endpoint() -> LocalEndpoint {

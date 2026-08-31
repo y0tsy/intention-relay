@@ -18,7 +18,7 @@ use intention_transport::{
     AsyncLocalClientConnection, AsyncLocalListener, LocalConnection, LocalEndpoint, LocalListener,
     local_protocol_version, negotiate_client, negotiate_daemon,
 };
-use intention_types::{CorrelationIdDto, SchemaVersionDto};
+use intention_types::CorrelationIdDto;
 use tempfile::TempDir;
 
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(0);
@@ -51,7 +51,7 @@ fn health_request() -> ProtocolRequestEnvelopeDto {
         local_protocol_version(),
         CorrelationIdDto::new(),
         ProtocolMessageDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
         ),
     )
@@ -62,7 +62,7 @@ fn unavailable_response(correlation_id: CorrelationIdDto) -> ProtocolResponseEnv
         local_protocol_version(),
         correlation_id,
         ProtocolMessageDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
                 intention_types::ErrorDto::unavailable("fixture", "fixture unavailable"),
             )),
@@ -246,7 +246,7 @@ fn framed_transport_negotiates_and_preserves_correlated_dtos() {
             local_protocol_version(),
             request.correlation_id(),
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
                     intention_types::ErrorDto::unavailable("fixture", "fixture unavailable"),
                 )),
@@ -417,7 +417,7 @@ fn windows_named_pipe_fixture_binds_negotiates_frames_and_cleans_up() {
                 local_protocol_version(),
                 request.correlation_id(),
                 ProtocolMessageDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
                         intention_types::ErrorDto::unavailable("fixture", "fixture unavailable"),
                     )),
