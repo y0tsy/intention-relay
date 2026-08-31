@@ -81,3 +81,7 @@ debug = 1
 # not regress.
 [profile.dev.package."*"]
 opt-level = 1
+# More codegen units parallelize the backend across the runner's cores;
+# opt-level 1 keeps the runtime impact small. The compile-time saving
+# compounds across the repeated test, coverage, lint, and deps phases.
+codegen-units = 256
