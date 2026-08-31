@@ -27,7 +27,7 @@ use intention_types::{
 };
 use tempfile::TempDir;
 
-const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
+const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 
 #[derive(Clone)]
 enum FixtureResponse {

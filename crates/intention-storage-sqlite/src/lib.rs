@@ -36,9 +36,9 @@ const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
 const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
 
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![M::up(
-    "
+macro_rules! schema_m3_sql {
+    () => {
+        "
 CREATE TABLE projects (project_id TEXT PRIMARY KEY);
 CREATE TABLE workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
 CREATE TABLE sessions (
@@ -82,9 +82,13 @@ CREATE TABLE run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL, projection_json TEXT NOT NULL
 );
-",
-), M::up(
-    "
+"
+    };
+}
+
+macro_rules! schema_m4_sql {
+    () => {
+        "
 CREATE TABLE run_cursors (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   cursor INTEGER NOT NULL CHECK(cursor >= 0)
@@ -100,8 +104,13 @@ CREATE TABLE model_run_snapshots (
 );
 INSERT INTO run_cursors(run_id, session_id, cursor)
   SELECT run_id, session_id, 0 FROM runs;
-", ), M::up(
-    "
+"
+    };
+}
+
+macro_rules! schema_m4_tool_results_sql {
+    () => {
+        "
 CREATE TABLE tool_results (
   run_id TEXT NOT NULL REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
@@ -113,7 +122,31 @@ CREATE TABLE tool_results (
   PRIMARY KEY(run_id, call_id),
   UNIQUE(event_id)
 );
-", )])
+"
+    };
+}
+
+const SCHEMA_M3_SQL: &str = schema_m3_sql!();
+const SCHEMA_M4_SQL: &str = schema_m4_sql!();
+const SCHEMA_M4_TOOL_RESULTS_SQL: &str = schema_m4_tool_results_sql!();
+
+/// The exact production schema-3 surface: the M3 base tables plus the M4
+/// run-cursor, model-fact, and tool-result tables. Preservation fixtures that
+/// stamp user_version = 3 (where the migration library applies nothing) build
+/// their schema from this single source of truth.
+#[doc(hidden)]
+pub const TEST_SCHEMA_3_SQL: &str = concat!(
+    schema_m3_sql!(),
+    schema_m4_sql!(),
+    schema_m4_tool_results_sql!()
+);
+
+static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+    Migrations::new(vec![
+        M::up(SCHEMA_M3_SQL),
+        M::up(SCHEMA_M4_SQL),
+        M::up(SCHEMA_M4_TOOL_RESULTS_SQL),
+    ])
 });
 
 /// A local absolute SQLite database location whose string is never exposed again.

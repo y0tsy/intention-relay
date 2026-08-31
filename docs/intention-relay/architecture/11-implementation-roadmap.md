@@ -435,7 +435,7 @@ activated by earlier slices in this order:
    additive storage migration with M3/M4 byte preservation; canonical tags
    and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
    ownership, feature-profile, and coverage-tier declarations for every
-   activated family.
+   activated family. The activating contract ledger is [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md).
 2. **Control plane** — the ADR 0020 cluster and provider session selection
    (architectures 25/29/22): controlled live reload; credential rotation;
    provider health checks; model discovery; pricing policy; provider profile

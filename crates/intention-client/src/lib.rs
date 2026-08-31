@@ -30,7 +30,7 @@ use intention_types::{
     SchemaVersionDto, SessionEventSequenceDto, SessionId,
 };
 
-const SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
+const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
 const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 3] = [

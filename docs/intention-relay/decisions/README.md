@@ -53,3 +53,4 @@ provenance.
 | [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, harness autonomy, and RLM packaging |
 | [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |
 | [0035](0035-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, pre-approved four-slice activation sequence |
+| [0036](0036-m5plus-slice1-contract-ledger.md) | Accepted | M5+ Slice 1 contract ledger and activating specification |
