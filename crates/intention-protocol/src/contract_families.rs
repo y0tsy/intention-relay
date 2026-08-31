@@ -828,6 +828,47 @@ pub struct AgentActivityJournalRecordDto {
     pub typed_references: Vec<String>,
     pub canonical_record_digest: String,
 }
+impl AgentActivityJournalRecordDto {
+    /// Validates the bounded activity journal record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `agent_activity_record_too_large` when the string payload
+    /// exceeds the 64 KiB record bound, `agent_message_reference_invalid`
+    /// when the record carries more than sixteen typed references, and
+    /// `agent_activity_journal_limit_exceeded` when the zero-based sequence
+    /// is at or beyond the 4,096-record journal bound.
+    pub fn validate(&self) -> DtoResult<()> {
+        let payload_bytes = self.activity_tree_id.0.len()
+            + self.record_id.len()
+            + self.root_run_reference.len()
+            + self
+                .direct_pair_reference_when_present
+                .as_deref()
+                .map_or(0, str::len)
+            + self.record_kind.len()
+            + self.safe_user_projection.len()
+            + self.canonical_record_digest.len();
+        if payload_bytes > 64 * 1024 {
+            return Err(ErrorDto::validation(
+                "agent_activity_record_too_large",
+                "activity journal record exceeds the 64 KiB record bound",
+            ));
+        }
+        bounded(
+            self.typed_references.clone(),
+            16,
+            "agent_message_reference_invalid",
+        )?;
+        if self.sequence >= 4096 {
+            return Err(ErrorDto::validation(
+                "agent_activity_journal_limit_exceeded",
+                "activity journal exceeds its 4,096-record bound",
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentNotificationCursorDto(pub u64);
@@ -1115,6 +1156,58 @@ pub struct LegacyM4SelectionBindingDto {
     pub execution_policy: String,
     pub driver_contract_revision: String,
 }
+impl LegacyM4SelectionBindingDto {
+    /// Validates that the binding references legacy bytes by canonical
+    /// `legacy-uuid:<canonical UUID>` reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns `legacy_selection_reference_invalid` when the safe selection
+    /// is not a lowercase canonical `legacy-uuid:` reference with a valid
+    /// UUID variant and version.
+    pub fn validate(&self) -> DtoResult<()> {
+        if !is_canonical_legacy_uuid_reference(&self.legacy_safe_selection) {
+            return Err(ErrorDto::validation(
+                "legacy_selection_reference_invalid",
+                "legacy selection must be a canonical legacy-uuid reference",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Returns whether `value` is exactly `legacy-uuid:<canonical UUID>` where the
+/// UUID is the lowercase hyphenated canonical form with a valid RFC 4122
+/// variant and version.
+#[must_use]
+pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("legacy-uuid:") else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    let is_lower_hex = |byte: u8| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase();
+    for (index, &byte) in bytes.iter().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            if byte != b'-' {
+                return false;
+            }
+        } else if !is_lower_hex(byte) {
+            return false;
+        }
+    }
+    // The third group's first digit is the RFC 4122 version.
+    if !matches!(bytes[14], b'1'..=b'8') {
+        return false;
+    }
+    // The fourth group's first digit is the RFC 4122 variant.
+    if !matches!(bytes[19], b'8' | b'9' | b'a' | b'b') {
+        return false;
+    }
+    true
+}
 
 #[cfg(test)]
 mod tests {
@@ -1328,7 +1421,7 @@ mod tests {
             round_trip(&kind);
         }
         round_trip(&agent_message());
-        round_trip(&AgentActivityJournalRecordDto {
+        let journal_record = AgentActivityJournalRecordDto {
             activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
             record_id: "record-1".to_owned(),
             sequence: 3,
@@ -1339,7 +1432,9 @@ mod tests {
             safe_user_projection: "safe".to_owned(),
             typed_references: Vec::new(),
             canonical_record_digest: "a".repeat(64),
-        });
+        };
+        assert!(journal_record.validate().is_ok());
+        round_trip(&journal_record);
     }
 
     #[test]
@@ -1458,17 +1553,149 @@ mod tests {
 
     #[test]
     fn legacy_m4_selection_binding_round_trips() {
-        round_trip(&LegacyM4SelectionBindingDto {
+        let binding = LegacyM4SelectionBindingDto {
             legacy_config_revision_id: "config-1".to_owned(),
             legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: "selection".to_owned(),
+            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
             default_profile_id: "profile-1".to_owned(),
             default_profile_revision_id: "rev-1".to_owned(),
             kind_descriptor_revision_id: "kind-rev-1".to_owned(),
             capability_subset: vec!["text".to_owned()],
             execution_policy: "execution-policy".to_owned(),
             driver_contract_revision: "driver-1.0".to_owned(),
-        });
+        };
+        assert!(binding.validate().is_ok());
+        round_trip(&binding);
+    }
+
+    #[test]
+    fn legacy_selection_reference_is_preserved_byte_for_byte() {
+        let reference = "legacy-uuid:11111111-1111-4111-8111-111111111111";
+        let binding = LegacyM4SelectionBindingDto {
+            legacy_config_revision_id: "config-1".to_owned(),
+            legacy_snapshot_schema: "schema-1".to_owned(),
+            legacy_safe_selection: reference.to_owned(),
+            default_profile_id: "profile-1".to_owned(),
+            default_profile_revision_id: "rev-1".to_owned(),
+            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+            capability_subset: vec!["text".to_owned()],
+            execution_policy: "execution-policy".to_owned(),
+            driver_contract_revision: "driver-1.0".to_owned(),
+        };
+        let wire = serde_json::to_vec(&binding).expect("binding encodes");
+        assert!(String::from_utf8_lossy(&wire).contains(reference));
+        let decoded: LegacyM4SelectionBindingDto =
+            serde_json::from_slice(&wire).expect("binding decodes");
+        assert_eq!(decoded.legacy_safe_selection, reference);
+        assert_eq!(decoded, binding);
+    }
+
+    #[test]
+    fn legacy_selection_reference_validation_rejects_non_canonical_forms() {
+        for value in [
+            "selection",
+            "legacy-uuid:",
+            "legacy-uuid:11111111-1111-4111-8111-11111111111",
+            "LEGACY-UUID:11111111-1111-4111-8111-111111111111",
+            "legacy-uuid:11111111-1111-4111-8111-1111111111111",
+            "legacy-uuid:11111111-1111-4111-8111-11111111111G",
+            "legacy-uuid:11111111-1111-4111-8111-111111111111 ",
+            "legacy-uuid:11111111-1111-4111-8111-111111111111\n",
+            "legacy-uuid:/tmp/11111111-1111-4111-8111-111111111111",
+            "legacy-uuid:11111111-1111-0111-8111-111111111111",
+            "legacy-uuid:11111111-1111-4111-7111-111111111111",
+        ] {
+            assert!(
+                !is_canonical_legacy_uuid_reference(value),
+                "{value:?} must not be canonical"
+            );
+            let binding = LegacyM4SelectionBindingDto {
+                legacy_config_revision_id: "config-1".to_owned(),
+                legacy_snapshot_schema: "schema-1".to_owned(),
+                legacy_safe_selection: value.to_owned(),
+                default_profile_id: "profile-1".to_owned(),
+                default_profile_revision_id: "rev-1".to_owned(),
+                kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+                capability_subset: vec!["text".to_owned()],
+                execution_policy: "execution-policy".to_owned(),
+                driver_contract_revision: "driver-1.0".to_owned(),
+            };
+            assert_eq!(
+                binding
+                    .validate()
+                    .expect_err("non-canonical reference is rejected")
+                    .code(),
+                "legacy_selection_reference_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_activity_journal_record_limits_accept_at_limit_and_reject_one_over() {
+        let record =
+            |sequence: u64, safe_user_projection: String, typed_references: Vec<String>| {
+                AgentActivityJournalRecordDto {
+                    activity_tree_id: AgentActivityTreeId("tree-1".to_owned()),
+                    record_id: "record-1".to_owned(),
+                    sequence,
+                    occurred_at: 100,
+                    root_run_reference: "run-1".to_owned(),
+                    direct_pair_reference_when_present: Some("pair-1".to_owned()),
+                    record_kind: "message".to_owned(),
+                    safe_user_projection,
+                    typed_references,
+                    canonical_record_digest: "a".repeat(64),
+                }
+            };
+        // 64 KiB string-payload bound.
+        let base_payload = "tree-1".len()
+            + "record-1".len()
+            + "run-1".len()
+            + "pair-1".len()
+            + "message".len()
+            + 64;
+        let at_limit = 64 * 1024 - base_payload;
+        assert!(
+            record(0, "a".repeat(at_limit), Vec::new())
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            record(0, "a".repeat(at_limit + 1), Vec::new())
+                .validate()
+                .expect_err("oversized record is rejected")
+                .code(),
+            "agent_activity_record_too_large"
+        );
+
+        // 16 typed references.
+        let references = |count: usize| (0..count).map(|i| format!("ref-{i}")).collect::<Vec<_>>();
+        assert!(
+            record(0, "safe".to_owned(), references(16))
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            record(0, "safe".to_owned(), references(17))
+                .validate()
+                .expect_err("17 references are rejected")
+                .code(),
+            "agent_message_reference_invalid"
+        );
+
+        // Zero-based sequence below the 4,096-record journal bound.
+        assert!(
+            record(4095, "safe".to_owned(), Vec::new())
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            record(4096, "safe".to_owned(), Vec::new())
+                .validate()
+                .expect_err("sequence 4096 is rejected")
+                .code(),
+            "agent_activity_journal_limit_exceeded"
+        );
     }
 
     #[test]
