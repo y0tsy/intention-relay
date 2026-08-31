@@ -5,15 +5,19 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto, RunEventCursorDto, RunModeDto,
-    RunStatusDto, WorkspaceRootDto,
+    CreateSessionCommandDto, DomainEventDto, ModelRunFactDto, ModelRunFactEventDto,
+    ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto, RunModeDto, RunSnapshotDto,
+    RunStatusDto, ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AppendModelRunFactsInputDto, CreateSessionInputDto,
     StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_types::{ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId};
+use intention_types::{
+    EventEnvelopeDto, EventId, EventMetadataDto, ProjectId, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+};
 use tempfile::TempDir;
 
 const M3_SCHEMA_SQL: &str = "
@@ -39,51 +43,6 @@ CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
 CREATE TABLE session_snapshots (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
 CREATE TABLE run_snapshots (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
 CREATE UNIQUE INDEX one_active_run_per_session ON runs(session_id) WHERE status NOT IN ('completed','cancelled','failed','interrupted');
-";
-
-/// The full production-equivalent schema-3 surface: M3 base tables plus the M4
-/// run-cursor/model-fact/tool-result tables. A fixture stamped user_version = 3
-/// must contain all of them because the migration library applies nothing.
-const V3_SCHEMA_SQL: &str = "
-CREATE TABLE projects (project_id TEXT PRIMARY KEY);
-CREATE TABLE workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
-CREATE TABLE sessions (
-  session_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
-  workspace_root TEXT NOT NULL, mode TEXT NOT NULL, config_revision_id TEXT,
-  last_sequence INTEGER NOT NULL, next_queue_ticket INTEGER NOT NULL
-);
-CREATE TABLE turns (
-  session_id TEXT NOT NULL, turn_id TEXT NOT NULL, content TEXT NOT NULL,
-  proposed_run_id TEXT NOT NULL, config_revision_id TEXT NOT NULL, outcome TEXT NOT NULL,
-  queue_ticket INTEGER, PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
-);
-CREATE TABLE runs (
-  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
-  status TEXT NOT NULL, config_revision_id TEXT NOT NULL, UNIQUE(session_id, turn_id)
-);
-CREATE TABLE queued_turns (session_id TEXT NOT NULL, turn_id TEXT NOT NULL, queue_ticket INTEGER NOT NULL, PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket));
-CREATE TABLE configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
-CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, envelope_json TEXT NOT NULL, UNIQUE(session_id, sequence));
-CREATE TABLE session_snapshots (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
-CREATE TABLE run_snapshots (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
-CREATE UNIQUE INDEX one_active_run_per_session_v3 ON runs(session_id) WHERE status NOT IN ('completed','cancelled','failed','interrupted');
-CREATE TABLE run_cursors (
-  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-  cursor INTEGER NOT NULL
-);
-CREATE TABLE model_run_facts (
-  run_id TEXT NOT NULL, cursor INTEGER NOT NULL,
-  event_id TEXT NOT NULL, PRIMARY KEY(run_id, cursor), UNIQUE(event_id)
-);
-CREATE TABLE model_run_snapshots (
-  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-  sequence INTEGER NOT NULL, cursor INTEGER NOT NULL, snapshot_json TEXT NOT NULL
-);
-CREATE TABLE tool_results (
-  run_id TEXT NOT NULL, session_id TEXT NOT NULL, call_id TEXT NOT NULL,
-  event_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
-  occurred_at INTEGER NOT NULL, PRIMARY KEY(run_id, call_id), UNIQUE(event_id)
-);
 ";
 
 fn time(value: i64) -> TimestampDto {
@@ -268,73 +227,118 @@ fn m3_database_migrates_to_cursor_zero_snapshots_without_synthetic_facts() {
 
 #[test]
 fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
-    // Mirrors the proven legacy fixture of
-    // m3_database_migrates_to_cursor_zero_snapshots_without_synthetic_facts, but
-    // stamps PRAGMA user_version = 3 so the reopen exercises the schema-3 path
-    // (no migration) while proving every pre-existing M3/M4 byte is unchanged.
-    // The schema must include the full production migration surface (M3 + M4
-    // tables) because user_version = 3 means rusqlite_migration applies nothing.
+    // Stamps PRAGMA user_version = 3 on the exact production schema-3 surface
+    // (built from the crate's migration source of truth), so the reopen
+    // exercises the schema-3 path without a migration while proving every
+    // pre-existing M3/M4 row in all fourteen tables is byte-identical. The
+    // fixture enables foreign keys so the seeded rows prove the production
+    // constraints (FKs, UNIQUEs, CHECKs, and the partial active-run index)
+    // directly against SQLite.
     let directory = TempDir::new().expect("temporary directory exists");
     let path = directory.path().join("legacy-v3.sqlite");
     let connection = sqlite::Connection::open(&path).expect("legacy database opens");
     connection
-        .execute_batch(V3_SCHEMA_SQL)
-        .expect("schema three creates");
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .expect("foreign keys enable");
+    connection
+        .execute_batch(intention_storage_sqlite::TEST_SCHEMA_3_SQL)
+        .expect("production schema three creates");
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
     let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let turn_id = TurnId::new();
     let revision_id = intention_types::ConfigRevisionId::new();
+    let turn_id = TurnId::new();
+    let queued_turn_id = TurnId::new();
+    let run_id = RunId::new();
+    let queued_run_id = RunId::new();
+    let fact_event_id = EventId::new();
+    let tool_event_id = EventId::new();
+    let call_id = ToolCallId::new();
+
     connection
         .execute(
             "INSERT INTO projects(project_id) VALUES (?1)",
-            [ProjectId::new().to_string()],
+            [project_id.to_string()],
         )
         .expect("project inserts");
     connection
         .execute(
             "INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2)",
-            sqlite::params![WorkspaceId::new().to_string(), workspace_root_path()],
+            sqlite::params![workspace_id.to_string(), workspace_root_path()],
         )
         .expect("workspace inserts");
-    let workspace_id: String = connection
-        .query_row("SELECT workspace_id FROM workspace_roots", [], |row| {
-            row.get(0)
-        })
-        .expect("workspace identity loads");
-    let project_id: String = connection
-        .query_row("SELECT project_id FROM projects", [], |row| row.get(0))
-        .expect("project identity loads");
+    connection
+        .execute(
+            "INSERT INTO configuration_revisions(revision_id, snapshot_json) VALUES (?1, ?2)",
+            sqlite::params![
+                revision_id.to_string(),
+                serde_json::to_string(&snapshot()).expect("safe snapshot serializes")
+            ],
+        )
+        .expect("configuration revision inserts");
+    connection
+        .execute(
+            "INSERT INTO sessions(session_id, project_id, workspace_id, workspace_root, mode, config_revision_id, last_sequence, next_queue_ticket) VALUES (?1, ?2, ?3, ?4, 'build', ?5, 7, 1)",
+            sqlite::params![session_id.to_string(), project_id.to_string(), workspace_id.to_string(), workspace_root_path(), revision_id.to_string()],
+        )
+        .expect("session inserts");
+    connection
+        .execute(
+            "INSERT INTO turns(session_id, turn_id, content, proposed_run_id, config_revision_id, outcome, queue_ticket) VALUES (?1, ?2, 'turn', ?3, ?4, 'started', NULL)",
+            sqlite::params![session_id.to_string(), turn_id.to_string(), run_id.to_string(), revision_id.to_string()],
+        )
+        .expect("started turn inserts");
+    connection
+        .execute(
+            "INSERT INTO turns(session_id, turn_id, content, proposed_run_id, config_revision_id, outcome, queue_ticket) VALUES (?1, ?2, 'queued turn', ?3, ?4, 'queued', 0)",
+            sqlite::params![session_id.to_string(), queued_turn_id.to_string(), queued_run_id.to_string(), revision_id.to_string()],
+        )
+        .expect("queued turn inserts");
+    // The run is terminal ('completed') so the queued-turn rows coexist with
+    // the partial unique index one_active_run_per_session.
+    connection
+        .execute(
+            "INSERT INTO runs(run_id, session_id, turn_id, status, config_revision_id) VALUES (?1, ?2, ?3, 'completed', ?4)",
+            sqlite::params![run_id.to_string(), session_id.to_string(), turn_id.to_string(), revision_id.to_string()],
+        )
+        .expect("run inserts");
+    connection
+        .execute(
+            "INSERT INTO queued_turns(session_id, turn_id, queue_ticket) VALUES (?1, ?2, 0)",
+            sqlite::params![session_id.to_string(), queued_turn_id.to_string()],
+        )
+        .expect("queued turn entry inserts");
+    connection
+        .execute(
+            "INSERT INTO domain_events(event_id, session_id, sequence, envelope_json) VALUES (?1, ?2, 1, ?3)",
+            sqlite::params![fact_event_id.to_string(), session_id.to_string(), serde_json::to_string(&fact_envelope(session_id, run_id, turn_id, fact_event_id, 1)).expect("fact envelope serializes")],
+        )
+        .expect("fact event inserts");
+    connection
+        .execute(
+            "INSERT INTO domain_events(event_id, session_id, sequence, envelope_json) VALUES (?1, ?2, 2, ?3)",
+            sqlite::params![tool_event_id.to_string(), session_id.to_string(), serde_json::to_string(&tool_lifecycle_envelope(session_id, run_id, turn_id, tool_event_id, call_id, 2)).expect("tool lifecycle envelope serializes")],
+        )
+        .expect("tool event inserts");
     let run_projection = intention_domain::RunProjectionDto::new(
         session_id,
         run_id,
         turn_id,
-        RunStatusDto::Failed,
+        RunStatusDto::Completed,
         revision_id,
     );
     let session_projection = intention_domain::SessionProjectionDto::new(
-        ProjectId::parse(&project_id).expect("project identity parses"),
+        project_id,
         session_id,
-        WorkspaceId::parse(&workspace_id).expect("workspace identity parses"),
+        workspace_id,
         WorkspaceRootDto::parse(workspace_root_path()).expect("workspace root is absolute"),
         RunModeDto::Build,
         Some(revision_id),
         None,
         Vec::new(),
-        intention_types::SessionEventSequenceDto::new(7),
+        SessionEventSequenceDto::new(7),
     )
     .expect("legacy session projection is valid");
-    connection
-        .execute(
-            "INSERT INTO sessions(session_id, project_id, workspace_id, workspace_root, mode, config_revision_id, last_sequence, next_queue_ticket) VALUES (?1, ?2, ?3, ?4, 'build', ?5, 7, 0)",
-            sqlite::params![session_id.to_string(), project_id, workspace_id, workspace_root_path(), revision_id.to_string()],
-        )
-        .expect("session inserts");
-    connection
-        .execute(
-            "INSERT INTO runs(run_id, session_id, turn_id, status, config_revision_id) VALUES (?1, ?2, ?3, 'failed', ?4)",
-            sqlite::params![run_id.to_string(), session_id.to_string(), turn_id.to_string(), revision_id.to_string()],
-        )
-        .expect("run inserts");
     connection
         .execute(
             "INSERT INTO session_snapshots(session_id, sequence, projection_json) VALUES (?1, 7, ?2)",
@@ -348,19 +352,69 @@ fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
         )
         .expect("run snapshot inserts");
     connection
+        .execute(
+            "INSERT INTO run_cursors(run_id, session_id, cursor) VALUES (?1, ?2, 0)",
+            sqlite::params![run_id.to_string(), session_id.to_string()],
+        )
+        .expect("run cursor inserts");
+    connection
+        .execute(
+            "INSERT INTO model_run_facts(run_id, cursor, event_id) VALUES (?1, 1, ?2)",
+            sqlite::params![run_id.to_string(), fact_event_id.to_string()],
+        )
+        .expect("model fact inserts");
+    let model_snapshot = RunSnapshotDto::new(
+        session_id,
+        run_id,
+        SessionEventSequenceDto::new(7),
+        ModelRunProjectionDto::new(
+            run_projection.clone(),
+            RunEventCursorDto::new(0),
+            None,
+            "",
+            None,
+            None,
+            None,
+        )
+        .expect("model projection is valid"),
+    )
+    .expect("model run snapshot is valid");
+    connection
+        .execute(
+            "INSERT INTO model_run_snapshots(run_id, session_id, sequence, cursor, snapshot_json) VALUES (?1, ?2, 7, 0, ?3)",
+            sqlite::params![run_id.to_string(), session_id.to_string(), serde_json::to_string(&model_snapshot).expect("model snapshot serializes")],
+        )
+        .expect("model run snapshot inserts");
+    connection
+        .execute(
+            "INSERT INTO tool_results(run_id, session_id, call_id, event_id, kind, content, occurred_at) VALUES (?1, ?2, ?3, ?4, 'read', 'file content', 3)",
+            sqlite::params![run_id.to_string(), session_id.to_string(), call_id.to_string(), tool_event_id.to_string()],
+        )
+        .expect("tool result inserts");
+    connection
         .pragma_update(None, "user_version", 3_i64)
         .expect("schema three version sets");
 
-    // Capture every pre-existing M3/M4 row byte-for-byte before reopen.
-    let mut before: Vec<(String, String)> = Vec::new();
-    for table in [
+    // Capture every pre-existing M3/M4 row byte-for-byte before reopen, in
+    // foreign-key order across all fourteen schema-3 tables.
+    let tables = [
         "projects",
         "workspace_roots",
+        "configuration_revisions",
         "sessions",
+        "turns",
         "runs",
+        "queued_turns",
+        "domain_events",
         "session_snapshots",
         "run_snapshots",
-    ] {
+        "run_cursors",
+        "model_run_facts",
+        "model_run_snapshots",
+        "tool_results",
+    ];
+    let mut before = Vec::new();
+    for table in tables {
         before.extend(capture_rows(&connection, table));
     }
     drop(connection);
@@ -383,58 +437,113 @@ fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("schema version reads");
     assert_eq!(version, 3);
-    let mut after: Vec<(String, String)> = Vec::new();
-    for table in [
-        "projects",
-        "workspace_roots",
-        "sessions",
-        "runs",
-        "session_snapshots",
-        "run_snapshots",
-    ] {
+    let mut after = Vec::new();
+    for table in tables {
         after.extend(capture_rows(&connection, table));
     }
     assert_eq!(
         before, after,
         "every pre-existing M3/M4 row is byte-identical after reopen"
     );
-    let fact_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM model_run_facts", [], |row| row.get(0))
-        .expect("fact count loads");
-    assert_eq!(fact_count, 0);
 }
 
-/// Captures every row of a table as exact joined text values, ordered
-/// deterministically, so pre-reopen and post-reopen bytes can be compared.
-fn capture_rows(connection: &sqlite::Connection, table: &str) -> Vec<(String, String)> {
+/// A byte-exact captured cell typed by SQLite storage class: text stays raw
+/// bytes, blobs stay raw bytes, and reals keep their exact bit pattern.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CapturedValue {
+    Null,
+    Integer(i64),
+    Real(u64),
+    Text(Vec<u8>),
+    Blob(Vec<u8>),
+}
+
+/// Captures every row of a table as typed values in rowid order, tagged with
+/// the table name, so pre-reopen and post-reopen bytes compare exactly.
+fn capture_rows(connection: &sqlite::Connection, table: &str) -> Vec<(String, Vec<CapturedValue>)> {
     let mut statement = connection
-        .prepare(&format!("SELECT * FROM {table}"))
+        .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
         .expect("capture statement prepares");
     let column_count = statement.column_count();
     let mut rows = statement.query([]).expect("capture query runs");
     let mut captured = Vec::new();
     while let Some(row) = rows.next().expect("capture row reads") {
-        let mut values = Vec::new();
+        let mut values = Vec::with_capacity(column_count);
         for index in 0..column_count {
             let value = match row.get_ref(index).expect("capture value reads") {
-                sqlite::types::ValueRef::Null => "NULL".to_string(),
-                sqlite::types::ValueRef::Integer(value) => value.to_string(),
-                sqlite::types::ValueRef::Real(value) => value.to_string(),
-                sqlite::types::ValueRef::Text(text) => String::from_utf8_lossy(text).into_owned(),
-                sqlite::types::ValueRef::Blob(blob) => {
-                    blob.iter().map(|byte| format!("{byte:02x}")).collect()
-                }
+                sqlite::types::ValueRef::Null => CapturedValue::Null,
+                sqlite::types::ValueRef::Integer(value) => CapturedValue::Integer(value),
+                sqlite::types::ValueRef::Real(value) => CapturedValue::Real(value.to_bits()),
+                sqlite::types::ValueRef::Text(text) => CapturedValue::Text(text.to_vec()),
+                sqlite::types::ValueRef::Blob(blob) => CapturedValue::Blob(blob.to_vec()),
             };
             values.push(value);
         }
-        captured.push(values.join("\u{1f}"));
+        captured.push((table.to_string(), values));
     }
-    captured.sort();
     captured
-        .into_iter()
-        .enumerate()
-        .map(|(i, value)| (format!("{table}#{i}"), value))
-        .collect()
+}
+
+/// A valid opaque envelope for one durable reasoning-delta domain event.
+fn fact_envelope(
+    session_id: SessionId,
+    run_id: RunId,
+    turn_id: TurnId,
+    event_id: EventId,
+    sequence: u64,
+) -> EventEnvelopeDto<DomainEventDto> {
+    let fact = ModelRunFactDto::new(
+        RunEventCursorDto::new(sequence),
+        ModelRunFactInputDto::reasoning_delta_recorded("tail-only reasoning")
+            .expect("reasoning fact is valid"),
+    )
+    .expect("model fact is valid");
+    let payload = ModelRunFactEventDto::new(session_id, run_id, fact, time(3));
+    EventEnvelopeDto::new(
+        EventMetadataDto::new(
+            SchemaVersionDto::new(1, 0),
+            event_id,
+            session_id,
+            Some(run_id),
+            Some(turn_id),
+            SessionEventSequenceDto::new(sequence),
+            time(3),
+        ),
+        DomainEventDto::ReasoningDeltaRecorded(payload),
+    )
+}
+
+/// A valid opaque envelope for one durable tool-lifecycle domain event.
+fn tool_lifecycle_envelope(
+    session_id: SessionId,
+    run_id: RunId,
+    turn_id: TurnId,
+    event_id: EventId,
+    call_id: ToolCallId,
+    sequence: u64,
+) -> EventEnvelopeDto<DomainEventDto> {
+    let lifecycle = ToolLifecycleEventDto::new(
+        session_id,
+        run_id,
+        call_id,
+        "read",
+        ToolLifecycleStatusDto::Admitted,
+        "local tool invocation admitted",
+        time(3),
+    )
+    .expect("tool lifecycle event is valid");
+    EventEnvelopeDto::new(
+        EventMetadataDto::new(
+            SchemaVersionDto::new(1, 0),
+            event_id,
+            session_id,
+            Some(run_id),
+            Some(turn_id),
+            SessionEventSequenceDto::new(sequence),
+            time(3),
+        ),
+        DomainEventDto::ToolLifecycle(lifecycle),
+    )
 }
 
 fn workspace_root_path() -> String {
