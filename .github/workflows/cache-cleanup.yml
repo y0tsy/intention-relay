@@ -1,0 +1,32 @@
+name: Cache cleanup
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly safety net: even without a merge, kept-branch caches older than
+    # the retention window are removed so the repository never drifts back to
+    # the cache limit between merges.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete stale GitHub Actions caches
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Delete stale GitHub Actions caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Pull-request and feature-branch caches are deleted in bulk; kept
+        # (main) caches older than the retention window are deleted by id.
+        run: python3 quality/cleanup_gha_caches.py --max-age-days 7

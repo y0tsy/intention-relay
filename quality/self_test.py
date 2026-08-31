@@ -206,6 +206,31 @@ def test_benchmark_jobs_parsing() -> None:
         raise RuntimeError("configured command must include --jobs=N")
 
 
+def test_cleanup_gha_caches_decides_deletion() -> None:
+    """The cache cleaner deletes non-kept refs and stale kept-ref caches only."""
+    import datetime as _datetime
+
+    cleanup = load_quality_module("cleanup_gha_caches")
+    now = _datetime.datetime(2026, 8, 31, 12, 0, tzinfo=_datetime.timezone.utc)
+    recent = "2026-08-31T10:00:00Z"
+    old = "2026-08-01T10:00:00Z"
+    # Non-kept refs (pull requests and feature branches) are always deleted.
+    if not cleanup.should_delete("refs/pull/21/merge", recent, "refs/heads/main", 7, now):
+        raise RuntimeError("pull-request caches must always be deleted")
+    if not cleanup.should_delete("refs/heads/feature-x", recent, "refs/heads/main", 7, now):
+        raise RuntimeError("feature-branch caches must always be deleted")
+    # Kept-ref caches are kept while fresh and deleted once stale.
+    if cleanup.should_delete("refs/heads/main", recent, "refs/heads/main", 7, now):
+        raise RuntimeError("fresh kept-ref cache must be kept")
+    if not cleanup.should_delete("refs/heads/main", old, "refs/heads/main", 7, now):
+        raise RuntimeError("stale kept-ref cache must be deleted")
+    # Age is measured against the explicit clock; boundary at exactly the
+    # limit is kept (strictly older than the limit is deleted).
+    boundary = (now - _datetime.timedelta(days=7)).isoformat().replace("+00:00", "Z")
+    if cleanup.should_delete("refs/heads/main", boundary, "refs/heads/main", 7, now):
+        raise RuntimeError("cache exactly at the age limit must be kept")
+
+
 def test_profile_arguments_include_critical_combinations(_root: Path) -> None:
     namespace = {"__file__": str(ROOT / "quality/run_profiles.py"), "__name__": "quality.run_profiles"}
     exec((ROOT / "quality/run_profiles.py").read_text(encoding="utf-8"), namespace)
@@ -1565,6 +1590,7 @@ def main() -> None:
         test_sccache_collector_parses_pinned_v017_schema,
         test_sccache_collector_rejects_malformed_counters,
         test_benchmark_jobs_parsing,
+        test_cleanup_gha_caches_decides_deletion,
     ]
     if arguments.list:
         for test in [*repository_tests, *standalone_tests]:
