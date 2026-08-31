@@ -2,7 +2,7 @@
 
 use crate::canonical::{
     CanonicalError, CanonicalRecordBuilder, CanonicalRecordReader, Digest256, TagRegistry,
-    WireType, decode_u64, encode_bool, encode_u64,
+    WireType, decode_u64, decode_uuid_list, encode_bool, encode_u64,
 };
 
 /// The closed execution kind of a run.
@@ -135,22 +135,58 @@ fn uuid(bytes: &[u8]) -> Result<[u8; 16], CanonicalError> {
     bytes.try_into().map_err(|_| CanonicalError::InvalidField)
 }
 
-fn limits_run(limits: &FixedRunLimits) -> Result<Vec<u8>, CanonicalError> {
-    record(
-        0,
-        1,
-        (1..=6)
-            .zip([
-                limits.max_attempts,
-                limits.max_total_seconds,
-                limits.max_actions,
-                limits.max_concurrent_actions,
-                limits.max_retained_bytes,
-                limits.max_clarification_seconds,
-            ])
-            .map(|(number, value)| (number, WireType::U64, encode_u64(value)))
-            .collect(),
-    )
+impl FixedRunLimits {
+    /// Encodes these run limits into their nested limits record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
+    /// field table were noncanonical; it is canonical by construction.
+    pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
+        record(
+            0,
+            1,
+            (1..=6)
+                .zip([
+                    self.max_attempts,
+                    self.max_total_seconds,
+                    self.max_actions,
+                    self.max_concurrent_actions,
+                    self.max_retained_bytes,
+                    self.max_clarification_seconds,
+                ])
+                .map(|(number, value)| (number, WireType::U64, encode_u64(value)))
+                .collect(),
+        )
+    }
+
+    /// Decodes these run limits from their nested limits record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidField` when any of the six limit fields
+    /// is absent or malformed, and other `CanonicalError` values for malformed
+    /// framing.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
+        let reader = CanonicalRecordReader::new(bytes, 6)?;
+        let values = (1..=6)
+            .map(|number| {
+                decode_u64(
+                    reader
+                        .field(number, WireType::U64)?
+                        .ok_or(CanonicalError::InvalidField)?,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            max_attempts: values[0],
+            max_total_seconds: values[1],
+            max_actions: values[2],
+            max_concurrent_actions: values[3],
+            max_retained_bytes: values[4],
+            max_clarification_seconds: values[5],
+        })
+    }
 }
 
 fn limits_activity(limits: &FixedActivityLimits) -> Result<Vec<u8>, CanonicalError> {
@@ -370,7 +406,7 @@ impl ProgrammaticCallerPolicySelectionV1 {
                     self.policy_selection_digest.bytes().to_vec(),
                 ),
                 (4, WireType::List, provenance),
-                (5, WireType::Record, limits_run(&self.fixed_run_limits)?),
+                (5, WireType::Record, self.fixed_run_limits.encode()?),
             ],
         )
     }
@@ -402,34 +438,22 @@ impl ProgrammaticCallerPolicySelectionV1 {
                 .field(3, WireType::Digest)?
                 .ok_or(CanonicalError::InvalidField)?,
         )?;
-        let limits = reader
-            .field(5, WireType::Record)?
-            .ok_or(CanonicalError::InvalidField)?;
-        let limits_reader = CanonicalRecordReader::new(limits, 6)?;
-        let values = (1..=6)
-            .map(|number| {
-                decode_u64(
-                    limits_reader
-                        .field(number, WireType::U64)
-                        .ok()
-                        .flatten()
-                        .unwrap_or(&[]),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let inherited_scope_provenance = decode_uuid_list(
+            reader
+                .field(4, WireType::List)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let fixed_run_limits = FixedRunLimits::decode(
+            reader
+                .field(5, WireType::Record)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
         Ok(Self {
             root_origin,
             effective_policy_snapshot_reference,
             policy_selection_digest,
-            inherited_scope_provenance: Vec::new(),
-            fixed_run_limits: FixedRunLimits {
-                max_attempts: values[0],
-                max_total_seconds: values[1],
-                max_actions: values[2],
-                max_concurrent_actions: values[3],
-                max_retained_bytes: values[4],
-                max_clarification_seconds: values[5],
-            },
+            inherited_scope_provenance,
+            fixed_run_limits,
         })
     }
 }
@@ -1397,6 +1421,156 @@ mod tests {
         for malformed in [Vec::<u8>::new(), vec![0x00, 0xAA], vec![0x02], vec![0x01]] {
             assert!(DisabledOr::decode(&malformed).is_err());
         }
+    }
+
+    #[test]
+    fn programmatic_provenance_round_trips_and_is_strict() {
+        let selection = ProgrammaticCallerPolicySelectionV1 {
+            root_origin: ExecutionKind::Ordinary,
+            effective_policy_snapshot_reference: [3u8; 16],
+            policy_selection_digest: Digest256::from_bytes(&[9u8; 32])
+                .expect("fixture digest is valid"),
+            inherited_scope_provenance: vec![[1u8; 16], [2u8; 16]],
+            fixed_run_limits: FixedRunLimits {
+                max_attempts: 1,
+                max_total_seconds: 2,
+                max_actions: 3,
+                max_concurrent_actions: 4,
+                max_retained_bytes: 5,
+                max_clarification_seconds: 6,
+            },
+        };
+        let bytes = selection.encode().expect("selection encodes");
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&bytes).expect("selection decodes"),
+            selection
+        );
+
+        // An empty provenance round-trips byte-identically to the historical
+        // encoding: a zero count and no items.
+        let empty = golden_selection();
+        let empty_bytes = empty.encode().expect("empty selection encodes");
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&empty_bytes)
+                .expect("empty selection decodes")
+                .encode()
+                .expect("empty selection re-encodes"),
+            empty_bytes
+        );
+
+        // A declared count that does not fit the remaining bytes is truncated.
+        let mut truncated = (2u32).to_be_bytes().to_vec();
+        truncated.extend_from_slice(&[1u8; 16]);
+        let truncated_record = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 32]),
+                (4, WireType::List as u8, &truncated),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&truncated_record)
+                .expect_err("truncated provenance item is rejected"),
+            CanonicalError::Truncated
+        );
+
+        // Bytes after the declared items are trailing.
+        let mut trailing = (1u32).to_be_bytes().to_vec();
+        trailing.extend_from_slice(&[1u8; 16]);
+        trailing.extend_from_slice(&[2u8; 16]);
+        let trailing_record = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 32]),
+                (4, WireType::List as u8, &trailing),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&trailing_record)
+                .expect_err("trailing provenance bytes are rejected"),
+            CanonicalError::TrailingBytes
+        );
+
+        // A missing provenance field is rejected.
+        let limits = golden_selection()
+            .fixed_run_limits
+            .encode()
+            .expect("fixture run limits encode");
+        let missing_provenance = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 32]),
+                (5, WireType::Record as u8, &limits),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&missing_provenance)
+                .expect_err("missing provenance field is rejected"),
+            CanonicalError::InvalidField
+        );
+
+        // A nested limits record missing one of its six fields is rejected
+        // instead of silently filling an empty value.
+        let incomplete_limits = raw_record(0, 1, &[(1, WireType::U64 as u8, &[1])]);
+        let missing_limits_field = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 32]),
+                (4, WireType::List as u8, &(0u32).to_be_bytes()),
+                (5, WireType::Record as u8, &incomplete_limits),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&missing_limits_field)
+                .expect_err("missing run-limit field is rejected"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn fixed_run_limits_round_trip_and_require_all_six_fields() {
+        let limits = FixedRunLimits {
+            max_attempts: 1,
+            max_total_seconds: 3600,
+            max_actions: 1024,
+            max_concurrent_actions: 4,
+            max_retained_bytes: 1048576,
+            max_clarification_seconds: 3600,
+        };
+        let bytes = limits.encode().expect("run limits encode");
+        assert_eq!(
+            FixedRunLimits::decode(&bytes).expect("run limits decode"),
+            limits
+        );
+
+        // A nested record missing any limit field is rejected.
+        let incomplete = raw_record(
+            0,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[1]),
+                (2, WireType::U64 as u8, &[2]),
+                (3, WireType::U64 as u8, &[3]),
+                (4, WireType::U64 as u8, &[4]),
+                (5, WireType::U64 as u8, &[5]),
+            ],
+        );
+        assert_eq!(
+            FixedRunLimits::decode(&incomplete).expect_err("missing run-limit field is rejected"),
+            CanonicalError::InvalidField
+        );
     }
 
     #[test]

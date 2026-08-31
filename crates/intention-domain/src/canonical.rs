@@ -386,6 +386,40 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<&str, CanonicalError> {
     std::str::from_utf8(bytes).map_err(|_| CanonicalError::InvalidUtf8)
 }
 
+/// Decodes a strict list of sixteen-byte UUIDs.
+///
+/// A list is a big-endian `u32` item count followed by exactly that many
+/// sixteen-byte UUIDs; the count must fit the remaining bytes exactly.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::Truncated` when the count or an item does not fit
+/// the remaining bytes, and `CanonicalError::TrailingBytes` when bytes remain
+/// after the declared items.
+pub fn decode_uuid_list(bytes: &[u8]) -> Result<Vec<[u8; 16]>, CanonicalError> {
+    if bytes.len() < 4 {
+        return Err(CanonicalError::Truncated);
+    }
+    let count = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    let expected = 4u64 + (count as u64) * 16;
+    if expected > bytes.len() as u64 {
+        return Err(CanonicalError::Truncated);
+    }
+    if expected < bytes.len() as u64 {
+        return Err(CanonicalError::TrailingBytes);
+    }
+    let mut items = Vec::with_capacity(count);
+    for index in 0..count {
+        let start = 4 + index * 16;
+        items.push(
+            bytes[start..start + 16]
+                .try_into()
+                .map_err(|_| CanonicalError::Truncated)?,
+        );
+    }
+    Ok(items)
+}
+
 /// The domain-owned numeric tag registry.
 pub struct TagRegistry;
 
