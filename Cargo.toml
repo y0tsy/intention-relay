@@ -72,8 +72,12 @@ undocumented_unsafe_blocks = "deny"
 # linking in the CI pipeline while preserving backtraces for tests.
 debug = 1
 
-# Optimize every package in the graph for the dev profile so test binaries
-# execute faster; the saved time compounds across the repeated test,
-# coverage, and fixture passes in CI.
+# Optimize every package in the graph for the dev profile at opt-level 1:
+# the middle ground between full optimization (opt-level 2) and no
+# optimization. opt-level 2 made every dependency and workspace crate
+# compile with full codegen in every CI phase (test, coverage, lint,
+# deps); level 1 cuts compile time materially while keeping test binaries
+# fast enough that the repeated test, coverage, and fixture passes in CI do
+# not regress.
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 1
