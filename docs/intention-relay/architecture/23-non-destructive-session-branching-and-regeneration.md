@@ -8,7 +8,7 @@
 - Decision record: [`0015`](../decisions/0015-non-destructive-session-branching-and-regeneration.md).
 - Detail decisions: [`0026`](../decisions/0026-session-branching-detail-directions.md) (session-branching detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (tool-result/child-agent execution, export, clone/rebind).
 - Reconciliation topics: `FRK-001..022`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

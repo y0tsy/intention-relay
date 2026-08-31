@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by the
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by the
 respective authoritative packages:
 
 - **Architecture 26 (continual harness)**: the 15 closed `harness_*` safe
@@ -37,7 +37,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 
 The authoritative package review of 2026-08-30 confirmed the 15 `harness_*`
 closed safe failures and the `ContinualHarnessSelectionV1` nested-record content
-are present in `m4plus_concept2.md` but absent from the authoritative
+are present in `m4plus_concept.md` but absent from the authoritative
 documentation: architecture 26 defines the harness model and its bounds but
 carries no closed failure list, and the run-execution-meaning record is
 referenced by name only. This decision adopts the detail so the authoritative

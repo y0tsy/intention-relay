@@ -40,5 +40,5 @@ replay, recovery, redaction, adapter-parity, cross-platform, and outcome evidenc
 
 ## Provenance
 
-`m4plus_concept2.md`, selected agent communication, observation, notification,
+`m4plus_concept.md`, selected agent communication, observation, notification,
 and presentation material, reconciled against architectures 03 and 13--23.

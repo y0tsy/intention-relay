@@ -114,5 +114,5 @@ standard quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected semi-autonomous Mandate overlay and transition
+`m4plus_concept.md`, selected semi-autonomous Mandate overlay and transition
 linearization sections.

@@ -8,7 +8,7 @@
 - Decision record: [`0007`](../decisions/0007-unified-tool-registry-and-direct-mandate-tool-admission.md).
 - Detail decision: [`0025`](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) (base-tool contracts and tool-loop bounds).
 - Reconciliation topics: `TLS-002..011, MTL-001..007`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

@@ -73,4 +73,4 @@ redaction coverage.
 
 ## Provenance
 
-`m4plus_concept2.md`, external-attempt taxonomy and recovery sections.
+`m4plus_concept.md`, external-attempt taxonomy and recovery sections.

@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The Goal aggregate domain from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted as the accepted future
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
 direction and owned by the new [Goal Domain and Verification](../architecture/28-goal-domain-and-verification.md)
 package:
 
@@ -40,7 +40,7 @@ work-authorization plane.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the Goal aggregate
-domain is present in `m4plus_concept2.md` but absent from the authoritative
+domain is present in `m4plus_concept.md` but absent from the authoritative
 documentation: architecture 21 covers only `GoalContextSelectionV1` and the
 Skill model, while the Goal identity/lifecycle/readiness/selection, verification
 gates, working memory, proposals, and compaction working form had no owner. This

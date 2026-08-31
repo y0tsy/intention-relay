@@ -37,5 +37,5 @@ document.
 
 ## Provenance
 
-`m4plus_concept2.md`, Mandate identity/lifecycle, transition linearization,
+`m4plus_concept.md`, Mandate identity/lifecycle, transition linearization,
 trigger/recovery, limit classification, and historical compatibility sections.

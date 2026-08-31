@@ -8,7 +8,7 @@
 - Decision record: [`0011`](../decisions/0011-mandate-gateway-rlm-bridge.md).
 - Detail decisions: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (bridge detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (per-call cancellation direction).
 - Reconciliation topics: `BRG-001..016`.
-- Research provenance: [`m4plus_concept2.md`](../m4plus_concept2.md).
+- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

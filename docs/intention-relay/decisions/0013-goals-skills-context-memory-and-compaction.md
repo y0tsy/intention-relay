@@ -55,5 +55,5 @@ gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected Goal, Skill, memory, and compaction material,
+`m4plus_concept.md`, selected Goal, Skill, memory, and compaction material,
 reconciled against architectures 13--20.

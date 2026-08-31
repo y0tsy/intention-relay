@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The provider session-selection and profiles protocol layer from
-[`m4plus_concept2.md`](../m4plus_concept2.md) is adopted as the accepted future
+[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
 direction and owned by the new [Provider Session Selection and Profiles Protocol](../architecture/29-provider-session-and-profiles-protocol.md)
 package:
 
@@ -36,7 +36,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the provider
-session-selection and protocol layer is present in `m4plus_concept2.md` but
+session-selection and protocol layer is present in `m4plus_concept.md` but
 explicitly excluded in architecture 22 ("session defaults/overrides" in the
 non-goals). The user directed that this exclusion is not accepted and the layer
 must be fully covered. This decision adopts the layer as an accepted future

@@ -31,4 +31,4 @@ Dynamic run-local capability acquisition supersedes retained fixed-catalog/no-di
 
 ## Provenance
 
-`m4plus_concept2.md`, Mandate MCP capability selection and dynamic acquisition sections, plus retained bounded MCP gateway material.
+`m4plus_concept.md`, Mandate MCP capability selection and dynamic acquisition sections, plus retained bounded MCP gateway material.

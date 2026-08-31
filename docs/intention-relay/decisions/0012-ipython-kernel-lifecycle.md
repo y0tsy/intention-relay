@@ -52,5 +52,5 @@ cross-platform, and outcome evidence through the standard quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, selected IPython kernel lifecycle and Mandate recovery
+`m4plus_concept.md`, selected IPython kernel lifecycle and Mandate recovery
 overlay, reconciled against architectures 13--19.

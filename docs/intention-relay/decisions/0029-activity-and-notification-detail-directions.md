@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The agent-communication, activity-observation, and user-notification detail
-from [`m4plus_concept2.md`](../m4plus_concept2.md) is adopted and owned by
+from [`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
 [architecture 24](../architecture/24-activity-ui-and-adapters.md):
 
 - `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;
@@ -53,7 +53,7 @@ note) and are classified as intrinsic/capacity bounds, never Mandate quotas.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the agent
-communication/observation/notification detail is present in `m4plus_concept2.md`
+communication/observation/notification detail is present in `m4plus_concept.md`
 but only at principle level in architecture 24, with the numeric values
 explicitly deferred. This decision adopts the detail so the authoritative
 documentation fully covers the feature, while preserving the project rule that

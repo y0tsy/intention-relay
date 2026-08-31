@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following three items, named in the
-[`m4plus_concept2.md`](../m4plus_concept2.md) backlog as "still to decide" or
+[`m4plus_concept.md`](../m4plus_concept.md) backlog as "still to decide" or
 "deliberately deferred", are adopted as accepted future directions:
 
 - **Tree-level metadata** (concept2 line 7608), owned by
@@ -38,7 +38,7 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed these three items are
-named in `m4plus_concept2.md` as deferred or still-to-decide but appear nowhere
+named in `m4plus_concept.md` as deferred or still-to-decide but appear nowhere
 in the authoritative documentation, including the deferred/excluded register.
 This decision adopts them as accepted future directions so the authoritative
 documentation no longer leaves them unmapped, while preserving the project rule

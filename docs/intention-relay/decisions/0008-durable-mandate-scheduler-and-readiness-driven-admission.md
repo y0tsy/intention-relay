@@ -47,5 +47,5 @@ quality gate.
 
 ## Provenance
 
-`m4plus_concept2.md`, Mandate trigger/recovery/limit sections and retained
+`m4plus_concept.md`, Mandate trigger/recovery/limit sections and retained
 continual-harness scheduling research.
