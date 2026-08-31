@@ -762,7 +762,8 @@ mod tests {
 
     use super::*;
     use crate::canonical::{
-        MAX_FIELD_BYTES, MAX_RECORD_BYTES, decode_bool, decode_utf8, encode_utf8,
+        CanonicalIdentityInput, IdentityV1, MAX_FIELD_BYTES, MAX_RECORD_BYTES, NamespacedDigest,
+        decode_bool, decode_utf8, encode_utf8,
     };
     use sha2::{Digest, Sha256};
 
@@ -1884,6 +1885,209 @@ mod tests {
             )
             .expect("descendant selection decodes"),
             descendant
+        );
+    }
+
+    #[test]
+    fn identity_v1_formats_and_parses_strictly() {
+        let identity = IdentityV1::sha256(b"intention-relay");
+        let text = identity.to_string();
+        assert!(text.starts_with("sha256-v1:"));
+        assert_eq!(text.len(), "sha256-v1:".len() + 64);
+        assert_eq!(
+            text.parse::<IdentityV1>().expect("identity parses"),
+            identity
+        );
+        assert_eq!(
+            identity.bytes(),
+            Digest256::sha256(b"intention-relay").bytes()
+        );
+        // The text form is lowercase-only and fixed-width.
+        assert!(text.to_uppercase().parse::<IdentityV1>().is_err());
+        assert!("sha256-v1:".parse::<IdentityV1>().is_err());
+        assert!(
+            format!("sha256-v1:{}", "a".repeat(63))
+                .parse::<IdentityV1>()
+                .is_err()
+        );
+        assert!("sha256-v1:".to_owned().parse::<IdentityV1>().is_err());
+        assert!(
+            text.replacen("sha256-v1:", "sha256:", 1)
+                .parse::<IdentityV1>()
+                .is_err()
+        );
+        assert_eq!(
+            IdentityV1::sha256(b"a").to_string(),
+            format!(
+                "sha256-v1:{}",
+                hex_encode(&IdentityV1::sha256(b"a").bytes())
+            )
+        );
+    }
+
+    #[test]
+    fn namespaced_digest_formats_parses_and_validates_namespaces() {
+        let bytes = b"canonical payload";
+        let digest = Digest256::for_namespace("run", bytes).expect("namespace is valid");
+        assert_eq!(
+            digest,
+            NamespacedDigest {
+                namespace: "run".to_owned(),
+                digest: Digest256::sha256(bytes),
+            }
+        );
+        let text = digest.to_string();
+        assert_eq!(
+            text,
+            format!(
+                "run:sha256:{}",
+                hex_encode(&Digest256::sha256(bytes).bytes())
+            )
+        );
+        assert_eq!(
+            text.parse::<NamespacedDigest>()
+                .expect("namespaced digest parses"),
+            digest
+        );
+        // Strict parsing rejections: empty namespace, uppercase digits, wrong
+        // widths, a second separator, and a missing separator.
+        let digits64 = "a".repeat(64);
+        assert!(
+            format!(":sha256:{digits64}")
+                .parse::<NamespacedDigest>()
+                .is_err()
+        );
+        assert!(
+            format!("run:sha256:{}", "A".repeat(64))
+                .parse::<NamespacedDigest>()
+                .is_err()
+        );
+        assert!(
+            format!("run:sha256:{}", "a".repeat(63))
+                .parse::<NamespacedDigest>()
+                .is_err()
+        );
+        assert!(
+            format!("run:sha256:{digits64}:sha256:{digits64}")
+                .parse::<NamespacedDigest>()
+                .is_err()
+        );
+        assert!("run-sha256-abcdef".parse::<NamespacedDigest>().is_err());
+        // for_namespace validates the namespace character set.
+        assert!(Digest256::for_namespace("", bytes).is_err());
+        assert!(Digest256::for_namespace("bad space", bytes).is_err());
+        assert!(Digest256::for_namespace("bad/name", bytes).is_err());
+        assert!(Digest256::for_namespace("bad:name", bytes).is_err());
+        for namespace in ["a", "A0", "run-2", "under_score", "dot.name"] {
+            assert!(Digest256::for_namespace(namespace, bytes).is_ok());
+        }
+    }
+
+    /// Builds the identity input over one run-execution-meaning record.
+    fn identity_input_for(meaning: &[u8], meaning_version: u32) -> CanonicalIdentityInput {
+        CanonicalIdentityInput::new()
+            .field(1, WireType::U64, ExecutionKind::Ordinary.enc())
+            .expect("execution kind field accepts")
+            .field(
+                2,
+                WireType::U64,
+                encode_u64(TagRegistry::RUN_EXECUTION_MEANING as u64),
+            )
+            .expect("meaning tag field accepts")
+            .field(3, WireType::U64, encode_u64(meaning_version as u64))
+            .expect("meaning version field accepts")
+            .field(4, WireType::U64, encode_u64(1))
+            .expect("canonicalization version field accepts")
+            .field(5, WireType::Bytes, meaning.to_vec())
+            .expect("meaning bytes field accepts")
+    }
+
+    #[test]
+    fn identity_input_excludes_non_identity_fields_with_sentinels() {
+        let v3 = golden_v3_record().encode().expect("v3 meaning encodes");
+        let plain = identity_input_for(&v3, 3);
+        let encoded = plain.encode().expect("identity input encodes");
+        let baseline = plain.digest().expect("identity digests");
+
+        // The digest field is excluded by construction: the identity is always
+        // recomputed from the encoded input and never accepts a stored digest.
+        assert_eq!(baseline, IdentityV1::sha256(&encoded));
+
+        // Credentials, filesystem paths, display/presentation data, readiness,
+        // and current state are excluded: sentinel values never change the
+        // digest, individually or together.
+        let sentinels = plain
+            .with_credentials(vec![0xDE, 0xAD, 0xBE, 0xEF])
+            .with_filesystem_path(
+                std::env::temp_dir()
+                    .join("intention-relay-credential-path")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .with_display_data("display name".to_owned())
+            .with_readiness(true)
+            .with_current_state(vec![0x01, 0x02, 0x03]);
+        assert_eq!(
+            sentinels
+                .digest()
+                .expect("excluded values keep the identity"),
+            baseline
+        );
+        for changed in [
+            sentinels
+                .clone()
+                .with_credentials(vec![0x00; 16])
+                .digest()
+                .expect("credentials stay excluded"),
+            sentinels
+                .clone()
+                .with_filesystem_path(
+                    std::env::temp_dir()
+                        .join("other-credential-path")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .digest()
+                .expect("paths stay excluded"),
+            sentinels
+                .clone()
+                .with_display_data("other display".to_owned())
+                .digest()
+                .expect("display data stays excluded"),
+            sentinels
+                .clone()
+                .with_readiness(false)
+                .digest()
+                .expect("readiness stays excluded"),
+            sentinels
+                .clone()
+                .with_current_state(vec![0xFF; 16])
+                .digest()
+                .expect("current state stays excluded"),
+        ] {
+            assert_eq!(changed, baseline);
+        }
+        // Excluded values never reach the encoded bytes.
+        assert_eq!(sentinels.encode().expect("identity input encodes"), encoded);
+    }
+
+    #[test]
+    fn identity_input_builder_enforces_strictly_increasing_fields() {
+        assert_eq!(
+            CanonicalIdentityInput::new()
+                .field(1, WireType::U64, vec![0])
+                .expect("first field accepts")
+                .field(1, WireType::U64, vec![1])
+                .expect_err("duplicate field is rejected"),
+            CanonicalError::DuplicateOrDescendingField
+        );
+        assert_eq!(
+            CanonicalIdentityInput::new()
+                .field(2, WireType::U64, vec![0])
+                .expect("higher field accepts")
+                .field(1, WireType::U64, vec![1])
+                .expect_err("descending field is rejected"),
+            CanonicalError::DuplicateOrDescendingField
         );
     }
 

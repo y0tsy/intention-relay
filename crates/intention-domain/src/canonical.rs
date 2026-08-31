@@ -100,6 +100,32 @@ impl Digest256 {
     pub const fn bytes(self) -> [u8; 32] {
         self.0
     }
+
+    /// Binds the SHA-256 digest of `bytes` to one validated namespace.
+    ///
+    /// The namespace must be non-empty ASCII letters, digits, `-`, `_`, or
+    /// `.`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidDigest` when `namespace` is empty or
+    /// contains a character outside the allowed set.
+    pub fn for_namespace(
+        namespace: &str,
+        bytes: &[u8],
+    ) -> Result<NamespacedDigest, CanonicalError> {
+        if namespace.is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(CanonicalError::InvalidDigest);
+        }
+        Ok(NamespacedDigest {
+            namespace: namespace.to_owned(),
+            digest: Self::sha256(bytes),
+        })
+    }
 }
 
 impl fmt::Display for Digest256 {
@@ -128,6 +154,203 @@ impl FromStr for Digest256 {
                 .map_err(|_| CanonicalError::InvalidDigest)?;
         }
         Ok(Self(bytes))
+    }
+}
+
+/// A SHA-256 digest bound to one namespace.
+///
+/// The text form is `<namespace>:sha256:<64 lowercase hex>`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NamespacedDigest {
+    /// The digest namespace.
+    pub namespace: String,
+    /// The SHA-256 digest bytes.
+    pub digest: Digest256,
+}
+
+impl fmt::Display for NamespacedDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.namespace, self.digest)
+    }
+}
+
+impl FromStr for NamespacedDigest {
+    type Err = CanonicalError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (namespace, digits) = value
+            .split_once(":sha256:")
+            .ok_or(CanonicalError::InvalidDigest)?;
+        if namespace.is_empty() {
+            return Err(CanonicalError::InvalidDigest);
+        }
+        let digest = Digest256::from_str(&format!("sha256:{digits}"))?;
+        Ok(Self {
+            namespace: namespace.to_owned(),
+            digest,
+        })
+    }
+}
+
+/// The sha256-v1 identity of canonical identity-bearing bytes.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IdentityV1([u8; 32]);
+
+impl IdentityV1 {
+    /// Computes the sha256-v1 identity of `bytes`.
+    #[must_use]
+    pub fn sha256(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
+
+    /// Returns the thirty-two raw identity bytes.
+    #[must_use]
+    pub const fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl fmt::Display for IdentityV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "sha256-v1:{}", hex(&self.0))
+    }
+}
+
+impl FromStr for IdentityV1 {
+    type Err = CanonicalError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let digits = value
+            .strip_prefix("sha256-v1:")
+            .ok_or(CanonicalError::InvalidDigest)?;
+        let digest = Digest256::from_str(&format!("sha256:{digits}"))?;
+        Ok(Self(digest.bytes()))
+    }
+}
+
+/// Builds the canonical identity input over only identity-bearing fields.
+///
+/// The identity is computed over exactly the fields added through
+/// [`Self::field`]. The digest field itself is excluded by construction:
+/// [`Self::digest`] always recomputes the identity from the encoded input and
+/// never accepts a stored digest. Credentials, filesystem paths,
+/// display/presentation data, readiness, and current state are not
+/// identity-bearing: values supplied through the `with_*` setters are retained
+/// for provenance only and are never encoded or digested.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CanonicalIdentityInput {
+    fields: Vec<(u32, WireType, Vec<u8>)>,
+    excluded_credentials: Option<Vec<u8>>,
+    excluded_filesystem_path: Option<String>,
+    excluded_display_data: Option<String>,
+    excluded_readiness: Option<bool>,
+    excluded_current_state: Option<Vec<u8>>,
+}
+
+impl CanonicalIdentityInput {
+    /// Creates an empty identity input.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            fields: Vec::new(),
+            excluded_credentials: None,
+            excluded_filesystem_path: None,
+            excluded_display_data: None,
+            excluded_readiness: None,
+            excluded_current_state: None,
+        }
+    }
+
+    /// Adds one identity-bearing field with a positive, strictly increasing
+    /// field number.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::DuplicateOrDescendingField` when the field
+    /// number is zero or does not strictly increase.
+    pub fn field(
+        mut self,
+        number: u32,
+        wire_type: WireType,
+        value: Vec<u8>,
+    ) -> Result<Self, CanonicalError> {
+        if number == 0
+            || self
+                .fields
+                .last()
+                .is_some_and(|(last, _, _)| number <= *last)
+        {
+            return Err(CanonicalError::DuplicateOrDescendingField);
+        }
+        self.fields.push((number, wire_type, value));
+        Ok(self)
+    }
+
+    /// Retains a credential value for provenance only; never encoded or
+    /// digested.
+    #[must_use]
+    pub fn with_credentials(mut self, value: Vec<u8>) -> Self {
+        self.excluded_credentials = Some(value);
+        self
+    }
+
+    /// Retains a filesystem path for provenance only; never encoded or
+    /// digested.
+    #[must_use]
+    pub fn with_filesystem_path(mut self, value: impl Into<String>) -> Self {
+        self.excluded_filesystem_path = Some(value.into());
+        self
+    }
+
+    /// Retains display/presentation data for provenance only; never encoded
+    /// or digested.
+    #[must_use]
+    pub fn with_display_data(mut self, value: impl Into<String>) -> Self {
+        self.excluded_display_data = Some(value.into());
+        self
+    }
+
+    /// Retains a readiness value for provenance only; never encoded or
+    /// digested.
+    #[must_use]
+    pub const fn with_readiness(mut self, value: bool) -> Self {
+        self.excluded_readiness = Some(value);
+        self
+    }
+
+    /// Retains current state for provenance only; never encoded or digested.
+    #[must_use]
+    pub fn with_current_state(mut self, value: Vec<u8>) -> Self {
+        self.excluded_current_state = Some(value);
+        self
+    }
+
+    /// Encodes the identity-bearing fields into their canonical record bytes.
+    ///
+    /// The input is framed as an anonymous record (tag zero, version one) so
+    /// the identity is a digest of the same `IRCR`/`typed-tlv-v1` bytes used
+    /// by every other canonical record.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the field
+    /// stream were noncanonical; it is canonical by construction.
+    pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
+        let mut builder = CanonicalRecordBuilder::new(0, 1);
+        for (number, wire_type, value) in &self.fields {
+            builder = builder.field(*number, *wire_type, value.clone())?;
+        }
+        Ok(builder.finish())
+    }
+
+    /// Computes the sha256-v1 identity of the encoded identity-bearing fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the field
+    /// stream were noncanonical; it is canonical by construction.
+    pub fn digest(&self) -> Result<IdentityV1, CanonicalError> {
+        Ok(IdentityV1::sha256(&self.encode()?))
     }
 }
 
