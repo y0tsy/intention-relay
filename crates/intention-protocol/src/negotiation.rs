@@ -178,6 +178,86 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_capability_across_both_peers_is_negotiated_once() {
+        // A capability declared by both peers is not a per-peer duplicate and
+        // survives the intersection exactly once.
+        let local = vec![ProtocolCapabilityDto::ProviderProfilesV1];
+        let remote = vec![ProtocolCapabilityDto::ProviderProfilesV1];
+        let negotiated = intersect_capabilities(&local, &remote).expect("no duplicates");
+        assert_eq!(negotiated, vec![ProtocolCapabilityDto::ProviderProfilesV1]);
+        // Reversing the peer order yields the same deterministic result.
+        assert_eq!(
+            intersect_capabilities(&remote, &local).expect("no duplicates"),
+            negotiated
+        );
+    }
+
+    #[test]
+    fn empty_capability_lists_negotiate_an_empty_intersection() {
+        let lone = vec![ProtocolCapabilityDto::ProviderProfilesV1];
+        assert!(
+            intersect_capabilities(&[], &lone)
+                .expect("no duplicates")
+                .is_empty()
+        );
+        assert!(
+            intersect_capabilities(&lone, &[])
+                .expect("no duplicates")
+                .is_empty()
+        );
+        assert!(
+            intersect_capabilities(&[], &[])
+                .expect("no duplicates")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn all_fail_closed_family_error_codes_map_to_capabilities() {
+        for (capability, expected_code) in [
+            (
+                ProtocolCapabilityDto::ProviderProfilesV1,
+                "provider_profiles_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::SessionForkV1,
+                "session_fork_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::NormalizedReasoningStreamV1,
+                "normalized_reasoning_stream_required",
+            ),
+            (
+                ProtocolCapabilityDto::AgentActivityV1,
+                "agent_activity_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::UserNotificationsV1,
+                "user_notifications_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::DaemonToolGatewayV1,
+                "daemon_tool_gateway_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::ModelToolLoopV1,
+                "model_tool_loop_required",
+            ),
+            (
+                ProtocolCapabilityDto::SessionSubscriptions,
+                "execution_meaning_capability_required",
+            ),
+        ] {
+            assert_eq!(
+                require_capability(&[], capability)
+                    .expect_err("missing capability fails closed")
+                    .code(),
+                expected_code
+            );
+        }
+    }
+
+    #[test]
     fn gateway_negotiation_requires_the_model_tool_loop() {
         let negotiated = |capabilities: Vec<ProtocolCapabilityDto>| ProtocolNegotiationResultDto {
             protocol_version: ProtocolVersionDto::new(1, 1),

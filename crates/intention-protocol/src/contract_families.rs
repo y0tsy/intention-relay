@@ -3866,10 +3866,33 @@ mod tests {
 
     #[test]
     fn public_wire_families_cover_exactly_the_ledger_tags() {
+        // The expected tag set is rebuilt solely from the domain-owned
+        // registry constants: there is no protocol-side numeric mirror.
         const LEDGER_TAGS: [u32; 24] = [
-            0x0201, 0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B,
-            0x020C, 0x0301, 0x0302, 0x0303, 0x0304, 0x0401, 0x0402, 0x0403, 0x0501, 0x0502, 0x0503,
-            0x0504, 0x0505,
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            TagRegistry::GOAL_RUN_SELECTION_V1,
+            TagRegistry::CONTINUAL_HARNESS_SELECTION_V1,
+            TagRegistry::MCP_METHOD_CATALOG_SELECTION_V1,
+            TagRegistry::MODEL_CAPABILITY_TAXONOMY_V1,
+            TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+            TagRegistry::PROVIDER_SELECTION_V1,
+            TagRegistry::REASONING_HISTORY_MANIFEST_V1,
+            TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
+            TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
+            TagRegistry::LEGACY_M4_SELECTION_BINDING,
+            TagRegistry::TOOL_DESCRIPTOR_REVISION,
+            TagRegistry::TOOL_REGISTRY_REVISION,
+            TagRegistry::MODEL_TOOL_LOOP_V1,
+            TagRegistry::BRIDGE_INVOCATION_V1,
+            TagRegistry::FORK_BASE_SNAPSHOT_V1,
+            TagRegistry::FORK_PREVIEW_V1,
+            TagRegistry::FORK_COMMAND_V1,
+            TagRegistry::AGENT_ACTIVITY_TREE_V1,
+            TagRegistry::AGENT_ACTIVITY_PAIR_V1,
+            TagRegistry::AGENT_MESSAGE_V1,
+            TagRegistry::AGENT_ACTIVITY_JOURNAL_RECORD_V1,
+            TagRegistry::AGENT_NOTIFICATION_RECORD_V1,
         ];
         let mut tags: Vec<u32> = PUBLIC_WIRE_CONTRACT_FAMILIES
             .iter()
