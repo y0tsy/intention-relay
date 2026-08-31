@@ -79,6 +79,11 @@ pub enum ProtocolCapabilityDto {
     ModelToolLoopV1,
 }
 
+/// The currently activated local protocol version.
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(1, 1);
+/// The currently activated public DTO schema version.
+pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
+
 /// Capabilities introduced after the M4 protocol surface.
 pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
     ProtocolCapabilityDto::ProviderProfilesV1,
@@ -1537,6 +1542,12 @@ mod tests {
                 .code(),
             "invalid_adapter_name"
         );
+    }
+
+    #[test]
+    fn current_versions_are_protocol_and_dto_schema_1_1() {
+        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(1, 1));
+        assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
     }
 
     #[test]
