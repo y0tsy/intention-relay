@@ -52,10 +52,10 @@ adapter_crates = ["intention-tauri", "intention-tui"]
 # b) so the per-profile critical path is the slower group instead of the
 # serial sum. Group boundaries preserve the coverage_crates compile order,
 # and the workspace aggregate report runs once per profile with group a.
-# Groups are balanced against measured per-crate collection times: group b
-# keeps the daemon compile anchor plus the heavy test suites (sqlite,
-# transport), group a keeps the intention compile anchor plus the provider
-# suites.
+# Groups are balanced against measured per-crate collection times and the
+# compile anchor: group a holds the intention compile anchor plus the
+# generic-chat provider, group b holds the daemon compile anchor plus the
+# heavy test suites (sqlite, transport, openrouter).
 [groups]
 a = [
   "intention-types",
@@ -65,7 +65,6 @@ a = [
   "intention-client",
   "intention",
   "intention-provider-generic-chat",
-  "intention-provider-openrouter",
 ]
 b = [
   "intention-transport",
@@ -75,6 +74,7 @@ b = [
   "intention-storage",
   "intention-storage-sqlite",
   "intention-model",
+  "intention-provider-openrouter",
   "intention-tools",
   "intention-workspace",
   "intention-hooks",
