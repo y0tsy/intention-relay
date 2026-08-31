@@ -21,10 +21,11 @@ each other's artifacts:
 
 Only numeric aggregates and the cache location are recorded; no environment
 or process data is dumped. Console output is limited to the sanitized
-summary line so raw statistics never reach CI logs. Counter values must be
-non-negative integers; bools (int subclasses) and negative integers are
-rejected as malformed, leaving the affected stat unavailable or ignored, so
-malformed output can never crash the diagnostics.
+summary line (hits/misses/errors, hit rate, cache size, and cache writes vs
+write errors when available) so raw statistics never reach CI logs. Counter
+values must be non-negative integers; bools (int subclasses) and negative
+integers are rejected as malformed, leaving the affected stat unavailable
+or ignored, so malformed output can never crash the diagnostics.</
 """
 
 from __future__ import annotations
@@ -213,6 +214,24 @@ def _hit_rate(stats: dict[str, object]) -> float | None:
     return round(hits / total, 4)
 
 
+def _write_error_suffix(stats: dict[str, object]) -> str:
+    """Append cache write diagnostics to the console summary when available.
+
+    ghac cache write failures appear in the post action as an aggregate
+    "Cache write errors" counter; surfacing writes vs write errors in the
+    collector's summary line makes the failure visible in the step log
+    without dumping raw statistics. Observational only: malformed or absent
+    counters simply leave the suffix empty.
+    """
+    writes = stats.get("cache_writes")
+    write_errors = stats.get("cache_write_errors")
+    if not isinstance(writes, int) or not isinstance(write_errors, int):
+        return ""
+    if writes <= 0 and write_errors <= 0:
+        return ""
+    return f", writes {writes} ({write_errors} write errors)"
+
+
 def _write_diagnostic(
     target: Path,
     phase: str,
@@ -231,6 +250,7 @@ def _write_diagnostic(
             f"{stats.get('cache_misses', 0)} misses / {errors or 0} errors"
             + (f" (hit rate {hit_rate})" if hit_rate is not None else "")
             + (f", cache {size} bytes" if size is not None else "")
+            + _write_error_suffix(stats)
         )
     )
     diagnostic = {

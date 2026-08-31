@@ -132,6 +132,12 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: ${{ matrix.rustflags }}
       CI_TOOLS_SCOPE: ${{ matrix.scope }}
+      # Diagnostic: sccache v0.17.0 records ghac cache write failures only in
+      # the aggregate "Cache write errors" counter of the post action unless
+      # its log level is raised, so coverage jobs run sccache at debug level
+      # to surface the failing write's cause in the step log. Remove once the
+      # ghac write errors are resolved.
+      SCCACHE_LOG: ${{ matrix.scope == 'coverage' && 'sccache=debug' || '' }}
     defaults:
       run:
         shell: bash
@@ -220,6 +226,46 @@ jobs:
         # gate verdict, and the gate's own failure still fails the job.
         if: always() && matrix.scope == 'coverage'
         run: python3 quality/collect_sccache_metrics.py --sccache "${SCCACHE_PATH}" --reports quality/reports --phase ${{ matrix.phase }}
+
+      - name: Dump sccache write diagnostics (coverage)
+        # Observational only: always exits 0 so it never changes the gate
+        # verdict. Prints the verbose stats, the write-error focused JSON
+        # summary (cache writes vs cache write errors, not-cached reasons),
+        # and the sccache-related environment so ghac cache write failures
+        # are diagnosable from the step log without downloading the artifact.
+        if: always() && matrix.scope == 'coverage'
+        run: |
+          set +e
+          echo "=== sccache version ==="
+          "${SCCACHE_PATH}" --version 2>&1 || true
+          echo "=== sccache stats (verbose) ==="
+          "${SCCACHE_PATH}" --show-stats --verbose 2>&1 || true
+          echo "=== sccache write-error summary ==="
+          "${SCCACHE_PATH}" --show-stats --stats-format json 2>/dev/null | python3 -c '
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+          except Exception as error:
+              print(f"json parse failed: {error}")
+              sys.exit(0)
+          stats = data.get("stats", {})
+          for key in (
+              "cache_writes",
+              "cache_write_errors",
+              "cache_read_errors",
+              "cache_timeouts",
+              "forced_recaches",
+              "compile_fails",
+              "requests_executed",
+          ):
+              print(f"{key}: {stats.get(key)}")
+          not_cached = stats.get("not_cached") or {}
+          print("not_cached reasons:", json.dumps(not_cached, sort_keys=True))
+          print("cache_location:", data.get("cache_location"))
+          print("cache_size:", data.get("cache_size"))
+          ' || true
+          echo "=== sccache environment ==="
+          env | grep -E '^(SCCACHE|CARGO_BUILD_RUSTC_WRAPPER|ACTIONS_CACHE|ACTIONS_RESULTS_URL|GITHUB_ACTIONS|CI_TOOLS_SCOPE)=' | sort || true
 
       - name: Upload quality reports
         if: always()
