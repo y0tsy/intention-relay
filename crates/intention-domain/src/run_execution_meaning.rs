@@ -763,7 +763,7 @@ mod tests {
     use super::*;
     use crate::canonical::{
         CanonicalIdentityInput, IdentityV1, MAX_FIELD_BYTES, MAX_RECORD_BYTES, NamespacedDigest,
-        decode_bool, decode_utf8, encode_utf8,
+        TagStatus, decode_bool, decode_utf8, encode_utf8,
     };
     use sha2::{Digest, Sha256};
 
@@ -2296,6 +2296,7 @@ mod tests {
         record_version: u32,
         bytes_hex: String,
         sha256: String,
+        namespace: String,
     }
 
     /// Parses the line-oriented golden fixture format.
@@ -2306,6 +2307,7 @@ mod tests {
             record_version: 0,
             bytes_hex: String::new(),
             sha256: String::new(),
+            namespace: String::new(),
         };
         for line in text.lines() {
             let (key, value) = line
@@ -2326,6 +2328,7 @@ mod tests {
                 }
                 "bytes_hex" => fixture.bytes_hex = value.to_owned(),
                 "sha256" => fixture.sha256 = value.to_owned(),
+                "namespace" => fixture.namespace = value.to_owned(),
                 other => return Err(format!("unknown golden key: {other}")),
             }
         }
@@ -2459,5 +2462,389 @@ mod tests {
             RunExecutionMeaningEnvelopeV1::decode(&encoded).expect("golden envelope decodes"),
             envelope
         );
+    }
+
+    fn golden_activity_selection_root() -> AgentActivitySelectionV1 {
+        AgentActivitySelectionV1::Root {
+            activity_tree_id: golden_uuid("11111111-1111-4111-8111-111111111111"),
+            root_origin: ExecutionKind::Ordinary,
+            activity_exchange_revision: 1,
+            activity_journal_revision: 1,
+            user_projection_revision: 1,
+            fixed_activity_limits: golden_activity_limits(),
+        }
+    }
+
+    fn golden_activity_selection_descendant() -> AgentActivitySelectionV1 {
+        AgentActivitySelectionV1::Descendant {
+            activity_tree_id: golden_uuid("11111111-1111-4111-8111-111111111111"),
+            direct_parent_link_reference: golden_uuid("44444444-4444-4444-8444-444444444444"),
+            activity_exchange_revision: 1,
+            activity_journal_revision: 1,
+            user_projection_revision: 1,
+            fixed_activity_limits: golden_activity_limits(),
+        }
+    }
+
+    fn golden_selection_with_provenance() -> ProgrammaticCallerPolicySelectionV1 {
+        ProgrammaticCallerPolicySelectionV1 {
+            root_origin: ExecutionKind::Ordinary,
+            effective_policy_snapshot_reference: golden_uuid(
+                "22222222-2222-4222-8222-222222222222",
+            ),
+            policy_selection_digest: Digest256::from_bytes(&[0x11; 32])
+                .expect("golden digest is valid"),
+            inherited_scope_provenance: vec![
+                golden_uuid("33333333-3333-4333-8333-333333333333"),
+                golden_uuid("44444444-4444-4444-8444-444444444444"),
+            ],
+            fixed_run_limits: FixedRunLimits {
+                max_attempts: 1,
+                max_total_seconds: 3600,
+                max_actions: 1024,
+                max_concurrent_actions: 4,
+                max_retained_bytes: 1048576,
+                max_clarification_seconds: 3600,
+            },
+        }
+    }
+
+    fn golden_identity_input_v4() -> CanonicalIdentityInput {
+        let meaning = golden_v4_record()
+            .encode()
+            .expect("golden v4 meaning encodes");
+        identity_input_for(&meaning, 4)
+    }
+
+    #[test]
+    fn golden_agent_activity_selection_root_fixture_matches_the_encoder_and_round_trips() {
+        let selection = golden_activity_selection_root();
+        let encoded = selection.encode().expect("root selection encodes");
+        assert_golden_fixture(
+            include_str!("../tests/fixtures/goldens/agent-activity-selection-root-v1.txt"),
+            "agent-activity-selection-root-v1",
+            0x0202,
+            1,
+            &encoded,
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&encoded).expect("golden root selection decodes"),
+            selection
+        );
+    }
+
+    #[test]
+    fn golden_agent_activity_selection_descendant_fixture_matches_the_encoder_and_round_trips() {
+        let selection = golden_activity_selection_descendant();
+        let encoded = selection.encode().expect("descendant selection encodes");
+        assert_golden_fixture(
+            include_str!("../tests/fixtures/goldens/agent-activity-selection-descendant-v1.txt"),
+            "agent-activity-selection-descendant-v1",
+            0x0202,
+            2,
+            &encoded,
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&encoded)
+                .expect("golden descendant selection decodes"),
+            selection
+        );
+    }
+
+    #[test]
+    fn golden_programmatic_policy_provenance_fixture_matches_the_encoder_and_round_trips() {
+        let selection = golden_selection_with_provenance();
+        let encoded = selection.encode().expect("selection encodes");
+        assert_golden_fixture(
+            include_str!(
+                "../tests/fixtures/goldens/programmatic-policy-selection-provenance-v1.txt"
+            ),
+            "programmatic-policy-selection-provenance-v1",
+            0x0201,
+            1,
+            &encoded,
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&encoded)
+                .expect("golden selection decodes"),
+            selection
+        );
+    }
+
+    #[test]
+    fn golden_identity_v1_fixture_matches_the_encoder_and_round_trips() {
+        let input = golden_identity_input_v4();
+        let encoded = input.encode().expect("identity input encodes");
+        assert_golden_fixture(
+            include_str!("../tests/fixtures/goldens/identity-v1.txt"),
+            "identity-v1",
+            0x0000,
+            1,
+            &encoded,
+        );
+        // The golden sha256 is exactly the identity's 64 lowercase hex digits.
+        let identity = input.digest().expect("identity digests");
+        assert_eq!(identity, IdentityV1::sha256(&encoded));
+        let fixture = parse_golden(include_str!("../tests/fixtures/goldens/identity-v1.txt"))
+            .expect("identity fixture parses");
+        assert_eq!(hex_encode(&identity.bytes()), fixture.sha256);
+        assert_eq!(
+            identity
+                .to_string()
+                .parse::<IdentityV1>()
+                .expect("identity parses"),
+            identity
+        );
+    }
+
+    #[test]
+    fn golden_namespaced_digest_fixture_matches_the_encoder_and_round_trips() {
+        let v3 = golden_v3_record()
+            .encode()
+            .expect("golden v3 meaning encodes");
+        assert_golden_fixture(
+            include_str!("../tests/fixtures/goldens/namespaced-digest-v1.txt"),
+            "namespaced-digest-v1",
+            0x0101,
+            3,
+            &v3,
+        );
+        let fixture = parse_golden(include_str!(
+            "../tests/fixtures/goldens/namespaced-digest-v1.txt"
+        ))
+        .expect("namespaced digest fixture parses");
+        let digest =
+            Digest256::for_namespace(&fixture.namespace, &v3).expect("golden namespace is valid");
+        assert_eq!(hex_encode(&digest.digest.bytes()), fixture.sha256);
+        assert_eq!(
+            digest.to_string(),
+            format!("{}:sha256:{}", fixture.namespace, fixture.sha256)
+        );
+        assert_eq!(
+            digest
+                .to_string()
+                .parse::<NamespacedDigest>()
+                .expect("namespaced digest parses"),
+            digest
+        );
+    }
+
+    #[test]
+    fn golden_identity_exclusion_fixture_matches_the_encoder_and_round_trips() {
+        let v3 = golden_v3_record()
+            .encode()
+            .expect("golden v3 meaning encodes");
+        let input = identity_input_for(&v3, 3)
+            .with_credentials(vec![0xDE, 0xAD, 0xBE, 0xEF])
+            .with_filesystem_path(
+                std::env::temp_dir()
+                    .join("intention-relay-excluded-path")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .with_display_data("excluded display".to_owned())
+            .with_readiness(true)
+            .with_current_state(vec![0x01, 0x02, 0x03]);
+        let encoded = input.encode().expect("identity input encodes");
+        assert_golden_fixture(
+            include_str!("../tests/fixtures/goldens/identity-exclusion-v1.txt"),
+            "identity-exclusion-v1",
+            0x0000,
+            1,
+            &encoded,
+        );
+        // The golden identity equals the identity of the same input without
+        // any excluded values.
+        let baseline = identity_input_for(&v3, 3)
+            .digest()
+            .expect("baseline identity digests");
+        assert_eq!(input.digest().expect("identity digests"), baseline);
+        let fixture = parse_golden(include_str!(
+            "../tests/fixtures/goldens/identity-exclusion-v1.txt"
+        ))
+        .expect("identity exclusion fixture parses");
+        assert_eq!(hex_encode(&baseline.bytes()), fixture.sha256);
+    }
+
+    #[test]
+    fn tag_registry_parity_with_the_adr_0036_ledger() {
+        // Every ledger tag maps to exactly one registry constant with the
+        // matching numeric value.
+        let registry_value = |name: &str| -> Option<u32> {
+            match name {
+                "run-execution-meaning" => Some(TagRegistry::RUN_EXECUTION_MEANING),
+                "programmatic-caller-policy-selection-v1" => {
+                    Some(TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1)
+                }
+                "agent-activity-selection-v1" => Some(TagRegistry::AGENT_ACTIVITY_SELECTION_V1),
+                "goal-run-selection-v1" => Some(TagRegistry::GOAL_RUN_SELECTION_V1),
+                "continual-harness-selection-v1" => {
+                    Some(TagRegistry::CONTINUAL_HARNESS_SELECTION_V1)
+                }
+                "mcp-method-catalog-selection-v1" => {
+                    Some(TagRegistry::MCP_METHOD_CATALOG_SELECTION_V1)
+                }
+                "model-capability-taxonomy-v1" => Some(TagRegistry::MODEL_CAPABILITY_TAXONOMY_V1),
+                "provider-profile-revision-v1" => Some(TagRegistry::PROVIDER_PROFILE_REVISION_V1),
+                "provider-selection-v1" => Some(TagRegistry::PROVIDER_SELECTION_V1),
+                "reasoning-history-manifest-v1" => Some(TagRegistry::REASONING_HISTORY_MANIFEST_V1),
+                "context-source-manifest-v1" => Some(TagRegistry::CONTEXT_SOURCE_MANIFEST_V1),
+                "model-context-projection-v1" => Some(TagRegistry::MODEL_CONTEXT_PROJECTION_V1),
+                "legacy-m4-selection-binding" => Some(TagRegistry::LEGACY_M4_SELECTION_BINDING),
+                "tool-descriptor-revision" => Some(TagRegistry::TOOL_DESCRIPTOR_REVISION),
+                "tool-registry-revision" => Some(TagRegistry::TOOL_REGISTRY_REVISION),
+                "model-tool-loop-v1" => Some(TagRegistry::MODEL_TOOL_LOOP_V1),
+                "bridge-invocation-v1" => Some(TagRegistry::BRIDGE_INVOCATION_V1),
+                "fork-base-snapshot-v1/v2" => Some(TagRegistry::FORK_BASE_SNAPSHOT_V1),
+                "fork-preview-v1/v2" => Some(TagRegistry::FORK_PREVIEW_V1),
+                "fork-command-v1" => Some(TagRegistry::FORK_COMMAND_V1),
+                "agent-activity-tree-v1" => Some(TagRegistry::AGENT_ACTIVITY_TREE_V1),
+                "agent-activity-pair-v1" => Some(TagRegistry::AGENT_ACTIVITY_PAIR_V1),
+                "agent-message-v1" => Some(TagRegistry::AGENT_MESSAGE_V1),
+                "agent-activity-journal-record-v1" => {
+                    Some(TagRegistry::AGENT_ACTIVITY_JOURNAL_RECORD_V1)
+                }
+                "agent-notification-record-v1" => Some(TagRegistry::AGENT_NOTIFICATION_RECORD_V1),
+                _ => None,
+            }
+        };
+        let mut values = Vec::new();
+        for entry in TagRegistry::LEDGER {
+            assert_eq!(
+                registry_value(entry.name).expect("ledger tag has a registry constant"),
+                entry.value,
+                "ledger tag {} must match its registry constant",
+                entry.name
+            );
+            assert!(
+                !values.contains(&entry.value),
+                "ledger tag value 0x{:04x} appears more than once",
+                entry.value
+            );
+            values.push(entry.value);
+            let wired = matches!(
+                entry.name,
+                "run-execution-meaning"
+                    | "programmatic-caller-policy-selection-v1"
+                    | "agent-activity-selection-v1"
+            );
+            assert_eq!(
+                entry.status,
+                if wired {
+                    TagStatus::Wired
+                } else {
+                    TagStatus::ReservedForSlice2
+                },
+                "unexpected status for ledger tag {}",
+                entry.name
+            );
+        }
+        // The fork aliases are single registry entries covering both versions.
+        assert_eq!(TagRegistry::FORK_BASE_SNAPSHOT_V1, 0x0401);
+        assert_eq!(TagRegistry::FORK_PREVIEW_V1, 0x0402);
+        assert_eq!(
+            TagRegistry::LEDGER
+                .iter()
+                .find(|entry| entry.name == "fork-base-snapshot-v1/v2")
+                .expect("fork base alias exists")
+                .value,
+            0x0401
+        );
+        assert_eq!(
+            TagRegistry::LEDGER
+                .iter()
+                .find(|entry| entry.name == "fork-preview-v1/v2")
+                .expect("fork preview alias exists")
+                .value,
+            0x0402
+        );
+        // Every registry constant appears in the ledger table exactly once.
+        let registry_entries: [(u32, &str); 25] = [
+            (TagRegistry::RUN_EXECUTION_MEANING, "run-execution-meaning"),
+            (
+                TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+                "programmatic-caller-policy-selection-v1",
+            ),
+            (
+                TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+                "agent-activity-selection-v1",
+            ),
+            (TagRegistry::GOAL_RUN_SELECTION_V1, "goal-run-selection-v1"),
+            (
+                TagRegistry::CONTINUAL_HARNESS_SELECTION_V1,
+                "continual-harness-selection-v1",
+            ),
+            (
+                TagRegistry::MCP_METHOD_CATALOG_SELECTION_V1,
+                "mcp-method-catalog-selection-v1",
+            ),
+            (
+                TagRegistry::MODEL_CAPABILITY_TAXONOMY_V1,
+                "model-capability-taxonomy-v1",
+            ),
+            (
+                TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+                "provider-profile-revision-v1",
+            ),
+            (TagRegistry::PROVIDER_SELECTION_V1, "provider-selection-v1"),
+            (
+                TagRegistry::REASONING_HISTORY_MANIFEST_V1,
+                "reasoning-history-manifest-v1",
+            ),
+            (
+                TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
+                "context-source-manifest-v1",
+            ),
+            (
+                TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
+                "model-context-projection-v1",
+            ),
+            (
+                TagRegistry::LEGACY_M4_SELECTION_BINDING,
+                "legacy-m4-selection-binding",
+            ),
+            (
+                TagRegistry::TOOL_DESCRIPTOR_REVISION,
+                "tool-descriptor-revision",
+            ),
+            (
+                TagRegistry::TOOL_REGISTRY_REVISION,
+                "tool-registry-revision",
+            ),
+            (TagRegistry::MODEL_TOOL_LOOP_V1, "model-tool-loop-v1"),
+            (TagRegistry::BRIDGE_INVOCATION_V1, "bridge-invocation-v1"),
+            (
+                TagRegistry::FORK_BASE_SNAPSHOT_V1,
+                "fork-base-snapshot-v1/v2",
+            ),
+            (TagRegistry::FORK_PREVIEW_V1, "fork-preview-v1/v2"),
+            (TagRegistry::FORK_COMMAND_V1, "fork-command-v1"),
+            (
+                TagRegistry::AGENT_ACTIVITY_TREE_V1,
+                "agent-activity-tree-v1",
+            ),
+            (
+                TagRegistry::AGENT_ACTIVITY_PAIR_V1,
+                "agent-activity-pair-v1",
+            ),
+            (TagRegistry::AGENT_MESSAGE_V1, "agent-message-v1"),
+            (
+                TagRegistry::AGENT_ACTIVITY_JOURNAL_RECORD_V1,
+                "agent-activity-journal-record-v1",
+            ),
+            (
+                TagRegistry::AGENT_NOTIFICATION_RECORD_V1,
+                "agent-notification-record-v1",
+            ),
+        ];
+        assert_eq!(TagRegistry::LEDGER.len(), registry_entries.len());
+        for (value, name) in registry_entries {
+            assert!(
+                TagRegistry::LEDGER
+                    .iter()
+                    .any(|entry| entry.value == value && entry.name == name),
+                "registry constant {name} (0x{value:04x}) is missing from the ledger table"
+            );
+        }
     }
 }

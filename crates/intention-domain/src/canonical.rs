@@ -643,6 +643,26 @@ pub fn decode_uuid_list(bytes: &[u8]) -> Result<Vec<[u8; 16]>, CanonicalError> {
     Ok(items)
 }
 
+/// Whether a ledger tag has a production codec in this slice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TagStatus {
+    /// The tag has a production codec in this PR.
+    Wired,
+    /// The tag is reserved for a later slice with no production codec yet.
+    ReservedForSlice2,
+}
+
+/// One ADR 0036 ledger registry entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LedgerTag {
+    /// The ledger name, including version aliases where applicable.
+    pub name: &'static str,
+    /// The frozen numeric tag value.
+    pub value: u32,
+    /// Whether a production codec exists in this slice.
+    pub status: TagStatus,
+}
+
 /// The domain-owned numeric tag registry.
 pub struct TagRegistry;
 
@@ -672,4 +692,136 @@ impl TagRegistry {
     pub const AGENT_MESSAGE_V1: u32 = 0x0503;
     pub const AGENT_ACTIVITY_JOURNAL_RECORD_V1: u32 = 0x0504;
     pub const AGENT_NOTIFICATION_RECORD_V1: u32 = 0x0505;
+
+    /// The complete ADR 0036 ledger tag table, one entry per ledger tag.
+    ///
+    /// The fork aliases `fork-base-snapshot-v1/v2` and `fork-preview-v1/v2`
+    /// each occupy a single entry that covers both versions.
+    pub const LEDGER: &'static [LedgerTag] = &[
+        LedgerTag {
+            name: "run-execution-meaning",
+            value: 0x0101,
+            status: TagStatus::Wired,
+        },
+        LedgerTag {
+            name: "programmatic-caller-policy-selection-v1",
+            value: 0x0201,
+            status: TagStatus::Wired,
+        },
+        LedgerTag {
+            name: "agent-activity-selection-v1",
+            value: 0x0202,
+            status: TagStatus::Wired,
+        },
+        LedgerTag {
+            name: "goal-run-selection-v1",
+            value: 0x0203,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "continual-harness-selection-v1",
+            value: 0x0204,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "mcp-method-catalog-selection-v1",
+            value: 0x0205,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "model-capability-taxonomy-v1",
+            value: 0x0206,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "provider-profile-revision-v1",
+            value: 0x0207,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "provider-selection-v1",
+            value: 0x0208,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "reasoning-history-manifest-v1",
+            value: 0x0209,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "context-source-manifest-v1",
+            value: 0x020A,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "model-context-projection-v1",
+            value: 0x020B,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "legacy-m4-selection-binding",
+            value: 0x020C,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "tool-descriptor-revision",
+            value: 0x0301,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "tool-registry-revision",
+            value: 0x0302,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "model-tool-loop-v1",
+            value: 0x0303,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "bridge-invocation-v1",
+            value: 0x0304,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "fork-base-snapshot-v1/v2",
+            value: 0x0401,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "fork-preview-v1/v2",
+            value: 0x0402,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "fork-command-v1",
+            value: 0x0403,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "agent-activity-tree-v1",
+            value: 0x0501,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "agent-activity-pair-v1",
+            value: 0x0502,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "agent-message-v1",
+            value: 0x0503,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "agent-activity-journal-record-v1",
+            value: 0x0504,
+            status: TagStatus::ReservedForSlice2,
+        },
+        LedgerTag {
+            name: "agent-notification-record-v1",
+            value: 0x0505,
+            status: TagStatus::ReservedForSlice2,
+        },
+    ];
 }
