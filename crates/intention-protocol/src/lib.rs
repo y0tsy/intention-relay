@@ -70,7 +70,29 @@ pub enum ProtocolCapabilityDto {
     DaemonHealth,
     /// The peer can subscribe to dedicated persistent run streams.
     RunStreamSubscriptions,
+    ProviderProfilesV1,
+    SessionForkV1,
+    NormalizedReasoningStreamV1,
+    AgentActivityV1,
+    UserNotificationsV1,
+    DaemonToolGatewayV1,
+    ModelToolLoopV1,
 }
+
+/// Capabilities introduced after the M4 protocol surface.
+pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
+    ProtocolCapabilityDto::ProviderProfilesV1,
+    ProtocolCapabilityDto::SessionForkV1,
+    ProtocolCapabilityDto::NormalizedReasoningStreamV1,
+    ProtocolCapabilityDto::AgentActivityV1,
+    ProtocolCapabilityDto::UserNotificationsV1,
+    ProtocolCapabilityDto::DaemonToolGatewayV1,
+    ProtocolCapabilityDto::ModelToolLoopV1,
+];
+
+pub mod contract_families;
+pub mod negotiation;
+pub use negotiation::ProtocolNegotiationResultDto;
 
 /// A safe metadata handshake exchanged before any protocol command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
