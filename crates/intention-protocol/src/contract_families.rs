@@ -1195,7 +1195,9 @@ pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
             if byte != b'-' {
                 return false;
             }
-        } else if !is_lower_hex(byte) {
+            continue;
+        }
+        if !is_lower_hex(byte) {
             return false;
         }
     }
