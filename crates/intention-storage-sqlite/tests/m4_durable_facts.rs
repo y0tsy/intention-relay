@@ -368,7 +368,7 @@ fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
         run_id,
         SessionEventSequenceDto::new(7),
         ModelRunProjectionDto::new(
-            run_projection,
+            run_projection.clone(),
             RunEventCursorDto::new(0),
             None,
             "",

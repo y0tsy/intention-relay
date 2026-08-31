@@ -1,4 +1,5 @@
 //! Additive protocol contract-family DTOs.
+use intention_domain::canonical::TagRegistry;
 use intention_types::{DtoResult, ErrorDto};
 use serde::{Deserialize, Serialize};
 
@@ -1208,6 +1209,186 @@ pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
     }
     true
 }
+
+/// Metadata linking one public wire contract family to its domain-owned tag.
+///
+/// This descriptor is nonserialized metadata: it never appears in DTO JSON.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContractFamilyDescriptor {
+    /// The stable ledger family name.
+    pub name: &'static str,
+    /// The family version (v1 or v2 for the fork snapshot and preview
+    /// families, which share one ledger tag).
+    pub version: u16,
+    /// The domain-owned canonical tag from [`TagRegistry`].
+    pub tag: u32,
+}
+
+pub const PROGRAMMATIC_CALLER_POLICY_SELECTION_V1: ContractFamilyDescriptor =
+    ContractFamilyDescriptor {
+        name: "programmatic-caller-policy-selection-v1",
+        version: 1,
+        tag: TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+    };
+pub const AGENT_ACTIVITY_SELECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-activity-selection-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+};
+pub const GOAL_RUN_SELECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "goal-run-selection-v1",
+    version: 1,
+    tag: TagRegistry::GOAL_RUN_SELECTION_V1,
+};
+pub const CONTINUAL_HARNESS_SELECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "continual-harness-selection-v1",
+    version: 1,
+    tag: TagRegistry::CONTINUAL_HARNESS_SELECTION_V1,
+};
+pub const MCP_METHOD_CATALOG_SELECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "mcp-method-catalog-selection-v1",
+    version: 1,
+    tag: TagRegistry::MCP_METHOD_CATALOG_SELECTION_V1,
+};
+pub const MODEL_CAPABILITY_TAXONOMY_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "model-capability-taxonomy-v1",
+    version: 1,
+    tag: TagRegistry::MODEL_CAPABILITY_TAXONOMY_V1,
+};
+pub const PROVIDER_PROFILE_REVISION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "provider-profile-revision-v1",
+    version: 1,
+    tag: TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+};
+pub const PROVIDER_SELECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "provider-selection-v1",
+    version: 1,
+    tag: TagRegistry::PROVIDER_SELECTION_V1,
+};
+pub const REASONING_HISTORY_MANIFEST_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "reasoning-history-manifest-v1",
+    version: 1,
+    tag: TagRegistry::REASONING_HISTORY_MANIFEST_V1,
+};
+pub const CONTEXT_SOURCE_MANIFEST_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "context-source-manifest-v1",
+    version: 1,
+    tag: TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
+};
+pub const MODEL_CONTEXT_PROJECTION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "model-context-projection-v1",
+    version: 1,
+    tag: TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
+};
+pub const LEGACY_M4_SELECTION_BINDING: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "legacy-m4-selection-binding",
+    version: 1,
+    tag: TagRegistry::LEGACY_M4_SELECTION_BINDING,
+};
+pub const TOOL_DESCRIPTOR_REVISION: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "tool-descriptor-revision",
+    version: 1,
+    tag: TagRegistry::TOOL_DESCRIPTOR_REVISION,
+};
+pub const TOOL_REGISTRY_REVISION: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "tool-registry-revision",
+    version: 1,
+    tag: TagRegistry::TOOL_REGISTRY_REVISION,
+};
+pub const MODEL_TOOL_LOOP_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "model-tool-loop-v1",
+    version: 1,
+    tag: TagRegistry::MODEL_TOOL_LOOP_V1,
+};
+pub const BRIDGE_INVOCATION_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "bridge-invocation-v1",
+    version: 1,
+    tag: TagRegistry::BRIDGE_INVOCATION_V1,
+};
+pub const FORK_BASE_SNAPSHOT_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "fork-base-snapshot-v1",
+    version: 1,
+    tag: TagRegistry::FORK_BASE_SNAPSHOT_V1,
+};
+pub const FORK_BASE_SNAPSHOT_V2: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "fork-base-snapshot-v2",
+    version: 2,
+    tag: TagRegistry::FORK_BASE_SNAPSHOT_V1,
+};
+pub const FORK_PREVIEW_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "fork-preview-v1",
+    version: 1,
+    tag: TagRegistry::FORK_PREVIEW_V1,
+};
+pub const FORK_PREVIEW_V2: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "fork-preview-v2",
+    version: 2,
+    tag: TagRegistry::FORK_PREVIEW_V1,
+};
+pub const FORK_COMMAND_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "fork-command-v1",
+    version: 1,
+    tag: TagRegistry::FORK_COMMAND_V1,
+};
+pub const AGENT_ACTIVITY_TREE_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-activity-tree-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_ACTIVITY_TREE_V1,
+};
+pub const AGENT_ACTIVITY_PAIR_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-activity-pair-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_ACTIVITY_PAIR_V1,
+};
+pub const AGENT_MESSAGE_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-message-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_MESSAGE_V1,
+};
+pub const AGENT_ACTIVITY_JOURNAL_RECORD_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-activity-journal-record-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_ACTIVITY_JOURNAL_RECORD_V1,
+};
+pub const AGENT_NOTIFICATION_RECORD_V1: ContractFamilyDescriptor = ContractFamilyDescriptor {
+    name: "agent-notification-record-v1",
+    version: 1,
+    tag: TagRegistry::AGENT_NOTIFICATION_RECORD_V1,
+};
+
+/// Every public wire contract family in the ADR 0036 ledger, in ledger order.
+///
+/// The fork snapshot and preview families carry one descriptor per version
+/// (v1 and v2) sharing their single ledger tag; every other family appears
+/// exactly once.
+pub const PUBLIC_WIRE_CONTRACT_FAMILIES: &[ContractFamilyDescriptor] = &[
+    PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+    AGENT_ACTIVITY_SELECTION_V1,
+    GOAL_RUN_SELECTION_V1,
+    CONTINUAL_HARNESS_SELECTION_V1,
+    MCP_METHOD_CATALOG_SELECTION_V1,
+    MODEL_CAPABILITY_TAXONOMY_V1,
+    PROVIDER_PROFILE_REVISION_V1,
+    PROVIDER_SELECTION_V1,
+    REASONING_HISTORY_MANIFEST_V1,
+    CONTEXT_SOURCE_MANIFEST_V1,
+    MODEL_CONTEXT_PROJECTION_V1,
+    LEGACY_M4_SELECTION_BINDING,
+    TOOL_DESCRIPTOR_REVISION,
+    TOOL_REGISTRY_REVISION,
+    MODEL_TOOL_LOOP_V1,
+    BRIDGE_INVOCATION_V1,
+    FORK_BASE_SNAPSHOT_V1,
+    FORK_BASE_SNAPSHOT_V2,
+    FORK_PREVIEW_V1,
+    FORK_PREVIEW_V2,
+    FORK_COMMAND_V1,
+    AGENT_ACTIVITY_TREE_V1,
+    AGENT_ACTIVITY_PAIR_V1,
+    AGENT_MESSAGE_V1,
+    AGENT_ACTIVITY_JOURNAL_RECORD_V1,
+    AGENT_NOTIFICATION_RECORD_V1,
+];
 
 #[cfg(test)]
 mod tests {
@@ -2719,6 +2900,152 @@ mod tests {
                 .expect_err("205 max-size descriptors exceed 512 KiB")
                 .code(),
             "tool_registry_revision_too_large"
+        );
+    }
+
+    #[test]
+    fn public_wire_families_cover_exactly_the_ledger_tags() {
+        const LEDGER_TAGS: [u32; 24] = [
+            0x0201, 0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B,
+            0x020C, 0x0301, 0x0302, 0x0303, 0x0304, 0x0401, 0x0402, 0x0403, 0x0501, 0x0502, 0x0503,
+            0x0504, 0x0505,
+        ];
+        let mut tags: Vec<u32> = PUBLIC_WIRE_CONTRACT_FAMILIES
+            .iter()
+            .map(|descriptor| descriptor.tag)
+            .collect();
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(
+            tags, LEDGER_TAGS,
+            "wire families must cover exactly the 24 ADR 0036 ledger tags"
+        );
+    }
+
+    #[test]
+    fn public_wire_families_duplicate_only_for_versioned_fork_families() {
+        for descriptor in PUBLIC_WIRE_CONTRACT_FAMILIES {
+            let count = PUBLIC_WIRE_CONTRACT_FAMILIES
+                .iter()
+                .filter(|other| other.tag == descriptor.tag)
+                .count();
+            let expected = if descriptor.tag == TagRegistry::FORK_BASE_SNAPSHOT_V1
+                || descriptor.tag == TagRegistry::FORK_PREVIEW_V1
+            {
+                2
+            } else {
+                1
+            };
+            assert_eq!(
+                count, expected,
+                "{} must be the only duplicate tag, found {count} descriptors",
+                descriptor.name
+            );
+        }
+    }
+
+    #[test]
+    fn public_wire_family_tags_match_the_domain_tag_registry() {
+        let registry: [(&str, u32); 26] = [
+            (
+                "programmatic-caller-policy-selection-v1",
+                TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            ),
+            (
+                "agent-activity-selection-v1",
+                TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            ),
+            ("goal-run-selection-v1", TagRegistry::GOAL_RUN_SELECTION_V1),
+            (
+                "continual-harness-selection-v1",
+                TagRegistry::CONTINUAL_HARNESS_SELECTION_V1,
+            ),
+            (
+                "mcp-method-catalog-selection-v1",
+                TagRegistry::MCP_METHOD_CATALOG_SELECTION_V1,
+            ),
+            (
+                "model-capability-taxonomy-v1",
+                TagRegistry::MODEL_CAPABILITY_TAXONOMY_V1,
+            ),
+            (
+                "provider-profile-revision-v1",
+                TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+            ),
+            ("provider-selection-v1", TagRegistry::PROVIDER_SELECTION_V1),
+            (
+                "reasoning-history-manifest-v1",
+                TagRegistry::REASONING_HISTORY_MANIFEST_V1,
+            ),
+            (
+                "context-source-manifest-v1",
+                TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
+            ),
+            (
+                "model-context-projection-v1",
+                TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
+            ),
+            (
+                "legacy-m4-selection-binding",
+                TagRegistry::LEGACY_M4_SELECTION_BINDING,
+            ),
+            (
+                "tool-descriptor-revision",
+                TagRegistry::TOOL_DESCRIPTOR_REVISION,
+            ),
+            (
+                "tool-registry-revision",
+                TagRegistry::TOOL_REGISTRY_REVISION,
+            ),
+            ("model-tool-loop-v1", TagRegistry::MODEL_TOOL_LOOP_V1),
+            ("bridge-invocation-v1", TagRegistry::BRIDGE_INVOCATION_V1),
+            ("fork-base-snapshot-v1", TagRegistry::FORK_BASE_SNAPSHOT_V1),
+            ("fork-base-snapshot-v2", TagRegistry::FORK_BASE_SNAPSHOT_V1),
+            ("fork-preview-v1", TagRegistry::FORK_PREVIEW_V1),
+            ("fork-preview-v2", TagRegistry::FORK_PREVIEW_V1),
+            ("fork-command-v1", TagRegistry::FORK_COMMAND_V1),
+            (
+                "agent-activity-tree-v1",
+                TagRegistry::AGENT_ACTIVITY_TREE_V1,
+            ),
+            (
+                "agent-activity-pair-v1",
+                TagRegistry::AGENT_ACTIVITY_PAIR_V1,
+            ),
+            ("agent-message-v1", TagRegistry::AGENT_MESSAGE_V1),
+            (
+                "agent-activity-journal-record-v1",
+                TagRegistry::AGENT_ACTIVITY_JOURNAL_RECORD_V1,
+            ),
+            (
+                "agent-notification-record-v1",
+                TagRegistry::AGENT_NOTIFICATION_RECORD_V1,
+            ),
+        ];
+        assert_eq!(registry.len(), PUBLIC_WIRE_CONTRACT_FAMILIES.len());
+        for descriptor in PUBLIC_WIRE_CONTRACT_FAMILIES {
+            let expected = registry
+                .iter()
+                .find(|(name, _)| *name == descriptor.name)
+                .expect("every family has a domain registry entry")
+                .1;
+            assert_eq!(
+                descriptor.tag, expected,
+                "{} must carry the domain registry tag",
+                descriptor.name
+            );
+        }
+    }
+
+    #[test]
+    fn current_protocol_and_schema_versions_are_1_1() {
+        assert_eq!(
+            crate::CURRENT_PROTOCOL_VERSION,
+            crate::ProtocolVersionDto::new(1, 1)
+        );
+        assert_eq!(
+            crate::CURRENT_DTO_SCHEMA_VERSION,
+            intention_types::SchemaVersionDto::new(1, 1)
         );
     }
 }
