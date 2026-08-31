@@ -231,6 +231,110 @@ def test_cleanup_gha_caches_decides_deletion() -> None:
         raise RuntimeError("cache exactly at the age limit must be kept")
 
 
+def test_coverage_groups_partition_policy() -> None:
+    """Coverage groups partition the coverage crates and keep the aggregate with group a."""
+    import tomllib as _tomllib
+
+    policy = _tomllib.loads((ROOT / "quality/coverage.toml").read_text(encoding="utf-8"))
+    crates = policy["policy"]["coverage_crates"]
+    groups = policy.get("groups")
+    if not isinstance(groups, dict) or set(groups) != {"a", "b"}:
+        raise RuntimeError("coverage policy must declare exactly groups a and b")
+    group_a = groups["a"]
+    group_b = groups["b"]
+    if sorted(group_a + group_b) != sorted(crates):
+        raise RuntimeError("coverage groups must partition coverage_crates exactly")
+    if len(set(group_a)) != len(group_a) or len(set(group_b)) != len(group_b):
+        raise RuntimeError("coverage groups must not repeat crates")
+    runner = (ROOT / "quality/run_coverage.py").read_text(encoding="utf-8")
+    if '"--group"' not in runner:
+        raise RuntimeError("coverage runner must accept --group for the CI split")
+    if 'arguments.group != "a"' not in runner:
+        raise RuntimeError("coverage runner must run the workspace aggregate with group a only")
+
+
+def test_run_profiles_profiles_filter() -> None:
+    """run_profiles --profiles restricts profiles and rejects unknown names."""
+    namespace = {
+        "__file__": str(ROOT / "quality/run_profiles.py"),
+        "__name__": "quality.run_profiles",
+    }
+    exec((ROOT / "quality/run_profiles.py").read_text(encoding="utf-8"), namespace)
+    selected = [
+        ("default", []),
+        ("no_default", ["--no-default-features"]),
+        ("all", ["--all-features"]),
+    ]
+    filtered = namespace["filter_profiles"](selected, ["default", "all"])
+    if filtered != [("default", []), ("all", ["--all-features"])]:
+        raise RuntimeError(f"unexpected filtered profiles: {filtered!r}")
+    try:
+        namespace["filter_profiles"](selected, ["default", "bogus"])
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("unknown profile names must be rejected")
+
+
+def test_run_deps_udeps_conditional() -> None:
+    """CI_UDEPS=false skips the unused-dependency check; local runs keep it."""
+    import os as _os
+
+    deps = load_quality_module("run_deps")
+    previous = _os.environ.get("CI_UDEPS")
+    try:
+        for disabled in ("0", "false", "no", "off", "FALSE", " False "):
+            _os.environ["CI_UDEPS"] = disabled
+            if deps.udeps_requested():
+                raise RuntimeError(f"CI_UDEPS={disabled!r} must disable udeps")
+        for enabled in ("1", "true", "yes"):
+            _os.environ["CI_UDEPS"] = enabled
+            if not deps.udeps_requested():
+                raise RuntimeError(f"CI_UDEPS={enabled!r} must keep udeps")
+        _os.environ.pop("CI_UDEPS", None)
+        if not deps.udeps_requested():
+            raise RuntimeError("unset CI_UDEPS must keep udeps")
+    finally:
+        if previous is None:
+            _os.environ.pop("CI_UDEPS", None)
+        else:
+            _os.environ["CI_UDEPS"] = previous
+
+
+def test_ci_split_makefile_targets() -> None:
+    """Makefile exposes the CI split targets (coverage groups and test halves)."""
+    import re as _re
+
+    source = (ROOT / "Makefile").read_text(encoding="utf-8")
+    expected = [
+        "coverage-default-a:",
+        "coverage-default-b:",
+        "coverage-no-default-a:",
+        "coverage-no-default-b:",
+        "coverage-all-a:",
+        "coverage-all-b:",
+        "ci-coverage-default-a:",
+        "ci-coverage-default-b:",
+        "ci-coverage-no-default-a:",
+        "ci-coverage-no-default-b:",
+        "ci-coverage-all-a:",
+        "ci-coverage-all-b:",
+        "test-default:",
+        "test-alt:",
+        "ci-test-default:",
+        "ci-test-alt:",
+    ]
+    for target in expected:
+        if _re.search(rf"^{_re.escape(target)} ", source, flags=_re.MULTILINE) is None:
+            raise RuntimeError(f"Makefile must declare {target}")
+    if "quality/run_profiles.py test --profiles default" not in source:
+        raise RuntimeError("test-default must run the default profile only")
+    if "quality/run_profiles.py test --profiles no_default,all" not in source:
+        raise RuntimeError("test-alt must run the alternate profiles")
+    if "quality/run_coverage.py --profile default --group a" not in source:
+        raise RuntimeError("coverage-default-a must pass --group a")
+
+
 def test_profile_arguments_include_critical_combinations(_root: Path) -> None:
     namespace = {"__file__": str(ROOT / "quality/run_profiles.py"), "__name__": "quality.run_profiles"}
     exec((ROOT / "quality/run_profiles.py").read_text(encoding="utf-8"), namespace)
@@ -1591,6 +1695,10 @@ def main() -> None:
         test_sccache_collector_rejects_malformed_counters,
         test_benchmark_jobs_parsing,
         test_cleanup_gha_caches_decides_deletion,
+        test_coverage_groups_partition_policy,
+        test_run_profiles_profiles_filter,
+        test_run_deps_udeps_conditional,
+        test_ci_split_makefile_targets,
     ]
     if arguments.list:
         for test in [*repository_tests, *standalone_tests]:

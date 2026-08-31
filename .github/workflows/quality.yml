@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Weekly main-branch run keeps the unused-dependency gate exercised even
+    # when no push reaches main for a while.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,9 +22,65 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Classify the change scope before the matrix starts so docs-only changes
+  # run only the Linux lint-arch gate (which contains the docs validation)
+  # instead of the full 13-job matrix. Any non-docs change runs everything;
+  # a failed or empty diff conservatively runs everything. The unused-
+  # dependency check additionally runs on every push to main, on scheduled
+  # runs, and on pull requests that touch manifests or dependency policy.
+  classify:
+    name: Classify change scope
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      run_udeps: ${{ steps.scope.outputs.run_udeps }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "push" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "run_udeps=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE" >/dev/null 2>&1 || true
+          CHANGED="$(git diff --name-only "$BASE...$GITHUB_SHA" 2>/dev/null || true)"
+          if [[ -z "$CHANGED" ]]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "run_udeps=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NON_DOCS="$(printf '%s\n' "$CHANGED" | grep -vE '^(docs/|README\.md$)' || true)"
+          if [[ -z "$NON_DOCS" ]]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            echo "run_udeps=true" >> "$GITHUB_OUTPUT"
+          else
+            DEP_PATHS="$(printf '%s\n' "$CHANGED" | grep -E '^(Cargo\.toml|Cargo\.lock|deny\.toml|rust-toolchain\.toml|THIRD_PARTY_NOTICES\.md|\.github/|Makefile|quality/)' || true)"
+            if [[ -n "$DEP_PATHS" ]]; then
+              echo "run_udeps=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run_udeps=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
   quality:
     name: ${{ matrix.os }} ${{ matrix.phase }}
     runs-on: ${{ matrix.os }}
+    needs: classify
     strategy:
       fail-fast: false
       matrix:
@@ -29,14 +90,21 @@ jobs:
           # equals the complete pinned toolset.
           #
           # lint-arch and test run on both Linux and Windows; coverage (all
-          # three profiles), selftest, and deps run on Linux only. Those three
-          # phases are platform-invariant: coverage measures the same source
-          # and toolchain, the selftest fixtures are Python/git subprocess
-          # checks, and the dependency gates read the same lockfile and
-          # registries. The Windows coverage trio dominated the CI critical
-          # path at roughly twenty minutes while running identical work about
-          # 1.7x slower than Linux; Windows correctness stays covered by the
-          # test job's named-pipe and platform-native symlink fixtures.
+          # three profiles, each split into groups a and b), selftest, and
+          # deps run on Linux only. Those phases are platform-invariant:
+          # coverage measures the same source and toolchain, the selftest
+          # fixtures are Python/git subprocess checks, and the dependency
+          # gates read the same lockfile and registries. The Windows coverage
+          # trio previously dominated the CI critical path at roughly twenty
+          # minutes while running identical work about 1.7x slower than
+          # Linux; Windows correctness stays covered by the test jobs'
+          # named-pipe and platform-native symlink fixtures. The Windows test
+          # gate itself is split into test-default and test-alt so the
+          # slower Windows runner is not the CI critical path.
+          #
+          # cache_family is the Swatinem/rust-cache shared-key: jobs in one
+          # family (same OS, toolchain, RUSTFLAGS, and profile family) share
+          # one cache entry instead of one per phase.
           - os: ubuntu-24.04
             phase: lint-arch
             stable: true
@@ -47,6 +115,7 @@ jobs:
             scope: lint-arch
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: linux-stable
           - os: ubuntu-24.04
             phase: test
             stable: true
@@ -57,36 +126,79 @@ jobs:
             scope: test
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: linux-stable
           - os: ubuntu-24.04
-            phase: coverage-default
+            phase: coverage-default-a
             stable: false
             nightly: true
             stable_components: ""
             nightly_components: "llvm-tools-preview"
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
+            coverage_group: a
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: coverage-default
           - os: ubuntu-24.04
-            phase: coverage-no-default
+            phase: coverage-default-b
             stable: false
             nightly: true
             stable_components: ""
             nightly_components: "llvm-tools-preview"
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
+            coverage_group: b
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: coverage-default
           - os: ubuntu-24.04
-            phase: coverage-all
+            phase: coverage-no-default-a
             stable: false
             nightly: true
             stable_components: ""
             nightly_components: "llvm-tools-preview"
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
             scope: coverage
+            coverage_group: a
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: coverage-no-default
+          - os: ubuntu-24.04
+            phase: coverage-no-default-b
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            coverage_group: b
+            rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
+            cache_family: coverage-no-default
+          - os: ubuntu-24.04
+            phase: coverage-all-a
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            coverage_group: a
+            rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
+            cache_family: coverage-all
+          - os: ubuntu-24.04
+            phase: coverage-all-b
+            stable: false
+            nightly: true
+            stable_components: ""
+            nightly_components: "llvm-tools-preview"
+            tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
+            scope: coverage
+            coverage_group: b
+            rustflags: "-C link-arg=-fuse-ld=mold"
+            uses_mold: true
+            cache_family: coverage-all
           - os: ubuntu-24.04
             phase: selftest
             stable: true
@@ -97,6 +209,7 @@ jobs:
             scope: selftest
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: linux-stable
           - os: ubuntu-24.04
             phase: deps
             stable: true
@@ -107,6 +220,7 @@ jobs:
             scope: deps
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            cache_family: linux-deps
           - os: windows-2025
             phase: lint-arch
             stable: true
@@ -117,8 +231,9 @@ jobs:
             scope: lint-arch
             rustflags: ""
             uses_mold: false
+            cache_family: windows-stable
           - os: windows-2025
-            phase: test
+            phase: test-default
             stable: true
             nightly: false
             stable_components: ""
@@ -127,11 +242,30 @@ jobs:
             scope: test
             rustflags: ""
             uses_mold: false
+            cache_family: windows-stable
+          - os: windows-2025
+            phase: test-alt
+            stable: true
+            nightly: false
+            stable_components: ""
+            nightly_components: ""
+            tools: "cargo-nextest@0.9.140"
+            scope: test
+            rustflags: ""
+            uses_mold: false
+            cache_family: windows-stable
     env:
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: ${{ matrix.rustflags }}
       CI_TOOLS_SCOPE: ${{ matrix.scope }}
+      # Unused-dependency gate: runs on every push to main, on scheduled
+      # runs, and on pull requests touching manifests or dependency policy.
+      CI_UDEPS: ${{ needs.classify.outputs.run_udeps }}
+      # Docs-only changes run only the Linux lint-arch gate (which contains
+      # the docs validation); every other gate step is skipped while the job
+      # still reports success so the required check surface never changes.
+      RUN_GATE: ${{ needs.classify.outputs.docs_only != 'true' || (matrix.os == 'ubuntu-24.04' && matrix.phase == 'lint-arch') }}
     defaults:
       run:
         shell: bash
@@ -141,37 +275,37 @@ jobs:
       - name: Restore Cargo and build caches
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ${{ matrix.phase }}
+          shared-key: ${{ matrix.cache_family }}
 
       - name: Install stable Rust toolchain
-        if: matrix.stable
+        if: matrix.stable && env.RUN_GATE == 'true'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.97.1
           components: ${{ matrix.stable_components }}
 
       - name: Install nightly Rust toolchain
-        if: matrix.nightly
+        if: matrix.nightly && env.RUN_GATE == 'true'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: nightly-2026-07-31
           components: ${{ matrix.nightly_components }}
 
       - name: Install pinned quality tools
-        if: matrix.tools != ''
+        if: matrix.tools != '' && env.RUN_GATE == 'true'
         uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
         with:
           tool: ${{ matrix.tools }}
           fallback: cargo-binstall
 
-      - name: Enable sccache object cache for coverage builds
-        if: matrix.scope == 'coverage'
+      - name: Enable sccache object cache for coverage and deps builds
+        if: (matrix.scope == 'coverage' || matrix.scope == 'deps') && env.RUN_GATE == 'true'
         uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c
         with:
           version: "v0.17.0"
 
-      - name: Route coverage builds through the sccache object cache
-        if: matrix.scope == 'coverage'
+      - name: Route coverage and deps builds through the sccache object cache
+        if: (matrix.scope == 'coverage' || matrix.scope == 'deps') && env.RUN_GATE == 'true'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           # cargo-llvm-cov installs its own RUSTC_WRAPPER; a pre-existing
@@ -184,13 +318,18 @@ jobs:
       - name: Install mold linker
         # Only Linux jobs that actually link with mold install it; the
         # version check verifies the install without hiding its failure.
-        if: runner.os == 'Linux' && matrix.uses_mold
+        # The probe skips apt entirely when the runner image already ships
+        # mold, which avoids apt update/install on every Linux job.
+        if: runner.os == 'Linux' && matrix.uses_mold && env.RUN_GATE == 'true'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq mold
+          if ! command -v mold >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq mold
+          fi
           mold --version
 
       - name: Set canonical Rust homes
+        if: env.RUN_GATE == 'true'
         run: |
           echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
@@ -200,14 +339,15 @@ jobs:
         run: df -h . "$HOME"
 
       - name: Collect runner metrics before quality gate (coverage)
-        if: matrix.scope == 'coverage'
+        if: matrix.scope == 'coverage' && env.RUN_GATE == 'true'
         run: python3 quality/collect_runner_metrics.py --label before --phase ${{ matrix.phase }} --out quality/reports/runner-metrics-${{ matrix.phase }}-before.json
 
       - name: Run repository quality gate (${{ matrix.phase }})
+        if: env.RUN_GATE == 'true'
         run: make ci-${{ matrix.phase }}
 
       - name: Collect runner metrics after quality gate (coverage)
-        if: always() && matrix.scope == 'coverage'
+        if: always() && matrix.scope == 'coverage' && env.RUN_GATE == 'true'
         run: python3 quality/collect_runner_metrics.py --label after --phase ${{ matrix.phase }} --out quality/reports/runner-metrics-${{ matrix.phase }}-after.json
 
       - name: Report disk space after quality gate
@@ -218,7 +358,7 @@ jobs:
         # Observational only: the collector always exits 0 (writing null
         # fields when statistics are unavailable) so it never changes the
         # gate verdict, and the gate's own failure still fails the job.
-        if: always() && matrix.scope == 'coverage'
+        if: always() && (matrix.scope == 'coverage' || matrix.scope == 'deps') && env.RUN_GATE == 'true'
         run: python3 quality/collect_sccache_metrics.py --sccache "${SCCACHE_PATH}" --reports quality/reports --phase ${{ matrix.phase }}
 
       - name: Upload quality reports

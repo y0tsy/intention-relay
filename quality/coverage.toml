@@ -48,6 +48,34 @@ production_crates = [
 ]
 adapter_crates = ["intention-tauri", "intention-tui"]
 
+# CI splits each coverage profile into two parallel jobs (group a and group
+# b) so the per-profile critical path is the slower group instead of the
+# serial sum. Group boundaries preserve the coverage_crates compile order,
+# and the workspace aggregate report runs once per profile with group a.
+[groups]
+a = [
+  "intention-types",
+  "intention-domain",
+  "intention-protocol",
+  "intention-config",
+  "intention-transport",
+  "intention-client",
+  "intention",
+]
+b = [
+  "intention-daemon",
+  "intention-application",
+  "intention-runtime",
+  "intention-storage",
+  "intention-storage-sqlite",
+  "intention-model",
+  "intention-provider-openrouter",
+  "intention-provider-generic-chat",
+  "intention-tools",
+  "intention-workspace",
+  "intention-hooks",
+]
+
 [crate_tiers]
 "intention-types" = "A"
 "intention-domain" = "A"

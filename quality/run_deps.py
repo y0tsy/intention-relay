@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -15,6 +16,21 @@ except ImportError:  # pragma: no cover - package/module invocation compatibilit
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_WORKERS = 2
+
+UDEPS_DISABLED_VALUES = {"0", "false", "no", "off"}
+
+
+def udeps_requested() -> bool:
+    """The unused-dependency check runs unless CI explicitly disables it.
+
+    CI sets CI_UDEPS=false for change scopes that cannot alter the declared
+    dependency graph (for example source-only pull requests); the check still
+    runs on every push to main, on scheduled runs, and whenever manifests or
+    dependency policy changed. Local runs without the variable keep the full
+    gate.
+    """
+    value = os.environ.get("CI_UDEPS", "").strip().lower()
+    return value not in UDEPS_DISABLED_VALUES
 
 
 def run_check(label: str, command: list[str]) -> tuple[str, int, str]:
@@ -60,9 +76,12 @@ def main() -> int:
             result = future.result()
             if result[1] != 0:
                 failures.append(result)
-    udeps = run_check("udeps", [python, "quality/run_profiles.py", "udeps"])
-    if udeps[1] != 0:
-        failures.append(udeps)
+    if udeps_requested():
+        udeps = run_check("udeps", [python, "quality/run_profiles.py", "udeps"])
+        if udeps[1] != 0:
+            failures.append(udeps)
+    else:
+        print("deps: udeps skipped (CI_UDEPS disables it for this change scope)", flush=True)
     if failures:
         for label, code, output in sorted(failures):
             print(f"deps: {label} failed (exit {code})\n{output}", file=sys.stderr)

@@ -81,6 +81,11 @@ def main() -> None:
         choices=["default", "no_default", "all"],
         help="run only one coverage profile instead of all three",
     )
+    parser.add_argument(
+        "--group",
+        choices=["a", "b"],
+        help="run only one coverage group (CI parallel split)",
+    )
     arguments = parser.parse_args()
     with POLICY.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
@@ -107,6 +112,24 @@ def main() -> None:
         ]
         if not combinations:
             raise ValueError(f"coverage profile {arguments.profile!r} is not configured")
+
+    groups = coverage_policy.get("groups")
+    if arguments.group is not None:
+        if not isinstance(groups, dict) or arguments.group not in groups:
+            raise ValueError(f"coverage group {arguments.group!r} is not configured")
+        group_crates = groups[arguments.group]
+        if not isinstance(group_crates, list) or not all(
+            isinstance(crate, str) for crate in group_crates
+        ):
+            raise ValueError("coverage groups must be string lists")
+        unknown = [crate for crate in group_crates if crate not in coverage_crates]
+        if unknown:
+            raise ValueError(
+                f"coverage group {arguments.group!r} references unknown crates: {', '.join(unknown)}"
+            )
+        coverage_crates = [crate for crate in coverage_crates if crate in group_crates]
+        if not coverage_crates:
+            raise ValueError(f"coverage group {arguments.group!r} selects no configured crates")
 
     REPORTS.mkdir(parents=True, exist_ok=True)
     # Collect the locked workspace metadata snapshot once; every checker
@@ -178,6 +201,10 @@ def main() -> None:
         # The package reports enforce each crate's denominator.  This aggregate
         # report also exercises dependency code in the same instrumented test
         # process, preventing package isolation from hiding production paths.
+        # In the CI group split the aggregate runs once per profile with group
+        # a; group b covers per-crate collection only.
+        if arguments.group is not None and arguments.group != "a":
+            continue
         report = REPORTS / f"coverage-{name}-workspace.json"
         run([
             "cargo", "+nightly-2026-07-31", "llvm-cov", "--branch", "--json",
