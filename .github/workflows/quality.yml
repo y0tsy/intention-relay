@@ -89,16 +89,17 @@ jobs:
           # installs and validates only what it runs. The union of all scopes
           # equals the complete pinned toolset.
           #
-          # lint-arch and test run on both Linux and Windows; coverage (all
-          # three profiles, each split into groups a and b), selftest, and
-          # deps run on Linux only. Those phases are platform-invariant:
-          # coverage measures the same source and toolchain, the selftest
-          # fixtures are Python/git subprocess checks, and the dependency
-          # gates read the same lockfile and registries. The Windows coverage
-          # trio previously dominated the CI critical path at roughly twenty
-          # minutes while running identical work about 1.7x slower than
-          # Linux; Windows correctness stays covered by the test jobs'
-          # named-pipe and platform-native symlink fixtures.
+          # lint-arch runs on Linux only; test runs on both Linux and
+          # Windows. Coverage (all three profiles, each split into groups a
+          # and b), selftest, and deps run on Linux only. Those phases are
+          # platform-invariant: coverage measures the same source and
+          # toolchain, the selftest fixtures are Python/git subprocess
+          # checks, and the dependency gates read the same lockfile and
+          # registries. The Windows coverage trio previously dominated the
+          # CI critical path at roughly twenty minutes while running
+          # identical work about 1.7x slower than Linux; Windows
+          # correctness stays covered by the test job's named-pipe and
+          # platform-native symlink fixtures.
           #
           # cache_family is the Swatinem/rust-cache shared-key: jobs in one
           # family (same OS, toolchain, RUSTFLAGS, and profile family) share
@@ -219,17 +220,6 @@ jobs:
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
             cache_family: linux-deps
-          - os: windows-2025
-            phase: lint-arch
-            stable: true
-            nightly: false
-            stable_components: "rustfmt, clippy"
-            nightly_components: ""
-            tools: ""
-            scope: lint-arch
-            rustflags: ""
-            uses_mold: false
-            cache_family: windows-stable
           - os: windows-2025
             phase: test
             stable: true
