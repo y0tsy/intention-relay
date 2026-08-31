@@ -63,9 +63,38 @@ pub enum CanonicalError {
     InvalidDigest,
 }
 
+impl CanonicalError {
+    /// The stable machine-readable snake_case code for this error.
+    ///
+    /// The code is a fixed string that never embeds input-derived values, so
+    /// it is safe for logs and machine consumption.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Truncated => "truncated",
+            Self::InvalidMagic => "invalid_magic",
+            Self::InvalidVersion => "invalid_version",
+            Self::InvalidTag => "invalid_tag",
+            Self::InvalidField => "invalid_field",
+            Self::InvalidWireType => "invalid_wire_type",
+            Self::InvalidUtf8 => "invalid_utf8",
+            Self::InvalidBool => "invalid_bool",
+            Self::InvalidOptional => "invalid_optional",
+            Self::DuplicateOrDescendingField => "duplicate_or_descending_field",
+            Self::UnknownField(_) => "unknown_field",
+            Self::TrailingBytes => "trailing_bytes",
+            Self::OverLimit => "over_limit",
+            Self::DigestMismatch => "digest_mismatch",
+            Self::InvalidDigest => "invalid_digest",
+        }
+    }
+}
+
 impl fmt::Display for CanonicalError {
+    /// Renders the stable [`CanonicalError::code`]; attacker-controlled raw
+    /// values such as the field number in `UnknownField` are never printed.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        f.write_str(self.code())
     }
 }
 
@@ -159,7 +188,9 @@ impl FromStr for Digest256 {
 
 /// A SHA-256 digest bound to one namespace.
 ///
-/// The text form is `<namespace>:sha256:<64 lowercase hex>`.
+/// The text form is `<namespace>:sha256:<64 lowercase hex>`; the namespace
+/// grammar is the same as [`Digest256::for_namespace`]: non-empty ASCII
+/// letters, digits, `-`, `_`, or `.`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespacedDigest {
     /// The digest namespace.
@@ -181,7 +212,11 @@ impl FromStr for NamespacedDigest {
         let (namespace, digits) = value
             .split_once(":sha256:")
             .ok_or(CanonicalError::InvalidDigest)?;
-        if namespace.is_empty() {
+        if namespace.is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
             return Err(CanonicalError::InvalidDigest);
         }
         let digest = Digest256::from_str(&format!("sha256:{digits}"))?;

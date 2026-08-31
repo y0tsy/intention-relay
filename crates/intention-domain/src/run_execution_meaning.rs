@@ -1585,6 +1585,40 @@ mod tests {
     }
 
     #[test]
+    fn canonical_error_codes_are_stable_and_display_never_leaks_values() {
+        assert_eq!(CanonicalError::Truncated.code(), "truncated");
+        assert_eq!(CanonicalError::InvalidMagic.code(), "invalid_magic");
+        assert_eq!(CanonicalError::InvalidVersion.code(), "invalid_version");
+        assert_eq!(CanonicalError::InvalidTag.code(), "invalid_tag");
+        assert_eq!(CanonicalError::InvalidField.code(), "invalid_field");
+        assert_eq!(CanonicalError::InvalidWireType.code(), "invalid_wire_type");
+        assert_eq!(CanonicalError::InvalidUtf8.code(), "invalid_utf8");
+        assert_eq!(CanonicalError::InvalidBool.code(), "invalid_bool");
+        assert_eq!(CanonicalError::InvalidOptional.code(), "invalid_optional");
+        assert_eq!(
+            CanonicalError::DuplicateOrDescendingField.code(),
+            "duplicate_or_descending_field"
+        );
+        assert_eq!(
+            CanonicalError::UnknownField(u32::MAX).code(),
+            "unknown_field"
+        );
+        assert_eq!(CanonicalError::TrailingBytes.code(), "trailing_bytes");
+        assert_eq!(CanonicalError::OverLimit.code(), "over_limit");
+        assert_eq!(CanonicalError::DigestMismatch.code(), "digest_mismatch");
+        assert_eq!(CanonicalError::InvalidDigest.code(), "invalid_digest");
+
+        // Display renders the stable code and never prints the raw field
+        // number or any other input-derived value.
+        assert_eq!(
+            CanonicalError::UnknownField(u32::MAX).to_string(),
+            "unknown_field"
+        );
+        assert_eq!(CanonicalError::OverLimit.to_string(), "over_limit");
+        assert_eq!(CanonicalError::InvalidDigest.to_string(), "invalid_digest");
+    }
+
+    #[test]
     fn over_limit_sizes_are_rejected() {
         // A field whose declared length exceeds the codec bound is over-limit.
         let mut over_field = Vec::new();
@@ -2221,6 +2255,24 @@ mod tests {
         assert!(Digest256::for_namespace("bad:name", bytes).is_err());
         for namespace in ["a", "A0", "run-2", "under_score", "dot.name"] {
             assert!(Digest256::for_namespace(namespace, bytes).is_ok());
+        }
+        // NamespacedDigest::from_str enforces the same namespace grammar:
+        // non-empty ASCII letters, digits, `-`, `_`, and `.`.
+        for bad in ["bad space", "bad:name", "bad/name"] {
+            assert!(
+                format!("{bad}:sha256:{digits64}")
+                    .parse::<NamespacedDigest>()
+                    .is_err(),
+                "namespace {bad:?} must be rejected"
+            );
+        }
+        for namespace in ["a", "A0", "run-2", "under_score", "dot.name"] {
+            assert!(
+                format!("{namespace}:sha256:{digits64}")
+                    .parse::<NamespacedDigest>()
+                    .is_ok(),
+                "namespace {namespace:?} must parse"
+            );
         }
     }
 
