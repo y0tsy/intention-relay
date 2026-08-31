@@ -153,10 +153,6 @@ fn limits_run(limits: &FixedRunLimits) -> Result<Vec<u8>, CanonicalError> {
     )
 }
 
-#[expect(
-    dead_code,
-    reason = "Activity encoding is consumed by the v4 integration path."
-)]
 fn limits_activity(limits: &FixedActivityLimits) -> Result<Vec<u8>, CanonicalError> {
     record(
         0,
@@ -174,6 +170,174 @@ fn limits_activity(limits: &FixedActivityLimits) -> Result<Vec<u8>, CanonicalErr
             .map(|(number, value)| (number, WireType::U64, encode_u64(value)))
             .collect(),
     )
+}
+
+/// Decodes the nested activity limits record.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::InvalidField` when any of the seven limit fields
+/// is absent or malformed, and other `CanonicalError` values for malformed
+/// framing.
+fn decode_activity_limits(bytes: &[u8]) -> Result<FixedActivityLimits, CanonicalError> {
+    let reader = CanonicalRecordReader::new(bytes, 7)?;
+    let values = (1..=7)
+        .map(|number| {
+            decode_u64(
+                reader
+                    .field(number, WireType::U64)?
+                    .ok_or(CanonicalError::InvalidField)?,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(FixedActivityLimits {
+        max_messages: values[0],
+        max_aggregate_bytes: values[1],
+        max_journal_records: values[2],
+        max_record_bytes: values[3],
+        max_page_records: values[4],
+        max_page_bytes: values[5],
+        max_typed_references: values[6],
+    })
+}
+
+impl AgentActivitySelectionV1 {
+    /// Encodes this selection into its canonical record bytes.
+    ///
+    /// The Root variant encodes as record version 1 and the Descendant variant
+    /// as record version 2; the version discriminates the variant under the
+    /// shared activity-selection tag.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
+    /// field table were noncanonical; it is canonical by construction.
+    pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
+        let (version, field_two) = match self {
+            Self::Root { root_origin, .. } => {
+                (1, (2, WireType::U64, encode_u64(*root_origin as u64)))
+            }
+            Self::Descendant {
+                direct_parent_link_reference,
+                ..
+            } => (
+                2,
+                (2, WireType::Uuid, direct_parent_link_reference.to_vec()),
+            ),
+        };
+        let (
+            activity_tree_id,
+            activity_exchange_revision,
+            activity_journal_revision,
+            user_projection_revision,
+            fixed_activity_limits,
+        ) = match self {
+            Self::Root {
+                activity_tree_id,
+                activity_exchange_revision,
+                activity_journal_revision,
+                user_projection_revision,
+                fixed_activity_limits,
+                ..
+            }
+            | Self::Descendant {
+                activity_tree_id,
+                activity_exchange_revision,
+                activity_journal_revision,
+                user_projection_revision,
+                fixed_activity_limits,
+                ..
+            } => (
+                activity_tree_id,
+                activity_exchange_revision,
+                activity_journal_revision,
+                user_projection_revision,
+                fixed_activity_limits,
+            ),
+        };
+        record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            version,
+            vec![
+                (1, WireType::Uuid, activity_tree_id.to_vec()),
+                field_two,
+                (3, WireType::U64, encode_u64(*activity_exchange_revision)),
+                (4, WireType::U64, encode_u64(*activity_journal_revision)),
+                (5, WireType::U64, encode_u64(*user_projection_revision)),
+                (6, WireType::Record, limits_activity(fixed_activity_limits)?),
+            ],
+        )
+    }
+
+    /// Decodes this selection from its canonical record bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidTag` when the tag is not the activity
+    /// selection table or the version is not a Root (1) or Descendant (2)
+    /// variant, `CanonicalError::InvalidField` when any of the six fields is
+    /// absent or carries the wrong wire type, and other `CanonicalError`
+    /// values for malformed or noncanonical framing.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
+        let reader = CanonicalRecordReader::new(bytes, 6)?;
+        if reader.tag != TagRegistry::AGENT_ACTIVITY_SELECTION_V1
+            || !matches!(reader.version, 1 | 2)
+        {
+            return Err(CanonicalError::InvalidTag);
+        }
+        let activity_tree_id = uuid(
+            reader
+                .field(1, WireType::Uuid)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let fixed_activity_limits = decode_activity_limits(
+            reader
+                .field(6, WireType::Record)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let activity_exchange_revision = decode_u64(
+            reader
+                .field(3, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let activity_journal_revision = decode_u64(
+            reader
+                .field(4, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let user_projection_revision = decode_u64(
+            reader
+                .field(5, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        match reader.version {
+            1 => Ok(Self::Root {
+                activity_tree_id,
+                root_origin: ExecutionKind::dec(
+                    reader
+                        .field(2, WireType::U64)?
+                        .ok_or(CanonicalError::InvalidField)?,
+                )?,
+                activity_exchange_revision,
+                activity_journal_revision,
+                user_projection_revision,
+                fixed_activity_limits,
+            }),
+            2 => Ok(Self::Descendant {
+                activity_tree_id,
+                direct_parent_link_reference: uuid(
+                    reader
+                        .field(2, WireType::Uuid)?
+                        .ok_or(CanonicalError::InvalidField)?,
+                )?,
+                activity_exchange_revision,
+                activity_journal_revision,
+                user_projection_revision,
+                fixed_activity_limits,
+            }),
+            _ => Err(CanonicalError::InvalidTag),
+        }
+    }
 }
 
 impl ProgrammaticCallerPolicySelectionV1 {
@@ -408,6 +572,18 @@ impl RunExecutionMeaningV4Record {
             agent_activity_selection,
         })
     }
+
+    /// Decodes the v4 activity-selection field into its semantic record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `CanonicalError` of [`AgentActivitySelectionV1::decode`]
+    /// when the field bytes are not a valid activity selection.
+    pub fn decode_agent_activity_selection(
+        &self,
+    ) -> Result<AgentActivitySelectionV1, CanonicalError> {
+        AgentActivitySelectionV1::decode(&self.agent_activity_selection)
+    }
 }
 
 impl RunExecutionMeaningEnvelopeV1 {
@@ -511,22 +687,23 @@ mod tests {
         }
     }
 
-    fn fixture_activity_selection() -> Vec<u8> {
-        record(
-            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
-            1,
-            vec![
-                (1, WireType::Uuid, [7u8; 16].to_vec()),
-                (2, WireType::U64, encode_u64(2)),
-            ],
-        )
-        .expect("fixture activity selection encodes")
+    fn fixture_activity_selection() -> AgentActivitySelectionV1 {
+        AgentActivitySelectionV1::Root {
+            activity_tree_id: [7u8; 16],
+            root_origin: ExecutionKind::VerifierMandate,
+            activity_exchange_revision: 1,
+            activity_journal_revision: 1,
+            user_projection_revision: 1,
+            fixed_activity_limits: golden_activity_limits(),
+        }
     }
 
     fn fixture_v4_record() -> RunExecutionMeaningV4Record {
         RunExecutionMeaningV4Record {
             fields: (0..10).map(|i| vec![i as u8; 3]).collect(),
-            agent_activity_selection: fixture_activity_selection(),
+            agent_activity_selection: fixture_activity_selection()
+                .encode()
+                .expect("fixture activity selection encodes"),
         }
     }
 
@@ -591,8 +768,231 @@ mod tests {
             .expect("v4 record decodes");
         assert_eq!(decoded, v4);
         assert_eq!(
+            decoded
+                .decode_agent_activity_selection()
+                .expect("activity selection decodes"),
+            fixture_activity_selection()
+        );
+    }
+
+    #[test]
+    fn activity_selection_round_trips_for_root_and_descendant_variants() {
+        let root = AgentActivitySelectionV1::Root {
+            activity_tree_id: [7u8; 16],
+            root_origin: ExecutionKind::Mandate,
+            activity_exchange_revision: 5,
+            activity_journal_revision: 6,
+            user_projection_revision: 7,
+            fixed_activity_limits: golden_activity_limits(),
+        };
+        let root_bytes = root.encode().expect("root selection encodes");
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&root_bytes).expect("root selection decodes"),
+            root
+        );
+        let descendant = AgentActivitySelectionV1::Descendant {
+            activity_tree_id: [8u8; 16],
+            direct_parent_link_reference: [9u8; 16],
+            activity_exchange_revision: 1,
+            activity_journal_revision: 2,
+            user_projection_revision: 3,
+            fixed_activity_limits: golden_activity_limits(),
+        };
+        let descendant_bytes = descendant.encode().expect("descendant selection encodes");
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&descendant_bytes)
+                .expect("descendant selection decodes"),
+            descendant
+        );
+        // The Root variant is record version 1 and the Descendant variant is
+        // record version 2 under the shared activity-selection tag.
+        assert_eq!(
+            CanonicalRecordReader::new(&root_bytes, 6)
+                .expect("root selection parses")
+                .version,
+            1
+        );
+        assert_eq!(
+            CanonicalRecordReader::new(&descendant_bytes, 6)
+                .expect("descendant selection parses")
+                .version,
+            2
+        );
+    }
+
+    #[test]
+    fn activity_selection_fields_carry_the_frozen_tags_and_wire_types() {
+        let root = fixture_activity_selection()
+            .encode()
+            .expect("root selection encodes");
+        let reader = CanonicalRecordReader::new(&root, 6).expect("root selection parses");
+        for (number, wire_type) in [
+            (1, WireType::Uuid),
+            (2, WireType::U64),
+            (3, WireType::U64),
+            (4, WireType::U64),
+            (5, WireType::U64),
+            (6, WireType::Record),
+        ] {
+            assert!(
+                reader
+                    .field(number, wire_type)
+                    .expect("field lookup succeeds")
+                    .is_some(),
+                "field {number} must be {wire_type:?}"
+            );
+        }
+        // A field looked up with the wrong wire type is rejected.
+        assert_eq!(
+            reader
+                .field(1, WireType::U64)
+                .expect_err("uuid field is not u64"),
+            CanonicalError::InvalidField
+        );
+        assert_eq!(
+            reader
+                .field(6, WireType::List)
+                .expect_err("limits field is not a list"),
+            CanonicalError::InvalidField
+        );
+        // The Descendant variant carries the parent link as a Uuid at field 2.
+        let descendant = AgentActivitySelectionV1::Descendant {
+            activity_tree_id: [8u8; 16],
+            direct_parent_link_reference: [9u8; 16],
+            activity_exchange_revision: 1,
+            activity_journal_revision: 1,
+            user_projection_revision: 1,
+            fixed_activity_limits: golden_activity_limits(),
+        }
+        .encode()
+        .expect("descendant selection encodes");
+        let reader = CanonicalRecordReader::new(&descendant, 6).expect("descendant parses");
+        assert!(
+            reader
+                .field(2, WireType::Uuid)
+                .expect("field lookup succeeds")
+                .is_some()
+        );
+        assert_eq!(
+            reader
+                .field(2, WireType::U64)
+                .expect_err("descendant field two is a uuid"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn activity_selection_rejects_wrong_variant_field_types() {
+        let limits = golden_activity_limits_record();
+        // A Root selection must carry its origin as a U64; a Uuid at field 2
+        // is rejected.
+        let root_with_uuid = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::Uuid as u8, &[7u8; 16]),
+                (2, WireType::Uuid as u8, &[8u8; 16]),
+                (3, WireType::U64 as u8, &[1]),
+                (4, WireType::U64 as u8, &[1]),
+                (5, WireType::U64 as u8, &[1]),
+                (6, WireType::Record as u8, &limits),
+            ],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&root_with_uuid)
+                .expect_err("root field two must be a U64 origin"),
+            CanonicalError::InvalidField
+        );
+        // A Descendant selection must carry its parent link as a Uuid; a U64
+        // at field 2 is rejected.
+        let descendant_with_u64 = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            2,
+            &[
+                (1, WireType::Uuid as u8, &[7u8; 16]),
+                (2, WireType::U64 as u8, &[0]),
+                (3, WireType::U64 as u8, &[1]),
+                (4, WireType::U64 as u8, &[1]),
+                (5, WireType::U64 as u8, &[1]),
+                (6, WireType::Record as u8, &limits),
+            ],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&descendant_with_u64)
+                .expect_err("descendant field two must be a Uuid"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn activity_selection_requires_all_six_fields() {
+        let tree = [7u8; 16];
+        let limits = golden_activity_limits_record();
+        let fields: Vec<(u32, u8, Vec<u8>)> = vec![
+            (1, WireType::Uuid as u8, tree.to_vec()),
+            (2, WireType::U64 as u8, vec![1]),
+            (3, WireType::U64 as u8, vec![1]),
+            (4, WireType::U64 as u8, vec![1]),
+            (5, WireType::U64 as u8, vec![1]),
+            (6, WireType::Record as u8, limits),
+        ];
+        for missing in 1..=6 {
+            let partial: Vec<(u32, u8, &[u8])> = fields
+                .iter()
+                .filter(|(number, ..)| *number != missing)
+                .map(|(number, wire_type, value)| (*number, *wire_type, value.as_slice()))
+                .collect();
+            let bytes = raw_record(TagRegistry::AGENT_ACTIVITY_SELECTION_V1, 1, &partial);
+            assert_eq!(
+                AgentActivitySelectionV1::decode(&bytes).expect_err("missing field is rejected"),
+                CanonicalError::InvalidField,
+                "missing field {missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn activity_selection_rejects_unknown_versions_and_other_tags() {
+        let unknown_version = raw_record(TagRegistry::AGENT_ACTIVITY_SELECTION_V1, 3, &[]);
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&unknown_version)
+                .expect_err("unknown version is rejected"),
+            CanonicalError::InvalidTag
+        );
+        let unknown_tag = raw_record(0x0A0A, 1, &[]);
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&unknown_tag)
+                .expect_err("unknown record tag is rejected"),
+            CanonicalError::InvalidTag
+        );
+    }
+
+    #[test]
+    fn v4_records_expose_the_semantic_activity_selection() {
+        let v4 = fixture_v4_record();
+        let bytes = v4.encode().expect("v4 record encodes");
+        let decoded = RunExecutionMeaningV4Record::decode(&bytes).expect("v4 record decodes");
+        assert_eq!(
             decoded.agent_activity_selection,
             fixture_activity_selection()
+                .encode()
+                .expect("fixture activity selection encodes")
+        );
+        assert_eq!(
+            decoded
+                .decode_agent_activity_selection()
+                .expect("semantic activity selection decodes"),
+            fixture_activity_selection()
+        );
+        // Corrupting the tag-11 bytes surfaces the semantic decode error.
+        let mut malformed = decoded;
+        malformed.agent_activity_selection =
+            raw_record(TagRegistry::AGENT_ACTIVITY_SELECTION_V1, 3, &[]);
+        assert_eq!(
+            malformed
+                .decode_agent_activity_selection()
+                .expect_err("malformed activity selection is rejected"),
+            CanonicalError::InvalidTag
         );
     }
 
@@ -1093,21 +1493,7 @@ mod tests {
     /// Encodes the fixed activity limits as their nested limits record, which
     /// mirrors the production `limits_activity` encoding byte-for-byte.
     fn golden_activity_limits_record() -> Vec<u8> {
-        let limits = golden_activity_limits();
-        record(
-            0,
-            1,
-            vec![
-                (1, WireType::U64, encode_u64(limits.max_messages)),
-                (2, WireType::U64, encode_u64(limits.max_aggregate_bytes)),
-                (3, WireType::U64, encode_u64(limits.max_journal_records)),
-                (4, WireType::U64, encode_u64(limits.max_record_bytes)),
-                (5, WireType::U64, encode_u64(limits.max_page_records)),
-                (6, WireType::U64, encode_u64(limits.max_page_bytes)),
-                (7, WireType::U64, encode_u64(limits.max_typed_references)),
-            ],
-        )
-        .expect("golden activity limits record encodes")
+        limits_activity(&golden_activity_limits()).expect("golden activity limits record encodes")
     }
 
     /// The fixed run-execution-meaning fields 1-10 exactly as the golden
@@ -1189,22 +1575,15 @@ mod tests {
     fn golden_v4_record() -> RunExecutionMeaningV4Record {
         RunExecutionMeaningV4Record {
             fields: golden_meaning_fields(),
-            agent_activity_selection: record(
-                TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
-                1,
-                vec![
-                    (
-                        1,
-                        WireType::Uuid,
-                        golden_uuid("11111111-1111-4111-8111-111111111111").to_vec(),
-                    ),
-                    (2, WireType::U64, encode_u64(0)),
-                    (3, WireType::U64, encode_u64(1)),
-                    (4, WireType::U64, encode_u64(1)),
-                    (5, WireType::U64, encode_u64(1)),
-                    (6, WireType::Record, golden_activity_limits_record()),
-                ],
-            )
+            agent_activity_selection: AgentActivitySelectionV1::Root {
+                activity_tree_id: golden_uuid("11111111-1111-4111-8111-111111111111"),
+                root_origin: ExecutionKind::Ordinary,
+                activity_exchange_revision: 1,
+                activity_journal_revision: 1,
+                user_projection_revision: 1,
+                fixed_activity_limits: golden_activity_limits(),
+            }
+            .encode()
             .expect("golden activity selection encodes"),
         }
     }
