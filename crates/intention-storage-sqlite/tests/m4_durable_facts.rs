@@ -38,6 +38,52 @@ CREATE TABLE configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_jso
 CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, envelope_json TEXT NOT NULL, UNIQUE(session_id, sequence));
 CREATE TABLE session_snapshots (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
 CREATE TABLE run_snapshots (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
+CREATE UNIQUE INDEX one_active_run_per_session ON runs(session_id) WHERE status NOT IN ('completed','cancelled','failed','interrupted');
+";
+
+/// The full production-equivalent schema-3 surface: M3 base tables plus the M4
+/// run-cursor/model-fact/tool-result tables. A fixture stamped user_version = 3
+/// must contain all of them because the migration library applies nothing.
+const V3_SCHEMA_SQL: &str = "
+CREATE TABLE projects (project_id TEXT PRIMARY KEY);
+CREATE TABLE workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
+CREATE TABLE sessions (
+  session_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+  workspace_root TEXT NOT NULL, mode TEXT NOT NULL, config_revision_id TEXT,
+  last_sequence INTEGER NOT NULL, next_queue_ticket INTEGER NOT NULL
+);
+CREATE TABLE turns (
+  session_id TEXT NOT NULL, turn_id TEXT NOT NULL, content TEXT NOT NULL,
+  proposed_run_id TEXT NOT NULL, config_revision_id TEXT NOT NULL, outcome TEXT NOT NULL,
+  queue_ticket INTEGER, PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
+);
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+  status TEXT NOT NULL, config_revision_id TEXT NOT NULL, UNIQUE(session_id, turn_id)
+);
+CREATE TABLE queued_turns (session_id TEXT NOT NULL, turn_id TEXT NOT NULL, queue_ticket INTEGER NOT NULL, PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket));
+CREATE TABLE configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
+CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, envelope_json TEXT NOT NULL, UNIQUE(session_id, sequence));
+CREATE TABLE session_snapshots (session_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
+CREATE TABLE run_snapshots (run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sequence INTEGER NOT NULL, projection_json TEXT NOT NULL);
+CREATE UNIQUE INDEX one_active_run_per_session_v3 ON runs(session_id) WHERE status NOT IN ('completed','cancelled','failed','interrupted');
+CREATE TABLE run_cursors (
+  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+  cursor INTEGER NOT NULL
+);
+CREATE TABLE model_run_facts (
+  run_id TEXT NOT NULL, cursor INTEGER NOT NULL,
+  event_id TEXT NOT NULL, PRIMARY KEY(run_id, cursor), UNIQUE(event_id)
+);
+CREATE TABLE model_run_snapshots (
+  run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL, cursor INTEGER NOT NULL, snapshot_json TEXT NOT NULL
+);
+CREATE TABLE tool_results (
+  run_id TEXT NOT NULL, session_id TEXT NOT NULL, call_id TEXT NOT NULL,
+  event_id TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL,
+  occurred_at INTEGER NOT NULL, PRIMARY KEY(run_id, call_id), UNIQUE(event_id)
+);
 ";
 
 fn time(value: i64) -> TimestampDto {
@@ -218,6 +264,177 @@ fn m3_database_migrates_to_cursor_zero_snapshots_without_synthetic_facts() {
         .query_row("SELECT COUNT(*) FROM model_run_facts", [], |row| row.get(0))
         .expect("fact count loads");
     assert_eq!(fact_count, 0);
+}
+
+#[test]
+fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
+    // Mirrors the proven legacy fixture of
+    // m3_database_migrates_to_cursor_zero_snapshots_without_synthetic_facts, but
+    // stamps PRAGMA user_version = 3 so the reopen exercises the schema-3 path
+    // (no migration) while proving every pre-existing M3/M4 byte is unchanged.
+    // The schema must include the full production migration surface (M3 + M4
+    // tables) because user_version = 3 means rusqlite_migration applies nothing.
+    let directory = TempDir::new().expect("temporary directory exists");
+    let path = directory.path().join("legacy-v3.sqlite");
+    let connection = sqlite::Connection::open(&path).expect("legacy database opens");
+    connection
+        .execute_batch(V3_SCHEMA_SQL)
+        .expect("schema three creates");
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let turn_id = TurnId::new();
+    let revision_id = intention_types::ConfigRevisionId::new();
+    connection
+        .execute(
+            "INSERT INTO projects(project_id) VALUES (?1)",
+            [ProjectId::new().to_string()],
+        )
+        .expect("project inserts");
+    connection
+        .execute(
+            "INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2)",
+            sqlite::params![WorkspaceId::new().to_string(), workspace_root_path()],
+        )
+        .expect("workspace inserts");
+    let workspace_id: String = connection
+        .query_row("SELECT workspace_id FROM workspace_roots", [], |row| {
+            row.get(0)
+        })
+        .expect("workspace identity loads");
+    let project_id: String = connection
+        .query_row("SELECT project_id FROM projects", [], |row| row.get(0))
+        .expect("project identity loads");
+    let run_projection = intention_domain::RunProjectionDto::new(
+        session_id,
+        run_id,
+        turn_id,
+        RunStatusDto::Failed,
+        revision_id,
+    );
+    let session_projection = intention_domain::SessionProjectionDto::new(
+        ProjectId::parse(&project_id).expect("project identity parses"),
+        session_id,
+        WorkspaceId::parse(&workspace_id).expect("workspace identity parses"),
+        WorkspaceRootDto::parse(workspace_root_path()).expect("workspace root is absolute"),
+        RunModeDto::Build,
+        Some(revision_id),
+        None,
+        Vec::new(),
+        intention_types::SessionEventSequenceDto::new(7),
+    )
+    .expect("legacy session projection is valid");
+    connection
+        .execute(
+            "INSERT INTO sessions(session_id, project_id, workspace_id, workspace_root, mode, config_revision_id, last_sequence, next_queue_ticket) VALUES (?1, ?2, ?3, ?4, 'build', ?5, 7, 0)",
+            sqlite::params![session_id.to_string(), project_id, workspace_id, workspace_root_path(), revision_id.to_string()],
+        )
+        .expect("session inserts");
+    connection
+        .execute(
+            "INSERT INTO runs(run_id, session_id, turn_id, status, config_revision_id) VALUES (?1, ?2, ?3, 'failed', ?4)",
+            sqlite::params![run_id.to_string(), session_id.to_string(), turn_id.to_string(), revision_id.to_string()],
+        )
+        .expect("run inserts");
+    connection
+        .execute(
+            "INSERT INTO session_snapshots(session_id, sequence, projection_json) VALUES (?1, 7, ?2)",
+            sqlite::params![session_id.to_string(), serde_json::to_string(&session_projection).expect("session projection serializes")],
+        )
+        .expect("session snapshot inserts");
+    connection
+        .execute(
+            "INSERT INTO run_snapshots(run_id, session_id, sequence, projection_json) VALUES (?1, ?2, 7, ?3)",
+            sqlite::params![run_id.to_string(), session_id.to_string(), serde_json::to_string(&run_projection).expect("run projection serializes")],
+        )
+        .expect("run snapshot inserts");
+    connection
+        .pragma_update(None, "user_version", 3_i64)
+        .expect("schema three version sets");
+
+    // Capture every pre-existing M3/M4 row byte-for-byte before reopen.
+    let mut before: Vec<(String, String)> = Vec::new();
+    for table in [
+        "projects",
+        "workspace_roots",
+        "sessions",
+        "runs",
+        "session_snapshots",
+        "run_snapshots",
+    ] {
+        before.extend(capture_rows(&connection, table));
+    }
+    drop(connection);
+
+    let repository = SqliteStorageRepository::open(
+        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned())
+            .expect("database path is absolute"),
+    )
+    .expect("schema three database reopens");
+    let replay = repository
+        .load_current_run_replay(session_id, run_id)
+        .expect("reopened run replay loads");
+    assert_eq!(replay.snapshot().cursor().value(), 0);
+    assert_eq!(replay.snapshot().at_sequence().value(), 7);
+    assert_eq!(replay.snapshot().run_projection(), run_projection);
+    assert!(replay.tail().facts().is_empty());
+
+    let connection = sqlite::Connection::open(&path).expect("reopened database reopens raw");
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("schema version reads");
+    assert_eq!(version, 3);
+    let mut after: Vec<(String, String)> = Vec::new();
+    for table in [
+        "projects",
+        "workspace_roots",
+        "sessions",
+        "runs",
+        "session_snapshots",
+        "run_snapshots",
+    ] {
+        after.extend(capture_rows(&connection, table));
+    }
+    assert_eq!(
+        before, after,
+        "every pre-existing M3/M4 row is byte-identical after reopen"
+    );
+    let fact_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM model_run_facts", [], |row| row.get(0))
+        .expect("fact count loads");
+    assert_eq!(fact_count, 0);
+}
+
+/// Captures every row of a table as exact joined text values, ordered
+/// deterministically, so pre-reopen and post-reopen bytes can be compared.
+fn capture_rows(connection: &sqlite::Connection, table: &str) -> Vec<(String, String)> {
+    let mut statement = connection
+        .prepare(&format!("SELECT * FROM {table}"))
+        .expect("capture statement prepares");
+    let column_count = statement.column_count();
+    let mut rows = statement.query([]).expect("capture query runs");
+    let mut captured = Vec::new();
+    while let Some(row) = rows.next().expect("capture row reads") {
+        let mut values = Vec::new();
+        for index in 0..column_count {
+            let value = match row.get_ref(index).expect("capture value reads") {
+                sqlite::types::ValueRef::Null => "NULL".to_string(),
+                sqlite::types::ValueRef::Integer(value) => value.to_string(),
+                sqlite::types::ValueRef::Real(value) => value.to_string(),
+                sqlite::types::ValueRef::Text(text) => String::from_utf8_lossy(text).into_owned(),
+                sqlite::types::ValueRef::Blob(blob) => {
+                    blob.iter().map(|byte| format!("{byte:02x}")).collect()
+                }
+            };
+            values.push(value);
+        }
+        captured.push(values.join("\u{1f}"));
+    }
+    captured.sort();
+    captured
+        .into_iter()
+        .enumerate()
+        .map(|(i, value)| (format!("{table}#{i}"), value))
+        .collect()
 }
 
 fn workspace_root_path() -> String {
