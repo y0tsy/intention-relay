@@ -125,9 +125,9 @@ impl FixedActivityLimits {
     /// # Errors
     ///
     /// Returns `CanonicalError::OverLimit` when any limit differs from the
-    /// frozen ledger value, and `CanonicalError::DuplicateOrDescendingField`
-    /// only if the fixed field table were noncanonical; it is canonical by
-    /// construction.
+    /// frozen ledger value or a field or the record exceeds the codec size
+    /// bounds, and `CanonicalError::DuplicateOrDescendingField` only if the
+    /// fixed field table were noncanonical; it is canonical by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         self.validate()?;
         record(
@@ -153,12 +153,19 @@ impl FixedActivityLimits {
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::InvalidField` when any of the eight limit
-    /// fields is absent or malformed, `CanonicalError::OverLimit` when any
-    /// decoded limit differs from the frozen ledger value, and other
+    /// Returns `CanonicalError::InvalidTag` when the nested record is not the
+    /// anonymous tag-zero version-one limits frame,
+    /// `CanonicalError::InvalidField` when any of the eight limit fields is
+    /// absent or malformed, `CanonicalError::OverLimit` when any decoded
+    /// limit differs from the frozen ledger value, and other
     /// `CanonicalError` values for malformed framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 8)?;
+        // The encoder frames the nested limits as an anonymous record: tag
+        // zero, version one.
+        if reader.tag != 0 || reader.version != 1 {
+            return Err(CanonicalError::InvalidTag);
+        }
         let values = (1..=8)
             .map(|number| {
                 decode_u64(
@@ -229,6 +236,12 @@ pub struct RunExecutionMeaningEnvelopeV1 {
 }
 
 /// Encodes one canonical record from a strictly increasing field stream.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::DuplicateOrDescendingField` or
+/// `CanonicalError::OverLimit` only if the field stream were noncanonical or
+/// a field or the record exceeded the codec size bounds.
 fn record(
     tag: u32,
     version: u32,
@@ -238,7 +251,7 @@ fn record(
     for (number, wire_type, value) in fields {
         builder = builder.field(number, wire_type, value)?;
     }
-    Ok(builder.finish())
+    builder.finish()
 }
 
 fn uuid(bytes: &[u8]) -> Result<[u8; 16], CanonicalError> {
@@ -251,7 +264,9 @@ impl FixedRunLimits {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         record(
             0,
@@ -274,11 +289,18 @@ impl FixedRunLimits {
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::InvalidField` when any of the six limit fields
-    /// is absent or malformed, and other `CanonicalError` values for malformed
+    /// Returns `CanonicalError::InvalidTag` when the nested record is not the
+    /// anonymous tag-zero version-one limits frame,
+    /// `CanonicalError::InvalidField` when any of the six limit fields is
+    /// absent or malformed, and other `CanonicalError` values for malformed
     /// framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 6)?;
+        // The encoder frames the nested limits as an anonymous record: tag
+        // zero, version one.
+        if reader.tag != 0 || reader.version != 1 {
+            return Err(CanonicalError::InvalidTag);
+        }
         let values = (1..=6)
             .map(|number| {
                 decode_u64(
@@ -309,7 +331,9 @@ impl AgentActivitySelectionV1 {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         let (version, field_two) = match self {
             Self::Root { root_origin, .. } => {
@@ -444,7 +468,9 @@ impl ProgrammaticCallerPolicySelectionV1 {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         let mut provenance = (self.inherited_scope_provenance.len() as u32)
             .to_be_bytes()
@@ -566,7 +592,9 @@ impl RunExecutionMeaningV3Record {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         record(
             TagRegistry::RUN_EXECUTION_MEANING,
@@ -611,7 +639,9 @@ impl RunExecutionMeaningV4Record {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         let mut fields = self.fields.clone();
         fields.push(self.agent_activity_selection.clone());
@@ -677,7 +707,9 @@ impl RunExecutionMeaningEnvelopeV1 {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical; it is canonical by construction.
+    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
+    /// a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         record(
             0x0102,
@@ -709,11 +741,18 @@ impl RunExecutionMeaningEnvelopeV1 {
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::DigestMismatch` when the stored digest does not
-    /// match the canonical meaning bytes, and other `CanonicalError` values for
+    /// Returns `CanonicalError::InvalidTag` when the record is not the
+    /// run-execution-meaning envelope frame (tag `0x0102`, version 1),
+    /// `CanonicalError::DigestMismatch` when the stored digest does not match
+    /// the canonical meaning bytes, and other `CanonicalError` values for
     /// malformed or noncanonical framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 6)?;
+        // The envelope is a closed fixed frame: tag 0x0102, version 1, per
+        // the ADR 0036 execution-meaning table.
+        if reader.tag != 0x0102 || reader.version != 1 {
+            return Err(CanonicalError::InvalidTag);
+        }
         let canonical_meaning_bytes = reader
             .field(5, WireType::Bytes)?
             .ok_or(CanonicalError::InvalidField)?
@@ -762,8 +801,8 @@ mod tests {
 
     use super::*;
     use crate::canonical::{
-        CanonicalIdentityInput, IdentityV1, MAX_FIELD_BYTES, MAX_RECORD_BYTES, NamespacedDigest,
-        TagStatus, decode_bool, decode_utf8, encode_utf8,
+        CanonicalIdentityInput, IdentityV1, MAX_FIELD_BYTES, MAX_RECORD_BYTES, MAX_UUID_LIST_ITEMS,
+        NamespacedDigest, TagStatus, decode_bool, decode_utf8, decode_uuid_list, encode_utf8,
     };
     use sha2::{Digest, Sha256};
 
@@ -1249,6 +1288,56 @@ mod tests {
     }
 
     #[test]
+    fn envelope_rejects_wrong_tag_version_and_unknown_execution_kind() {
+        // The envelope frame is closed to tag 0x0102, version 1.
+        let wrong_tag = raw_record(0x0A0A, 1, &[]);
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&wrong_tag)
+                .expect_err("unknown envelope tag is rejected"),
+            CanonicalError::InvalidTag
+        );
+        let wrong_version = raw_record(0x0102, 2, &[]);
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&wrong_version)
+                .expect_err("unknown envelope version is rejected"),
+            CanonicalError::InvalidTag
+        );
+
+        // An unknown execution-kind byte is rejected directly and through the
+        // envelope decoder.
+        assert!(ExecutionKind::dec(&[3]).is_err());
+        assert!(ExecutionKind::dec(&[0, 0]).is_err());
+        let meaning = golden_v4_record()
+            .encode()
+            .expect("golden v4 meaning encodes");
+        let unknown_kind = raw_record(
+            0x0102,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[3]),
+                (
+                    2,
+                    WireType::U64 as u8,
+                    &encode_u64(TagRegistry::RUN_EXECUTION_MEANING as u64),
+                ),
+                (3, WireType::U64 as u8, &encode_u64(4)),
+                (4, WireType::U64 as u8, &encode_u64(1)),
+                (5, WireType::Bytes as u8, &meaning),
+                (
+                    6,
+                    WireType::Digest as u8,
+                    &Digest256::sha256(&meaning).bytes(),
+                ),
+            ],
+        );
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&unknown_kind)
+                .expect_err("unknown execution kind is rejected"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
     fn field_discipline_rejects_unknown_duplicate_and_descending_tags() {
         // The builder rejects zero, duplicate, and descending field numbers.
         assert_eq!(
@@ -1524,6 +1613,70 @@ mod tests {
     }
 
     #[test]
+    fn builder_enforces_field_and_record_size_limits() {
+        // A single field value over the per-field bound is rejected.
+        assert_eq!(
+            CanonicalRecordBuilder::new(TagRegistry::RUN_EXECUTION_MEANING, 3)
+                .field(1, WireType::Bytes, vec![0u8; MAX_FIELD_BYTES + 1])
+                .err()
+                .expect("over-limit field value is rejected"),
+            CanonicalError::OverLimit
+        );
+
+        // A boundary-sized single field is accepted, encodes, and parses.
+        let boundary_field = CanonicalRecordBuilder::new(TagRegistry::RUN_EXECUTION_MEANING, 3)
+            .field(1, WireType::Bytes, vec![0u8; MAX_FIELD_BYTES])
+            .expect("boundary-sized field is accepted")
+            .finish()
+            .expect("boundary-sized field finishes");
+        assert_eq!(boundary_field.len(), 16 + 9 + MAX_FIELD_BYTES);
+        assert_eq!(
+            CanonicalRecordReader::new(&boundary_field, 1)
+                .expect("boundary record parses")
+                .field(1, WireType::Bytes)
+                .expect("field lookup succeeds")
+                .expect("field is present")
+                .len(),
+            MAX_FIELD_BYTES
+        );
+
+        // Accumulated fields that would exceed the record bound are rejected
+        // even though every individual field fits the per-field bound.
+        let builder = (1..=3)
+            .try_fold(
+                CanonicalRecordBuilder::new(TagRegistry::RUN_EXECUTION_MEANING, 3),
+                |builder, number| {
+                    builder.field(number, WireType::Bytes, vec![0u8; MAX_FIELD_BYTES])
+                },
+            )
+            .expect("three boundary-sized fields are accepted");
+        assert_eq!(
+            builder
+                .field(4, WireType::Bytes, vec![0u8; MAX_FIELD_BYTES])
+                .err()
+                .expect("accumulated record size is rejected"),
+            CanonicalError::OverLimit
+        );
+
+        // A record at exactly the record bound still encodes and parses.
+        let remainder = MAX_RECORD_BYTES - 16 - 4 * 9 - 3 * MAX_FIELD_BYTES;
+        let builder = (1..=3)
+            .try_fold(
+                CanonicalRecordBuilder::new(TagRegistry::RUN_EXECUTION_MEANING, 3),
+                |builder, number| {
+                    builder.field(number, WireType::Bytes, vec![0u8; MAX_FIELD_BYTES])
+                },
+            )
+            .expect("three boundary-sized fields are accepted");
+        let builder = builder
+            .field(4, WireType::Bytes, vec![0u8; remainder])
+            .expect("fourth field fits the record bound exactly");
+        let exact = builder.finish().expect("exact-boundary record finishes");
+        assert_eq!(exact.len(), MAX_RECORD_BYTES);
+        assert!(CanonicalRecordReader::new(&exact, 4).is_ok());
+    }
+
+    #[test]
     fn disabled_or_encodes_closed_marker_and_selected_nested_record() {
         // Architecture 14 optional convention: a one-byte presence marker
         // followed by the nested record bytes when selected. Disabled is the
@@ -1692,6 +1845,37 @@ mod tests {
     }
 
     #[test]
+    fn uuid_list_count_cap_is_enforced_before_allocation() {
+        // A declared count over the cap is rejected even with no item bytes.
+        let over_cap = (MAX_UUID_LIST_ITEMS as u32 + 1).to_be_bytes().to_vec();
+        assert_eq!(
+            decode_uuid_list(&over_cap).expect_err("count over the cap is rejected"),
+            CanonicalError::OverLimit
+        );
+
+        // A count at the cap with an exact-size payload decodes fully.
+        let exact = {
+            let mut bytes = (MAX_UUID_LIST_ITEMS as u32).to_be_bytes().to_vec();
+            bytes.resize(4 + MAX_UUID_LIST_ITEMS * 16, 0);
+            bytes
+        };
+        assert_eq!(
+            decode_uuid_list(&exact)
+                .expect("cap-sized list decodes")
+                .len(),
+            MAX_UUID_LIST_ITEMS
+        );
+
+        // A count at the cap with a truncated payload is truncated, not
+        // over-limit: the cap check never misfires on valid counts.
+        let truncated = (MAX_UUID_LIST_ITEMS as u32).to_be_bytes().to_vec();
+        assert_eq!(
+            decode_uuid_list(&truncated).expect_err("truncated cap-sized list is truncated"),
+            CanonicalError::Truncated
+        );
+    }
+
+    #[test]
     fn fixed_run_limits_round_trip_and_require_all_six_fields() {
         let limits = FixedRunLimits {
             max_attempts: 1,
@@ -1722,6 +1906,63 @@ mod tests {
         assert_eq!(
             FixedRunLimits::decode(&incomplete).expect_err("missing run-limit field is rejected"),
             CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn nested_limits_reject_wrong_record_framing() {
+        // The nested limits records are anonymous: tag zero, version one.
+        let wrong_tag = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 1, &[]);
+        assert_eq!(
+            FixedRunLimits::decode(&wrong_tag).expect_err("wrong nested tag is rejected"),
+            CanonicalError::InvalidTag
+        );
+        assert_eq!(
+            FixedActivityLimits::decode(&wrong_tag)
+                .expect_err("wrong nested activity tag is rejected"),
+            CanonicalError::InvalidTag
+        );
+        let wrong_version = raw_record(0, 2, &[]);
+        assert_eq!(
+            FixedRunLimits::decode(&wrong_version).expect_err("wrong nested version is rejected"),
+            CanonicalError::InvalidTag
+        );
+        assert_eq!(
+            FixedActivityLimits::decode(&wrong_version)
+                .expect_err("wrong nested activity version is rejected"),
+            CanonicalError::InvalidTag
+        );
+
+        // The framing check propagates through the programmatic selection
+        // decoder's nested limits field, even when all six limit values are
+        // present under the wrong frame.
+        let mis_framed_limits = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[1]),
+                (2, WireType::U64 as u8, &[2]),
+                (3, WireType::U64 as u8, &[3]),
+                (4, WireType::U64 as u8, &[4]),
+                (5, WireType::U64 as u8, &[5]),
+                (6, WireType::U64 as u8, &[6]),
+            ],
+        );
+        let selection = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 32]),
+                (4, WireType::List as u8, &(0u32).to_be_bytes()),
+                (5, WireType::Record as u8, &mis_framed_limits),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&selection)
+                .expect_err("wrong nested limits framing is rejected"),
+            CanonicalError::InvalidTag
         );
     }
 

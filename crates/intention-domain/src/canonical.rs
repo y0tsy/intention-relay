@@ -333,22 +333,26 @@ impl CanonicalIdentityInput {
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the field
-    /// stream were noncanonical; it is canonical by construction.
+    /// Returns `CanonicalError::DuplicateOrDescendingField` or
+    /// `CanonicalError::OverLimit` only if the field stream were noncanonical
+    /// or a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         let mut builder = CanonicalRecordBuilder::new(0, 1);
         for (number, wire_type, value) in &self.fields {
             builder = builder.field(*number, *wire_type, value.clone())?;
         }
-        Ok(builder.finish())
+        builder.finish()
     }
 
     /// Computes the sha256-v1 identity of the encoded identity-bearing fields.
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the field
-    /// stream were noncanonical; it is canonical by construction.
+    /// Returns `CanonicalError::DuplicateOrDescendingField` or
+    /// `CanonicalError::OverLimit` only if the field stream were noncanonical
+    /// or a field or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
     pub fn digest(&self) -> Result<IdentityV1, CanonicalError> {
         Ok(IdentityV1::sha256(&self.encode()?))
     }
@@ -363,6 +367,7 @@ pub struct CanonicalRecordBuilder {
     tag: u32,
     version: u32,
     fields: Vec<(u32, WireType, Vec<u8>)>,
+    encoded_len: usize,
 }
 
 impl CanonicalRecordBuilder {
@@ -373,6 +378,8 @@ impl CanonicalRecordBuilder {
             tag,
             version,
             fields: Vec::new(),
+            // Four magic bytes plus three four-byte header words.
+            encoded_len: 16,
         }
     }
 
@@ -381,7 +388,10 @@ impl CanonicalRecordBuilder {
     /// # Errors
     ///
     /// Returns `CanonicalError::DuplicateOrDescendingField` when the field
-    /// number is zero or does not strictly increase.
+    /// number is zero or does not strictly increase, and
+    /// `CanonicalError::OverLimit` when the field value exceeds
+    /// `MAX_FIELD_BYTES` or the accumulated record size would exceed
+    /// `MAX_RECORD_BYTES`.
     pub fn field(
         mut self,
         number: u32,
@@ -396,13 +406,27 @@ impl CanonicalRecordBuilder {
         {
             return Err(CanonicalError::DuplicateOrDescendingField);
         }
+        if value.len() > MAX_FIELD_BYTES {
+            return Err(CanonicalError::OverLimit);
+        }
+        let value_len = value.len();
+        if self.encoded_len + 9 + value_len > MAX_RECORD_BYTES {
+            return Err(CanonicalError::OverLimit);
+        }
+        self.encoded_len += 9 + value_len;
         self.fields.push((number, wire_type, value));
         Ok(self)
     }
 
     /// Finishes the record into its canonical framed bytes.
-    #[must_use]
-    pub fn finish(self) -> Vec<u8> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::OverLimit` only if a field length could not
+    /// fit the wire `u32`; that is impossible by construction because
+    /// [`Self::field`] rejects values over `MAX_FIELD_BYTES`, far below
+    /// `u32::MAX`.
+    pub fn finish(self) -> Result<Vec<u8>, CanonicalError> {
         let mut out = Vec::new();
         out.extend_from_slice(b"IRCR");
         out.extend_from_slice(&1u32.to_be_bytes());
@@ -411,10 +435,11 @@ impl CanonicalRecordBuilder {
         for (number, wire_type, value) in self.fields {
             out.extend_from_slice(&number.to_be_bytes());
             out.push(wire_type as u8);
-            out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            let length = u32::try_from(value.len()).map_err(|_| CanonicalError::OverLimit)?;
+            out.extend_from_slice(&length.to_be_bytes());
             out.extend(value);
         }
-        out
+        Ok(out)
     }
 }
 
@@ -609,6 +634,13 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<&str, CanonicalError> {
     std::str::from_utf8(bytes).map_err(|_| CanonicalError::InvalidUtf8)
 }
 
+/// Maximum items in one decoded UUID list.
+///
+/// The cap is `MAX_FIELD_BYTES / 16`, the largest number of sixteen-byte
+/// items that can fit inside one field value, so no valid encoding is ever
+/// rejected. It bounds the allocation a hostile declared count could drive.
+pub const MAX_UUID_LIST_ITEMS: usize = MAX_FIELD_BYTES / 16;
+
 /// Decodes a strict list of sixteen-byte UUIDs.
 ///
 /// A list is a big-endian `u32` item count followed by exactly that many
@@ -616,14 +648,19 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<&str, CanonicalError> {
 ///
 /// # Errors
 ///
-/// Returns `CanonicalError::Truncated` when the count or an item does not fit
-/// the remaining bytes, and `CanonicalError::TrailingBytes` when bytes remain
-/// after the declared items.
+/// Returns `CanonicalError::OverLimit` when the declared count exceeds
+/// `MAX_UUID_LIST_ITEMS`, `CanonicalError::Truncated` when the count or an
+/// item does not fit the remaining bytes, and
+/// `CanonicalError::TrailingBytes` when bytes remain after the declared
+/// items.
 pub fn decode_uuid_list(bytes: &[u8]) -> Result<Vec<[u8; 16]>, CanonicalError> {
     if bytes.len() < 4 {
         return Err(CanonicalError::Truncated);
     }
     let count = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    if count > MAX_UUID_LIST_ITEMS {
+        return Err(CanonicalError::OverLimit);
+    }
     let expected = 4u64 + (count as u64) * 16;
     if expected > bytes.len() as u64 {
         return Err(CanonicalError::Truncated);
