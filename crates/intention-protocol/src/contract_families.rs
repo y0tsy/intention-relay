@@ -552,22 +552,61 @@ impl ForkPreviewV2 {
     }
 }
 
-impl From<ForkPreviewV1> for ForkPreviewDto {
-    fn from(value: ForkPreviewV1) -> Self {
-        Self {
+impl TryFrom<ForkPreviewV1> for ForkPreviewDto {
+    type Error = ErrorDto;
+
+    /// Bridges a frozen v1 preview to the legacy summary DTO without loss.
+    ///
+    /// The bridge succeeds only when every dropped field is at its default or
+    /// absent value: a zero `source_head_sequence` and the closed
+    /// `unverified` workspace state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `fork_preview_conversion_lossy` when the source carries a
+    /// non-default dropped field.
+    fn try_from(value: ForkPreviewV1) -> Result<Self, Self::Error> {
+        if value.workspace_state != "unverified" || value.source_head_sequence != 0 {
+            return Err(ErrorDto::validation(
+                "fork_preview_conversion_lossy",
+                "fork preview conversion would drop source fields",
+            ));
+        }
+        Ok(Self {
             preview_digest: value.preview_digest,
             page_count: value.page_count,
             snapshot_size_bytes: value.snapshot_size_bytes,
-        }
+        })
     }
 }
-impl From<ForkPreviewV2> for ForkPreviewDto {
-    fn from(value: ForkPreviewV2) -> Self {
-        Self {
+impl TryFrom<ForkPreviewV2> for ForkPreviewDto {
+    type Error = ErrorDto;
+
+    /// Bridges a frozen v2 preview to the legacy summary DTO without loss.
+    ///
+    /// The bridge succeeds only when every dropped field is at its default or
+    /// absent value: a zero `source_head_sequence`, the closed `unverified`
+    /// workspace state, and no inherited reasoning history references.
+    ///
+    /// # Errors
+    ///
+    /// Returns `fork_preview_conversion_lossy` when the source carries a
+    /// non-default dropped field.
+    fn try_from(value: ForkPreviewV2) -> Result<Self, Self::Error> {
+        if value.workspace_state != "unverified"
+            || value.source_head_sequence != 0
+            || !value.inherited_reasoning_history_references.is_empty()
+        {
+            return Err(ErrorDto::validation(
+                "fork_preview_conversion_lossy",
+                "fork preview conversion would drop source fields",
+            ));
+        }
+        Ok(Self {
             preview_digest: value.preview_digest,
             page_count: value.page_count,
             snapshot_size_bytes: value.snapshot_size_bytes,
-        }
+        })
     }
 }
 
@@ -1579,7 +1618,7 @@ pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
         }
     }
     // The third group's first digit is the RFC 4122 version.
-    if !matches!(bytes[14], b'1'..=b'8') {
+    if !matches!(bytes[14], b'1'..=b'5') {
         return false;
     }
     // The fourth group's first digit is the RFC 4122 variant.
@@ -2200,6 +2239,25 @@ mod tests {
                     .expect_err("non-canonical reference is rejected")
                     .code(),
                 "legacy_selection_reference_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_uuid_reference_accepts_only_rfc_4122_versions_one_through_five() {
+        let reference = |version_digit: char| {
+            format!("legacy-uuid:11111111-1111-{version_digit}111-8111-111111111111")
+        };
+        for version in ['1', '2', '3', '4', '5'] {
+            assert!(
+                is_canonical_legacy_uuid_reference(&reference(version)),
+                "version {version} is RFC 4122 and must be canonical"
+            );
+        }
+        for version in ['0', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'] {
+            assert!(
+                !is_canonical_legacy_uuid_reference(&reference(version)),
+                "version {version} is outside RFC 4122 1..=5 and must be rejected"
             );
         }
     }
@@ -3377,12 +3435,45 @@ mod tests {
         assert!(v2.validate().is_ok());
         round_trip(&v2);
 
-        let bridged_v1: ForkPreviewDto = v1.into();
+        // Lossless bridging: every dropped field is at its default or absent
+        // value, so no preview data is lost.
+        let mut lossless_v1 = v1.clone();
+        lossless_v1.source_head_sequence = 0;
+        let bridged_v1: ForkPreviewDto = lossless_v1
+            .try_into()
+            .expect("lossless v1 preview conversion");
         assert_eq!(bridged_v1.preview_digest, "a".repeat(64));
         assert_eq!(bridged_v1.page_count, 3);
         assert_eq!(bridged_v1.snapshot_size_bytes, 4096);
-        let bridged_v2: ForkPreviewDto = v2.into();
+        let mut lossless_v2 = v2.clone();
+        lossless_v2.source_head_sequence = 0;
+        lossless_v2.inherited_reasoning_history_references = Vec::new();
+        let bridged_v2: ForkPreviewDto = lossless_v2
+            .try_into()
+            .expect("lossless v2 preview conversion");
         assert_eq!(bridged_v2, bridged_v1);
+
+        // Lossy conversions fail closed with a stable code.
+        assert_eq!(
+            ForkPreviewDto::try_from(v1)
+                .expect_err("nonzero head sequence is lossy")
+                .code(),
+            "fork_preview_conversion_lossy"
+        );
+        assert_eq!(
+            ForkPreviewDto::try_from(v2)
+                .expect_err("inherited references are lossy")
+                .code(),
+            "fork_preview_conversion_lossy"
+        );
+        let mut non_unverified = preview_v1();
+        non_unverified.workspace_state = "verified".to_owned();
+        assert_eq!(
+            ForkPreviewDto::try_from(non_unverified)
+                .expect_err("non-default workspace state is lossy")
+                .code(),
+            "fork_preview_conversion_lossy"
+        );
     }
 
     #[test]
