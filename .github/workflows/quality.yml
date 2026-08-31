@@ -98,9 +98,7 @@ jobs:
           # trio previously dominated the CI critical path at roughly twenty
           # minutes while running identical work about 1.7x slower than
           # Linux; Windows correctness stays covered by the test jobs'
-          # named-pipe and platform-native symlink fixtures. The Windows test
-          # gate itself is split into test-default and test-alt so the
-          # slower Windows runner is not the CI critical path.
+          # named-pipe and platform-native symlink fixtures.
           #
           # cache_family is the Swatinem/rust-cache shared-key: jobs in one
           # family (same OS, toolchain, RUSTFLAGS, and profile family) share
@@ -233,18 +231,7 @@ jobs:
             uses_mold: false
             cache_family: windows-stable
           - os: windows-2025
-            phase: test-default
-            stable: true
-            nightly: false
-            stable_components: ""
-            nightly_components: ""
-            tools: "cargo-nextest@0.9.140"
-            scope: test
-            rustflags: ""
-            uses_mold: false
-            cache_family: windows-stable
-          - os: windows-2025
-            phase: test-alt
+            phase: test
             stable: true
             nightly: false
             stable_components: ""

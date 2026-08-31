@@ -253,29 +253,6 @@ def test_coverage_groups_partition_policy() -> None:
         raise RuntimeError("coverage runner must run the workspace aggregate with group a only")
 
 
-def test_run_profiles_profiles_filter() -> None:
-    """run_profiles --profiles restricts profiles and rejects unknown names."""
-    namespace = {
-        "__file__": str(ROOT / "quality/run_profiles.py"),
-        "__name__": "quality.run_profiles",
-    }
-    exec((ROOT / "quality/run_profiles.py").read_text(encoding="utf-8"), namespace)
-    selected = [
-        ("default", []),
-        ("no_default", ["--no-default-features"]),
-        ("all", ["--all-features"]),
-    ]
-    filtered = namespace["filter_profiles"](selected, ["default", "all"])
-    if filtered != [("default", []), ("all", ["--all-features"])]:
-        raise RuntimeError(f"unexpected filtered profiles: {filtered!r}")
-    try:
-        namespace["filter_profiles"](selected, ["default", "bogus"])
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError("unknown profile names must be rejected")
-
-
 def test_run_deps_udeps_conditional() -> None:
     """CI_UDEPS=false skips the unused-dependency check; local runs keep it."""
     import os as _os
@@ -302,7 +279,7 @@ def test_run_deps_udeps_conditional() -> None:
 
 
 def test_ci_split_makefile_targets() -> None:
-    """Makefile exposes the CI split targets (coverage groups and test halves)."""
+    """Makefile exposes the CI coverage split targets."""
     import re as _re
 
     source = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -319,18 +296,10 @@ def test_ci_split_makefile_targets() -> None:
         "ci-coverage-no-default-b:",
         "ci-coverage-all-a:",
         "ci-coverage-all-b:",
-        "test-default:",
-        "test-alt:",
-        "ci-test-default:",
-        "ci-test-alt:",
     ]
     for target in expected:
         if _re.search(rf"^{_re.escape(target)} ", source, flags=_re.MULTILINE) is None:
             raise RuntimeError(f"Makefile must declare {target}")
-    if "quality/run_profiles.py test --profiles default" not in source:
-        raise RuntimeError("test-default must run the default profile only")
-    if "quality/run_profiles.py test --profiles no_default,all" not in source:
-        raise RuntimeError("test-alt must run the alternate profiles")
     if "quality/run_coverage.py --profile default --group a" not in source:
         raise RuntimeError("coverage-default-a must pass --group a")
 
@@ -1696,7 +1665,6 @@ def main() -> None:
         test_benchmark_jobs_parsing,
         test_cleanup_gha_caches_decides_deletion,
         test_coverage_groups_partition_policy,
-        test_run_profiles_profiles_filter,
         test_run_deps_udeps_conditional,
         test_ci_split_makefile_targets,
     ]

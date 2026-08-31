@@ -11,7 +11,7 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test test-default test-alt docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-default-a coverage-default-b coverage-no-default-a coverage-no-default-b coverage-all-a coverage-all-b coverage-artifacts-clean deps quality-self-test quality-self-test-in-place quick check verify ci ci-source ci-lint-arch ci-test ci-test-default ci-test-alt ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-coverage-default-a ci-coverage-default-b ci-coverage-no-default-a ci-coverage-no-default-b ci-coverage-all-a ci-coverage-all-b ci-selftest ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-test-default metrics-start-test-alt metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-default-a metrics-start-coverage-default-b metrics-start-coverage-no-default metrics-start-coverage-no-default-a metrics-start-coverage-no-default-b metrics-start-coverage-all metrics-start-coverage-all-a metrics-start-coverage-all-b metrics-start-deps metrics-start-selftest metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-test-default metrics-finish-test-alt metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-default-a metrics-finish-coverage-default-b metrics-finish-coverage-no-default metrics-finish-coverage-no-default-a metrics-finish-coverage-no-default-b metrics-finish-coverage-all metrics-finish-coverage-all-a metrics-finish-coverage-all-b metrics-finish-deps metrics-finish-selftest
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-default-a coverage-default-b coverage-no-default-a coverage-no-default-b coverage-all-a coverage-all-b coverage-artifacts-clean deps quality-self-test quality-self-test-in-place quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-coverage-default-a ci-coverage-default-b ci-coverage-no-default-a ci-coverage-no-default-b ci-coverage-all-a ci-coverage-all-b ci-selftest ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-default-a metrics-start-coverage-default-b metrics-start-coverage-no-default metrics-start-coverage-no-default-a metrics-start-coverage-no-default-b metrics-start-coverage-all metrics-start-coverage-all-a metrics-start-coverage-all-b metrics-start-deps metrics-start-selftest metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-default-a metrics-finish-coverage-default-b metrics-finish-coverage-no-default metrics-finish-coverage-no-default-a metrics-finish-coverage-no-default-b metrics-finish-coverage-all metrics-finish-coverage-all-a metrics-finish-coverage-all-b metrics-finish-deps metrics-finish-selftest
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
@@ -47,14 +47,6 @@ lint: tools-check ## Run strict Rust and Clippy linting for all feature profiles
 test: tools-check ## Run nextest and doctests for all feature profiles.
 	$(PYTHON) quality/run_profiles.py test
 	$(PYTHON) quality/run_profiles.py doctest
-
-test-default: tools-check ## Run nextest and doctests for the default profile (CI Windows split).
-	$(PYTHON) quality/run_profiles.py test --profiles default
-	$(PYTHON) quality/run_profiles.py doctest --profiles default
-
-test-alt: tools-check ## Run nextest and doctests for the no-default and all profiles (CI Windows split).
-	$(PYTHON) quality/run_profiles.py test --profiles no_default,all
-	$(PYTHON) quality/run_profiles.py doctest --profiles no_default,all
 
 check-cargo: tools-check ## Run Cargo check for all feature profiles.
 	$(TIMED) $(PYTHON) quality/run_profiles.py check
@@ -130,12 +122,6 @@ ci-lint-arch: metrics-start-lint-arch fmt-check features lint docs-check archite
 ci-test: metrics-start-test test metrics-finish-test ## CI test job: metrics, nextest and doctests, metrics.
 	@true
 
-ci-test-default: metrics-start-test-default test-default metrics-finish-test-default ## CI test job for the default profile (Windows).
-	@true
-
-ci-test-alt: metrics-start-test-alt test-alt metrics-finish-test-alt ## CI test job for the no-default and all profiles (Windows).
-	@true
-
 ci-coverage: metrics-start-coverage coverage coverage-artifacts-clean metrics-finish-coverage ## CI coverage job (all profiles, local convenience): metrics, coverage, generated-artifact cleanup, metrics.
 	@true
 
@@ -178,8 +164,8 @@ metrics-start: ## Initialize the quality metrics manifest for this run.
 metrics-finish: ## Finalize the quality metrics manifest preserving the gate result.
 	@$(PYTHON) quality/metrics.py finish
 
-metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-test-default metrics-start-test-alt metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-default-a metrics-start-coverage-default-b metrics-start-coverage-no-default metrics-start-coverage-no-default-a metrics-start-coverage-no-default-b metrics-start-coverage-all metrics-start-coverage-all-a metrics-start-coverage-all-b metrics-start-deps metrics-start-selftest:
+metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-default-a metrics-start-coverage-default-b metrics-start-coverage-no-default metrics-start-coverage-no-default-a metrics-start-coverage-no-default-b metrics-start-coverage-all metrics-start-coverage-all-a metrics-start-coverage-all-b metrics-start-deps metrics-start-selftest:
 	@$(PYTHON) quality/metrics.py start --job $(patsubst metrics-start-%,%,$@)
 
-metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-test-default metrics-finish-test-alt metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-default-a metrics-finish-coverage-default-b metrics-finish-coverage-no-default metrics-finish-coverage-no-default-a metrics-finish-coverage-no-default-b metrics-finish-coverage-all metrics-finish-coverage-all-a metrics-finish-coverage-all-b metrics-finish-deps metrics-finish-selftest:
+metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-default-a metrics-finish-coverage-default-b metrics-finish-coverage-no-default metrics-finish-coverage-no-default-a metrics-finish-coverage-no-default-b metrics-finish-coverage-all metrics-finish-coverage-all-a metrics-finish-coverage-all-b metrics-finish-deps metrics-finish-selftest:
 	@$(PYTHON) quality/metrics.py finish --job $(patsubst metrics-finish-%,%,$@)

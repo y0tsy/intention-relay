@@ -23,22 +23,6 @@ def run(command: list[str]) -> None:
     if completed.returncode != 0:
         raise subprocess.CalledProcessError(completed.returncode, command)
 
-def filter_profiles(
-    selected: list[tuple[str, list[str]]], requested: list[str]
-) -> list[tuple[str, list[str]]]:
-    """Restrict profile runs to the requested names (CI split).
-
-    Unknown requested names raise so a typo in a Makefile target or workflow
-    cannot silently drop a required profile.
-    """
-    wanted = set(requested)
-    result = [entry for entry in selected if entry[0] in wanted]
-    unknown = wanted - {entry[0] for entry in result}
-    if unknown:
-        raise RuntimeError(f"unknown quality profiles: {', '.join(sorted(unknown))}")
-    return result
-
-
 def profile_arguments(policy: dict[str, object]) -> list[tuple[str, list[str]]]:
     profiles = policy["profiles"]
     assert isinstance(profiles, dict)
@@ -57,14 +41,7 @@ def main() -> None:
     )
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--profile", dest="profile", default=None)
-    parser.add_argument(
-        "--profiles",
-        default=None,
-        help="comma-separated profile names to run (CI split)",
-    )
     arguments = parser.parse_args()
-    if arguments.profile is not None and arguments.profiles is not None:
-        raise RuntimeError("--profile and --profiles are mutually exclusive")
 
     with arguments.policy.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
@@ -83,11 +60,6 @@ def main() -> None:
         selected_profiles = [entry for entry in selected_profiles if entry[0] == arguments.profile]
         if not selected_profiles:
             raise RuntimeError(f"unknown quality profile: {arguments.profile}")
-    if arguments.profiles is not None:
-        requested = [name.strip() for name in arguments.profiles.split(",") if name.strip()]
-        selected_profiles = filter_profiles(selected_profiles, requested)
-        if not selected_profiles:
-            raise RuntimeError(f"no quality profiles matched: {arguments.profiles}")
 
     for profile_name, flags in selected_profiles:
         print(f"profile: {profile_name}", flush=True)
