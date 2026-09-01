@@ -343,8 +343,7 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
                 content: String,
             },
             ReasoningDeltaRecorded {
-                #[serde(default)]
-                category: Option<ReasoningDeltaCategory>,
+                category: ReasoningDeltaCategory,
                 content: String,
             },
             ReasoningSummaryDeltaRecorded {
@@ -384,10 +383,7 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
                 content,
             } => Self::assistant_content_appended(assistant_turn_id, content),
             RawModelRunFactInputDto::ReasoningDeltaRecorded { category, content } => {
-                Self::reasoning_delta_recorded_categorized(
-                    category.unwrap_or(ReasoningDeltaCategory::Primary),
-                    content,
-                )
+                Self::reasoning_delta_recorded_categorized(category, content)
             }
             RawModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content } => {
                 Self::reasoning_summary_delta_recorded(content)

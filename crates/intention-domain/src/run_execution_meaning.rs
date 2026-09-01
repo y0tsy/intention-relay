@@ -211,12 +211,6 @@ pub enum AgentActivitySelectionV1 {
     },
 }
 
-/// The run-execution-meaning v3 record (fixed field table 1-10).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunExecutionMeaningV3Record {
-    pub fields: Vec<Vec<u8>>,
-}
-
 /// The run-execution-meaning v4 record (fixed field table 1-11).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunExecutionMeaningV4Record {
@@ -586,53 +580,6 @@ impl DisabledOr<ProgrammaticCallerPolicySelectionV1> {
     }
 }
 
-impl RunExecutionMeaningV3Record {
-    /// Encodes this record into its canonical run-execution-meaning v3 bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CanonicalError::DuplicateOrDescendingField` only if the fixed
-    /// field table were noncanonical, and `CanonicalError::OverLimit` only if
-    /// a field or the record exceeded the codec size bounds; both are
-    /// impossible by construction.
-    pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
-        record(
-            TagRegistry::RUN_EXECUTION_MEANING,
-            3,
-            self.fields
-                .iter()
-                .enumerate()
-                .map(|(index, value)| ((index + 1) as u32, WireType::Record, value.clone()))
-                .collect(),
-        )
-    }
-
-    /// Decodes this record from its canonical v3 bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CanonicalError::InvalidTag` when the tag or version is not the
-    /// run-execution-meaning v3 table, `CanonicalError::InvalidField` when any
-    /// of the ten mandatory fields is absent or carries the wrong wire type,
-    /// and other `CanonicalError` values for malformed or noncanonical
-    /// framing.
-    pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
-        let reader = CanonicalRecordReader::new(bytes, 10)?;
-        if reader.tag != TagRegistry::RUN_EXECUTION_MEANING || reader.version != 3 {
-            return Err(CanonicalError::InvalidTag);
-        }
-        let fields = (1..=10)
-            .map(|number| {
-                reader
-                    .field(number, WireType::Record)?
-                    .ok_or(CanonicalError::InvalidField)
-                    .map(|value| value.to_vec())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { fields })
-    }
-}
-
 impl RunExecutionMeaningV4Record {
     /// Encodes this record into its canonical run-execution-meaning v4 bytes.
     ///
@@ -806,12 +753,6 @@ mod tests {
     };
     use sha2::{Digest, Sha256};
 
-    fn fixture_v3_record() -> RunExecutionMeaningV3Record {
-        RunExecutionMeaningV3Record {
-            fields: (0..10).map(|i| vec![i as u8; 4]).collect(),
-        }
-    }
-
     fn fixture_activity_selection() -> AgentActivitySelectionV1 {
         AgentActivitySelectionV1::Root {
             activity_tree_id: [7u8; 16],
@@ -881,13 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_and_v4_records_round_trip_exactly() {
-        let v3 = fixture_v3_record();
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&v3.encode().expect("v3 record encodes"))
-                .expect("v3 record decodes"),
-            v3
-        );
+    fn v4_record_round_trips_exactly() {
         let v4 = fixture_v4_record();
         let decoded = RunExecutionMeaningV4Record::decode(&v4.encode().expect("v4 record encodes"))
             .expect("v4 record decodes");
@@ -1122,19 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_decodes_without_synthetic_activity_selection_and_v4_requires_it() {
-        let v3_bytes = fixture_v3_record().encode().expect("v3 record encodes");
-        let decoded = RunExecutionMeaningV3Record::decode(&v3_bytes).expect("v3 record decodes");
-        assert_eq!(decoded, fixture_v3_record());
-        // Re-encoding the decoded record reproduces the exact input bytes, so no
-        // synthetic activity-selection field is introduced.
-        assert_eq!(decoded.encode().expect("decoded v3 re-encodes"), v3_bytes);
-        // The v4 decoder rejects v3 records on their version before field checks.
-        assert_eq!(
-            RunExecutionMeaningV4Record::decode(&v3_bytes)
-                .expect_err("v4 decoder rejects v3 records"),
-            CanonicalError::InvalidTag
-        );
+    fn v4_requires_the_agent_activity_selection_field() {
         // A version-4 record without field 11 is rejected: v4 requires the
         // activity selection field.
         let v4_without_activity = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &[]);
@@ -1157,13 +1080,6 @@ mod tests {
         for missing in 0..10 {
             let mut partial = full.clone();
             partial.remove(missing);
-            let v3 = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 3, &partial);
-            assert_eq!(
-                RunExecutionMeaningV3Record::decode(&v3).expect_err("missing v3 field is rejected"),
-                CanonicalError::InvalidField,
-                "missing v3 field {}",
-                missing + 1
-            );
             let mut v4 = partial;
             v4.push((11, WireType::Record as u8, &activity));
             let v4_bytes = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &v4);
@@ -1186,17 +1102,6 @@ mod tests {
 
     #[test]
     fn meaning_records_reject_wrong_field_wire_types() {
-        // A v3 field 1 encoded as a U64 instead of a Record is rejected.
-        let v3_wrong = raw_record(
-            TagRegistry::RUN_EXECUTION_MEANING,
-            3,
-            &[(1, WireType::U64 as u8, &[0])],
-        );
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&v3_wrong)
-                .expect_err("wrong v3 wire type is rejected"),
-            CanonicalError::InvalidField
-        );
         // A v4 field 1 encoded as a U64 instead of a Record is rejected even
         // with a valid field 11 present.
         let activity = golden_v4_record().agent_activity_selection;
@@ -1259,8 +1164,10 @@ mod tests {
 
         // Mutating canonical bytes under a stored digest is rejected.
         let mut changed_bytes = envelope;
+        let mut altered_meaning = fixture_v4_record();
+        altered_meaning.fields[0] = vec![0xFF; 4];
         changed_bytes.canonical_meaning_bytes =
-            fixture_v3_record().encode().expect("v3 record encodes");
+            altered_meaning.encode().expect("altered v4 record encodes");
         assert_eq!(
             RunExecutionMeaningEnvelopeV1::decode(
                 &changed_bytes.encode().expect("envelope encodes")
@@ -1426,11 +1333,6 @@ mod tests {
                 .expect("unknown field number is rejected"),
             CanonicalError::UnknownField(11)
         );
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&unknown_field)
-                .expect_err("unknown field number is rejected"),
-            CanonicalError::UnknownField(11)
-        );
         let envelope_unknown = raw_record(0x0102, 1, &[(1, 1, &[0u8]), (7, 6, &[])]);
         assert_eq!(
             CanonicalRecordReader::new(&envelope_unknown, 6)
@@ -1442,11 +1344,6 @@ mod tests {
         // Typed decoders reject records with unknown tags or versions.
         let unknown_tag = raw_record(0xFFFF, 3, &[]);
         assert_eq!(
-            RunExecutionMeaningV3Record::decode(&unknown_tag)
-                .expect_err("unknown record tag is rejected"),
-            CanonicalError::InvalidTag
-        );
-        assert_eq!(
             RunExecutionMeaningV4Record::decode(&unknown_tag)
                 .expect_err("unknown record tag is rejected"),
             CanonicalError::InvalidTag
@@ -1457,7 +1354,7 @@ mod tests {
             CanonicalError::InvalidTag
         );
         assert_eq!(
-            RunExecutionMeaningV3Record::decode(&raw_record(
+            RunExecutionMeaningV4Record::decode(&raw_record(
                 TagRegistry::RUN_EXECUTION_MEANING,
                 7,
                 &[],
@@ -1560,19 +1457,6 @@ mod tests {
 
     #[test]
     fn trailing_bytes_are_rejected() {
-        let mut trailing = fixture_v3_record().encode().expect("v3 record encodes");
-        trailing.extend_from_slice(&[0xDE, 0xAD, 0xBE]);
-        assert_eq!(
-            CanonicalRecordReader::new(&trailing, 10)
-                .err()
-                .expect("trailing bytes are rejected"),
-            CanonicalError::TrailingBytes
-        );
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&trailing)
-                .expect_err("trailing bytes are rejected"),
-            CanonicalError::TrailingBytes
-        );
         let mut envelope_trailing = fixture_envelope(ExecutionKind::Mandate)
             .encode()
             .expect("envelope encodes");
@@ -2297,8 +2181,8 @@ mod tests {
 
     #[test]
     fn identity_input_excludes_non_identity_fields_with_sentinels() {
-        let v3 = golden_v3_record().encode().expect("v3 meaning encodes");
-        let plain = identity_input_for(&v3, 3);
+        let v4 = golden_v4_record().encode().expect("v4 meaning encodes");
+        let plain = identity_input_for(&v4, 4);
         let encoded = plain.encode().expect("identity input encodes");
         let baseline = plain.digest().expect("identity digests");
 
@@ -2386,11 +2270,6 @@ mod tests {
 
     #[test]
     fn canonical_encoding_is_byte_deterministic() {
-        let v3 = fixture_v3_record();
-        assert_eq!(
-            v3.encode().expect("v3 encodes"),
-            v3.encode().expect("v3 encodes")
-        );
         let v4 = fixture_v4_record();
         assert_eq!(
             v4.encode().expect("v4 encodes"),
@@ -2403,14 +2282,6 @@ mod tests {
         );
 
         // Decode and re-encode reproduces the exact input bytes.
-        let v3_bytes = v3.encode().expect("v3 encodes");
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&v3_bytes)
-                .expect("v3 decodes")
-                .encode()
-                .expect("v3 re-encodes"),
-            v3_bytes
-        );
         let v4_bytes = v4.encode().expect("v4 encodes");
         assert_eq!(
             RunExecutionMeaningV4Record::decode(&v4_bytes)
@@ -2546,12 +2417,6 @@ mod tests {
         ]
     }
 
-    fn golden_v3_record() -> RunExecutionMeaningV3Record {
-        RunExecutionMeaningV3Record {
-            fields: golden_meaning_fields(),
-        }
-    }
-
     fn golden_v4_record() -> RunExecutionMeaningV4Record {
         RunExecutionMeaningV4Record {
             fields: golden_meaning_fields(),
@@ -2669,23 +2534,6 @@ mod tests {
             hex_encode(&digest),
             fixture.sha256,
             "sha256 of the golden bytes must equal the golden sha256"
-        );
-    }
-
-    #[test]
-    fn golden_execution_meaning_v3_fixture_matches_the_encoder_and_round_trips() {
-        let record = golden_v3_record();
-        let encoded = record.encode().expect("golden v3 record encodes");
-        assert_golden_fixture(
-            include_str!("../tests/fixtures/goldens/execution-meaning-v3.txt"),
-            "execution-meaning-v3",
-            0x0101,
-            3,
-            &encoded,
-        );
-        assert_eq!(
-            RunExecutionMeaningV3Record::decode(&encoded).expect("golden v3 record decodes"),
-            record
         );
     }
 
@@ -2892,22 +2740,22 @@ mod tests {
 
     #[test]
     fn golden_namespaced_digest_fixture_matches_the_encoder_and_round_trips() {
-        let v3 = golden_v3_record()
+        let v4 = golden_v4_record()
             .encode()
-            .expect("golden v3 meaning encodes");
+            .expect("golden v4 meaning encodes");
         assert_golden_fixture(
             include_str!("../tests/fixtures/goldens/namespaced-digest-v1.txt"),
             "namespaced-digest-v1",
             0x0101,
-            3,
-            &v3,
+            4,
+            &v4,
         );
         let fixture = parse_golden(include_str!(
             "../tests/fixtures/goldens/namespaced-digest-v1.txt"
         ))
         .expect("namespaced digest fixture parses");
         let digest =
-            Digest256::for_namespace(&fixture.namespace, &v3).expect("golden namespace is valid");
+            Digest256::for_namespace(&fixture.namespace, &v4).expect("golden namespace is valid");
         assert_eq!(hex_encode(&digest.digest.bytes()), fixture.sha256);
         assert_eq!(
             digest.to_string(),
@@ -2924,10 +2772,10 @@ mod tests {
 
     #[test]
     fn golden_identity_exclusion_fixture_matches_the_encoder_and_round_trips() {
-        let v3 = golden_v3_record()
+        let v4 = golden_v4_record()
             .encode()
-            .expect("golden v3 meaning encodes");
-        let input = identity_input_for(&v3, 3)
+            .expect("golden v4 meaning encodes");
+        let input = identity_input_for(&v4, 4)
             .with_credentials(vec![0xDE, 0xAD, 0xBE, 0xEF])
             .with_filesystem_path(
                 std::env::temp_dir()
@@ -2948,7 +2796,7 @@ mod tests {
         );
         // The golden identity equals the identity of the same input without
         // any excluded values.
-        let baseline = identity_input_for(&v3, 3)
+        let baseline = identity_input_for(&v4, 4)
             .digest()
             .expect("baseline identity digests");
         assert_eq!(input.digest().expect("identity digests"), baseline);

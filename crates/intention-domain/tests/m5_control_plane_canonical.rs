@@ -1325,10 +1325,6 @@ fn context_manifest_digest_excludes_safe_label() {
 fn no_synthetic_post_m5_records_are_created() {
     for (text, record) in [
         (
-            include_str!("fixtures/goldens/execution-meaning-v3.txt"),
-            "execution-meaning-v3",
-        ),
-        (
             include_str!("fixtures/goldens/execution-meaning-v4.txt"),
             "execution-meaning-v4",
         ),
@@ -1341,12 +1337,6 @@ fn no_synthetic_post_m5_records_are_created() {
         assert_eq!(fixture.record, record);
         let bytes = hex_decode(&fixture.bytes_hex);
         let decoded = match record {
-            "execution-meaning-v3" => {
-                intention_domain::run_execution_meaning::RunExecutionMeaningV3Record::decode(&bytes)
-                    .expect("v3 golden decodes")
-                    .encode()
-                    .expect("v3 golden re-encodes")
-            }
             "execution-meaning-v4" => {
                 intention_domain::run_execution_meaning::RunExecutionMeaningV4Record::decode(&bytes)
                     .expect("v4 golden decodes")
@@ -1368,12 +1358,8 @@ fn no_synthetic_post_m5_records_are_created() {
 }
 
 #[test]
-fn m3_m4_execution_meaning_bytes_remain_unchanged() {
+fn current_execution_meaning_bytes_remain_byte_stable() {
     for (text, record) in [
-        (
-            include_str!("fixtures/goldens/execution-meaning-v3.txt"),
-            "execution-meaning-v3",
-        ),
         (
             include_str!("fixtures/goldens/execution-meaning-v4.txt"),
             "execution-meaning-v4",
@@ -1412,15 +1398,9 @@ fn m3_m4_execution_meaning_bytes_remain_unchanged() {
             fixture.sha256,
             "sha256 of the golden bytes must remain stable for {record}"
         );
-        // Every historical golden must still decode and re-encode to the
-        // exact pinned bytes, proving no byte output changed.
+        // Every current golden must still decode and re-encode to the exact
+        // pinned bytes, proving no byte output changed.
         let re_encoded = match record {
-            "execution-meaning-v3" => {
-                intention_domain::run_execution_meaning::RunExecutionMeaningV3Record::decode(&bytes)
-                    .expect("v3 golden decodes")
-                    .encode()
-                    .expect("v3 golden re-encodes")
-            }
             "execution-meaning-v4" => {
                 intention_domain::run_execution_meaning::RunExecutionMeaningV4Record::decode(&bytes)
                     .expect("v4 golden decodes")
@@ -1458,7 +1438,7 @@ fn m3_m4_execution_meaning_bytes_remain_unchanged() {
         };
         assert_eq!(
             re_encoded, bytes,
-            "M3/M4 golden {record} must remain byte-identical"
+            "current golden {record} must remain byte-identical"
         );
     }
 }

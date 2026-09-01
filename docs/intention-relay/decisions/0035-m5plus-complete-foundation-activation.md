@@ -23,7 +23,9 @@ of activating slices, all approved together as one package:
 
 1. **Contracts and versions** — the versioned protocol/schema/
    execution-meaning/DTO contract ledger for the full post-M5 stack, including
-   `run-execution-meaning-v3`/`v4`, the negotiated capability families
+   `run-execution-meaning-v4` (the single live record version; v3 is removed by
+   [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)), the
+   negotiated capability families
    (`provider_profiles_v1`, `session_fork_v1`,
    `normalized_reasoning_stream_v1`, `agent_activity_v1`,
    `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`),

@@ -224,7 +224,6 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         serde_json::json!({"cursor":1,"kind":"provider_attempt_failed","attempt":1,"failure":failure}),
         serde_json::json!({"cursor":1,"kind":"retry_scheduled","failed_attempt":1,"next_attempt":2}),
         serde_json::json!({"cursor":1,"kind":"assistant_content_appended","assistant_turn_id":AssistantTurnId::new(),"content":"answer"}),
-        serde_json::json!({"cursor":1,"kind":"reasoning_delta_recorded","content":"thought"}),
         serde_json::json!({"cursor":1,"kind":"reasoning_delta_recorded","category":"detail","content":"thought"}),
         serde_json::json!({"cursor":1,"kind":"reasoning_summary_delta_recorded","content":"summary"}),
         serde_json::json!({"cursor":1,"kind":"usage_recorded","usage":{"state":"not_reported"}}),
@@ -237,24 +236,6 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         let fact: ModelRunFactDto = serde_json::from_value(value).expect("valid fact wire");
         assert_eq!(fact.cursor().value(), 1);
     }
-    // The historical M4 reasoning fact without a category decodes as Primary.
-    let legacy: ModelRunFactDto = serde_json::from_value(serde_json::json!({
-        "cursor": 1,
-        "kind": "reasoning_delta_recorded",
-        "content": "thought"
-    }))
-    .expect("legacy reasoning wire decodes");
-    assert_eq!(
-        legacy.kind(),
-        intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded
-    );
-    assert_eq!(
-        legacy.input(),
-        &ModelRunFactInputDto::ReasoningDeltaRecorded {
-            category: intention_domain::ReasoningDeltaCategory::Primary,
-            content: "thought".to_owned(),
-        }
-    );
     let unknown =
         serde_json::json!({"cursor":1,"kind":"provider_attempt_started","attempt":1,"extra":true});
     assert!(serde_json::from_value::<ModelRunFactDto>(unknown).is_ok());

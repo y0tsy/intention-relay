@@ -426,7 +426,7 @@ activated by earlier slices in this order:
 
 1. **Contracts and versions** — the versioned protocol/schema/
    execution-meaning/DTO contract ledger for the full post-M5 stack: local
-   protocol and schema version advancement; `run-execution-meaning-v3`/`v4`
+   protocol and schema version advancement; `run-execution-meaning-v4`
    field tables (`ProgrammaticCallerPolicySelectionV1`, `GoalRunSelectionV1`,
    `AgentActivitySelectionV1`, `ContinualHarnessSelectionV1`); the negotiated
    capability families (`provider_profiles_v1`, `session_fork_v1`,
@@ -1132,7 +1132,7 @@ milestone.
 - policy lifecycle with live tightening, drafts, and no-reactivation-after-revoke;
 - run and calendar limits with atomic reservations and
   `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
-- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v3`/v4 with
+- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v4` with
   `Disabled` only for historical M4.
 
 ### Exit criteria

@@ -1,8 +1,9 @@
 //! Slice 2 per-turn provider override contract tests.
 //!
-//! The override fields are additive: the three-argument constructor still
-//! works, legacy wire JSON without the new fields still deserializes, and the
-//! bounded override validation rejects invalid or credential-shaped values.
+//! The override fields are current wire fields: the three-argument
+//! constructor still works, wire JSON with the override fields round-trips,
+//! and the bounded override validation rejects invalid or credential-shaped
+//! values.
 
 #![allow(
     clippy::expect_used,
@@ -97,21 +98,6 @@ fn credential_shaped_override_values_are_rejected() {
         .with_profile_override("default", Some("api_key-rev".to_owned()))
         .expect_err("credential-shaped expected revision must fail");
     assert_eq!(error.code(), "credentials_forbidden");
-}
-
-#[test]
-fn legacy_wire_json_without_override_fields_deserializes() {
-    let session_id = SessionId::new();
-    let turn_id = TurnId::new();
-    let wire =
-        format!(r#"{{"session_id":"{session_id}","turn_id":"{turn_id}","content":"hello"}}"#);
-    let decoded: SendUserTurnCommandDto =
-        serde_json::from_str(&wire).expect("legacy wire JSON deserializes");
-    assert_eq!(decoded.session_id(), session_id);
-    assert_eq!(decoded.turn_id(), turn_id);
-    assert_eq!(decoded.content(), "hello");
-    assert!(decoded.profile_override().is_none());
-    assert!(decoded.expected_profile_revision().is_none());
 }
 
 #[test]

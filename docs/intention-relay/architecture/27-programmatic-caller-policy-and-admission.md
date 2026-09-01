@@ -430,9 +430,9 @@ default, a different counter, a live ancestor, or a fresh authorization.
 
 ## Run-selection compatibility and closed safe failures
 
-The selected immutable execution meaning is first selected in
-`run-execution-meaning-v3` for programmatic-caller policy and then extended by
-the separately versioned `run-execution-meaning-v4` activity selection:
+The selected immutable execution meaning is carried by the single live
+`run-execution-meaning-v4` record, which extends the former v3 field table with
+the separately versioned activity selection at tag 11:
 
 ```text
 ProgrammaticCallerPolicySelectionV1
@@ -444,7 +444,7 @@ ProgrammaticCallerPolicySelectionV1
 ```
 
 `RunExecutionMeaningDto.programmatic_caller_policy_selection` is `Disabled`
-only for historical M4 and earlier post-M4 selection versions. Every new v3 or
+only for historical M4 and earlier post-M4 selection versions. Every new
 v4 ordinary, goal-directed, verification, child, and harness run carries this
 selection, including a selection that contains only the narrow interactive
 direct-local-read baseline. `GoalRunSelectionV1`, `SubAgentDelegationSnapshotDto`,

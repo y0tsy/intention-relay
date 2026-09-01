@@ -17,8 +17,10 @@ decoding, and execution/replay/audit compatibility. It does not authorize a
 crate, schema migration, protocol frame, provider driver, scheduler, or runtime
 implementation.
 
-It preserves M3/M4 bytes and behavior. Existing records remain ordinary under
-their recorded semantics and do not acquire a future envelope.
+It preserves current-record bytes and behavior. Existing records remain
+ordinary under their recorded semantics and do not acquire a future envelope.
+The run-execution-meaning V3 record is removed; V4 is the single live record
+version ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
 
 ## Ownership
 
@@ -235,18 +237,23 @@ Every claimed executable decoder retains exact golden fixtures. Decoder removal
 is an explicit future compatibility decision. A readable record is never
 implicitly executable.
 
-## Historical M3/M4 and additive bridges
+## Current M3/M4 records and legacy removal
 
 M3/M4 `EventEnvelopeDto`, projections, snapshots, `ConfigSnapshotDto`, UUID
 `ConfigRevisionId`, queue tickets, cursors, facts, replay and provider selection
-remain byte/meaning compatible. M4 `ToolCallRecorded` remains evidence followed
+remain byte/meaning compatible. The run-execution-meaning V3 record codec and
+its golden are removed; V4 is the single live record version
+([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
+M4 `ToolCallRecorded` remains evidence followed
 by `tool_execution_unavailable`, never historical tool execution. M4 provider
 kinds remain `openrouter` and `generic-chat-completion-api`; an opaque model ID,
 including `gpt-*`, `o*` or `codex*`, never changes that fact.
 
-A later concrete consumer may define `LegacyOrdinaryRunBridgeV1` referencing
-legacy identity/source bytes and schema class. It cannot copy, normalize,
-replace or digest-reidentify those bytes; create Mandate/verifier/Skill/MCP/child/activity/profile/policy/tool-loop state; make a legacy run Mandate-executable; or be synthesized from current configuration/registry. This package creates no bridge or migration.
+No legacy bridge is defined. [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)
+removes the historical V3 record and the legacy wire-compat tests; no package
+creates or consumes a `LegacyOrdinaryRunBridgeV1` or any other legacy-version
+meaning bridge, and missing historical meaning is never synthesized from
+current configuration, registry, model name, ancestry, or live resource state.
 
 ### Common historical-version policy
 
@@ -296,10 +303,9 @@ reload remain deferred. No M4 provider behavior changes here.
 
 Future storage binds canonical bytes/digest and run/meaning reference additively
 and verifies them on read. It preserves source bytes, never uses JSON as
-canonical form, never updates canonical bytes in place, rejects future schemas
-before readiness, and exposes DTO-only outcomes rather than rows/byte buffers.
-Exact tables, migrations, field tags on wire, pages and retention remain
-deferred.
+canonical form, and never updates canonical bytes in place; it exposes
+DTO-only outcomes rather than rows/byte buffers. Exact tables, field tags on
+wire, pages and retention remain deferred.
 
 A future separately negotiated execution-meaning/Mandate protocol sends typed
 safe projections only, never raw canonical bytes. It preserves correlated
@@ -323,7 +329,7 @@ A later implementation specification must define:
 - canonical golden bytes/digests and negative kind/tag/version/field/order/
   digest/nesting/verifier vectors;
 - deterministic decode/re-encode and Linux/Windows equality;
-- M3/M4 schema-v1/v2 byte-preservation, replay and tool-denial fixtures;
+- current-record byte-stability, replay and tool-denial fixtures;
 - no-current-state-reconstruction cases across config, registry, provider/model,
   credentials, ancestry, MCP, process/kernel/bridge state;
 - capability-intersection, model-name non-routing and driver-major/minor tests;

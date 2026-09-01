@@ -15,7 +15,9 @@ Historical M3/M4 and existing ordinary meanings remain readable only under their
 recorded semantics. They never gain synthetic Mandate, verifier, Skill, MCP,
 child, activity, policy, profile, or execution-kind state. Missing historical
 meaning is never reconstructed from current configuration, registry, model
-name, ancestry, or live resource state.
+name, ancestry, or live resource state. The run-execution-meaning V3 record is
+removed; V4 is the single live record version
+([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)).
 
 ## Canonical envelope and outcomes
 
@@ -51,14 +53,18 @@ detail owned by [architecture 14](../architecture/14-run-execution-meaning-and-h
 owns canonical field tables, tags, digest/decoder rules and compatibility
 outcomes. Later packages own nested provider, tool, MCP, Skill, Goal, child,
 verifier, bridge and UI payload semantics. Provider profiles/Responses and reasoning are owned by architecture 22 and
-decision 0014; bridge implementation and decoder removal remain deferred. No old
+decision 0014. Legacy bridge definition and decoder removal are governed by
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): the
+run-execution-meaning V3 codec and golden are removed and no legacy bridge is
+defined. No old
 byte, UUID, digest, cursor, event or snapshot is rewritten by this decision.
 
 ## Evidence
 
 Future delivery requires kind/version mismatch rejection, canonical golden
-vectors, legacy decode/replay fixtures, no-current-state-reconstruction tests,
-and no-external-work-on-incompatibility proof.
+vectors for the current record version, current-record decode/replay fixtures,
+no-current-state-reconstruction tests, and no-external-work-on-incompatibility
+proof.
 
 ## Provenance
 

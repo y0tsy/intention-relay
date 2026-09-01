@@ -4,8 +4,8 @@
 )]
 
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, QueuedTurnProjectionDto, RemoveQueuedTurnCommandDto,
-    RunModeDto, RunProjectionDto, RunStartedEventDto, RunStatusDto, SessionCreatedEventDto,
+    CreateSessionCommandDto, QueuedTurnProjectionDto, RemoveQueuedTurnCommandDto, RunModeDto,
+    RunProjectionDto, RunStartedEventDto, RunStatusDto, SessionCreatedEventDto,
     SessionProjectionDto, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_types::{
@@ -49,7 +49,7 @@ fn m3_sessions_require_stable_workspace_identity_in_commands_events_and_projecti
         RunModeDto::Build,
         fixture_time(),
     );
-    assert_eq!(created.workspace_id(), Some(workspace_id));
+    assert_eq!(created.workspace_id(), workspace_id);
     let projection = SessionProjectionDto::new(
         project_id,
         session_id,
@@ -65,20 +65,6 @@ fn m3_sessions_require_stable_workspace_identity_in_commands_events_and_projecti
     assert_eq!(projection.workspace_id(), workspace_id);
     let remove = RemoveQueuedTurnCommandDto::new(session_id, TurnId::new());
     assert_eq!(remove.session_id(), session_id);
-}
-
-#[test]
-fn legacy_session_created_wire_is_explicitly_distinguished_without_inventing_workspace_identity() {
-    let legacy_root = serde_json::to_string(workspace_root().as_str())
-        .expect("native fixture root serializes for the wire fixture");
-    let legacy = format!(
-        "{{\"kind\":\"session_created\",\"data\":{{\"project_id\":\"33333333-3333-4333-8333-333333333333\",\"session_id\":\"22222222-2222-4222-8222-222222222222\",\"workspace_root\":{legacy_root},\"mode\":\"plan\",\"occurred_at\":1}}}}"
-    );
-    let event: DomainEventDto =
-        serde_json::from_str(&legacy).expect("legacy event decodes deliberately");
-    assert!(
-        matches!(event, DomainEventDto::SessionCreated(value) if value.workspace_id().is_none())
-    );
 }
 
 #[test]

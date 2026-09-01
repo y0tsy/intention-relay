@@ -1505,8 +1505,7 @@ impl RunStartedEventDto {
 pub struct SessionCreatedEventDto {
     project_id: ProjectId,
     session_id: SessionId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workspace_id: Option<WorkspaceId>,
+    workspace_id: WorkspaceId,
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     occurred_at: TimestampDto,
@@ -1521,8 +1520,7 @@ impl<'de> Deserialize<'de> for SessionCreatedEventDto {
         struct RawSessionCreatedEventDto {
             project_id: ProjectId,
             session_id: SessionId,
-            #[serde(default)]
-            workspace_id: Option<WorkspaceId>,
+            workspace_id: WorkspaceId,
             workspace_root: WorkspaceRootDto,
             mode: RunModeDto,
             occurred_at: TimestampDto,
@@ -1553,7 +1551,7 @@ impl SessionCreatedEventDto {
         Self {
             project_id,
             session_id,
-            workspace_id: Some(workspace_id),
+            workspace_id,
             workspace_root,
             mode,
             occurred_at,
@@ -1572,9 +1570,9 @@ impl SessionCreatedEventDto {
         self.session_id
     }
 
-    /// Returns the M3 workspace identity, or `None` for a decoded M1/M2 event.
+    /// Returns the mandatory workspace identity.
     #[must_use]
-    pub const fn workspace_id(&self) -> Option<WorkspaceId> {
+    pub const fn workspace_id(&self) -> WorkspaceId {
         self.workspace_id
     }
 

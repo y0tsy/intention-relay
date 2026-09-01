@@ -74,7 +74,9 @@ credentials, paths, display data, readiness, and current state.
 
 ## Execution-meaning records
 
-`run-execution-meaning-v3` has field tags 1–10; v4 has tags 1–11 and adds
+The historical `run-execution-meaning-v3` field table (tags 1–10) is removed
+by [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md); the single
+live record is `run-execution-meaning-v4`, which has tags 1–11 and adds
 `agent_activity_selection` at tag 11. Envelope tags 1–6 are, in order,
 `execution_kind`, `meaning_record_tag`, `meaning_record_version`,
 `canonicalization_version`, `canonical_meaning_bytes`, and
@@ -205,7 +207,7 @@ unless the Required column says otherwise. No table cell spans multiple lines.
 | `run-execution-meaning` (0x0101) | 4 | 11 | agent_activity_selection | Record | Yes | v4-only addition; nested `AgentActivitySelectionV1` canonical record (0x0202) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 1 | execution_kind | U64 | Yes | Closed `ExecutionKind`: Ordinary (0), Mandate (1), VerifierMandate (2) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 2 | meaning_record_tag | U64 | Yes | Canonical record tag, `0x0101` |
-| `run-execution-meaning envelope` (0x0102) | 1 | 3 | meaning_record_version | U64 | Yes | 3 or 4 |
+| `run-execution-meaning envelope` (0x0102) | 1 | 3 | meaning_record_version | U64 | Yes | Single live record version 4 (v3 removed by ADR 0038) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 4 | canonicalization_version | U64 | Yes | 1 |
 | `run-execution-meaning envelope` (0x0102) | 1 | 5 | canonical_meaning_bytes | Bytes | Yes | Exact canonical meaning record bytes |
 | `run-execution-meaning envelope` (0x0102) | 1 | 6 | canonical_meaning_digest | Digest | Yes | SHA-256 of field 5; mismatch rejects with `DigestMismatch` |
