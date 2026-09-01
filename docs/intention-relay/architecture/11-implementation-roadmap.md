@@ -443,7 +443,9 @@ activated by earlier slices in this order:
    provider-native preservation controls; server-side parser setup; session
    defaults and per-turn/fork overrides; unavailable-queue promotion and
    reconciliation; `provider_profiles_v1`; pending-removal and degraded
-   recovery; and the provider reasoning/catalog surface.
+   recovery; and the provider reasoning/catalog surface. **Activated by
+   [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); Slice 2 is
+   complete.**
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
@@ -474,6 +476,18 @@ inside its slice, each with its own contract, transaction, and outcome test.
   classification; promotion/reconciliation limits; catalog acceptance and
   recovery; control-plane safe-projection (no raw TOML, credentials, or
   resources cross public or durable boundaries);
+  **implemented (ADR 0037); evidence anchors:**
+  `crates/intention-domain/tests/m5_control_plane_canonical.rs`,
+  `crates/intention-domain/tests/m5_control_plane_rejections.rs`,
+  `crates/intention-domain/tests/m5_session_selection_overrides.rs`,
+  `crates/intention-protocol/tests/control_plane_contracts.rs`,
+  `crates/intention-config/tests/m5_control_plane_config.rs`,
+  `crates/intention-application/tests/m5_catalog_runtime.rs`,
+  `crates/intention-application/tests/m5_control_plane_runtime.rs`,
+  `crates/intention-client/tests/control_plane_client.rs`,
+  `crates/intention-client/tests/session_selection_client.rs`,
+  `crates/intention-model/tests/m6_reasoning_surface.rs`, and the schema-4
+  tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`;
 - slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
   conclusion bounds; class resolution; corridor admission and reservation
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
@@ -492,16 +506,21 @@ inside its slice, each with its own contract, transaction, and outcome test.
   quality-policy change;
 - M3/M4 startup-only configuration, recorded revisions, persisted run
   snapshots, queue tickets, sessions, runs, events, and bytes remain
-  authoritative and unchanged;
+  authoritative and unchanged; Slice 2 adds SQLite schema 4 additively with
+  M3/M4 rows byte-preserved (schema-4 tests in
+  `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`);
 - health, discovery, and pricing create no RunId, reason, lifecycle
   transition, scheduler candidate, tool permission, child edge, verifier
   authority, MCP capability, bridge grant, kernel epoch, context projection,
-  branch, or reconciliation result;
+  branch, or reconciliation result (non-authority fixtures in
+  `crates/intention-application/tests/m5_control_plane_runtime.rs` and
+  `crates/intention-client/tests/control_plane_client.rs`);
 - applicable crates meet their declared coverage tiers without excluding
   policy or boundary logic; every activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, migration behavior, and evidence together.
+  Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices 3-4 remain.
 
 ### Exit criteria
 

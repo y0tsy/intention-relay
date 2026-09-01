@@ -9,16 +9,21 @@
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
 - Reconciliation topics: `PRV-001..012, RSN-001..020`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (catalog, selection, capability-taxonomy, reasoning-history, legacy-bridge, header/preservation/parser contracts; `responses` driver remains not activated).
 
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for future provider kinds, profiles and catalog lifecycle,
+**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
+owner for provider kinds, profiles and catalog lifecycle,
 provider/model-capability selections, endpoint and credential-transport
 semantics, driver-contract compatibility, provider-local availability, and
-normalized textual reasoning. It does not authorize a crate, SDK, parser,
-storage migration, wire implementation, catalog database, profile UI, or
-production provider behavior.
+normalized textual reasoning. Slice 2 activates the catalog lifecycle,
+provider selection and capability resolution, the normalized reasoning
+surface, the typed dialect decoder contract, the legacy M4 bridge, typed
+header policy validation, preservation controls, and parser configuration. It
+does not authorize a `responses` SDK/driver, remote continuation, live wire
+header injection (`SafeHeader`), a user-kind parser, provider-native live
+extraction beyond declared paths, or production provider behavior beyond the
+activated Slice 2 contracts.
 
 It applies only to future Mandate and VerifierMandate execution. M3/M4 bytes,
 IDs, UUID `ConfigRevisionId` values, provider kinds, configuration snapshots,
@@ -499,13 +504,15 @@ explicit typed textual history contract; provider-native `preserve_thinking`,
 `thinking.keep`, remote continuation identifiers, and non-fitting
 assistant-history requirements are excluded. Arbitrary authentication headers,
 provider-native preservation controls, and server-side parser setup are
-accepted post-M5 future directions under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
-executed in Milestone 5+: a closed code-owned typed header policy, explicit
-typed preservation controls under the local-history-first law (never remote
-continuation), and explicit typed server-side parser configuration where a
-closed descriptor declares it (never raw JSON/templates and never unbounded
-parsing). They are not activated here. The current `async-openai` core
+accepted post-M5 directions under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and are
+activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md):
+a closed code-owned typed header policy, explicit typed preservation controls
+under the local-history-first law (never remote continuation), and explicit
+typed server-side parser configuration where a closed descriptor declares it
+(never raw JSON/templates and never unbounded parsing). Live wire header
+injection (`SafeHeader`) and provider-native live extraction beyond the
+declared paths remain not activated. The current `async-openai` core
 Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified
 private typed decoder per closed descriptor. The descriptor registry never
@@ -617,13 +624,16 @@ meaning and gains no synthetic category, summary, or history.
 ## Dependencies, non-goals, and evidence
 
 This document depends on architectures 13, 14, 15, 16, and 21 plus decisions
-0001--0013. It does not define a Responses SDK/driver, user-kind parser, catalog
-database, wire tags, migrations, profile picker/editor, credential entry/keychain/
-rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
-structured output, arbitrary headers, plugin drivers, remote continuation,
-provider-side parser administration, while architecture 23 owns forks and lineage,
-architecture 29 owns session defaults/overrides and the profiles protocol,
-UI, Cargo, Makefile/CI, or production activation.
+0001--0013. It does not define a Responses SDK/driver, user-kind parser,
+profile picker/editor presentation, credential entry/keychain, telemetry,
+multimodal or structured output, plugin drivers, or remote continuation; the
+catalog database, schema-4 migrations, credential rotation, health checks,
+discovery, pricing, controlled live reload, typed header policy, and
+server-side parser configuration are activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)). Architecture
+23 owns forks and lineage, architecture 29 owns session defaults/overrides and
+the profiles protocol, and UI, Cargo, Makefile/CI, or production activation
+beyond the activated Slice 2 contracts remain outside this document.
 
 Semantic content inspection of reasoning or provider content is an accepted
 post-M5 future direction under
@@ -635,12 +645,16 @@ The profile picker/editor, credential rotation, health test, discovery,
 pricing, telemetry, and live reload items are accepted post-M5 directions
 owned by [architecture 25](25-configuration-provider-control-plane.md) and
 activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
-they are not activated here.
+they are activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md).
+The profile picker/editor presentation and telemetry remain not activated.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`, `make
-verify`, and Linux/Windows CI. Required evidence includes:
+verify`, and Linux/Windows CI.
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
+activating specification: it declares the exact test targets, the schema-4
+migration, and the per-direction evidence anchors. Required evidence includes:
 
 - IRCR canonical positive/negative goldens and cross-platform digests for
   descriptor/profile/catalog/selection/capability/driver records;

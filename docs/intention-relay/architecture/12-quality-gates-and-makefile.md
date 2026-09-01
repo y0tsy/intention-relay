@@ -264,6 +264,28 @@ authorize an unimplemented focused gate.
 
 A high coverage percentage, passing lint, or successful compilation never replaces a required end-to-end outcome scenario.
 
+### M5+ Slice 2 test targets and evidence requirements
+
+The M5+ Slice 2 control-plane activation
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) adds the
+following integration test targets to the machine-readable policy:
+`intention-domain` `m5_control_plane_canonical`, `m5_control_plane_rejections`,
+`m5_session_selection_overrides`; `intention-protocol`
+`control_plane_contracts`; `intention-config` `m5_control_plane_config`;
+`intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`;
+`intention-client` `control_plane_client`, `session_selection_client`;
+`intention-model` `m6_reasoning_surface`. `intention-storage-sqlite` adds no
+new integration file; the schema-4 tests live inside the existing
+`sqlite_contracts` target. No new CI job, Makefile target, crate, dependency,
+feature profile, coverage tier, or exclusion is added: the existing check count
+and the `make quick`, `make verify`, `docs-check`, and `architecture` gates
+remain the Slice 2 acceptance gate. Slice 2 required evidence is the reload
+transaction fault-injection, rotation no-frozen-meaning and fail-closed
+fixtures, health/discovery/pricing non-authority fixtures, promotion/
+reconciliation limit fixtures, catalog acceptance/recovery fixtures,
+control-plane safe-projection fixtures, and M3/M4 byte-preservation fixtures
+anchored in ADR 0037.
+
 ### M4 controller charter and closure record
 
 [`docs/intention-relay/m4.md`](../m4.md) records the controller-owned M4
@@ -410,7 +432,13 @@ coverage tier, feature combination, protocol implementation, migration, quality
 tool, or Makefile target. A later activating change must declare exact provider
 owners, dependencies, test targets, coverage/features, storage/wire policy,
 expected-failure architecture fixtures, redaction evidence, and Linux/Windows
-outcomes atomically with production work.
+outcomes atomically with production work. The M5+ Slice 2 control-plane
+activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) is
+that activating change for the provider catalog, selection, capability
+taxonomy, reasoning surface, legacy bridge, header/preservation/parser
+contracts, and the configuration/provider control-plane cluster; it declares
+the exact test targets above and the schema-4 storage/wire policy, and passes
+the standard gates.
 
 The post-M4 Session branching and regeneration package is documentation-only. It
 activates no crate, test target, coverage tier, feature profile, storage/wire
