@@ -228,12 +228,11 @@ fn m3_database_migrates_to_cursor_zero_snapshots_without_synthetic_facts() {
 #[test]
 fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
     // Stamps PRAGMA user_version = 3 on the exact production schema-3 surface
-    // (built from the crate's migration source of truth), so the reopen
-    // exercises the schema-3 path without a migration while proving every
-    // pre-existing M3/M4 row in all fourteen tables is byte-identical. The
-    // fixture enables foreign keys so the seeded rows prove the production
-    // constraints (FKs, UNIQUEs, CHECKs, and the partial active-run index)
-    // directly against SQLite.
+    // (built from the crate's migration source of truth), so the reopen runs
+    // the additive schema-4 migration while proving every pre-existing M3/M4
+    // row in all fourteen tables is byte-identical. The fixture enables foreign
+    // keys so the seeded rows prove the production constraints (FKs, UNIQUEs,
+    // CHECKs, and the partial active-run index) directly against SQLite.
     let directory = TempDir::new().expect("temporary directory exists");
     let path = directory.path().join("legacy-v3.sqlite");
     let connection = sqlite::Connection::open(&path).expect("legacy database opens");
@@ -436,7 +435,7 @@ fn slice1_schema_three_reopen_preserves_all_m3_m4_bytes() {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("schema version reads");
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let mut after = Vec::new();
     for table in tables {
         after.extend(capture_rows(&connection, table));

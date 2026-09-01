@@ -5,9 +5,10 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto, RemoveQueuedTurnCommandDto,
-    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
-    RunStatusDto, SessionProjectionDto,
+    CreateSessionCommandDto, DomainEventDto, LegacyM4SelectionBindingDto, ModelRunFactInputDto,
+    ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
+    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunProjectionDto,
+    RunReplayDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, QueuePositionDto, RunId,
@@ -248,6 +249,7 @@ pub struct AcceptUserTurnInputDto {
     proposed_run_id: RunId,
     config_snapshot: ConfigSnapshotDto,
     occurred_at: TimestampDto,
+    selection: Option<ProviderSelectionV1>,
 }
 
 impl AcceptUserTurnInputDto {
@@ -283,7 +285,21 @@ impl AcceptUserTurnInputDto {
             proposed_run_id,
             config_snapshot,
             occurred_at,
+            selection: None,
         })
+    }
+    /// Attaches the credential-free provider selection bound to this turn's
+    /// fresh run, committed in the same durable transaction as the run and its
+    /// `RunStarted` event when the turn starts immediately.
+    #[must_use]
+    pub fn with_provider_selection(mut self, selection: ProviderSelectionV1) -> Self {
+        self.selection = Some(selection);
+        self
+    }
+    /// Returns the credential-free provider selection bound to this turn, if any.
+    #[must_use]
+    pub const fn provider_selection(&self) -> Option<&ProviderSelectionV1> {
+        self.selection.as_ref()
     }
     /// Returns the owning session.
     #[must_use]
@@ -951,4 +967,835 @@ pub trait StorageRepositoryDto {
     /// Returns a validation or conflict error when the revision cannot be
     /// recorded, or an unavailable error when durable storage fails.
     fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()>;
+
+    /// Loads every persisted credential-free configuration revision with its
+    /// original persisted snapshot bytes.
+    ///
+    /// The snapshot bytes are the exact persisted JSON document, returned
+    /// unchanged so historical replays never rewrite legacy bytes. `snapshot`
+    /// carries the decoded credential-free snapshot when the persisted bytes
+    /// decode and validate, and `None` when the historical record is
+    /// unsupported or malformed; `snapshot_bytes_digest` always covers the
+    /// original bytes. Revisions are returned in deterministic order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the persisted revisions cannot be read.
+    fn load_config_revision_records(&self) -> DtoResult<Vec<PersistedConfigRevisionRecordDto>> {
+        Err(ErrorDto::unavailable(
+            "config_revision_records_unavailable",
+            "persisted configuration revision records are unavailable",
+        ))
+    }
+}
+
+/// One persisted credential-free configuration revision and its original bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PersistedConfigRevisionRecordDto {
+    /// The immutable persisted configuration revision identity.
+    pub revision_id: String,
+    /// The digest over the exact original persisted snapshot bytes.
+    pub snapshot_bytes_digest: String,
+    /// The decoded credential-free snapshot, or `None` when the historical
+    /// bytes are unsupported or malformed.
+    pub snapshot: Option<ConfigSnapshotDto>,
+}
+
+// ============================================================================
+// Schema-4 control-plane DTOs and repository contracts.
+//
+// These contracts are DTO-only: no connection, SQL, path, or closure crosses
+// the boundary. Record JSON columns are opaque safe strings produced and
+// consumed by the backend; credentials never enter any schema-4 column.
+// ============================================================================
+
+/// The durable provider catalog lifecycle status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderCatalogStatusDto {
+    /// No catalog has been accepted yet.
+    Preparing,
+    /// The active catalog is fully committed and serving.
+    Active,
+    /// A removal candidate is pending against the active catalog.
+    PendingRemoval,
+    /// The active catalog requires explicit activation recovery.
+    ActivationRecoveryRequired,
+}
+
+/// The durable provider catalog state singleton.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogStateDto {
+    /// The last accepted catalog revision, if any.
+    pub active_catalog_revision_id: Option<u64>,
+    /// The prepared-but-not-accepted candidate revision, if any.
+    pub candidate_catalog_revision_id: Option<u64>,
+    /// The closed lifecycle status.
+    pub status: ProviderCatalogStatusDto,
+    /// The active default profile id, if any.
+    pub active_default_profile_id: Option<String>,
+    /// The prepared candidate handle, if any.
+    pub candidate_handle: Option<String>,
+    /// The safe degraded reason, if any.
+    pub degraded_reason: Option<String>,
+    /// The last state update time in Unix seconds.
+    pub updated_at: i64,
+}
+
+/// The readiness of one projected provider profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderReadinessDto {
+    Ready,
+    Disabled,
+    Unavailable,
+}
+
+/// One safe projected provider profile entry in a catalog projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogProfileEntryDto {
+    pub profile_id: String,
+    pub profile_revision_id: String,
+    pub kind_id: String,
+    pub kind_descriptor_revision_id: String,
+    pub display_name: Option<String>,
+    pub enabled: bool,
+    pub credential_configured: bool,
+    pub readiness: ProviderReadinessDto,
+    /// The opaque safe projection JSON produced by the backend.
+    pub safe_projection_json: String,
+}
+
+/// One bounded page of a provider catalog projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogPageDto {
+    pub entries: Vec<ProviderCatalogProfileEntryDto>,
+    /// The opaque next-page token; `None` when the page is the last.
+    pub next_token: Option<String>,
+    pub has_more: bool,
+}
+
+/// A provider profile revision plus its resolved safe projection values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderProfileCandidateDto {
+    /// The credential-free domain profile revision identity.
+    pub profile: ProviderProfileRevisionV1,
+    pub declared_model_capability_subset: Vec<String>,
+    pub resolved_reasoning_policy: String,
+    pub effective_execution_policy: String,
+    pub effective_loopback_policy_or_not_applicable: String,
+    pub display_name: Option<String>,
+    pub enabled: bool,
+    pub credential_configured: bool,
+    pub readiness: ProviderReadinessDto,
+}
+
+/// A provider kind descriptor revision plus its explicit revision identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderKindDescriptorCandidateDto {
+    pub descriptor_revision_id: String,
+    pub descriptor: ProviderKindDescriptorRevisionV1,
+}
+
+/// Input appending one provider kind descriptor revision to catalog history.
+///
+/// Appending is the preparation step: it also marks the candidate revision in
+/// the durable catalog state and records one `ProviderCatalogCandidatePrepared`
+/// audit per operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendProviderKindDescriptorRevisionInputDto {
+    pub descriptor_revision_id: String,
+    pub descriptor: ProviderKindDescriptorRevisionV1,
+    pub catalog_revision_id: u64,
+    pub accepted_at: i64,
+    pub operation_id: String,
+}
+
+/// Input appending one provider profile revision to catalog history.
+///
+/// Appending is the preparation step: it also marks the candidate revision in
+/// the durable catalog state and records one `ProviderCatalogCandidatePrepared`
+/// audit per operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendProviderProfileRevisionInputDto {
+    pub profile: ProviderProfileCandidateDto,
+    pub catalog_revision_id: u64,
+    pub accepted_at: i64,
+    pub operation_id: String,
+}
+
+/// Input atomically accepting one prepared provider catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptProviderCatalogInputDto {
+    pub catalog_revision_id: u64,
+    pub candidate_handle: String,
+    pub kind_descriptors: Vec<ProviderKindDescriptorCandidateDto>,
+    pub profiles: Vec<ProviderProfileCandidateDto>,
+    pub default_profile_id: String,
+    pub accepted_at: i64,
+    pub operation_id: String,
+}
+
+/// Input rejecting one prepared provider catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RejectProviderCatalogCandidateInputDto {
+    pub catalog_revision_id: u64,
+    pub candidate_handle: String,
+    pub rejected_at: i64,
+    pub operation_id: String,
+}
+
+/// Input expiring one prepared provider catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpireProviderCatalogCandidateInputDto {
+    pub catalog_revision_id: u64,
+    pub expired_at: i64,
+    pub operation_id: String,
+}
+
+/// Input loading one bounded page of the active provider catalog projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadProviderCatalogPageInputDto {
+    /// The opaque next-page token from a prior page, if any.
+    pub token: Option<String>,
+    /// The maximum number of entries to return.
+    pub limit: u64,
+}
+
+/// The durable session provider default selection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionProviderDefaultDto {
+    pub session_id: SessionId,
+    pub profile_id: String,
+    pub projection_revision: u64,
+    pub last_operation_id: String,
+    pub updated_at: i64,
+}
+
+/// Input setting one session provider default with optimistic concurrency.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetSessionProviderProfileInputDto {
+    pub session_id: SessionId,
+    pub profile_id: String,
+    pub expected_projection_revision: u64,
+    pub operation_id: String,
+    pub updated_at: i64,
+}
+
+/// The outcome of one session provider default update.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetSessionProviderProfileOutcomeDto {
+    /// Whether the durable default changed.
+    pub changed: bool,
+    /// The resulting optimistic projection revision.
+    pub projection_revision: u64,
+}
+
+/// Input atomically committing one configuration reload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitConfigurationReloadInputDto {
+    pub snapshot: ConfigSnapshotDto,
+    pub operation_id: String,
+    pub reloaded_at: i64,
+}
+
+/// Input persisting the resolved provider selection of one fresh run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PersistResolvedRunProviderSelectionInputDto {
+    pub session_id: SessionId,
+    pub run_id: RunId,
+    pub selection: ProviderSelectionV1,
+    pub occurred_at: i64,
+}
+
+/// The closed state of one unavailable provider queue entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnavailableQueueStateDto {
+    Queued,
+    Terminalized,
+    Promoted,
+}
+
+/// One durable unavailable-provider queue entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnavailableRunQueueEntryDto {
+    pub queue_id: i64,
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub unavailable_reason: String,
+    pub first_unavailable_at: i64,
+    pub promotion_attempts: u64,
+    pub state: UnavailableQueueStateDto,
+    pub last_operation_id: Option<String>,
+    pub selection_json: String,
+}
+
+/// Input enqueueing one unavailable provider run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EnqueueUnavailableRunInputDto {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub unavailable_reason: String,
+    pub first_unavailable_at: i64,
+    pub operation_id: String,
+    pub selection_json: String,
+}
+
+/// Input loading one bounded FIFO page of the unavailable queue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadUnavailableQueuePageInputDto {
+    pub after_queue_id: Option<i64>,
+    pub limit: u64,
+}
+
+/// Input promoting up to a bounded number of queued unavailable runs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromoteUnavailableRunsInputDto {
+    pub now: i64,
+    pub operation_id: String,
+    pub max: u64,
+}
+
+/// The outcome of one unavailable-run promotion pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromoteUnavailableRunsOutcomeDto {
+    pub promoted: Vec<UnavailableRunQueueEntryDto>,
+    /// Whether a reconciliation marker was created because the queue was exhausted.
+    pub reconciliation_marker_created: bool,
+}
+
+/// Input reconciling up to a bounded number of queued unavailable runs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconcileUnavailableQueueInputDto {
+    pub now: i64,
+    pub operation_id: String,
+    pub max: u64,
+}
+
+/// The outcome of one unavailable-queue reconciliation pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconcileUnavailableQueueOutcomeDto {
+    /// Every queued entry inspected in FIFO order.
+    pub processed: Vec<UnavailableRunQueueEntryDto>,
+    /// The entries whose runs reached a terminal state and were marked terminalized.
+    pub terminalized: Vec<UnavailableRunQueueEntryDto>,
+}
+
+/// One durable unavailable-queue reconciliation marker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QueueReconciliationMarkerDto {
+    pub marker_id: i64,
+    pub session_id: SessionId,
+    pub created_at: i64,
+    pub reason: String,
+    pub next_page_cursor: Option<String>,
+    pub resolved_at: Option<i64>,
+}
+
+/// One credential-free provider usage event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderUsageEventInputDto {
+    pub run_id: RunId,
+    pub usage_event_id: String,
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub model_id: String,
+    pub input_units: u64,
+    pub output_units: u64,
+    pub reasoning_units: u64,
+    pub occurred_at: i64,
+    pub usage_json: String,
+}
+
+/// Input recording a batch of provider usage events for one usage period.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordProviderUsageInputDto {
+    pub session_id: SessionId,
+    pub usage_period_start: i64,
+    pub usage_period_end: i64,
+    pub recorded_at: i64,
+    pub events: Vec<ProviderUsageEventInputDto>,
+}
+
+/// One durable provider usage aggregate for a usage period.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderUsageAggregateDto {
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub model_id: String,
+    pub usage_period_start: i64,
+    pub usage_period_end: i64,
+    pub request_count: u64,
+    pub input_units: u64,
+    pub output_units: u64,
+    pub reasoning_units: u64,
+    pub last_run_id: Option<RunId>,
+    pub updated_at: i64,
+}
+
+/// The closed status of one provider catalog removal candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderCatalogRemovalStatusDto {
+    Pending,
+    Accepted,
+    Rejected,
+    Expired,
+}
+
+/// One durable provider catalog removal candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogRemovalCandidateDto {
+    pub candidate_handle: String,
+    pub candidate_catalog_revision_id: u64,
+    pub active_catalog_revision_id: u64,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub source_recheck: String,
+    pub status: ProviderCatalogRemovalStatusDto,
+    pub candidate_json: String,
+    pub operation_id: Option<String>,
+    pub completed_at: Option<i64>,
+}
+
+/// Input creating one provider catalog removal candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateProviderCatalogRemovalCandidateInputDto {
+    pub candidate_handle: String,
+    pub candidate_catalog_revision_id: u64,
+    pub active_catalog_revision_id: u64,
+    pub created_at: i64,
+    pub source_recheck: String,
+    pub candidate_json: String,
+    pub operation_id: String,
+}
+
+/// Input accepting one pending provider catalog removal candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptProviderCatalogRemovalInputDto {
+    pub candidate_handle: String,
+    pub accepted_at: i64,
+    pub operation_id: String,
+}
+
+/// Input rejecting one pending provider catalog removal candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RejectProviderCatalogRemovalInputDto {
+    pub candidate_handle: String,
+    pub rejected_at: i64,
+    pub operation_id: String,
+}
+
+/// Input expiring overdue pending provider catalog removal candidates.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpireProviderCatalogRemovalCandidateInputDto {
+    pub now: i64,
+    pub operation_id: String,
+}
+
+/// The closed admission state of one held recovered run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HeldRunAdmissionStateDto {
+    Held,
+    Admitted,
+    Rejected,
+}
+
+/// One durable held recovered run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HeldRecoveredRunDto {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub held_at: i64,
+    pub reason: String,
+    pub admission_state: HeldRunAdmissionStateDto,
+    pub admission_operation_id: Option<String>,
+    pub admitted_at: Option<i64>,
+}
+
+/// Input marking one recovered run as held pending explicit admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarkRecoveredRunHeldInputDto {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub held_at: i64,
+    pub operation_id: String,
+}
+
+/// Input admitting one held recovered run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdmitHeldRecoveredRunInputDto {
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub admitted_at: i64,
+    pub operation_id: String,
+}
+
+/// The closed validation status of one legacy M4 selection binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyBindingValidationStatusDto {
+    Validated,
+    Corrupt,
+}
+
+/// Input appending one deterministic legacy M4 selection binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendLegacyM4SelectionBindingInputDto {
+    pub config_revision_id: String,
+    /// The valid legacy binding, or `None` when the historical selection is
+    /// unsupported or malformed and must be recorded as corrupt.
+    pub binding: Option<LegacyM4SelectionBindingDto>,
+    pub snapshot_bytes_digest: String,
+    pub validation_status: LegacyBindingValidationStatusDto,
+    pub created_at: i64,
+}
+
+/// One durable legacy M4 selection binding record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LegacyM4SelectionBindingRecordDto {
+    pub config_revision_id: String,
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub kind_id: String,
+    pub kind_descriptor_revision_id: String,
+    pub provider_driver_contract_revision: String,
+    pub binding_digest: String,
+    pub snapshot_bytes_digest: String,
+    pub validation_status: LegacyBindingValidationStatusDto,
+    pub binding_json: String,
+    pub created_at: i64,
+}
+
+/// DTO-only repository contract for the provider catalog control plane.
+pub trait ProviderCatalogRepositoryDto {
+    /// Appends one provider kind descriptor revision to append-only catalog history.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the descriptor digest is already bound to
+    /// a different kind identity, or an unavailable error when storage fails.
+    fn append_provider_kind_descriptor_revision(
+        &self,
+        input: AppendProviderKindDescriptorRevisionInputDto,
+    ) -> DtoResult<()>;
+    /// Appends one provider profile revision to append-only catalog history.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the profile digest is already bound to a
+    /// different profile identity, or an unavailable error when storage fails.
+    fn append_provider_profile_revision(
+        &self,
+        input: AppendProviderProfileRevisionInputDto,
+    ) -> DtoResult<()>;
+    /// Loads the durable provider catalog state singleton.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the state cannot be read.
+    fn load_provider_catalog_status(&self) -> DtoResult<ProviderCatalogStateDto>;
+    /// Loads one bounded page of the active provider catalog projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an unusable token or limit, or an
+    /// unavailable error when the projection cannot be read.
+    fn load_provider_catalog_page(
+        &self,
+        input: LoadProviderCatalogPageInputDto,
+    ) -> DtoResult<ProviderCatalogPageDto>;
+    /// Atomically accepts one prepared provider catalog candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the candidate revision does not match the
+    /// prepared state, or an unavailable error when the atomic commit fails.
+    fn accept_provider_catalog(&self, input: AcceptProviderCatalogInputDto) -> DtoResult<()>;
+    /// Rejects one prepared provider catalog candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found or conflict error when the candidate is not the
+    /// prepared candidate, or an unavailable error when storage fails.
+    fn reject_provider_catalog_candidate(
+        &self,
+        input: RejectProviderCatalogCandidateInputDto,
+    ) -> DtoResult<()>;
+    /// Expires one prepared provider catalog candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found or conflict error when the candidate is not the
+    /// prepared candidate, or an unavailable error when storage fails.
+    fn expire_provider_catalog_candidate(
+        &self,
+        input: ExpireProviderCatalogCandidateInputDto,
+    ) -> DtoResult<()>;
+    /// Loads the full accepted provider catalog material for the active
+    /// catalog: every kind descriptor revision and profile revision plus the
+    /// active default profile id. This is the startup reconstruction surface
+    /// for the private registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_not_active` when no active catalog is
+    /// committed, or an unavailable error when the material cannot be read.
+    fn load_provider_catalog_material(&self) -> DtoResult<ProviderCatalogMaterialDto> {
+        Err(ErrorDto::unavailable(
+            "provider_catalog_material_unavailable",
+            "the accepted provider catalog material is unavailable",
+        ))
+    }
+}
+
+/// The full accepted provider catalog material for private-registry
+/// reconstruction at startup. Credential-free by construction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogMaterialDto {
+    /// The committed active catalog revision.
+    pub catalog_revision_id: u64,
+    /// The active default profile id, when one exists.
+    pub default_profile_id: Option<String>,
+    /// Every kind descriptor revision accepted with the active catalog.
+    pub kind_descriptors: Vec<ProviderKindDescriptorCandidateDto>,
+    /// Every profile revision accepted with the active catalog.
+    pub profiles: Vec<ProviderProfileCandidateDto>,
+}
+
+/// DTO-only repository contract for atomic configuration reloads.
+pub trait ConfigurationReloadRepositoryDto {
+    /// Atomically commits one configuration reload: the candidate snapshot,
+    /// its audit row, and the active state update in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation or conflict error when the snapshot cannot be
+    /// persisted, or an unavailable error when the atomic commit fails.
+    fn commit_configuration_reload(
+        &self,
+        input: CommitConfigurationReloadInputDto,
+    ) -> DtoResult<()>;
+}
+
+/// DTO-only repository contract for session provider defaults.
+pub trait SessionProviderDefaultsRepositoryDto {
+    /// Loads the durable provider profile default for one session, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the default cannot be read.
+    fn get_session_provider_profile(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<Option<SessionProviderDefaultDto>>;
+    /// Sets the durable provider profile default for one session with
+    /// optimistic projection-revision concurrency and idempotent operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the expected projection revision is stale
+    /// or the operation already bound a different profile, or an unavailable
+    /// error when storage fails.
+    fn set_session_provider_profile(
+        &self,
+        input: SetSessionProviderProfileInputDto,
+    ) -> DtoResult<SetSessionProviderProfileOutcomeDto>;
+}
+
+/// DTO-only repository contract for resolved run provider selections.
+pub trait ProviderSelectionRepositoryDto {
+    /// Persists the resolved provider selection of one fresh run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the run already bound a different
+    /// selection, or an unavailable error when storage fails.
+    fn persist_resolved_run_provider_selection(
+        &self,
+        input: PersistResolvedRunProviderSelectionInputDto,
+    ) -> DtoResult<()>;
+    /// Loads the persisted resolved provider selection of one run, if any.
+    ///
+    /// Returns `None` when the run has no persisted selection or the supplied
+    /// session does not own the run.
+    ///
+    /// # Errors
+    ///
+    /// Returns `storage_decode_failed` when the persisted record is malformed,
+    /// or an unavailable error when storage cannot be read.
+    fn load_resolved_run_provider_selection(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<Option<ProviderSelectionV1>>;
+}
+
+/// DTO-only repository contract for the unavailable-provider queue.
+pub trait UnavailableQueueRepositoryDto {
+    /// Enqueues one unavailable provider run idempotently.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when storage fails.
+    fn enqueue_unavailable_run(&self, input: EnqueueUnavailableRunInputDto) -> DtoResult<()>;
+    /// Loads one bounded FIFO page of queued unavailable runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an unusable limit, or an unavailable
+    /// error when the queue cannot be read.
+    fn load_unavailable_queue_page(
+        &self,
+        input: LoadUnavailableQueuePageInputDto,
+    ) -> DtoResult<Vec<UnavailableRunQueueEntryDto>>;
+    /// Promotes up to `max` queued unavailable runs in FIFO order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the promotion cannot be committed.
+    fn promote_unavailable_runs(
+        &self,
+        input: PromoteUnavailableRunsInputDto,
+    ) -> DtoResult<PromoteUnavailableRunsOutcomeDto>;
+    /// Reconciles up to `max` queued unavailable runs against their durable
+    /// run states, marking terminalized entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the reconciliation cannot be committed.
+    fn reconcile_unavailable_queue(
+        &self,
+        input: ReconcileUnavailableQueueInputDto,
+    ) -> DtoResult<ReconcileUnavailableQueueOutcomeDto>;
+    /// Loads the latest unresolved reconciliation marker for one session, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the marker cannot be read.
+    fn load_queue_reconciliation_marker(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<Option<QueueReconciliationMarkerDto>>;
+}
+
+/// DTO-only repository contract for provider usage aggregates and facts.
+pub trait ProviderUsageRepositoryDto {
+    /// Records a batch of provider usage events with stable event identity and
+    /// no double counting, and updates the matching usage aggregates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the usage cannot be committed.
+    fn record_provider_usage(&self, input: RecordProviderUsageInputDto) -> DtoResult<()>;
+    /// Loads usage aggregates for one provider profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the aggregates cannot be read.
+    fn load_provider_usage_by_profile(
+        &self,
+        profile_id: String,
+    ) -> DtoResult<Vec<ProviderUsageAggregateDto>>;
+    /// Loads usage aggregates for one provider profile revision and model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the aggregates cannot be read.
+    fn load_provider_usage_by_revision_and_model(
+        &self,
+        provider_profile_revision_id: String,
+        model_id: String,
+    ) -> DtoResult<Vec<ProviderUsageAggregateDto>>;
+}
+
+/// DTO-only repository contract for the provider catalog removal lifecycle.
+pub trait ProviderRemovalRepositoryDto {
+    /// Creates one provider catalog removal candidate with a thirty-minute
+    /// lifetime and at most one pending candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when a pending candidate already exists, or an
+    /// unavailable error when storage fails.
+    fn create_provider_catalog_removal_candidate(
+        &self,
+        input: CreateProviderCatalogRemovalCandidateInputDto,
+    ) -> DtoResult<()>;
+    /// Accepts one pending provider catalog removal candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found or conflict error when the candidate is not pending,
+    /// or an unavailable error when storage fails.
+    fn accept_provider_catalog_removal(
+        &self,
+        input: AcceptProviderCatalogRemovalInputDto,
+    ) -> DtoResult<()>;
+    /// Rejects one pending provider catalog removal candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found or conflict error when the candidate is not pending,
+    /// or an unavailable error when storage fails.
+    fn reject_provider_catalog_removal(
+        &self,
+        input: RejectProviderCatalogRemovalInputDto,
+    ) -> DtoResult<()>;
+    /// Expires pending removal candidates past their lifetime and returns the
+    /// number expired.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when storage fails.
+    fn expire_provider_catalog_removal_candidate(
+        &self,
+        input: ExpireProviderCatalogRemovalCandidateInputDto,
+    ) -> DtoResult<u64>;
+}
+
+/// DTO-only repository contract for held recovered runs.
+pub trait HeldRunRepositoryDto {
+    /// Marks one recovered run as held pending explicit admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the held record cannot be committed.
+    fn mark_recovered_run_held(&self, input: MarkRecoveredRunHeldInputDto) -> DtoResult<()>;
+    /// Admits one held recovered run idempotently without creating a second task.
+    ///
+    /// # Errors
+    ///
+    /// Returns a not-found or conflict error when the run is not held or was
+    /// already rejected, or an unavailable error when storage fails.
+    fn admit_held_recovered_run(&self, input: AdmitHeldRecoveredRunInputDto) -> DtoResult<()>;
+    /// Loads the held recovered run record for one run, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the record cannot be read.
+    fn load_held_recovered_run(&self, run_id: RunId) -> DtoResult<Option<HeldRecoveredRunDto>>;
+}
+
+/// DTO-only repository contract for legacy M4 selection bindings.
+pub trait LegacyBindingRepositoryDto {
+    /// Appends one deterministic legacy M4 selection binding idempotently.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the revision already bound a different
+    /// binding, or an unavailable error when storage fails.
+    fn append_legacy_m4_selection_binding(
+        &self,
+        input: AppendLegacyM4SelectionBindingInputDto,
+    ) -> DtoResult<()>;
+    /// Loads the durable legacy M4 selection binding for one config revision, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the binding cannot be read.
+    fn load_legacy_m4_selection_binding(
+        &self,
+        config_revision_id: String,
+    ) -> DtoResult<Option<LegacyM4SelectionBindingRecordDto>>;
 }
