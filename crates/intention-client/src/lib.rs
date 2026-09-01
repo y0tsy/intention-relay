@@ -14,12 +14,29 @@ use std::time::{Duration, Instant};
 
 use intention_domain::{ModelRunFactDto, ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolDaemonFrameDto,
-    ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    ProtocolVersionDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunStreamFrameDto,
-    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto,
+    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto,
+    ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunLiveBatchDto,
+    RunResyncDto, RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto,
+    RunSubscriptionResponseDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    contract_families::{
+        AcceptProviderCatalogRemovalAcceptedDto, AcceptProviderCatalogRemovalCommandDto,
+        AdmitRecoveredRunAcceptedDto, AdmitRecoveredRunCommandDto, ConfigurationEditCommandDto,
+        ConfigurationProjectionDto, CredentialRotationResultDto,
+        GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto, GetProviderCatalogQueryDto,
+        GetProviderCatalogStatusQueryDto, GetProviderDiscoveryStatusQueryDto,
+        GetProviderHealthEvidenceQueryDto, GetProviderUsageQueryDto,
+        GetSessionProviderProfileQueryDto, PricingProjectionDto, ProviderCatalogPageDto,
+        ProviderCatalogStatusDto, ProviderDiscoveryProjectionDto, ProviderHealthProjectionDto,
+        RawTomlEditCommandDto, ReconcileUnavailableQueueAcceptedDto,
+        ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
+        RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
+        ReloadTransactionDto, RotateProviderCredentialsCommandDto, SessionProviderProfileDto,
+        SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto,
+        UsageAggregationDto,
+    },
 };
 use intention_transport::{
     AsyncDaemonFrameReceiver, AsyncLocalClientConnection, AsyncRequestSender, LocalConnection,
@@ -210,6 +227,362 @@ impl IntentionClient {
         }
     }
 
+    /// Reloads daemon configuration from a prepared candidate reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn reload_configuration(
+        &self,
+        command: ReloadConfigurationCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ReloadConfiguration(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Submits a bounded, credential-free raw TOML configuration edit.
+    ///
+    /// The daemon parses and validates the candidate server-side and never
+    /// echoes the raw content back. The response is the durable reload
+    /// transaction outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn submit_raw_toml_edit(
+        &self,
+        command: RawTomlEditCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::SubmitRawTomlEdit(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Applies typed, credential-free configuration edit operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn apply_configuration_edit(
+        &self,
+        command: ConfigurationEditCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ApplyConfigurationEdit(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rotates one provider's private credential material.
+    ///
+    /// The command carries no credential material; the replacement arrives
+    /// through the daemon's private channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected rotation outcome, or a typed unavailable or
+    /// invalid-response error.
+    pub fn rotate_credential(
+        &self,
+        command: RotateProviderCredentialsCommandDto,
+    ) -> DtoResult<CredentialRotationResultDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::RotateProviderCredentials(command))? {
+            ProtocolAcceptedResultDto::RotateProviderCredentials(result) => Ok(result),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries non-authorizing health evidence for one provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_health(
+        &self,
+        query: GetProviderHealthEvidenceQueryDto,
+    ) -> DtoResult<ProviderHealthProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderHealthEvidence(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderHealthEvidence(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the status of one provider discovery attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn discovery_status(
+        &self,
+        query: GetProviderDiscoveryStatusQueryDto,
+    ) -> DtoResult<ProviderDiscoveryProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderDiscoveryStatus(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderDiscoveryStatus(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the safe non-authorizing pricing policy projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn pricing(&self, query: GetPricingPolicyQueryDto) -> DtoResult<PricingProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetPricingPolicy(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::PricingPolicy(
+                projection,
+            )) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the safe applied configuration projection.
+    ///
+    /// The projection never carries raw TOML, credentials, private endpoints,
+    /// or paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn configuration_projection(&self) -> DtoResult<ConfigurationProjectionDto> {
+        let query = GetConfigurationProjectionQueryDto {
+            schema_version: schema_version_string(),
+        };
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetConfigurationProjection(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ConfigurationProjection(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Binds one session's durable provider profile intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn set_session_provider_profile(
+        &self,
+        command: SetSessionProviderProfileCommandDto,
+    ) -> DtoResult<SetSessionProviderProfileAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::SetSessionProviderProfile(command))? {
+            ProtocolAcceptedResultDto::SetSessionProviderProfile(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries one session's durable provider profile projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn session_provider_profile(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<SessionProviderProfileDto> {
+        let query = GetSessionProviderProfileQueryDto {
+            schema_version: schema_version_string(),
+            session_id: session_id.to_string(),
+        };
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetSessionProviderProfile(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::SessionProviderProfile(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Loads one paged provider catalog projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn list_provider_profiles(
+        &self,
+        query: GetProviderCatalogQueryDto,
+    ) -> DtoResult<ProviderCatalogPageDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderCatalog(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::ProviderCatalog(
+                page,
+            )) => Ok(page),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the provider catalog activation and degradation status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_catalog_status(
+        &self,
+        query: GetProviderCatalogStatusQueryDto,
+    ) -> DtoResult<ProviderCatalogStatusDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderCatalogStatus(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderCatalogStatus(status),
+            ) => Ok(status),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Reconciles one bounded page of a session's unavailable-run queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn reconcile_unavailable_queue(
+        &self,
+        command: ReconcileUnavailableQueueCommandDto,
+    ) -> DtoResult<ReconcileUnavailableQueueAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ReconcileUnavailableQueue(command))? {
+            ProtocolAcceptedResultDto::ReconcileUnavailableQueue(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Accepts one pending provider catalog removal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn accept_provider_catalog_removal(
+        &self,
+        command: AcceptProviderCatalogRemovalCommandDto,
+    ) -> DtoResult<AcceptProviderCatalogRemovalAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::AcceptProviderCatalogRemoval(command))? {
+            ProtocolAcceptedResultDto::AcceptProviderCatalogRemoval(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rejects one pending provider catalog removal candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn reject_provider_catalog_candidate(
+        &self,
+        command: RejectProviderCatalogCandidateCommandDto,
+    ) -> DtoResult<RejectProviderCatalogCandidateAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::RejectProviderCatalogCandidate(command))? {
+            ProtocolAcceptedResultDto::RejectProviderCatalogCandidate(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Admits one held recovered run back into its session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn admit_recovered_run(
+        &self,
+        command: AdmitRecoveredRunCommandDto,
+    ) -> DtoResult<AdmitRecoveredRunAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::AdmitRecoveredRun(command))? {
+            ProtocolAcceptedResultDto::AdmitRecoveredRun(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries one provider's usage aggregation over a period.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_usage(
+        &self,
+        query: GetProviderUsageQueryDto,
+    ) -> DtoResult<UsageAggregationDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderUsage(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::ProviderUsage(
+                usage,
+            )) => Ok(usage),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
     fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
         let mut connection = self.connect()?;
         let health = self.request_on(
@@ -255,6 +628,23 @@ impl IntentionClient {
     fn request(&self, payload: ProtocolRequestPayloadDto) -> DtoResult<ProtocolResponsePayloadDto> {
         let mut connection = self.connect()?;
         self.request_on(&mut connection, payload)
+    }
+
+    /// Sends one control-plane command and returns its typed accepted result.
+    ///
+    /// A rejected command propagates the daemon's typed error; an acceptance
+    /// without an operation-specific result is an invalid response.
+    fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
+        let response = self.request(ProtocolRequestPayloadDto::Command(command))?;
+        match response {
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
+                accepted,
+            )) => accepted.result().cloned().ok_or_else(invalid_response),
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
+                error,
+            )) => Err(error),
+            _ => Err(invalid_response()),
+        }
     }
 
     fn connect(&self) -> DtoResult<NegotiatedConnection> {
@@ -598,7 +988,7 @@ impl RunSubscriptionReducer {
         let mut historical_cursors = self.historical_reasoning_cursors.clone();
         for fact in batch.facts() {
             if fact.cursor().value() <= snapshot_cursor.value() {
-                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
                     && historical_cursors.insert(fact.cursor())
                 {
                     appended_reasoning.push_str(content);
@@ -634,7 +1024,7 @@ impl RunSubscriptionReducer {
                     "run replay tail requires contiguous facts",
                 ));
             }
-            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
                 && reasoning_cursors.insert(fact.cursor())
             {
                 reasoning_content.push_str(content);
@@ -968,6 +1358,12 @@ fn is_daemon_unavailable(error: &ErrorDto) -> bool {
         error.code(),
         "local_daemon_unavailable" | "local_daemon_connection_unavailable"
     )
+}
+
+/// Formats the current DTO schema version as the protocol `major.minor` text.
+#[must_use]
+fn schema_version_string() -> String {
+    format!("{}.{}", SCHEMA_VERSION.major(), SCHEMA_VERSION.minor())
 }
 
 fn is_daemon_starting(error: &ErrorDto) -> bool {
