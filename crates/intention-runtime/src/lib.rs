@@ -956,16 +956,44 @@ where
                     *durable_output |= next_cursor != cursor;
                     cursor = next_cursor;
                 }
-                ModelEventDto::ReasoningDelta { content } => {
+                ModelEventDto::ReasoningDelta { category, content } => {
+                    let category = match category {
+                        intention_model::ReasoningFragmentCategoryDto::Primary => {
+                            intention_domain::ReasoningDeltaCategory::Primary
+                        }
+                        intention_model::ReasoningFragmentCategoryDto::Detail => {
+                            intention_domain::ReasoningDeltaCategory::Detail
+                        }
+                    };
                     cursor = self.append(
                         input.session_id,
                         input.run_id,
                         cursor,
-                        vec![ModelRunFactInputDto::reasoning_delta_recorded(content)?],
+                        vec![ModelRunFactInputDto::reasoning_delta_recorded_categorized(
+                            category, content,
+                        )?],
                         None,
                     )?;
                     *durable_output = true;
                 }
+                ModelEventDto::ReasoningSummaryDelta { content } => {
+                    cursor = self.append(
+                        input.session_id,
+                        input.run_id,
+                        cursor,
+                        vec![ModelRunFactInputDto::reasoning_summary_delta_recorded(
+                            content,
+                        )?],
+                        None,
+                    )?;
+                    *durable_output = true;
+                }
+                // Slice 2: the per-fact 512 KiB reasoning bound is enforced by
+                // the domain constructors above; the combined per-run 4 MiB
+                // bound (`intention_domain::validate_reasoning_fact_output_bound`)
+                // needs per-run reasoning accounting and lands with the
+                // control-plane/session-selection zones (the controller
+                // decides on the 4 MiB follow-up).
                 ModelEventDto::Usage { usage } => {
                     cursor = self.append(
                         input.session_id,
@@ -1353,4 +1381,115 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
 
 fn failure_from_error(error: &ErrorDto) -> DtoResult<RunFailureDto> {
     RunFailureDto::new(error.code(), error.retry(), error.correlation_id())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Accessor fixtures use expect to provide precise test failure messages."
+    )]
+
+    use super::*;
+    use intention_config::{
+        ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+    };
+    use intention_model::{ModelCancellationSignal, ModelMessageDto, ModelRequestDto};
+    use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+
+    fn fixture_input() -> ModelRunExecutionInputDto {
+        let session_id = SessionId::parse("11111111-1111-4111-8111-111111111111")
+            .expect("fixture session id is valid");
+        let run_id =
+            RunId::parse("22222222-2222-4222-8222-222222222222").expect("fixture run id is valid");
+        let request = ModelRequestDto::new(
+            run_id,
+            "fixture-model",
+            vec![
+                ModelMessageDto::new(intention_model::ModelRoleDto::User, "fixture turn")
+                    .expect("fixture message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("fixture request is valid");
+        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\ncredential = \"fixture-credential-not-real-12345\"\n"
+                .to_owned(),
+            ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-runtime-accessor-fixture.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("fixture configuration resolves");
+        let safe_config = ConfigSnapshotDto::new(
+            SchemaVersionDto::new(1, 0),
+            ConfigRevisionId::parse("33333333-3333-4333-8333-333333333333")
+                .expect("fixture revision is a canonical UUID"),
+            TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
+            resolved,
+        )
+        .expect("fixture snapshot is valid");
+        ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request,
+            safe_config,
+            ModelCancellationSignal::new(),
+        )
+    }
+
+    #[test]
+    fn execution_input_accessors_expose_all_fields() {
+        let input = fixture_input();
+        assert_eq!(
+            input.session_id(),
+            SessionId::parse("11111111-1111-4111-8111-111111111111")
+                .expect("fixture session id is valid")
+        );
+        assert_eq!(
+            input.run_id(),
+            RunId::parse("22222222-2222-4222-8222-222222222222").expect("fixture run id is valid")
+        );
+        assert_eq!(input.request().model(), "fixture-model");
+        assert_eq!(
+            input.safe_config().resolved().provider().model(),
+            "fixture-model"
+        );
+        assert!(
+            !input
+                .safe_config()
+                .resolved()
+                .provider()
+                .credential_configured()
+                || input.safe_config().resolved().provider().kind().as_str() == "openrouter",
+            "the safe configuration is the credential-free resolved projection"
+        );
+    }
+
+    #[test]
+    fn runtime_values_accessors_expose_all_fields() {
+        let values = RuntimeValuesDto::new(
+            RunId::parse("44444444-4444-4444-8444-444444444444").expect("fixture run id is valid"),
+            fixture_input().safe_config().clone(),
+            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
+        );
+        assert_eq!(
+            values.next_run_id(),
+            RunId::parse("44444444-4444-4444-8444-444444444444").expect("fixture run id is valid")
+        );
+        assert_eq!(
+            values.config_snapshot().resolved().provider().model(),
+            "fixture-model"
+        );
+        assert_eq!(
+            values.occurred_at(),
+            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid")
+        );
+    }
 }
