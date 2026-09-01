@@ -453,6 +453,16 @@ impl ModelRequestDto {
     }
 }
 
+/// The closed category of one normalized reasoning fragment.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningFragmentCategoryDto {
+    /// The main textual reasoning representation.
+    Primary,
+    /// A separate detailed reasoning representation.
+    Detail,
+}
+
 /// A provider-neutral normalized stream fact.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -462,7 +472,12 @@ pub enum ModelEventDto {
     /// A non-empty text content delta arrived.
     TextDelta { content: String },
     /// A non-empty reasoning delta arrived.
-    ReasoningDelta { content: String },
+    ReasoningDelta {
+        category: ReasoningFragmentCategoryDto,
+        content: String,
+    },
+    /// A non-empty reasoning summary delta arrived.
+    ReasoningSummaryDelta { content: String },
     /// A complete provider-normalized tool call arrived.
     ToolCall { call: ToolCallDto },
     /// Final usage became available.
@@ -480,11 +495,26 @@ impl<'de> Deserialize<'de> for ModelEventDto {
         #[serde(tag = "kind", rename_all = "snake_case")]
         enum RawModelEventDto {
             Started,
-            TextDelta { content: String },
-            ReasoningDelta { content: String },
-            ToolCall { call: ToolCallDto },
-            Usage { usage: UsageDto },
-            Finished { reason: FinishReasonDto },
+            TextDelta {
+                content: String,
+            },
+            ReasoningDelta {
+                #[serde(default)]
+                category: Option<ReasoningFragmentCategoryDto>,
+                content: String,
+            },
+            ReasoningSummaryDelta {
+                content: String,
+            },
+            ToolCall {
+                call: ToolCallDto,
+            },
+            Usage {
+                usage: UsageDto,
+            },
+            Finished {
+                reason: FinishReasonDto,
+            },
         }
 
         match RawModelEventDto::deserialize(deserializer)? {
@@ -492,8 +522,15 @@ impl<'de> Deserialize<'de> for ModelEventDto {
             RawModelEventDto::TextDelta { content } => {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
-            RawModelEventDto::ReasoningDelta { content } => {
-                Self::reasoning_delta(content).map_err(de::Error::custom)
+            RawModelEventDto::ReasoningDelta { category, content } => {
+                Self::reasoning_delta_categorized(
+                    category.unwrap_or(ReasoningFragmentCategoryDto::Primary),
+                    content,
+                )
+                .map_err(de::Error::custom)
+            }
+            RawModelEventDto::ReasoningSummaryDelta { content } => {
+                Self::reasoning_summary_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ToolCall { call } => Ok(Self::tool_call(call)),
             RawModelEventDto::Usage { usage } => Ok(Self::usage(usage)),
@@ -526,12 +563,24 @@ impl ModelEventDto {
         }
     }
 
-    /// Creates a non-empty reasoning delta.
+    /// Creates a non-empty reasoning delta categorized as primary.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the delta is empty.
     pub fn reasoning_delta(content: impl Into<String>) -> DtoResult<Self> {
+        Self::reasoning_delta_categorized(ReasoningFragmentCategoryDto::Primary, content)
+    }
+
+    /// Creates a non-empty categorized reasoning delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the delta is empty.
+    pub fn reasoning_delta_categorized(
+        category: ReasoningFragmentCategoryDto,
+        content: impl Into<String>,
+    ) -> DtoResult<Self> {
         let content = content.into();
         if content.is_empty() {
             Err(ErrorDto::validation(
@@ -539,7 +588,24 @@ impl ModelEventDto {
                 "model reasoning delta must not be empty",
             ))
         } else {
-            Ok(Self::ReasoningDelta { content })
+            Ok(Self::ReasoningDelta { category, content })
+        }
+    }
+
+    /// Creates a non-empty reasoning summary delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the delta is empty.
+    pub fn reasoning_summary_delta(content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_model_reasoning_summary_delta",
+                "model reasoning summary delta must not be empty",
+            ))
+        } else {
+            Ok(Self::ReasoningSummaryDelta { content })
         }
     }
 
@@ -559,6 +625,552 @@ impl ModelEventDto {
     #[must_use]
     pub const fn finished(reason: FinishReasonDto) -> Self {
         Self::Finished { reason }
+    }
+}
+
+/// The closed provider-neutral reasoning effort levels.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffortLevel {
+    /// Reasoning is explicitly disabled.
+    None,
+    /// Minimal reasoning effort.
+    Minimal,
+    /// Low reasoning effort.
+    Low,
+    /// Balanced reasoning effort.
+    Medium,
+    /// High reasoning effort.
+    High,
+    /// Extra-high reasoning effort.
+    Xhigh,
+    /// Maximum reasoning effort.
+    Max,
+}
+
+/// The closed provider-neutral reasoning modes.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponsesReasoningMode {
+    /// The standard reasoning mode.
+    Standard,
+    /// The higher-capability reasoning mode.
+    Pro,
+}
+
+/// The closed credential transport modes (names only, never values).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialTransportMode {
+    /// Authorization through the standard bearer scheme.
+    Bearer,
+    /// Authorization through one descriptor-selected safe header name.
+    SafeHeader,
+}
+
+/// Maximum characters of one safe header name.
+const MAX_SAFE_HEADER_NAME_CHARS: usize = 128;
+
+/// A descriptor-declared header policy carrying names only, never credential values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AuthenticationHeaderPolicyV1 {
+    allowed_header_names: Vec<String>,
+    selected_transport: CredentialTransportMode,
+}
+
+impl<'de> Deserialize<'de> for AuthenticationHeaderPolicyV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawAuthenticationHeaderPolicyV1 {
+            allowed_header_names: Vec<String>,
+            selected_transport: CredentialTransportMode,
+        }
+        let raw = RawAuthenticationHeaderPolicyV1::deserialize(deserializer)?;
+        Self::new(raw.allowed_header_names, raw.selected_transport).map_err(de::Error::custom)
+    }
+}
+
+impl AuthenticationHeaderPolicyV1 {
+    /// Creates a validated header policy (names only, never values).
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a header name is not a non-empty HTTP
+    /// token of at most 128 characters, names are duplicated, or the selected
+    /// transport and the allowed header names are inconsistent.
+    pub fn new(
+        allowed_header_names: Vec<String>,
+        selected_transport: CredentialTransportMode,
+    ) -> DtoResult<Self> {
+        if !valid_header_names(&allowed_header_names) {
+            return Err(ErrorDto::validation(
+                "invalid_safe_header_name",
+                "header policy names must be unique HTTP tokens of at most 128 characters",
+            ));
+        }
+        let transport_is_consistent = match selected_transport {
+            CredentialTransportMode::Bearer => allowed_header_names.is_empty(),
+            CredentialTransportMode::SafeHeader => !allowed_header_names.is_empty(),
+        };
+        if !transport_is_consistent {
+            return Err(ErrorDto::validation(
+                "invalid_credential_transport",
+                "bearer transport rejects header names and safe-header transport requires at least one",
+            ));
+        }
+        Ok(Self {
+            allowed_header_names,
+            selected_transport,
+        })
+    }
+
+    /// Returns the allowed header names (names only, never values).
+    #[must_use]
+    pub fn allowed_header_names(&self) -> &[String] {
+        &self.allowed_header_names
+    }
+
+    /// Returns the selected credential transport mode.
+    #[must_use]
+    pub const fn selected_transport(&self) -> CredentialTransportMode {
+        self.selected_transport
+    }
+}
+
+/// Whether every declared header name is a unique non-empty HTTP token of at
+/// most [`MAX_SAFE_HEADER_NAME_CHARS`] characters.
+fn valid_header_names(names: &[String]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    names.iter().all(|name| {
+        !name.is_empty()
+            && name.len() <= MAX_SAFE_HEADER_NAME_CHARS
+            && name.bytes().all(is_http_token_byte)
+            && seen.insert(name.clone())
+    })
+}
+
+/// Whether `byte` is one HTTP token character (`tchar`).
+const fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+/// Descriptor-declared native reasoning preservation controls.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderNativePreservationControlsV1 {
+    preserve_thinking: bool,
+    thinking_keep: bool,
+}
+
+impl ProviderNativePreservationControlsV1 {
+    /// Creates native reasoning preservation controls.
+    #[must_use]
+    pub const fn new(preserve_thinking: bool, thinking_keep: bool) -> Self {
+        Self {
+            preserve_thinking,
+            thinking_keep,
+        }
+    }
+
+    /// Returns whether native thinking must be preserved.
+    #[must_use]
+    pub const fn preserve_thinking(self) -> bool {
+        self.preserve_thinking
+    }
+
+    /// Returns whether the thinking payload must be kept.
+    #[must_use]
+    pub const fn thinking_keep(self) -> bool {
+        self.thinking_keep
+    }
+}
+
+/// Closed code-owned server-side parser bounds.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ParserLimitsV1 {
+    max_bytes: u64,
+    max_nesting: u32,
+    max_fields: u32,
+    max_array_items: u32,
+}
+
+/// The closed maximum parser payload bytes (512 KiB).
+const MAX_PARSER_MAX_BYTES: u64 = 512 * 1024;
+/// The closed maximum parser nesting depth.
+const MAX_PARSER_MAX_NESTING: u32 = 128;
+/// The closed maximum parser field count.
+const MAX_PARSER_MAX_FIELDS: u32 = 4096;
+/// The closed maximum parser array-item count.
+const MAX_PARSER_MAX_ARRAY_ITEMS: u32 = 65_536;
+
+impl ParserLimitsV1 {
+    /// Creates validated parser limits within the closed code-owned bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a limit is zero or exceeds its closed bound.
+    pub fn new(
+        max_bytes: u64,
+        max_nesting: u32,
+        max_fields: u32,
+        max_array_items: u32,
+    ) -> DtoResult<Self> {
+        if max_bytes == 0
+            || max_bytes > MAX_PARSER_MAX_BYTES
+            || max_nesting == 0
+            || max_nesting > MAX_PARSER_MAX_NESTING
+            || max_fields == 0
+            || max_fields > MAX_PARSER_MAX_FIELDS
+            || max_array_items == 0
+            || max_array_items > MAX_PARSER_MAX_ARRAY_ITEMS
+        {
+            return Err(ErrorDto::validation(
+                "invalid_parser_limits",
+                "parser limits must be positive and within the closed code-owned bounds",
+            ));
+        }
+        Ok(Self {
+            max_bytes,
+            max_nesting,
+            max_fields,
+            max_array_items,
+        })
+    }
+
+    /// Returns the closed maximum parser payload bytes.
+    #[must_use]
+    pub const fn max_bytes(self) -> u64 {
+        self.max_bytes
+    }
+
+    /// Returns the closed maximum parser nesting depth.
+    #[must_use]
+    pub const fn max_nesting(self) -> u32 {
+        self.max_nesting
+    }
+
+    /// Returns the closed maximum parser field count.
+    #[must_use]
+    pub const fn max_fields(self) -> u32 {
+        self.max_fields
+    }
+
+    /// Returns the closed maximum parser array-item count.
+    #[must_use]
+    pub const fn max_array_items(self) -> u32 {
+        self.max_array_items
+    }
+}
+
+/// Closed server-side parser configuration; never raw JSON or templates.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ServerSideParserConfigV1 {
+    /// No server-side parser is configured.
+    None,
+    /// A vLLM parser identified by its stable parser id.
+    Vllm {
+        parser_id: String,
+        bounded_limits: ParserLimitsV1,
+    },
+    /// An SGLang parser identified by its stable parser id.
+    Sglang {
+        parser_id: String,
+        bounded_limits: ParserLimitsV1,
+    },
+}
+
+impl<'de> Deserialize<'de> for ServerSideParserConfigV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "mode", rename_all = "snake_case")]
+        enum RawServerSideParserConfigV1 {
+            None,
+            Vllm {
+                parser_id: String,
+                bounded_limits: ParserLimitsV1,
+            },
+            Sglang {
+                parser_id: String,
+                bounded_limits: ParserLimitsV1,
+            },
+        }
+        match RawServerSideParserConfigV1::deserialize(deserializer)? {
+            RawServerSideParserConfigV1::None => Ok(Self::none()),
+            RawServerSideParserConfigV1::Vllm {
+                parser_id,
+                bounded_limits,
+            } => Self::vllm(parser_id, bounded_limits).map_err(de::Error::custom),
+            RawServerSideParserConfigV1::Sglang {
+                parser_id,
+                bounded_limits,
+            } => Self::sglang(parser_id, bounded_limits).map_err(de::Error::custom),
+        }
+    }
+}
+
+impl ServerSideParserConfigV1 {
+    /// Creates the disabled parser configuration.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self::None
+    }
+
+    /// Creates a validated vLLM parser configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the parser id is blank or carries control characters.
+    pub fn vllm(parser_id: impl Into<String>, bounded_limits: ParserLimitsV1) -> DtoResult<Self> {
+        Ok(Self::Vllm {
+            parser_id: validate_parser_id(parser_id.into())?,
+            bounded_limits,
+        })
+    }
+
+    /// Creates a validated SGLang parser configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the parser id is blank or carries control characters.
+    pub fn sglang(parser_id: impl Into<String>, bounded_limits: ParserLimitsV1) -> DtoResult<Self> {
+        Ok(Self::Sglang {
+            parser_id: validate_parser_id(parser_id.into())?,
+            bounded_limits,
+        })
+    }
+}
+
+/// Validates one stable parser identifier.
+///
+/// # Errors
+///
+/// Returns a validation error when the parser id is blank or carries control characters.
+fn validate_parser_id(parser_id: String) -> DtoResult<String> {
+    if parser_id.trim().is_empty() || parser_id.chars().any(char::is_control) {
+        Err(ErrorDto::validation(
+            "invalid_parser_id",
+            "parser id must be a non-blank value without control characters",
+        ))
+    } else {
+        Ok(parser_id)
+    }
+}
+
+/// The closed model-capability taxonomy revision of the flattened envelope.
+pub const MODEL_CAPABILITY_TAXONOMY_V1: &str = "model-capability-taxonomy-v1";
+
+/// A flattened provider-neutral capability envelope.
+///
+/// The domain canonical `ModelCapabilitySetV1` (model-capability-taxonomy-v1)
+/// remains the authoritative form; this DTO maps 1:1 onto that taxonomy and
+/// exists so provider-neutral configuration can flow without a domain import.
+/// The `intention-model` crate cannot import `intention-domain`, so the
+/// flattened boolean fields are the provider-neutral projection of the
+/// domain's closed capability set.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ModelCapabilityEnvelopeV1 {
+    taxonomy_version: String,
+    input_text_only: bool,
+    text_streaming: bool,
+    structured_output_unsupported: bool,
+    reasoning: bool,
+    tool_exchange: bool,
+    context_preservation_local_durable_history: bool,
+}
+
+impl<'de> Deserialize<'de> for ModelCapabilityEnvelopeV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawModelCapabilityEnvelopeV1 {
+            taxonomy_version: String,
+            input_text_only: bool,
+            text_streaming: bool,
+            structured_output_unsupported: bool,
+            reasoning: bool,
+            tool_exchange: bool,
+            context_preservation_local_durable_history: bool,
+        }
+        let raw = RawModelCapabilityEnvelopeV1::deserialize(deserializer)?;
+        Self::new(
+            raw.taxonomy_version,
+            raw.input_text_only,
+            raw.text_streaming,
+            raw.structured_output_unsupported,
+            raw.reasoning,
+            raw.tool_exchange,
+            raw.context_preservation_local_durable_history,
+        )
+        .map_err(de::Error::custom)
+    }
+}
+
+impl ModelCapabilityEnvelopeV1 {
+    /// Creates a validated flattened capability envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the taxonomy version is not the closed
+    /// `model-capability-taxonomy-v1` value.
+    pub fn new(
+        taxonomy_version: impl Into<String>,
+        input_text_only: bool,
+        text_streaming: bool,
+        structured_output_unsupported: bool,
+        reasoning: bool,
+        tool_exchange: bool,
+        context_preservation_local_durable_history: bool,
+    ) -> DtoResult<Self> {
+        let taxonomy_version = taxonomy_version.into();
+        if taxonomy_version != MODEL_CAPABILITY_TAXONOMY_V1 {
+            return Err(ErrorDto::validation(
+                "invalid_model_capability_taxonomy",
+                "model capability envelope requires the closed model-capability-taxonomy-v1 version",
+            ));
+        }
+        Ok(Self {
+            taxonomy_version,
+            input_text_only,
+            text_streaming,
+            structured_output_unsupported,
+            reasoning,
+            tool_exchange,
+            context_preservation_local_durable_history,
+        })
+    }
+
+    /// Returns the closed taxonomy revision.
+    #[must_use]
+    pub fn taxonomy_version(&self) -> &str {
+        &self.taxonomy_version
+    }
+
+    /// Returns whether the closed taxonomy declares text-only input.
+    #[must_use]
+    pub const fn input_text_only(&self) -> bool {
+        self.input_text_only
+    }
+
+    /// Returns whether the closed taxonomy declares text streaming.
+    #[must_use]
+    pub const fn text_streaming(&self) -> bool {
+        self.text_streaming
+    }
+
+    /// Returns whether the closed taxonomy declares structured output unsupported.
+    #[must_use]
+    pub const fn structured_output_unsupported(&self) -> bool {
+        self.structured_output_unsupported
+    }
+
+    /// Returns whether the closed taxonomy declares reasoning support.
+    #[must_use]
+    pub const fn reasoning(&self) -> bool {
+        self.reasoning
+    }
+
+    /// Returns whether the closed taxonomy declares tool exchange.
+    #[must_use]
+    pub const fn tool_exchange(&self) -> bool {
+        self.tool_exchange
+    }
+
+    /// Returns whether the closed taxonomy declares local durable history context preservation.
+    #[must_use]
+    pub const fn context_preservation_local_durable_history(&self) -> bool {
+        self.context_preservation_local_durable_history
+    }
+}
+
+/// Optional typed reasoning usage.
+///
+/// This is the typed reasoning-usage component of a reported usage record:
+/// a missing component means not reported (never zero), and no price or
+/// currency is ever carried. The `UsageDto::Reported` attachment itself lives
+/// in `intention-types`; this crate defines the component so provider-neutral
+/// reasoning usage stays typed and credential-free.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ReasoningUsageDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<u64>,
+}
+
+impl<'de> Deserialize<'de> for ReasoningUsageDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawReasoningUsageDto {
+            #[serde(default)]
+            input_tokens: Option<u64>,
+            #[serde(default)]
+            output_tokens: Option<u64>,
+        }
+        let raw = RawReasoningUsageDto::deserialize(deserializer)?;
+        Self::new(raw.input_tokens, raw.output_tokens).map_err(de::Error::custom)
+    }
+}
+
+impl ReasoningUsageDto {
+    /// Creates optional typed reasoning usage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a reported component is zero.
+    pub fn new(input_tokens: Option<u64>, output_tokens: Option<u64>) -> DtoResult<Self> {
+        if input_tokens == Some(0) || output_tokens == Some(0) {
+            return Err(ErrorDto::validation(
+                "invalid_model_reasoning_usage",
+                "reasoning usage components must be positive when reported",
+            ));
+        }
+        Ok(Self {
+            input_tokens,
+            output_tokens,
+        })
+    }
+
+    /// Returns reported reasoning input tokens, if reported.
+    #[must_use]
+    pub const fn input_tokens(self) -> Option<u64> {
+        self.input_tokens
+    }
+
+    /// Returns reported reasoning output tokens, if reported.
+    #[must_use]
+    pub const fn output_tokens(self) -> Option<u64> {
+        self.output_tokens
     }
 }
 
@@ -603,6 +1215,7 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
+            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. }
                 if self.started && !self.terminal =>
             {
@@ -613,6 +1226,7 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
+            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
         }
     }
