@@ -80,22 +80,6 @@ fn execution_policy_rejects_out_of_range_values_without_redacting_errors() {
 }
 
 #[test]
-fn legacy_safe_snapshot_omitting_execution_policy_decodes_with_defaults() {
-    let snapshot = serde_json::from_str::<intention_config::ConfigSnapshotDto>(include_str!(
-        "fixtures/config-snapshot-v1.json"
-    ))
-    .expect("legacy M3 snapshot remains compatible");
-    assert_eq!(
-        snapshot
-            .resolved()
-            .provider_execution()
-            .attempt_timeout_seconds(),
-        30
-    );
-    assert_eq!(snapshot.resolved().provider_execution().max_attempts(), 2);
-}
-
-#[test]
 fn startup_material_is_opaque_and_safe_projection_excludes_credential() {
     let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         format!(
@@ -110,14 +94,14 @@ fn startup_material_is_opaque_and_safe_projection_excludes_credential() {
 }
 
 #[test]
-fn startup_material_preserves_legacy_selection_only_for_provider_construction() {
+fn startup_material_preserves_current_selection_only_for_provider_construction() {
     let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         format!(
-            "[model]\nprovider = \"generic-chat-completion-api\"\nname = \"legacy-fixture\"\napi_key = \"{FAKE_CREDENTIAL}\"\n"
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n"
         ),
         source(),
     ))
-    .expect("legacy startup material resolves");
+    .expect("current-shape startup material resolves");
 
     let (resolved, credential) =
         material.into_parts_for_provider(|resolved, credential| (resolved, credential));
@@ -125,7 +109,7 @@ fn startup_material_preserves_legacy_selection_only_for_provider_construction() 
         resolved.provider().kind().as_str(),
         "generic-chat-completion-api"
     );
-    assert_eq!(resolved.provider().model(), "legacy-fixture");
+    assert_eq!(resolved.provider().model(), "fixture");
     assert_eq!(credential, FAKE_CREDENTIAL);
 }
 
@@ -135,6 +119,10 @@ fn startup_material_returns_safe_errors_before_provider_construction() {
         ("not = [valid", "invalid_config_toml"),
         (
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \" \"\n",
+            "missing_provider_credential",
+        ),
+        (
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n",
             "missing_provider_credential",
         ),
     ] {

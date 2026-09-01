@@ -1,4 +1,4 @@
-//! TOML configuration parsing, migration, resolution, and safe projection.
+//! TOML configuration parsing, validation, resolution, and safe projection.
 //!
 //! M1 parses a versioned TOML file into a validated public projection. Raw
 //! credentials remain inside this crate and are never serialized, displayed, or
@@ -323,7 +323,6 @@ impl ProviderSelectionDto {
 pub struct ResolvedConfigDto {
     schema_version: SchemaVersionDto,
     provider: ProviderSelectionDto,
-    #[serde(default)]
     provider_execution: ProviderExecutionPolicyDto,
     source_kind: ConfigSourceKindDto,
 }
@@ -338,7 +337,6 @@ impl<'de> Deserialize<'de> for ResolvedConfigDto {
         struct RawResolvedConfigDto {
             schema_version: SchemaVersionDto,
             provider: ProviderSelectionDto,
-            #[serde(default)]
             provider_execution: ProviderExecutionPolicyDto,
             source_kind: ConfigSourceKindDto,
         }
@@ -355,7 +353,7 @@ impl<'de> Deserialize<'de> for ResolvedConfigDto {
 }
 
 impl ResolvedConfigDto {
-    /// Parses, migrates, validates, and resolves opaque TOML input.
+    /// Parses, validates, and resolves opaque TOML input.
     ///
     /// # Errors
     ///
@@ -369,7 +367,6 @@ impl ResolvedConfigDto {
             )
         })?;
         let normalized = match document.get("schema_version") {
-            None => Self::migrate_v0(document)?,
             Some(toml::Value::Integer(major)) if *major == i64::from(CURRENT_SCHEMA_MAJOR) => {
                 Self::parse_v1(document)?
             }
@@ -383,6 +380,12 @@ impl ResolvedConfigDto {
                 return Err(ErrorDto::validation(
                     "invalid_config_schema_version",
                     "configuration schema version must be an integer",
+                ));
+            }
+            None => {
+                return Err(ErrorDto::validation(
+                    "invalid_config_schema",
+                    "configuration does not include a schema version",
                 ));
             }
         };
@@ -400,25 +403,6 @@ impl ResolvedConfigDto {
         Ok(NormalizedConfig {
             provider: raw.provider,
             provider_execution,
-        })
-    }
-
-    fn migrate_v0(document: toml::Value) -> DtoResult<NormalizedConfig> {
-        let raw: RawV0Config = document.try_into().map_err(|_| {
-            ErrorDto::validation(
-                "invalid_legacy_config_schema",
-                "legacy configuration does not match the supported migration schema",
-            )
-        })?;
-        Ok(NormalizedConfig {
-            provider: RawProviderConfig {
-                kind: raw.model.provider,
-                model: raw.model.name,
-                credential: raw.model.api_key,
-                endpoint: None,
-                execution: None,
-            },
-            provider_execution: None,
         })
     }
 
@@ -618,15 +602,6 @@ pub struct ProviderExecutionPolicyDto {
     max_attempts: u8,
 }
 
-impl Default for ProviderExecutionPolicyDto {
-    fn default() -> Self {
-        Self {
-            attempt_timeout_seconds: 30,
-            max_attempts: 2,
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for ProviderExecutionPolicyDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -709,20 +684,6 @@ struct RawV1Config {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawV0Config {
-    model: RawV0ModelConfig,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawV0ModelConfig {
-    provider: ProviderKindDto,
-    name: String,
-    api_key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RawProviderConfig {
     kind: ProviderKindDto,
     model: String,
@@ -758,14 +719,6 @@ fn parse_credential(text: &str) -> DtoResult<String> {
         .and_then(|provider| provider.get("credential"))
         .and_then(toml::Value::as_str)
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            document
-                .get("model")
-                .and_then(toml::Value::as_table)
-                .and_then(|model| model.get("api_key"))
-                .and_then(toml::Value::as_str)
-                .map(ToOwned::to_owned)
-        })
         .ok_or_else(|| {
             ErrorDto::validation(
                 "missing_provider_credential",
@@ -882,9 +835,12 @@ credential = \"{credential}\"
         }
         let explicit = ConfigPathResolver::resolve(Some(path.clone())).expect("override resolves");
         assert_eq!(explicit.kind(), ConfigSourceKindDto::Explicit);
+        assert_eq!(explicit.kind().as_str(), "explicit");
         assert_eq!(explicit.path(), &path);
         let platform = ConfigPathResolver::resolve(None).expect("platform path resolves");
         assert_eq!(platform.kind(), ConfigSourceKindDto::PlatformDefault);
+        assert_eq!(platform.kind().as_str(), "platform_default");
+        assert_eq!(platform.kind().to_string(), "platform_default");
         assert!(platform.path().as_str().ends_with("config.toml"));
     }
 
@@ -979,7 +935,7 @@ credential = \"{credential}\"
     }
 
     #[test]
-    fn parse_and_migration_helpers_reject_schema_and_legacy_shape_mismatches() {
+    fn parse_helpers_reject_schema_and_shape_mismatches() {
         let wrong_major = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             v1("openrouter", "fixture", CREDENTIAL, None).replacen(
                 "schema_version = 1",
@@ -996,12 +952,13 @@ credential = \"{credential}\"
         ))
         .expect_err("missing provider must fail");
         assert_eq!(missing_provider.code(), "invalid_config_schema");
-        let incomplete_legacy = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "[model]\nprovider = \"openrouter\"".to_owned(),
+        let unversioned = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n"
+                .to_owned(),
             explicit_source(),
         ))
-        .expect_err("incomplete legacy configuration must fail");
-        assert_eq!(incomplete_legacy.code(), "invalid_legacy_config_schema");
+        .expect_err("unversioned configuration must fail closed");
+        assert_eq!(unversioned.code(), "invalid_config_schema");
     }
 
     #[test]

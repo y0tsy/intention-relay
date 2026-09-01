@@ -127,9 +127,9 @@ configuration policy:
 - configuration discovers a platform-standard config location, with a validated
   explicit absolute-path override for tests, portable invocation, and future
   daemon composition. It never falls back to process CWD;
-- the initial TOML schema is version 1, includes a tested supported v0-to-v1
-  migration, rejects future schemas with an `ErrorDto`, and exposes only
-  redacted public configuration projections;
+- the initial TOML schema is version 1 (the single current shape; unversioned
+  documents fail closed), rejects future schemas with an `ErrorDto`, and
+  exposes only redacted public configuration projections;
 - M1 defines a serializable, credential-free `ConfigSnapshotDto` contract
   foundation with `ConfigRevisionId` and capture time. Configuration revision
   persistence, daemon application/reload, and attaching a snapshot to a live

@@ -31,7 +31,7 @@ unchanged. Historical runs receive no synthetic post-M5 records.
 | --- | --- |
 | Local protocol | 1.1, unchanged |
 | Public DTO schema | 1.1, additive, unchanged |
-| TOML configuration schema | 1, unchanged |
+| TOML configuration schema | 1, single shape; unversioned documents fail closed ([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)) |
 | SQLite storage schema | Logical version 1: single live schema created directly on open; no migration chain and no version gate ([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)) |
 
 ## Negotiated capabilities and failure semantics

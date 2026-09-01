@@ -267,7 +267,7 @@ fn credential_shaped_raw_content_is_rejected_without_echoing_content() {
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\ntoken = \"Bearer secret-token-123\"\n",
         // An api_key duplicate in a v1 document.
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\napi_key = \"sk-test-123\"\n",
-        // A password assignment in a legacy document.
+        // A password assignment in an unversioned document.
         "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\npassword = \"hunter2\"\n",
         // A credential-shaped value hidden inside a model identifier.
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"sk-test-model\"\ncredential = \"fixture-credential-not-real-12345\"\n",
@@ -513,37 +513,147 @@ fn candidate_wire_shapes_round_trip_without_unknown_fields() {
             .expect("issue decodes");
     assert_eq!(issue.code(), "unknown_config_field");
     assert_eq!(issue.field(), Some("provider.extra"));
+    assert!(
+        serde_json::from_str::<ConfigCandidateDto>(
+            r#"{"candidate_revision_id":"","source":{"raw_toml":{"size_bytes":0}},"safe_snapshot":{"schema_version":{"major":1,"minor":0},"revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}},"validation":{"issues":[],"truncated":false,"total_issue_count":0}}"#
+        )
+        .is_err(),
+        "an empty candidate revision id is rejected"
+    );
     assert!(serde_json::from_str::<ConfigCandidateDto>(
-        r#"{"candidate_revision_id":"","source":{"raw_toml":{"size_bytes":0}},"safe_snapshot":{"schema_version":{"major":1,"minor":0},"revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"source_kind":"explicit"}},"validation":{"issues":[],"truncated":false,"total_issue_count":0},"unexpected":true}"#
+        r#"{"candidate_revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","source":{"raw_toml":{"size_bytes":0}},"safe_snapshot":{"schema_version":{"major":1,"minor":0},"revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}},"validation":{"issues":[],"truncated":false,"total_issue_count":0},"unexpected":true}"#
     )
     .is_err());
 }
 
 #[test]
-fn legacy_v0_candidate_migrates_without_disclosing_credentials() {
+fn acceptance_outcome_wire_shape_round_trips_and_rejects_unknown_fields() {
+    let outcome = CandidateAcceptanceOutcomeDto::new(
+        false,
+        true,
+        vec!["provider_kind".to_owned()],
+        Some("catalog_change_requires_restart".to_owned()),
+    );
+    let encoded = serde_json::to_string(&outcome).expect("outcome serializes");
+    let decoded: CandidateAcceptanceOutcomeDto =
+        serde_json::from_str(&encoded).expect("outcome decodes");
+    assert_eq!(decoded, outcome);
+    assert!(
+        serde_json::from_str::<CandidateAcceptanceOutcomeDto>(
+            r#"{"accepted":true,"changed_semantics":false,"changed_field_categories":[],"failure_code":null,"unexpected":true}"#
+        )
+        .is_err(),
+        "unknown outcome fields are rejected"
+    );
+}
+
+#[test]
+fn malformed_candidate_toml_collects_a_typed_issue_without_advancing() {
+    let previous = snapshot(
+        &v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc",
+    );
+    let parsed = candidate("schema_version = [", &previous);
+
+    assert!(
+        parsed
+            .validation()
+            .issues()
+            .iter()
+            .any(|issue| issue.code() == "invalid_config_toml"),
+        "malformed TOML reports a parse issue"
+    );
+    assert_eq!(
+        parsed.safe_snapshot(),
+        &previous,
+        "a malformed candidate never advances the active snapshot"
+    );
+}
+
+#[test]
+fn source_kind_changes_classify_as_other_and_compare_different() {
+    let explicit = snapshot(
+        &v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbd",
+    );
+    let platform_resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+        v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),
+        ConfigSourceDto::PlatformDefault(
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-relay-m5-platform.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture path is absolute"),
+        ),
+    ))
+    .expect("fixture configuration resolves");
+    let platform = ConfigSnapshotDto::new(
+        SchemaVersionDto::new(1, 0),
+        ConfigRevisionId::parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbe")
+            .expect("fixture revision is a canonical UUID"),
+        TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
+        platform_resolved,
+    )
+    .expect("fixture snapshot schema is compatible");
+
+    assert!(
+        !semantic_equivalence(&platform, &explicit),
+        "a source kind difference is semantic"
+    );
+    assert_eq!(
+        classify_changed_fields(&platform, &explicit),
+        vec!["other".to_owned()],
+        "source kind changes classify as other"
+    );
+}
+
+#[test]
+fn unversioned_candidate_fails_closed_without_disclosing_credentials() {
     let previous = snapshot(
         &v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, ""),
         "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
     );
-    let legacy = "[model]\nprovider = \"openrouter\"\nname = \"legacy-model\"\napi_key = \"fixture-credential-not-real-12345\"\n";
-    let parsed = candidate(legacy, &previous);
+    // An unversioned document without credential-shaped content surfaces the
+    // missing schema version as a validation issue and never advances the
+    // active snapshot.
+    let unversioned = "[model]\nprovider = \"openrouter\"\nname = \"fixture-model\"\n";
+    let parsed = candidate(unversioned, &previous);
 
     assert!(
-        parsed.validation().issues().is_empty(),
-        "legacy fixture is valid"
+        parsed
+            .validation()
+            .issues()
+            .iter()
+            .any(|issue| issue.code() == "invalid_config_schema"
+                && issue.field() == Some("schema_version")),
+        "an unversioned candidate reports the missing schema version"
     );
     assert_eq!(
-        parsed.safe_snapshot().resolved().provider().model(),
-        "legacy-model"
-    );
-    assert!(
-        !semantic_equivalence(parsed.safe_snapshot(), &previous),
-        "the migrated model is a semantic change"
+        parsed.safe_snapshot(),
+        &previous,
+        "an invalid candidate never advances the active snapshot"
     );
     let encoded = serde_json::to_string(&parsed).expect("candidate serializes");
     assert!(
         !encoded.contains(FAKE_CREDENTIAL),
-        "the migrated legacy credential never leaks"
+        "the rejected candidate never leaks credential material"
+    );
+
+    // An unversioned document carrying a credential-shaped `model.api_key` key
+    // is rejected outright without echoing content.
+    let with_api_key = "[model]\nprovider = \"openrouter\"\nname = \"fixture-model\"\napi_key = \"fixture-credential-not-real-12345\"\n";
+    let error = parse_candidate(
+        RawConfigInputDto::new(with_api_key.to_owned(), source()),
+        &previous,
+    )
+    .expect_err("a credential-shaped key outside provider.credential must fail");
+    assert_eq!(error.code(), "credentials_forbidden");
+    assert_eq!(error.category().as_str(), "policy");
+    assert!(
+        !error.to_string().contains(FAKE_CREDENTIAL),
+        "the error never echoes the offending content"
     );
 }
 
@@ -649,53 +759,33 @@ fn validation_collects_typed_issues_for_malformed_v1_documents() {
 }
 
 #[test]
-fn validation_collects_typed_issues_for_malformed_v0_documents() {
+fn validation_collects_typed_issues_for_unversioned_documents() {
     let previous = snapshot(
         &v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),
         "ffffffff-ffff-4fff-8fff-ffffffffffff",
     );
     let cases = [
-        ("", "invalid_legacy_config_schema", Some("model")),
-        (
-            "model = \"openrouter\"\n",
-            "invalid_legacy_config_schema",
-            Some("model"),
-        ),
-        (
-            "[model]\nprovider = \"unknown\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n",
-            "invalid_provider_kind",
-            Some("model.provider"),
-        ),
-        (
-            "[model]\nprovider = \"openrouter\"\nname = \"\"\napi_key = \"fixture-credential-not-real-12345\"\n",
-            "invalid_provider_model",
-            Some("model.name"),
-        ),
-        (
-            "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\nextra = 1\n",
-            "unknown_config_field",
-            Some("model.extra"),
-        ),
-        (
-            "other = 1\n[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n",
-            "unknown_config_field",
-            Some("other"),
-        ),
+        "",
+        "model = \"openrouter\"\n",
+        "[model]\nprovider = \"unknown\"\nname = \"fixture\"\n",
+        "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\nextra = 1\n",
+        "other = 1\n[model]\nprovider = \"openrouter\"\nname = \"fixture\"\n",
     ];
-    for (text, expected_code, expected_field) in cases {
+    for text in cases {
         let parsed = candidate(text, &previous);
         assert!(
             parsed
                 .validation()
                 .issues()
                 .iter()
-                .any(|issue| issue.code() == expected_code && issue.field() == expected_field),
-            "expected issue {expected_code:?} at {expected_field:?} for {text:?}"
+                .any(|issue| issue.code() == "invalid_config_schema"
+                    && issue.field() == Some("schema_version")),
+            "expected an invalid_config_schema issue for {text:?}"
         );
         assert_eq!(
             parsed.safe_snapshot(),
             &previous,
-            "invalid legacy candidates never advance the active snapshot"
+            "invalid unversioned candidates never advance the active snapshot"
         );
     }
 }
@@ -722,29 +812,23 @@ fn credential_shaped_keys_values_and_arrays_are_rejected() {
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\nmeta = \"auth=secret\"\n",
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\nmeta = \"apikey123\"\n",
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\nmeta = \"mysecret\"\n",
-        // The legitimate v0 credential key is allowed through.
+        // Credential-shaped key names in an unversioned document are also
+        // forbidden; `api_key` is legitimate only as `provider.credential`.
         "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n",
     ];
-    for (index, text) in cases.iter().enumerate() {
-        let outcome = parse_candidate(
+    for text in cases {
+        let error = parse_candidate(
             RawConfigInputDto::new(text.to_string(), source()),
             &previous,
-        );
-        if index == cases.len() - 1 {
+        )
+        .expect_err("credential-shaped content must fail");
+        assert_eq!(error.code(), "credentials_forbidden");
+        assert_eq!(error.category().as_str(), "policy");
+        for secret in ["sk-test", "Bearer", "password", "secret", "apikey"] {
             assert!(
-                outcome.is_ok(),
-                "the legitimate v0 credential key is allowed"
+                !error.to_string().contains(secret),
+                "the error never echoes the offending content"
             );
-        } else {
-            let error = outcome.expect_err("credential-shaped content must fail");
-            assert_eq!(error.code(), "credentials_forbidden");
-            assert_eq!(error.category().as_str(), "policy");
-            for secret in ["sk-test", "Bearer", "password", "secret", "apikey"] {
-                assert!(
-                    !error.to_string().contains(secret),
-                    "the error never echoes the offending content"
-                );
-            }
         }
     }
 }

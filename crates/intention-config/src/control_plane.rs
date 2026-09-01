@@ -327,7 +327,7 @@ impl CandidateAcceptanceOutcomeDto {
     }
 }
 
-/// Parses, migrates, and validates a raw TOML reload candidate.
+/// Parses and validates a raw TOML reload candidate.
 ///
 /// The candidate is validated through the existing startup
 /// [`ResolvedConfigDto::parse_resolve`] path. Raw content larger than
@@ -560,7 +560,11 @@ fn collect_validation_issues(document: &toml::Value) -> Vec<CandidateIssueDto> {
             Some("schema_version"),
             "configuration schema version must be an integer",
         )),
-        None => collect_v0_issues(table, &mut issues),
+        None => issues.push(CandidateIssueDto::new(
+            "invalid_config_schema",
+            Some("schema_version"),
+            "configuration does not include a schema version",
+        )),
     }
     issues
 }
@@ -607,39 +611,6 @@ fn collect_v1_issues(table: &toml::Table, issues: &mut Vec<CandidateIssueDto>) {
             "kind" | "model" | "credential" | "endpoint" | "execution"
         ) {
             issues.push(unknown_field_issue(&format!("provider.{key}")));
-        }
-    }
-}
-
-/// Collects v0 (legacy migration) field-level issues in deterministic order.
-fn collect_v0_issues(table: &toml::Table, issues: &mut Vec<CandidateIssueDto>) {
-    for key in table.keys() {
-        if key != "model" {
-            issues.push(unknown_field_issue(key));
-        }
-    }
-    let Some(model) = table.get("model") else {
-        issues.push(CandidateIssueDto::new(
-            "invalid_legacy_config_schema",
-            Some("model"),
-            "legacy configuration does not include a model table",
-        ));
-        return;
-    };
-    let Some(model_table) = model.as_table() else {
-        issues.push(CandidateIssueDto::new(
-            "invalid_legacy_config_schema",
-            Some("model"),
-            "legacy configuration does not include a model table",
-        ));
-        return;
-    };
-    validate_provider_kind(model_table.get("provider"), "model.provider", issues);
-    validate_provider_model(model_table.get("name"), "model.name", issues);
-    validate_provider_credential(model_table.get("api_key"), "model.api_key", issues);
-    for key in model_table.keys() {
-        if !matches!(key.as_str(), "provider" | "name" | "api_key") {
-            issues.push(unknown_field_issue(&format!("model.{key}")));
         }
     }
 }
@@ -776,20 +747,13 @@ fn unknown_field_issue(path: &str) -> CandidateIssueDto {
 /// Whether the parsed document carries credential-shaped content outside the
 /// legitimate credential key.
 ///
-/// The legitimate credential key is `provider.credential` (v1) or
-/// `model.api_key` (v0); its value is allowed through and redacted by the
-/// startup projection. Any other credential-shaped key or value is forbidden.
+/// The legitimate credential key is `provider.credential`; its value is
+/// allowed through and redacted by the startup projection. Any other
+/// credential-shaped key or value, including `model.api_key` in an unversioned
+/// document, is forbidden.
 #[must_use]
 fn has_forbidden_credential_shaped_content(document: &toml::Value) -> bool {
-    let Some(table) = document.as_table() else {
-        return false;
-    };
-    let legitimate_credential_path = if table.contains_key("schema_version") {
-        "provider.credential"
-    } else {
-        "model.api_key"
-    };
-    contains_forbidden_credential(document, "", legitimate_credential_path)
+    contains_forbidden_credential(document, "", "provider.credential")
 }
 
 /// Walks a TOML value tree for forbidden credential-shaped keys and values.

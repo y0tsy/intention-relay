@@ -13,7 +13,6 @@ It does not introduce remote authentication, cloud secrets management, or multi-
 - TOML parsing;
 - schema validation;
 - defaults and resolved configuration;
-- configuration migrations;
 - the M1 `ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
 
 M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds. A future canonical Responses kind is `responses`, not `openai`; any `openai` spelling is only a future parse-time alias under architecture 22 and does not amend M1/M4.
@@ -34,7 +33,7 @@ flowchart LR
 
 ### M1 contract foundation and M3 startup lifecycle
 
-M1 parses, migrates, validates, and projects configuration. It defines the
+M1 parses, validates, and projects configuration. It defines the
 immutable, serializable `ConfigSnapshotDto` shape. M3 makes that DTO the
 canonical credential-free configuration selection for durable storage and runs:
 the daemon composition receives one validated startup snapshot, records it by
@@ -61,7 +60,7 @@ it affects fresh runs only and never mutates a recorded snapshot.
 
 ### M4 provider execution policy and startup material
 
-The optional TOML table `[provider.execution]` resolves into the credential-free `ProviderExecutionPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. `attempt_timeout_seconds` defaults to `30` and must be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing policy fields and M3 snapshots lacking the additive policy field decode to those defaults. Runtime owns the fixed 250 ms retry delay, not TOML.
+The optional TOML table `[provider.execution]` resolves into the credential-free `ProviderExecutionPolicyDto` included in `ResolvedConfigDto` and therefore in every `ConfigSnapshotDto`. `attempt_timeout_seconds` defaults to `30` and must be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing policy fields in a fresh document decode to those defaults; `provider_execution` is a required field on the resolved and snapshot wire shapes, so persisted snapshots always carry the effective policy explicitly. Runtime owns the fixed 250 ms retry delay, not TOML.
 
 `parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`, `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor. Safe resolved/snapshot DTOs, persistence, events, protocol, diagnostics, logs, and adapter projections remain credential-free.
 
@@ -145,7 +144,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
-| TOML validation | Parser/migration fixture tests. | Invalid config returns typed errors without partial state replacement. |
+| TOML validation | Parser fixture tests. | Invalid config returns typed errors without partial state replacement. |
 | M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and stored by revision. |
 | Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
 | Run snapshot immutability | Accepted-turn and terminal-promotion integration fixtures. | Started and promoted runs retain their selected immutable config revision. |
@@ -156,7 +155,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Quality-gate integration
 
-`intention-config` remains a Tier A coverage target. TOML parsing, migrations,
+`intention-config` remains a Tier A coverage target. TOML parsing,
 M1 snapshot serialization, permissions, redaction, and safe observability tests
 are blocking `make verify` inputs. M3 adds canonical snapshot-persistence,
 restart-only application, and per-run snapshot integration coverage. A
