@@ -93,7 +93,7 @@ fn openrouter_mapping_normalizes_text_reasoning_usage_finish_error_and_tool_call
         OpenRouterDriver::map_fixture_reasoning("considering context").expect("reasoning maps");
     assert_eq!(
         serde_json::to_string(&reasoning).expect("serializes"),
-        r#"{"kind":"reasoning_delta","content":"considering context"}"#
+        r#"{"kind":"reasoning_delta","category":"primary","content":"considering context"}"#
     );
     let usage = OpenRouterDriver::map_fixture_usage(2, 3, 5).expect("usage maps");
     assert!(

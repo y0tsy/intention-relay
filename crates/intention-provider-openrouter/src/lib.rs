@@ -12,22 +12,89 @@ use futures_util::{
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
+    ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
+    ProviderNativePreservationControlsV1, ReasoningEffortLevel, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 use openrouter_rs::{
     OpenRouterClient,
     api::chat::{ChatCompletionRequest, Message},
     error::OpenRouterError,
-    types::{FinishReason as OpenRouterFinishReason, Role, stream::StreamEvent},
+    types::{Effort, FinishReason as OpenRouterFinishReason, Role, stream::StreamEvent},
 };
+
+/// Additive descriptor-driven driver options; the default is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct OpenRouterDriverOptions {
+    header_policy: Option<AuthenticationHeaderPolicyV1>,
+    preservation_controls: Option<ProviderNativePreservationControlsV1>,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+}
+
+impl OpenRouterDriverOptions {
+    /// Creates default driver options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Declares the descriptor header policy (names only, never values).
+    ///
+    /// The policy is validated by construction and stored privately; it is
+    /// never logged, serialized, or made durable.
+    #[must_use]
+    pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
+        self.header_policy = Some(policy);
+        self
+    }
+
+    /// Declares native reasoning preservation controls.
+    ///
+    /// The OpenRouter chat SDK exposes no thinking-preservation request field,
+    /// so the controls are validated and stored but not applied to requests.
+    #[must_use]
+    pub const fn with_preservation_controls(
+        mut self,
+        controls: ProviderNativePreservationControlsV1,
+    ) -> Self {
+        self.preservation_controls = Some(controls);
+        self
+    }
+
+    /// Declares the reasoning effort applied to OpenRouter requests.
+    #[must_use]
+    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Validates that every declared option is applicable to this adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the header policy selects the
+    /// safe-header transport, which this SDK adapter cannot inject without
+    /// the `http` crate as a production dependency.
+    pub fn build(self) -> DtoResult<Self> {
+        if self.header_policy.as_ref().is_some_and(|policy| {
+            policy.selected_transport() == CredentialTransportMode::SafeHeader
+        }) {
+            return Err(ErrorDto::validation(
+                "unsupported_safe_header_transport",
+                "the OpenRouter adapter does not yet support safe-header credential transport",
+            ));
+        }
+        Ok(self)
+    }
+}
 
 /// OpenRouter driver with private SDK client state.
 pub struct OpenRouterDriver {
     resolved: ResolvedConfigDto,
     client: OpenRouterClient,
+    options: OpenRouterDriverOptions,
     outbound_calls_for_test: u32,
 }
 
@@ -51,7 +118,30 @@ impl OpenRouterDriver {
         material.into_parts_for_provider(Self::with_credential)
     }
 
+    /// Creates a driver from opaque startup-only provider material and
+    /// validated descriptor-driven options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the material does not select OpenRouter.
+    pub fn from_startup_material_with_options(
+        material: StartupProviderMaterial,
+        options: OpenRouterDriverOptions,
+    ) -> DtoResult<Self> {
+        material.into_parts_for_provider(move |resolved, credential| {
+            Self::with_credential_and_options(resolved, credential, options)
+        })
+    }
+
     fn with_credential(resolved: ResolvedConfigDto, credential: String) -> DtoResult<Self> {
+        Self::with_credential_and_options(resolved, credential, OpenRouterDriverOptions::default())
+    }
+
+    fn with_credential_and_options(
+        resolved: ResolvedConfigDto,
+        credential: String,
+        options: OpenRouterDriverOptions,
+    ) -> DtoResult<Self> {
         if resolved.provider().kind() != ProviderKindDto::Openrouter {
             return Err(ErrorDto::validation(
                 "invalid_openrouter_provider_config",
@@ -70,6 +160,7 @@ impl OpenRouterDriver {
         Ok(Self {
             resolved,
             client,
+            options,
             outbound_calls_for_test: 0,
         })
     }
@@ -90,7 +181,7 @@ impl OpenRouterDriver {
     /// Returns a safe policy or translation error before outbound work.
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
-        let _native_request = translate_request(request)?;
+        let _native_request = translate_request(request, &self.options)?;
         let _client = &self.client;
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
@@ -190,7 +281,7 @@ impl ModelExecutionDriver for OpenRouterDriver {
                 Err(safe_error("openrouter_request_rejected"))
             }));
         }
-        let native_request = match translate_request(&request) {
+        let native_request = match translate_request(&request, &self.options) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
@@ -278,8 +369,32 @@ where
             },
             StreamEvent::ReasoningDelta(content) => match ModelEventDto::reasoning_delta(content) {
                 Ok(event) => self.pending.push_back(Ok(event)),
-                Err(_) => self.fail("openrouter_invalid_reasoning"),
+                Err(_) => self.fail("provider_reasoning_stream_invalid"),
             },
+            StreamEvent::ReasoningDetailsDelta(details) => {
+                for detail in details {
+                    match detail.text.filter(|text| !text.is_empty()) {
+                        Some(text) => {
+                            match ModelEventDto::reasoning_delta_categorized(
+                                intention_model::ReasoningFragmentCategoryDto::Detail,
+                                text,
+                            ) {
+                                Ok(event) => self.pending.push_back(Ok(event)),
+                                Err(_) => {
+                                    self.fail("provider_reasoning_stream_invalid");
+                                    return;
+                                }
+                            }
+                        }
+                        // Encrypted or otherwise non-textual reasoning blocks
+                        // cannot be normalized and are never published raw.
+                        None => {
+                            self.fail("provider_reasoning_stream_invalid");
+                            return;
+                        }
+                    }
+                }
+            }
             StreamEvent::Done {
                 tool_calls,
                 finish_reason,
@@ -328,7 +443,6 @@ where
                 }
             }
             StreamEvent::Error(error) => self.fail_error(map_openrouter_error(&error)),
-            StreamEvent::ReasoningDetailsDelta(_) => {}
             _ => self.fail("openrouter_unsupported_stream_event"),
         }
     }
@@ -400,7 +514,10 @@ fn safe_error(code: &'static str) -> ProviderErrorDto {
     })
 }
 
-fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionRequest> {
+fn translate_request(
+    request: &ModelRequestDto,
+    options: &OpenRouterDriverOptions,
+) -> DtoResult<ChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
         messages.push(Message::new(Role::System, context));
@@ -408,16 +525,30 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionReque
     for message in request.messages() {
         messages.push(translate_message(message)?);
     }
-    ChatCompletionRequest::builder()
-        .model(request.model())
-        .messages(messages)
-        .build()
-        .map_err(|_| {
-            ErrorDto::validation(
-                "invalid_openrouter_request",
-                "OpenRouter request could not be translated",
-            )
-        })
+    let mut builder = ChatCompletionRequest::builder();
+    builder.model(request.model());
+    builder.messages(messages);
+    if let Some(effort) = options.reasoning_effort {
+        builder.reasoning_effort(map_effort(effort));
+    }
+    builder.build().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_openrouter_request",
+            "OpenRouter request could not be translated",
+        )
+    })
+}
+
+const fn map_effort(effort: ReasoningEffortLevel) -> Effort {
+    match effort {
+        ReasoningEffortLevel::None => Effort::None,
+        ReasoningEffortLevel::Minimal => Effort::Minimal,
+        ReasoningEffortLevel::Low => Effort::Low,
+        ReasoningEffortLevel::Medium => Effort::Medium,
+        ReasoningEffortLevel::High => Effort::High,
+        ReasoningEffortLevel::Xhigh => Effort::Xhigh,
+        ReasoningEffortLevel::Max => Effort::Max,
+    }
 }
 
 fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
@@ -444,6 +575,7 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
 mod tests {
     use super::*;
     use futures_util::FutureExt;
+    use intention_types::RunId;
 
     fn api_error(status: http::StatusCode) -> OpenRouterError {
         OpenRouterError::Api(Box::new(openrouter_rs::error::ApiErrorContext {
@@ -454,6 +586,44 @@ mod tests {
             metadata: None,
             kind: openrouter_rs::error::ApiErrorKind::Generic,
         }))
+    }
+
+    fn reasoning_detail(text: Option<&str>) -> openrouter_rs::types::ReasoningDetail {
+        serde_json::from_value(serde_json::json!({
+            "type": "reasoning.text",
+            "text": text,
+        }))
+        .expect("private SDK reasoning detail fixture decodes")
+    }
+
+    fn startup_material(credential: &str) -> StartupProviderMaterial {
+        let source = intention_config::ConfigSourceDto::Explicit(
+            intention_config::ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("openrouter-test-config.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture path is absolute"),
+        );
+        let toml = format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\ncredential = \"{credential}\"\n"
+        );
+        intention_config::ResolvedConfigDto::parse_startup_material(
+            intention_config::RawConfigInputDto::new(toml, source),
+        )
+        .expect("fixture startup material")
+    }
+
+    fn request() -> ModelRequestDto {
+        ModelRequestDto::new(
+            RunId::new(),
+            "fixture-model",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid")
     }
 
     #[test]
@@ -555,7 +725,7 @@ mod tests {
         invalid_reasoning.accept(StreamEvent::ReasoningDelta(String::new()));
         assert!(matches!(
             invalid_reasoning.pending.back(),
-            Some(Err(error)) if error.code() == "openrouter_invalid_reasoning"
+            Some(Err(error)) if error.code() == "provider_reasoning_stream_invalid"
         ));
 
         let mut invalid_usage = state();
@@ -576,14 +746,118 @@ mod tests {
             Some(Err(error)) if error.code() == "openrouter_invalid_tool_call"
         ));
 
+        // An empty reasoning-details event carries no reasoning and is a no-op.
+        let mut empty_details = state();
+        empty_details.accept(StreamEvent::ReasoningDetailsDelta(Vec::new()));
+        assert_eq!(empty_details.pending.len(), 1);
+        assert!(!empty_details.terminal);
+
+        // A reasoning detail without decodable text is malformed reasoning.
+        let mut encrypted_detail = state();
+        encrypted_detail.accept(StreamEvent::ReasoningDetailsDelta(vec![reasoning_detail(
+            None,
+        )]));
+        assert!(matches!(
+            encrypted_detail.pending.back(),
+            Some(Err(error)) if error.code() == "provider_reasoning_stream_invalid"
+        ));
+
         let mut unsupported = state();
-        unsupported.accept(StreamEvent::ReasoningDetailsDelta(Vec::new()));
-        assert_eq!(unsupported.pending.len(), 1);
         unsupported.fail("openrouter_stream_incomplete");
         assert!(matches!(
             unsupported.pending.back(),
             Some(Err(error)) if error.code() == "openrouter_stream_incomplete"
         ));
+    }
+
+    #[test]
+    fn reasoning_details_normalize_to_detail_deltas_in_array_order() {
+        let mut state = state();
+        state.accept(StreamEvent::ReasoningDetailsDelta(vec![
+            reasoning_detail(Some("detail one")),
+            reasoning_detail(Some("detail two")),
+        ]));
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::started()))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_delta_categorized(
+                intention_model::ReasoningFragmentCategoryDto::Detail,
+                "detail one",
+            )
+            .expect("valid detail delta")))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_delta_categorized(
+                intention_model::ReasoningFragmentCategoryDto::Detail,
+                "detail two",
+            )
+            .expect("valid detail delta")))
+        );
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn descriptor_options_reject_before_any_request_and_never_disclose_policy() {
+        let bearer = AuthenticationHeaderPolicyV1::new(
+            Vec::new(),
+            intention_model::CredentialTransportMode::Bearer,
+        )
+        .expect("bearer policy is valid");
+        let options = OpenRouterDriverOptions::new()
+            .with_header_policy(bearer)
+            .with_reasoning_effort(ReasoningEffortLevel::High)
+            .build()
+            .expect("descriptor options build");
+        assert!(!format!("{options:?}").contains("X-Custom-Auth"));
+
+        let safe_header = AuthenticationHeaderPolicyV1::new(
+            vec!["X-Custom-Auth".to_owned()],
+            intention_model::CredentialTransportMode::SafeHeader,
+        )
+        .expect("safe-header policy is valid");
+        assert_eq!(
+            OpenRouterDriverOptions::new()
+                .with_header_policy(safe_header)
+                .build()
+                .expect_err("safe-header transport is rejected before any request")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        let driver = OpenRouterDriver::from_startup_material_with_options(
+            startup_material("sk-fake-secret-12345"),
+            options,
+        )
+        .expect("driver builds with validated options");
+        let debug = format!("{driver:?}");
+        assert!(!debug.contains("sk-fake-secret-12345"));
+        assert!(!debug.contains("X-Custom-Auth"));
+        assert!(!debug.contains("reasoning"));
+        assert_eq!(driver.prepared_request_count(), 0);
+    }
+
+    #[test]
+    fn declared_reasoning_effort_is_applied_to_the_native_request() {
+        let options = OpenRouterDriverOptions::new()
+            .with_reasoning_effort(ReasoningEffortLevel::High)
+            .build()
+            .expect("descriptor options build");
+        let wire = serde_json::to_value(
+            translate_request(&request(), &options).expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(wire["reasoning"]["effort"], "high");
+
+        let default_wire = serde_json::to_value(
+            translate_request(&request(), &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(default_wire.get("reasoning").is_none());
     }
 
     #[test]

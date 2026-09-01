@@ -19,7 +19,7 @@ use async_openai::{
         ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
         ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
         CreateChatCompletionRequestArgs, CreateChatCompletionStreamResponse, FinishReason,
-        FunctionCall,
+        FunctionCall, ReasoningEffort,
     },
 };
 use futures_util::{
@@ -29,16 +29,294 @@ use futures_util::{
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
+    ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
+    ReasoningEffortLevel, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
+
+/// The closed reasoning output field paths a descriptor may declare.
+///
+/// This mirrors the closed `reasoning_content`, `reasoning`,
+/// `reasoning_details[].text`, and `reasoning_details[].message.thinking`
+/// output paths of the domain reasoning dialect.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ReasoningDialectFieldPath {
+    ReasoningContent,
+    Reasoning,
+    ReasoningDetailsText,
+    ReasoningDetailsMessageThinking,
+}
+
+impl ReasoningDialectFieldPath {
+    fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "reasoning_content" => Ok(Self::ReasoningContent),
+            "reasoning" => Ok(Self::Reasoning),
+            "reasoning_details[].text" => Ok(Self::ReasoningDetailsText),
+            "reasoning_details[].message.thinking" => Ok(Self::ReasoningDetailsMessageThinking),
+            _ => Err(ErrorDto::validation(
+                "invalid_reasoning_dialect_path",
+                "reasoning dialect path is not a closed output field path",
+            )),
+        }
+    }
+
+    /// Returns the category assigned to fragments decoded from this path.
+    const fn category(self) -> ReasoningFragmentCategoryDto {
+        match self {
+            Self::ReasoningContent | Self::Reasoning => ReasoningFragmentCategoryDto::Primary,
+            Self::ReasoningDetailsText | Self::ReasoningDetailsMessageThinking => {
+                ReasoningFragmentCategoryDto::Detail
+            }
+        }
+    }
+}
+
+/// The closed thinking activation forms a descriptor may declare.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThinkingActivation {
+    Enabled,
+    Adaptive,
+}
+
+/// One normalized reasoning fragment decoded from a native payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReasoningDeltaFragment {
+    category: ReasoningFragmentCategoryDto,
+    content: String,
+}
+
+/// A private typed decoder over the closed reasoning dialect field paths.
+///
+/// The decoder is descriptor-declared only: it decodes exactly the declared
+/// paths in declared order, preserving `reasoning_details` array-index order.
+/// The pinned `async-openai` delta type does not yet surface reasoning
+/// fields, so declared paths currently decode no fragments; the decoder keeps
+/// the closed mapping and ordering contract ready for when the SDK exposes
+/// them, and never parses raw JSON templates or unbounded payloads.
+#[derive(Clone, Debug)]
+struct ReasoningDialectDecoder {
+    paths: Vec<ReasoningDialectFieldPath>,
+}
+
+impl ReasoningDialectDecoder {
+    const fn new(paths: Vec<ReasoningDialectFieldPath>) -> Self {
+        Self { paths }
+    }
+
+    /// Decodes the declared reasoning fragments from one native delta.
+    ///
+    /// Declared paths are decoded in declared order, preserving
+    /// `reasoning_details` array-index order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the native payload is structurally malformed for
+    /// a declared path (for example `reasoning_details` is not an array).
+    fn decode(
+        &self,
+        delta: &ChatCompletionStreamResponseDelta,
+    ) -> Result<Vec<ReasoningDeltaFragment>, ()> {
+        let mut fragments = Vec::new();
+        for path in &self.paths {
+            for content in self.decode_path(*path, delta)? {
+                fragments.push(ReasoningDeltaFragment {
+                    category: path.category(),
+                    content,
+                });
+            }
+        }
+        Ok(fragments)
+    }
+
+    /// Decodes the raw content fragments of one declared path from the native
+    /// delta.
+    ///
+    /// The pinned `async-openai` delta type does not yet surface reasoning
+    /// fields, so every declared path currently yields no fragments; the
+    /// closed path mapping stays live for when the SDK exposes them.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the native payload is structurally malformed for
+    /// the declared path.
+    const fn decode_path(
+        &self,
+        _path: ReasoningDialectFieldPath,
+        _delta: &ChatCompletionStreamResponseDelta,
+    ) -> Result<Vec<String>, ()> {
+        Ok(Vec::new())
+    }
+}
+
+/// Additive descriptor-driven driver options; the default is unchanged.
+#[derive(Clone, Debug, Default)]
+pub struct GenericChatDriverOptions {
+    header_policy: Option<AuthenticationHeaderPolicyV1>,
+    dialect: Vec<ReasoningDialectFieldPath>,
+    thinking_activation: Option<ThinkingActivation>,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+    thinking_budget: Option<u32>,
+    thinking_token_budget: Option<u32>,
+}
+
+impl GenericChatDriverOptions {
+    /// Creates default driver options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Declares the descriptor header policy (names only, never values).
+    ///
+    /// The policy is validated by construction and stored privately; it is
+    /// never logged, serialized, or made durable.
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "Moving the validated policy into the option requires a drop that const fn cannot evaluate."
+    )]
+    pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
+        self.header_policy = Some(policy);
+        self
+    }
+
+    /// Declares the closed reasoning output field paths in declared order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a path is not a closed output field
+    /// path or a path is declared more than once.
+    pub fn with_reasoning_dialect(mut self, paths: Vec<String>) -> DtoResult<Self> {
+        let mut seen = std::collections::HashSet::with_capacity(paths.len());
+        let mut decoded = Vec::with_capacity(paths.len());
+        for path in paths {
+            let field = ReasoningDialectFieldPath::parse(&path)?;
+            if !seen.insert(field) {
+                return Err(ErrorDto::validation(
+                    "duplicate_reasoning_dialect_path",
+                    "a reasoning dialect field path may be declared at most once",
+                ));
+            }
+            decoded.push(field);
+        }
+        self.dialect = decoded;
+        Ok(self)
+    }
+
+    /// Declares the closed thinking activation form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the activation is not `enabled` or `adaptive`.
+    pub fn with_thinking(mut self, activation: &str) -> DtoResult<Self> {
+        self.thinking_activation = Some(match activation {
+            "enabled" => ThinkingActivation::Enabled,
+            "adaptive" => ThinkingActivation::Adaptive,
+            _ => {
+                return Err(ErrorDto::validation(
+                    "invalid_thinking_activation",
+                    "thinking activation must be enabled or adaptive",
+                ));
+            }
+        });
+        Ok(self)
+    }
+
+    /// Declares thinking activation through the `enable_thinking` form.
+    #[must_use]
+    pub const fn with_enable_thinking(mut self, enabled: bool) -> Self {
+        self.thinking_activation = if enabled {
+            Some(ThinkingActivation::Enabled)
+        } else {
+            None
+        };
+        self
+    }
+
+    /// Declares thinking activation through the `think` boolean form.
+    #[must_use]
+    pub const fn with_think(mut self, enabled: bool) -> Self {
+        self.thinking_activation = if enabled {
+            Some(ThinkingActivation::Enabled)
+        } else {
+            None
+        };
+        self
+    }
+
+    /// Declares thinking activation through the `think` closed effort-string form.
+    #[must_use]
+    pub const fn with_think_effort(mut self, effort: ReasoningEffortLevel) -> Self {
+        self.thinking_activation = Some(ThinkingActivation::Enabled);
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Declares the closed reasoning effort request field.
+    #[must_use]
+    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Declares the closed thinking budget request field.
+    #[must_use]
+    pub const fn with_thinking_budget(mut self, budget: u32) -> Self {
+        self.thinking_budget = Some(budget);
+        self
+    }
+
+    /// Declares the closed thinking token budget request field.
+    #[must_use]
+    pub const fn with_thinking_token_budget(mut self, budget: u32) -> Self {
+        self.thinking_token_budget = Some(budget);
+        self
+    }
+
+    /// Validates that every declared option is applicable to this adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the header policy selects the
+    /// safe-header transport, thinking activation or budgets are declared
+    /// (the pinned SDK exposes no thinking request field), or the maximum
+    /// reasoning effort is declared (the pinned SDK effort set has no max).
+    pub fn build(self) -> DtoResult<Self> {
+        if self.header_policy.as_ref().is_some_and(|policy| {
+            policy.selected_transport() == CredentialTransportMode::SafeHeader
+        }) {
+            return Err(ErrorDto::validation(
+                "unsupported_safe_header_transport",
+                "the generic chat adapter does not yet support safe-header credential transport",
+            ));
+        }
+        if self.thinking_activation.is_some()
+            || self.thinking_budget.is_some()
+            || self.thinking_token_budget.is_some()
+        {
+            return Err(ErrorDto::validation(
+                "unsupported_thinking_configuration",
+                "the generic chat adapter cannot yet express thinking activation or budgets",
+            ));
+        }
+        if self.reasoning_effort == Some(ReasoningEffortLevel::Max) {
+            return Err(ErrorDto::validation(
+                "unsupported_reasoning_effort",
+                "the generic chat adapter cannot express the maximum reasoning effort",
+            ));
+        }
+        Ok(self)
+    }
+}
 
 /// Generic Chat Completions driver with private SDK client state.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
     client: Client<OpenAIConfig>,
+    options: GenericChatDriverOptions,
     outbound_calls_for_test: u32,
 }
 
@@ -62,7 +340,30 @@ impl GenericChatDriver {
         material.into_parts_for_provider(Self::with_credential)
     }
 
+    /// Creates the driver from opaque startup-only provider material and
+    /// validated descriptor-driven options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the material selects a different provider kind.
+    pub fn from_startup_material_with_options(
+        material: StartupProviderMaterial,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
+        material.into_parts_for_provider(move |resolved, credential| {
+            Self::with_credential_and_options(resolved, credential, options)
+        })
+    }
+
     fn with_credential(resolved: ResolvedConfigDto, credential: String) -> DtoResult<Self> {
+        Self::with_credential_and_options(resolved, credential, GenericChatDriverOptions::default())
+    }
+
+    fn with_credential_and_options(
+        resolved: ResolvedConfigDto,
+        credential: String,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
         if resolved.provider().kind() != ProviderKindDto::GenericChatCompletionApi {
             return Err(ErrorDto::validation(
                 "invalid_generic_chat_provider_config",
@@ -83,6 +384,7 @@ impl GenericChatDriver {
         Ok(Self {
             resolved,
             client,
+            options,
             outbound_calls_for_test: 0,
         })
     }
@@ -103,7 +405,7 @@ impl GenericChatDriver {
     /// Returns a safe policy or translation error before outbound work.
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
-        let _native_request = translate_request(request)?;
+        let _native_request = translate_request(request, &self.options)?;
         let _client = &self.client;
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
@@ -186,7 +488,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 Err(non_retryable_error("generic_chat_request_rejected"))
             }));
         }
-        let native_request = match translate_request(&request) {
+        let native_request = match translate_request(&request, &self.options) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
@@ -194,6 +496,8 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
+        let dialect_decoder = (!self.options.dialect.is_empty())
+            .then(|| ReasoningDialectDecoder::new(self.options.dialect.clone()));
         let client = self.client.clone();
         Box::pin(
             stream::once(async move {
@@ -206,7 +510,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                             Box::pin(stream::once(async move { Err(map_openai_error(&error)) }))
                                 as ModelEventStream
                         },
-                        |native| normalize_stream(native, cancellation),
+                        |native| normalize_stream(native, cancellation, dialect_decoder),
                     )
             })
             .flatten(),
@@ -214,12 +518,16 @@ impl ModelExecutionDriver for GenericChatDriver {
     }
 }
 
-fn normalize_stream<S>(native: S, cancellation: ModelCancellationSignal) -> ModelEventStream
+fn normalize_stream<S>(
+    native: S,
+    cancellation: ModelCancellationSignal,
+    dialect_decoder: Option<ReasoningDialectDecoder>,
+) -> ModelEventStream
 where
     S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>> + Send + 'static,
 {
     Box::pin(stream::unfold(
-        GenericStreamState::new(native, cancellation),
+        GenericStreamState::new(native, cancellation, dialect_decoder),
         |mut state| async move { state.next().await.map(|event| (event, state)) },
     ))
 }
@@ -230,6 +538,7 @@ struct GenericStreamState<S> {
     pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
     legacy_tools: BTreeMap<u32, FunctionToolFragments>,
+    dialect_decoder: Option<ReasoningDialectDecoder>,
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
 }
@@ -238,7 +547,11 @@ impl<S> GenericStreamState<S>
 where
     S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>>,
 {
-    fn new(native: S, cancellation: ModelCancellationSignal) -> Self {
+    fn new(
+        native: S,
+        cancellation: ModelCancellationSignal,
+        dialect_decoder: Option<ReasoningDialectDecoder>,
+    ) -> Self {
         let mut pending = VecDeque::new();
         pending.push_back(Ok(ModelEventDto::started()));
         Self {
@@ -247,6 +560,7 @@ where
             pending,
             tools: BTreeMap::new(),
             legacy_tools: BTreeMap::new(),
+            dialect_decoder,
             terminal: false,
             terminal_reason: None,
         }
@@ -289,7 +603,9 @@ where
         }
         for choice in chunk.choices {
             if self.accept_delta(choice.index, choice.delta).is_err() {
-                self.fail("generic_chat_invalid_tool_call");
+                if !self.terminal {
+                    self.fail("generic_chat_invalid_tool_call");
+                }
                 return;
             }
             if let Some(reason) = choice.finish_reason
@@ -309,6 +625,28 @@ where
         choice_index: u32,
         delta: ChatCompletionStreamResponseDelta,
     ) -> Result<(), ()> {
+        if let Some(decoder) = &self.dialect_decoder {
+            match decoder.decode(&delta) {
+                Ok(fragments) => {
+                    for fragment in fragments {
+                        match ModelEventDto::reasoning_delta_categorized(
+                            fragment.category,
+                            fragment.content,
+                        ) {
+                            Ok(event) => self.pending.push_back(Ok(event)),
+                            Err(_) => {
+                                self.fail("provider_reasoning_stream_invalid");
+                                return Err(());
+                            }
+                        }
+                    }
+                }
+                Err(()) => {
+                    self.fail("provider_reasoning_stream_invalid");
+                    return Err(());
+                }
+            }
+        }
         if let Some(content) = delta.content.filter(|content| !content.is_empty()) {
             self.pending
                 .push_back(Ok(ModelEventDto::text_delta(content).map_err(|_| ())?));
@@ -488,7 +826,10 @@ fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
         .expect("fixed normalized provider error code is valid")
 }
 
-fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletionRequest> {
+fn translate_request(
+    request: &ModelRequestDto,
+    options: &GenericChatDriverOptions,
+) -> DtoResult<CreateChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
         messages.push(ChatCompletionRequestMessage::System(
@@ -501,20 +842,43 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletio
     for message in request.messages() {
         messages.push(translate_message(message)?);
     }
-    CreateChatCompletionRequestArgs::default()
-        .model(request.model())
-        .messages(messages)
-        .stream_options(ChatCompletionStreamOptions {
-            include_usage: Some(true),
-            include_obfuscation: None,
-        })
-        .build()
-        .map_err(|_| {
-            ErrorDto::validation(
-                "invalid_generic_chat_request",
-                "generic chat request could not be translated",
-            )
-        })
+    let mut args = CreateChatCompletionRequestArgs::default();
+    args.model(request.model());
+    args.messages(messages);
+    args.stream_options(ChatCompletionStreamOptions {
+        include_usage: Some(true),
+        include_obfuscation: None,
+    });
+    if let Some(effort) = options.reasoning_effort {
+        args.reasoning_effort(map_reasoning_effort(effort)?);
+    }
+    args.build().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_generic_chat_request",
+            "generic chat request could not be translated",
+        )
+    })
+}
+
+/// Maps the closed effort level onto the pinned SDK effort set.
+///
+/// # Errors
+///
+/// Returns a validation error for the maximum effort, which the pinned SDK
+/// effort set cannot express.
+fn map_reasoning_effort(effort: ReasoningEffortLevel) -> DtoResult<ReasoningEffort> {
+    match effort {
+        ReasoningEffortLevel::None => Ok(ReasoningEffort::None),
+        ReasoningEffortLevel::Minimal => Ok(ReasoningEffort::Minimal),
+        ReasoningEffortLevel::Low => Ok(ReasoningEffort::Low),
+        ReasoningEffortLevel::Medium => Ok(ReasoningEffort::Medium),
+        ReasoningEffortLevel::High => Ok(ReasoningEffort::High),
+        ReasoningEffortLevel::Xhigh => Ok(ReasoningEffort::Xhigh),
+        ReasoningEffortLevel::Max => Err(ErrorDto::validation(
+            "unsupported_reasoning_effort",
+            "the generic chat adapter cannot express the maximum reasoning effort",
+        )),
+    }
 }
 
 fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionRequestMessage> {
@@ -640,8 +1004,11 @@ mod tests {
         )
         .expect("request is valid");
 
-        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -684,8 +1051,11 @@ mod tests {
             None,
         )
         .expect("request is valid");
-        let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&follow_up, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         let assistant = &wire["messages"][1];
         assert!(assistant.get("content").is_none());
         assert_eq!(
@@ -885,6 +1255,7 @@ mod tests {
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
             ),
             ModelCancellationSignal::new(),
+            None,
         );
         state.accept_chunk(CreateChatCompletionStreamResponse {
             id: "fixture".to_owned(),
@@ -925,6 +1296,7 @@ mod tests {
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
             ),
             ModelCancellationSignal::new(),
+            None,
         );
         let mut modern = FunctionToolFragments::default();
         modern
@@ -1002,7 +1374,8 @@ mod tests {
 
     #[test]
     fn native_chunks_normalize_content_tools_and_terminal_finish() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        let mut state =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
         state.accept_chunk(chunk(
             vec![delta(
                 Some("answer"),
@@ -1045,7 +1418,7 @@ mod tests {
     #[test]
     fn native_chunks_reject_duplicate_finish_invalid_usage_and_incomplete_tools() {
         let mut duplicate =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
         duplicate.accept_chunk(chunk(
             vec![delta(None, None, Some(FinishReason::Stop))],
             None,
@@ -1060,7 +1433,7 @@ mod tests {
         ));
 
         let mut invalid_usage =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
         invalid_usage.accept_chunk(chunk(
             Vec::new(),
             Some(async_openai::types::chat::CompletionUsage {
@@ -1077,7 +1450,7 @@ mod tests {
         ));
 
         let mut incomplete =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
         incomplete.accept_chunk(chunk(
             vec![delta(
                 None,
@@ -1105,5 +1478,266 @@ mod tests {
             incomplete.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
+    }
+
+    #[test]
+    fn reasoning_dialect_accepts_each_closed_path_and_preserves_declared_order() {
+        for path in [
+            "reasoning_content",
+            "reasoning",
+            "reasoning_details[].text",
+            "reasoning_details[].message.thinking",
+        ] {
+            let options = GenericChatDriverOptions::new()
+                .with_reasoning_dialect(vec![path.to_owned()])
+                .expect("closed path is accepted")
+                .build()
+                .expect("options build");
+            assert_eq!(options.dialect.len(), 1);
+        }
+
+        let options = GenericChatDriverOptions::new()
+            .with_reasoning_dialect(vec![
+                "reasoning_details[].text".to_owned(),
+                "reasoning".to_owned(),
+                "reasoning_content".to_owned(),
+                "reasoning_details[].message.thinking".to_owned(),
+            ])
+            .expect("declared dialect is accepted")
+            .build()
+            .expect("options build");
+        assert_eq!(
+            options.dialect,
+            vec![
+                ReasoningDialectFieldPath::ReasoningDetailsText,
+                ReasoningDialectFieldPath::Reasoning,
+                ReasoningDialectFieldPath::ReasoningContent,
+                ReasoningDialectFieldPath::ReasoningDetailsMessageThinking,
+            ]
+        );
+        assert_eq!(
+            ReasoningDialectFieldPath::ReasoningContent.category(),
+            ReasoningFragmentCategoryDto::Primary
+        );
+        assert_eq!(
+            ReasoningDialectFieldPath::Reasoning.category(),
+            ReasoningFragmentCategoryDto::Primary
+        );
+        assert_eq!(
+            ReasoningDialectFieldPath::ReasoningDetailsText.category(),
+            ReasoningFragmentCategoryDto::Detail
+        );
+        assert_eq!(
+            ReasoningDialectFieldPath::ReasoningDetailsMessageThinking.category(),
+            ReasoningFragmentCategoryDto::Detail
+        );
+    }
+
+    #[test]
+    fn reasoning_dialect_rejects_unknown_paths_and_duplicates() {
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_reasoning_dialect(vec!["raw_thoughts".to_owned()])
+                .expect_err("unknown dialect path is rejected")
+                .code(),
+            "invalid_reasoning_dialect_path"
+        );
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_reasoning_dialect(vec![
+                    "reasoning_content".to_owned(),
+                    "reasoning_content".to_owned(),
+                ])
+                .expect_err("duplicate dialect path is rejected")
+                .code(),
+            "duplicate_reasoning_dialect_path"
+        );
+    }
+
+    #[test]
+    #[allow(
+        deprecated,
+        reason = "The private fixture constructs the SDK delta shape with its deprecated function-call field."
+    )]
+    fn reasoning_dialect_decoder_accepts_the_pinned_typed_delta_for_every_path() {
+        let options = GenericChatDriverOptions::new()
+            .with_reasoning_dialect(vec![
+                "reasoning_content".to_owned(),
+                "reasoning".to_owned(),
+                "reasoning_details[].text".to_owned(),
+                "reasoning_details[].message.thinking".to_owned(),
+            ])
+            .expect("declared dialect is accepted")
+            .build()
+            .expect("options build");
+        let decoder = ReasoningDialectDecoder::new(options.dialect);
+        let delta = ChatCompletionStreamResponseDelta {
+            content: Some("answer".to_owned()),
+            function_call: None,
+            tool_calls: None,
+            role: None,
+            refusal: None,
+        };
+        // The pinned SDK delta type does not surface reasoning fields, so no
+        // fragments decode and the stream state stays well-ordered.
+        assert_eq!(
+            decoder.decode(&delta).expect("typed delta is accepted"),
+            Vec::new()
+        );
+
+        let mut state = GenericStreamState::new(
+            stream::empty(),
+            ModelCancellationSignal::new(),
+            Some(decoder),
+        );
+        state.accept_delta(0, delta).expect("delta is accepted");
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::started()))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::text_delta("answer").expect("valid text")))
+        );
+        assert!(state.pending.is_empty());
+    }
+
+    #[test]
+    fn descriptor_options_reject_before_any_request_and_never_disclose_policy() {
+        let bearer = AuthenticationHeaderPolicyV1::new(
+            Vec::new(),
+            intention_model::CredentialTransportMode::Bearer,
+        )
+        .expect("bearer policy is valid");
+        let options = GenericChatDriverOptions::new()
+            .with_header_policy(bearer)
+            .with_reasoning_effort(ReasoningEffortLevel::High)
+            .build()
+            .expect("descriptor options build");
+        assert!(!format!("{options:?}").contains("X-Custom-Auth"));
+
+        let safe_header = AuthenticationHeaderPolicyV1::new(
+            vec!["X-Custom-Auth".to_owned()],
+            intention_model::CredentialTransportMode::SafeHeader,
+        )
+        .expect("safe-header policy is valid");
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_header_policy(safe_header)
+                .build()
+                .expect_err("safe-header transport is rejected before any request")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        let material = startup_material();
+        let driver = GenericChatDriver::from_startup_material_with_options(material, options)
+            .expect("driver builds with validated options");
+        let debug = format!("{driver:?}");
+        assert!(!debug.contains("fixture-credential-not-real-12345"));
+        assert!(!debug.contains("X-Custom-Auth"));
+        assert!(!debug.contains("reasoning"));
+        assert_eq!(driver.prepared_request_count(), 0);
+    }
+
+    #[test]
+    fn unapplicable_thinking_and_effort_declarations_reject_before_any_request() {
+        for options in [
+            GenericChatDriverOptions::new()
+                .with_thinking("enabled")
+                .expect("activation form is valid"),
+            GenericChatDriverOptions::new()
+                .with_thinking("adaptive")
+                .expect("activation form is valid"),
+            GenericChatDriverOptions::new().with_enable_thinking(true),
+            GenericChatDriverOptions::new().with_think(true),
+            GenericChatDriverOptions::new().with_think_effort(ReasoningEffortLevel::High),
+            GenericChatDriverOptions::new().with_thinking_budget(1024),
+            GenericChatDriverOptions::new().with_thinking_token_budget(4096),
+        ] {
+            assert_eq!(
+                options
+                    .build()
+                    .expect_err("unapplicable option is rejected")
+                    .code(),
+                "unsupported_thinking_configuration"
+            );
+        }
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_reasoning_effort(ReasoningEffortLevel::Max)
+                .build()
+                .expect_err("maximum effort is rejected")
+                .code(),
+            "unsupported_reasoning_effort"
+        );
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_thinking("bogus")
+                .expect_err("unknown activation is rejected")
+                .code(),
+            "invalid_thinking_activation"
+        );
+    }
+
+    #[test]
+    fn declared_reasoning_effort_is_applied_to_the_native_request() {
+        let options = GenericChatDriverOptions::new()
+            .with_reasoning_effort(ReasoningEffortLevel::Low)
+            .build()
+            .expect("descriptor options build");
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid");
+        let wire = serde_json::to_value(
+            translate_request(&request, &options).expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(wire["reasoning_effort"], "low");
+
+        let default_wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(default_wire.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn normalized_reasoning_failures_never_carry_raw_provider_text() {
+        let mut state =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+        state.fail("provider_reasoning_stream_invalid");
+        let error = state
+            .pending
+            .back()
+            .expect("failure is pending")
+            .as_ref()
+            .expect_err("failure is an error");
+        assert_eq!(error.code(), "provider_reasoning_stream_invalid");
+        let encoded = serde_json::to_string(error).expect("error serializes");
+        assert!(!encoded.contains("secret provider text"));
+        assert!(!encoded.contains("fixture-credential-not-real-12345"));
+    }
+
+    fn startup_material() -> StartupProviderMaterial {
+        ResolvedConfigDto::parse_startup_material(intention_config::RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"fixture-credential-not-real-12345\"",
+            intention_config::ConfigSourceDto::Explicit(
+                intention_config::ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-relay-generic-chat-options.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("generic chat config resolves")
     }
 }
