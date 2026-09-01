@@ -101,21 +101,22 @@ When a session has an active run, `SendUserTurnCommandDto` creates a durable que
 ## Persistence model
 
 SQLite is the M3 `intention-storage` implementation. It uses bundled SQLite
-with `rusqlite_migration` to apply supported schema migrations and rejects a
-newer on-disk schema. Storage combines:
+and creates the complete current storage schema directly on open; there is no
+migration chain and no version gate (ADR 0038). Storage combines:
 
 - normalized current-state tables for project, workspace-root, session, run, and queue queries;
 - append-only domain-event envelopes for auditability and event-tail recovery;
 - per-state-change session snapshots and snapshots for every affected run, including terminal and recovered runs; and
 - credential-free canonical `ConfigSnapshotDto` revisions keyed by `ConfigRevisionId`; the same revision ID with an equal snapshot is idempotent, while the same ID with a different snapshot fails with a typed conflict.
 
-The M3 schema contains `projects`, `workspace_roots`, `sessions`, `turns`,
-`runs`, `queued_turns`, `configuration_revisions`, `domain_events`,
-`session_snapshots`, and `run_snapshots`. M4 schema v2 retains those tables and
-adds `run_cursors`, `model_run_facts`, and `model_run_snapshots`. The fact index
+The current storage schema contains the `projects`, `workspace_roots`,
+`sessions`, `turns`, `runs`, `queued_turns`, `configuration_revisions`,
+`domain_events`, `session_snapshots`, and `run_snapshots` base tables, the M4
+`run_cursors`, `model_run_facts`, and `model_run_snapshots` tables, and the
+`tool_results` table, all created directly on open. The fact index
 references the canonical typed `domain_events` envelope; it stores no duplicate
-payload. Migration creates cursor-zero M4 snapshots for every M3 run using its
-original run projection, status, sequence, and revision with no synthetic facts.
+payload. Run cursors are seeded at zero per run by the write path
+(`ensure_run_cursors`), never by open-time hydration.
 
 ## Transaction and publication order
 
@@ -282,8 +283,8 @@ and observed state, not proof of external atomicity.
 | Atomic terminal promotion | Runtime and SQLite contract tests. | A terminal transition and next queued run start are one durable commit with ordered facts; the promotion retains the queued turn's proposed `RunId`, config snapshot, and revision despite later daemon config changes. |
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `interrupted` before readiness; no external work resumes. |
 | Replay-only consistency | Durable facade snapshot/tail/resync contract test. | One-shot subscription returns a current projection plus stored contiguous tail or typed resync, never a live stream. |
-| SQLite migration and config persistence | SQLite migration/future-schema and safe snapshot persistence fixtures. | Supported migrations apply, a future schema fails safely, and only credential-free snapshot data persists. |
-| M4 durable model facts and replay | Domain/storage/SQLite contract fixtures, M3-v1 migration fixture, and fault injection after fact envelope/index, projection, and snapshot stages. | Typed fact batches use exact cursors, bounded scoped replay never leaks a run, legacy M3 runs receive cursor-zero M4 snapshots with no synthetic facts, and every injected stage rolls back fact/index/cursor/projection/session/M4 snapshot state. |
+| SQLite current-schema creation and config persistence | SQLite current-schema and safe snapshot persistence fixtures. | The complete current schema is created directly on open, and only credential-free snapshot data persists. |
+| M4 durable model facts and replay | Domain/storage/SQLite contract fixtures and fault injection after fact envelope/index, projection, and snapshot stages. | Typed fact batches use exact cursors, bounded scoped replay never leaks a run, and every injected stage rolls back fact/index/cursor/projection/session/M4 snapshot state. |
 
 ## Quality-gate integration
 

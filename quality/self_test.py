@@ -1555,11 +1555,13 @@ def test_slice2_tag_registry_parity(root: Path) -> None:
             raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
 
 
-def test_slice2_storage_schema_declared_four(root: Path) -> None:
+def test_slice2_storage_schema_declared_single_live(root: Path) -> None:
     adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
     text = adr.read_text(encoding="utf-8")
-    if "SQLite storage schema | 3 to 4" not in text:
-        raise RuntimeError("ADR 0037 must declare the SQLite storage schema advance from 3 to 4")
+    if "SQLite storage schema | Logical version 1" not in text:
+        raise RuntimeError(
+            "ADR 0037 must declare the single live SQLite storage schema (logical version 1)"
+        )
 
 
 def test_slice2_protocol_versions_declared(root: Path) -> None:
@@ -1677,7 +1679,7 @@ def main() -> None:
         test_secret_fixture,
         test_adr_0037_slice2_ledger_exists_and_is_indexed,
         test_slice2_tag_registry_parity,
-        test_slice2_storage_schema_declared_four,
+        test_slice2_storage_schema_declared_single_live,
         test_slice2_protocol_versions_declared,
         test_slice2_test_targets_declared,
         test_slice2_no_new_crate,

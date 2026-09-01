@@ -91,7 +91,7 @@ per page, 16 references, and a 60-minute clarification wait.
 ## Ownership and preservation invariants
 
 Semantic canonical records/tags belong to `intention-domain`; public wire and
-frames to `intention-protocol`; storage contracts/migrations to
+frames to `intention-protocol`; storage contracts/schema to
 `intention-storage` and `intention-storage-sqlite`; registry/typed tool
 contracts to `intention-tools`; provider-private translation to provider
 crates; process/publication to `intention-daemon`; concrete assembly to
@@ -102,7 +102,11 @@ remain untouched, and M6–M9 behavior is untouched.
 
 M3/M4 config revisions, snapshots, sessions, runs, events, cursors, queue
 tickets, and bytes remain authoritative and unchanged. Historical runs receive
-no synthetic post-M5 records; current state is never reconstructed. The legacy
+no synthetic post-M5 records; current state is never reconstructed. SQLite
+storage keeps one live schema (logical version 1, ADR 0038) created directly
+on open: the schema-3-to-4 migration chain, `user_version` gate, and
+byte-preservation fixtures are removed; M3/M4 durable authorities remain
+unchanged. The legacy
 M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) is removed by
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md); no synthetic
 binding is ever materialized for historical runs.
@@ -111,7 +115,7 @@ binding is ever materialized for historical runs.
 
 Required evidence covers DTO round trips; canonical golden bytes/digests;
 compatible-minor, incompatible-major, and unnegotiated fail-closed negotiation
-fixtures; M3/M4 preservation; future-schema rejection; fake-secret absence;
+fixtures; current-schema creation and round trips; fake-secret absence;
 and cross-platform determinism. Required gates are `make quick`, `make verify`,
 `docs-check`, and Linux/Windows CI.
 

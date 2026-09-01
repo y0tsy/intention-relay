@@ -234,7 +234,7 @@ transport and adapter constraints are in [Daemon, Transport, and Adapters](03-da
 
 ### Deliver
 
-- repository DTO contracts and bundled-SQLite implementation using `rusqlite_migration`;
+- repository DTO contracts and the bundled-SQLite implementation creating the single current storage schema directly on open;
 - activated `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite` ownership, including the required storage/application/runtime-to-config snapshot edges;
 - session/project/workspace-root state with stable `WorkspaceId` association;
 - canonical credential-free `ConfigSnapshotDto` revision persistence: an equal snapshot for the same `ConfigRevisionId` is idempotent, while a different snapshot for that ID fails with a typed conflict; and immutable per-started/promoted-run attachment;
@@ -283,8 +283,9 @@ startup; accepted and promoted runs retain their own immutable snapshot/revision
 M3 applies TOML at startup only. A TOML edit becomes effective on restart and
 cannot mutate a running daemon or an existing run.
 
-The SQLite backend owns bundled SQLite migrations through `rusqlite_migration`,
-semantic transactional repository methods, normalized current projections,
+The SQLite backend creates the single current storage schema directly on open
+(no migration chain or version gate), and owns semantic transactional
+repository methods, normalized current projections,
 append-only events, and per-state-change session/run snapshots. Its public
 storage contract remains DTO-only: it does not expose a SQL connection,
 transaction closure, path, or SQLite row.
@@ -485,8 +486,8 @@ inside its slice, each with its own contract, transaction, and outcome test.
   `crates/intention-application/tests/m5_control_plane_runtime.rs`,
   `crates/intention-client/tests/control_plane_client.rs`,
   `crates/intention-client/tests/session_selection_client.rs`,
-  `crates/intention-model/tests/m6_reasoning_surface.rs`, and the schema-4
-  tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`;
+  `crates/intention-model/tests/m6_reasoning_surface.rs`, and the
+  current-schema tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`;
 - slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
   conclusion bounds; class resolution; corridor admission and reservation
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
@@ -505,8 +506,9 @@ inside its slice, each with its own contract, transaction, and outcome test.
   quality-policy change;
 - M3/M4 startup-only configuration, recorded revisions, persisted run
   snapshots, queue tickets, sessions, runs, events, and bytes remain
-  authoritative and unchanged; Slice 2 adds SQLite schema 4 additively with
-  M3/M4 rows byte-preserved (schema-4 tests in
+  authoritative and unchanged; SQLite storage is the single live schema
+  created directly on open (the schema-3-to-4 migration chain and preservation
+  fixtures are removed by ADR 0038; current-schema tests in
   `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`);
 - health, discovery, and pricing create no RunId, reason, lifecycle
   transition, scheduler candidate, tool permission, child edge, verifier

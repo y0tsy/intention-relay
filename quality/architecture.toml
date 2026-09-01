@@ -103,7 +103,7 @@ public_resource_patterns = [
 "intention-application" = []
 "intention-runtime" = ["futures-executor", "futures-util"]
 "intention-storage" = ["serde_json"]
-"intention-storage-sqlite" = ["rusqlite", "rusqlite_migration", "serde_json", "tempfile"]
+"intention-storage-sqlite" = ["rusqlite", "serde_json", "tempfile"]
 "intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
 "intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
 "intention-provider-generic-chat" = ["async-openai", "futures-util", "http", "serde_json"]
@@ -205,8 +205,8 @@ coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage-sqlite"
-responsibility = "SQLite schema, migrations, projections, and repository implementation."
-test_target = "migration and transaction fault-injection tests"
+responsibility = "SQLite current-schema creation, projections, and repository implementation."
+test_target = "current-schema and transaction fault-injection tests"
 test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "m5_control_plane_repos", "sqlite_contracts"]
 coverage_tier = "B"
 

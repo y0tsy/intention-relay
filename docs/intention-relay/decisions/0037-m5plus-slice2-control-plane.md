@@ -32,7 +32,7 @@ unchanged. Historical runs receive no synthetic post-M5 records.
 | Local protocol | 1.1, unchanged |
 | Public DTO schema | 1.1, additive, unchanged |
 | TOML configuration schema | 1, unchanged |
-| SQLite storage schema | 3 to 4 (additive migration; `user_version` = 4; M3/M4 rows byte-preserved; no synthetic post-M5 records on historical runs) |
+| SQLite storage schema | Logical version 1: single live schema created directly on open; no migration chain and no version gate ([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)) |
 
 ## Negotiated capabilities and failure semantics
 
@@ -138,9 +138,11 @@ No new crate, dependency, feature, coverage tier, or exclusion is introduced.
 Skeleton `intention-headroom`, `intention-plans`, `intention-vfr`, and
 `intention-tauri` remain untouched, and M6-M9 behavior is untouched. M3/M4
 config revisions, snapshots, sessions, runs, events, cursors, queue tickets,
-and bytes remain authoritative and unchanged. The schema-4 migration is
-additive: `user_version` moves to 4, M3/M4 rows are byte-preserved, and no
-synthetic post-M5 record is added to historical runs. The legacy M4 selection
+and bytes remain authoritative and unchanged. The storage schema is the
+single live schema (logical version 1) created directly on open under
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no migration
+chain, no `user_version` gate, and no synthetic post-M5 record added to
+historical runs. The legacy M4 selection
 bridge (tag `legacy-m4-selection-binding` 0x020C) is removed by
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no synthetic
 binding is ever materialized for historical runs.
@@ -158,7 +160,7 @@ anchors:
 | Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `crates/intention-application/tests/m5_control_plane_runtime.rs`; `crates/intention-client/tests/control_plane_client.rs` |
 | Configuration reload and editing | `crates/intention-config/tests/m5_control_plane_config.rs` |
 | Reasoning surface (DTO-level) | `crates/intention-model/tests/m6_reasoning_surface.rs` |
-| SQLite schema-4 migration | `crates/intention-storage-sqlite/tests/sqlite_contracts.rs` (schema-4 tests) |
+| SQLite single current storage schema | `crates/intention-storage-sqlite/tests/sqlite_contracts.rs` (current-schema tests) |
 
 Required gates are `make quick`, `make verify`, `docs-check`, and Linux/Windows
 CI.
@@ -175,9 +177,12 @@ user-kind parser, or provider-native live extraction beyond declared paths.
 Protocol 1.1 and public DTO schema 1.1 remain the active advertised versions;
 `intention-protocol` continues to define `CURRENT_PROTOCOL_VERSION` and
 `CURRENT_DTO_SCHEMA_VERSION`, and the runtime crates reference them. TOML
-configuration schema remains 1. SQLite storage schema advances from 3 to 4
-additively: the migration preserves M3/M4 rows byte-for-byte and adds the
-control-plane tables listed in Appendix B. Historical M3/M4 fixtures and
+configuration schema remains 1. SQLite storage is a single live schema
+(logical version 1) created directly on open: the control-plane tables listed
+in Appendix B are part of that schema, and the 3-to-4 migration chain and
+`user_version` gate are removed by
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md). Historical
+M3/M4 fixtures and
 committed v1 protocol fixtures remain 1.0 and are not rewritten. Same-major
 compatibility (1.0 to 1.1) is superseded by
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): negotiation
@@ -289,10 +294,11 @@ Required column says otherwise. No table cell spans multiple lines.
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.ordered_messages | Vec<String> | Yes | 1..=1024 nonblank entries; up to 1 MiB aggregate; `model_context_projection_invalid`/`_too_large` |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.model_context_digest | String | Yes | 64 lowercase hex |
 
-## Appendix B: SQLite schema-4 migration table inventory
+## Appendix B: SQLite control-plane table inventory
 
-The schema-4 migration adds the following durable tables. Each table is
-additive; M3/M4 tables and rows are byte-preserved and never rewritten.
+The control-plane DDL is part of the single current storage schema (logical
+version 1, ADR 0038) and creates the following durable tables directly on
+open; M3/M4 tables and rows are never rewritten.
 
 | Table | Purpose |
 | --- | --- |

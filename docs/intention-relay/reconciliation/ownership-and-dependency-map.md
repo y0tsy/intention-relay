@@ -54,7 +54,7 @@
 | Configuration reload and editing | `intention-config` | `intention-config` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_config` | Existing declared tiers |
 | Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `intention-application` | `intention-domain` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_runtime`, `control_plane_client` | Existing declared tiers |
 | Reasoning surface (DTO-level) | `intention-model` | `intention-domain` | domain registry | existing storage owners | protocol DTOs | `m6_reasoning_surface` | Existing declared tiers |
-| Schema-4 migration and durable rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `sqlite_contracts` (schema-4 tests) | Existing declared tiers |
+| Current storage schema and durable rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `sqlite_contracts` (current-schema tests) | Existing declared tiers |
 | Daemon hosting and degraded gate | `intention-daemon` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
 | Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `control_plane_client`, `session_selection_client` | Existing declared tiers |
 | Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |

@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 125 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 124 dependency entries
 - [MIT License](#MIT), used by 43 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 19 dependency entries
 - [ISC License](#ISC), used by 5 dependency entries
@@ -4350,7 +4350,6 @@ limitations under the License.
 - [rand_chacha 0.9.0](https://github.com/rust-random/rand)
 - [ref-cast-impl 1.0.27](https://github.com/dtolnay/ref-cast)
 - [ref-cast 1.0.27](https://github.com/dtolnay/ref-cast)
-- [rusqlite_migration 2.6.0](https://github.com/cljoly/rusqlite_migration)
 - [ryu 1.0.23](https://github.com/dtolnay/ryu)
 - [serde 1.0.229](https://github.com/serde-rs/serde)
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)

@@ -8,10 +8,9 @@ use intention_config::{
 };
 use intention_domain::{
     ContextPreservationCapability, CreateSessionCommandDto, CredentialTransportMode,
-    DomainEventDto, ModelCapabilitySetV1, ModelInputCapability, ModelRunFactDto,
-    ModelRunFactEventDto, ModelRunFactInputDto, ProviderDriverContractRevisionDto,
+    DomainEventDto, ModelCapabilitySetV1, ModelInputCapability, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
-    ReasoningCapability, RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunStatusDto,
+    ReasoningCapability, RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto,
     StructuredOutputCapability, ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
     canonical::contains_credential_shape, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
@@ -33,10 +32,9 @@ use intention_storage::{
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    ConfigRevisionId, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId, RunId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
+    TimestampDto, TurnId, WorkspaceId,
 };
-use rusqlite_migration::{M, Migrations};
 use tempfile::TempDir;
 
 fn time(value: i64) -> TimestampDto {
@@ -813,21 +811,7 @@ fn queue_tickets_never_reuse_and_terminal_promotion_selects_oldest() {
 }
 
 #[test]
-fn migration_rejects_future_schema_and_config_snapshot_is_safe_to_persist() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let path = directory.path().join("future.sqlite");
-    let connection = sqlite::Connection::open(&path).expect("fixture database opens");
-    connection
-        .pragma_update(None, "user_version", 99_i64)
-        .expect("version sets");
-    drop(connection);
-    let future_result = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned()).expect("absolute path"),
-    );
-    assert_eq!(
-        future_result.err().expect("future schema rejects").code(),
-        "unsupported_storage_schema"
-    );
+fn config_snapshot_is_safe_to_persist() {
     let (_directory, store) = repository();
     store
         .accept_configuration_revision(snapshot())
@@ -835,20 +819,18 @@ fn migration_rejects_future_schema_and_config_snapshot_is_safe_to_persist() {
 }
 
 #[test]
-fn slice1_storage_schema_four_remains_authoritative() {
+fn current_storage_schema_is_created_completely_and_remains_authoritative() {
     let directory = TempDir::new().expect("temporary directory exists");
     let path = directory.path().join("storage.sqlite");
-    let _store = SqliteStorageRepository::open(
+    let store = SqliteStorageRepository::open(
         SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned()).expect("absolute path"),
     )
     .expect("database opens");
+    // The complete current schema is created directly on open: every table and
+    // explicit index exists exactly once, with no legacy or duplicate objects.
     let connection = sqlite::Connection::open(path).expect("database reopens");
-    let version: i64 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .expect("schema version reads");
-    assert_eq!(version, 4);
-    let expected = [
-        // Preserved M3/M4 tables.
+    let expected_tables = [
+        // M3/M4 base tables.
         "projects",
         "workspace_roots",
         "sessions",
@@ -863,7 +845,7 @@ fn slice1_storage_schema_four_remains_authoritative() {
         "model_run_facts",
         "model_run_snapshots",
         "tool_results",
-        // Additive schema-4 tables.
+        // Control-plane tables.
         "provider_kind_descriptor_revisions",
         "provider_profile_revisions",
         "provider_profile_tombstones",
@@ -880,7 +862,19 @@ fn slice1_storage_schema_four_remains_authoritative() {
         "provider_catalog_removal_candidates",
         "held_recovered_runs",
     ];
-    for table in expected {
+    let table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table count reads");
+    assert_eq!(
+        table_count,
+        expected_tables.len() as i64,
+        "exactly the current tables exist, no legacy tables"
+    );
+    for table in expected_tables {
         let present: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -888,24 +882,35 @@ fn slice1_storage_schema_four_remains_authoritative() {
                 |row| row.get(0),
             )
             .expect("table lookup");
-        assert_eq!(present, 1, "missing table {table}");
+        assert_eq!(present, 1, "table {table} must be created exactly once");
     }
-    let active_run_object: String = connection
-        .query_row(
-            "SELECT type FROM sqlite_master WHERE name='one_active_run_per_session'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("active-run object lookup");
-    assert_eq!(active_run_object, "index");
-    let pending_object: String = connection
-        .query_row(
-            "SELECT type FROM sqlite_master WHERE name='one_pending_provider_catalog_candidate'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("pending-candidate object lookup");
-    assert_eq!(pending_object, "index");
+    let expected_indexes = [
+        "one_active_run_per_session",
+        "provider_kind_descriptor_revisions_by_catalog",
+        "provider_profile_revisions_by_catalog",
+        "provider_profile_revisions_by_kind",
+        "configuration_audit_by_catalog",
+        "configuration_audit_by_run",
+        "session_provider_defaults_by_profile",
+        "resolved_run_provider_selections_by_profile",
+        "resolved_run_provider_selections_by_session",
+        "unavailable_provider_queue_fifo",
+        "unavailable_provider_queue_by_profile",
+        "provider_usage_aggregates_by_revision",
+        "provider_usage_facts_by_profile",
+        "one_pending_provider_catalog_candidate",
+        "held_recovered_runs_by_admission",
+    ];
+    for index in expected_indexes {
+        let present: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |row| row.get(0),
+            )
+            .expect("index lookup");
+        assert_eq!(present, 1, "index {index} must be created exactly once");
+    }
     let state_seed: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM provider_catalog_state WHERE singleton_id=1 AND status='preparing'",
@@ -914,6 +919,19 @@ fn slice1_storage_schema_four_remains_authoritative() {
         )
         .expect("state seed lookup");
     assert_eq!(state_seed, 1);
+    // The freshly created schema is usable end to end.
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, TurnId::new(), run, "usable");
+    assert_eq!(
+        store
+            .load_session_snapshot(session)
+            .expect("session snapshot loads")
+            .active_run()
+            .expect("accepted run is active")
+            .run_id(),
+        run
+    );
 }
 
 #[test]
@@ -1230,74 +1248,8 @@ fn tool_result_reread_is_typed_not_found_without_durably_committed_evidence() {
 }
 
 // ============================================================================
-// Schema-4 migration, preservation, and fake-secret fixtures.
+// Current-schema and fake-secret fixtures.
 // ============================================================================
-
-/// A byte-exact captured cell typed by SQLite storage class: text stays raw
-/// bytes, blobs stay raw bytes, and reals keep their exact bit pattern.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum CapturedValue {
-    Null,
-    Integer(i64),
-    Real(u64),
-    Text(Vec<u8>),
-    Blob(Vec<u8>),
-}
-
-/// Captures every row of a table as typed values in rowid order, tagged with
-/// the table name, so pre-migration and post-migration bytes compare exactly.
-fn capture_rows(connection: &sqlite::Connection, table: &str) -> Vec<(String, Vec<CapturedValue>)> {
-    let mut statement = connection
-        .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
-        .expect("capture statement prepares");
-    let column_count = statement.column_count();
-    let mut rows = statement.query([]).expect("capture query runs");
-    let mut captured = Vec::new();
-    while let Some(row) = rows.next().expect("capture row reads") {
-        let mut values = Vec::with_capacity(column_count);
-        for index in 0..column_count {
-            let value = match row.get_ref(index).expect("capture value reads") {
-                sqlite::types::ValueRef::Null => CapturedValue::Null,
-                sqlite::types::ValueRef::Integer(value) => CapturedValue::Integer(value),
-                sqlite::types::ValueRef::Real(value) => CapturedValue::Real(value.to_bits()),
-                sqlite::types::ValueRef::Text(text) => CapturedValue::Text(text.to_vec()),
-                sqlite::types::ValueRef::Blob(blob) => CapturedValue::Blob(blob.to_vec()),
-            };
-            values.push(value);
-        }
-        captured.push((table.to_string(), values));
-    }
-    captured
-}
-
-/// A valid opaque envelope for one durable reasoning-delta domain event.
-fn reasoning_delta_envelope(
-    session_id: SessionId,
-    run_id: RunId,
-    turn_id: TurnId,
-    event_id: EventId,
-    sequence: u64,
-) -> EventEnvelopeDto<DomainEventDto> {
-    let fact = ModelRunFactDto::new(
-        RunEventCursorDto::new(sequence),
-        ModelRunFactInputDto::reasoning_delta_recorded("tail-only reasoning")
-            .expect("reasoning fact is valid"),
-    )
-    .expect("model fact is valid");
-    let payload = ModelRunFactEventDto::new(session_id, run_id, fact, time(3));
-    EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
-            event_id,
-            session_id,
-            Some(run_id),
-            Some(turn_id),
-            SessionEventSequenceDto::new(sequence),
-            time(3),
-        ),
-        DomainEventDto::ReasoningDeltaRecorded(payload),
-    )
-}
 
 fn fixture_capability_envelope() -> ModelCapabilitySetV1 {
     ModelCapabilitySetV1 {
@@ -1444,419 +1396,6 @@ fn accept_candidate(
             operation_id: operation_id.to_owned(),
         })
         .expect("fixture catalog accepts");
-}
-
-#[test]
-fn schema4_migration_preserves_schema_three_rows_byte_for_byte() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let path = directory.path().join("legacy-v3-schema4.sqlite");
-    let connection = sqlite::Connection::open(&path).expect("legacy database opens");
-    connection
-        .execute_batch("PRAGMA foreign_keys = ON;")
-        .expect("foreign keys enable");
-    connection
-        .execute_batch(intention_storage_sqlite::TEST_SCHEMA_3_SQL)
-        .expect("production schema three creates");
-    let project_id = ProjectId::new();
-    let workspace_id = WorkspaceId::new();
-    let session_id = SessionId::new();
-    let revision_id = ConfigRevisionId::new();
-    let turn_id = TurnId::new();
-    let run_id = RunId::new();
-    let fact_event_id = EventId::new();
-    let tool_event_id = EventId::new();
-    let call_id = intention_types::ToolCallId::new();
-    connection
-        .execute(
-            "INSERT INTO projects(project_id) VALUES (?1)",
-            [project_id.to_string()],
-        )
-        .expect("project inserts");
-    connection
-        .execute(
-            "INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2)",
-            sqlite::params![
-                workspace_id.to_string(),
-                workspace_root("schema4-preserve").as_str()
-            ],
-        )
-        .expect("workspace inserts");
-    connection
-        .execute(
-            "INSERT INTO configuration_revisions(revision_id, snapshot_json) VALUES (?1, ?2)",
-            sqlite::params![
-                revision_id.to_string(),
-                serde_json::to_string(&snapshot()).expect("safe snapshot serializes")
-            ],
-        )
-        .expect("configuration revision inserts");
-    connection
-        .execute(
-            "INSERT INTO sessions(session_id, project_id, workspace_id, workspace_root, mode, config_revision_id, last_sequence, next_queue_ticket) VALUES (?1, ?2, ?3, ?4, 'build', ?5, 4, 0)",
-            sqlite::params![
-                session_id.to_string(),
-                project_id.to_string(),
-                workspace_id.to_string(),
-                workspace_root("schema4-preserve").as_str(),
-                revision_id.to_string()
-            ],
-        )
-        .expect("session inserts");
-    connection
-        .execute(
-            "INSERT INTO turns(session_id, turn_id, content, proposed_run_id, config_revision_id, outcome, queue_ticket) VALUES (?1, ?2, 'turn', ?3, ?4, 'started', NULL)",
-            sqlite::params![
-                session_id.to_string(),
-                turn_id.to_string(),
-                run_id.to_string(),
-                revision_id.to_string()
-            ],
-        )
-        .expect("started turn inserts");
-    connection
-        .execute(
-            "INSERT INTO runs(run_id, session_id, turn_id, status, config_revision_id) VALUES (?1, ?2, ?3, 'running', ?4)",
-            sqlite::params![
-                run_id.to_string(),
-                session_id.to_string(),
-                turn_id.to_string(),
-                revision_id.to_string()
-            ],
-        )
-        .expect("run inserts");
-    connection
-        .execute(
-            "INSERT INTO domain_events(event_id, session_id, sequence, envelope_json) VALUES (?1, ?2, 1, ?3)",
-            sqlite::params![
-                fact_event_id.to_string(),
-                session_id.to_string(),
-                serde_json::to_string(&reasoning_delta_envelope(
-                    session_id,
-                    run_id,
-                    turn_id,
-                    fact_event_id,
-                    1
-                ))
-                .expect("fact envelope serializes")
-            ],
-        )
-        .expect("fact event inserts");
-    connection
-        .execute(
-            "INSERT INTO domain_events(event_id, session_id, sequence, envelope_json) VALUES (?1, ?2, 2, ?3)",
-            sqlite::params![
-                tool_event_id.to_string(),
-                session_id.to_string(),
-                serde_json::to_string(&tool_lifecycle_envelope(
-                    session_id,
-                    run_id,
-                    turn_id,
-                    tool_event_id,
-                    call_id,
-                    2
-                ))
-                .expect("tool lifecycle envelope serializes")
-            ],
-        )
-        .expect("tool event inserts");
-    let run_projection = intention_domain::RunProjectionDto::new(
-        session_id,
-        run_id,
-        turn_id,
-        RunStatusDto::Running,
-        revision_id,
-    );
-    let session_projection = intention_domain::SessionProjectionDto::new(
-        project_id,
-        session_id,
-        workspace_id,
-        workspace_root("schema4-preserve"),
-        RunModeDto::Build,
-        Some(revision_id),
-        Some(run_projection),
-        Vec::new(),
-        SessionEventSequenceDto::new(4),
-    )
-    .expect("legacy session projection is valid");
-    connection
-        .execute(
-            "INSERT INTO session_snapshots(session_id, sequence, projection_json) VALUES (?1, 4, ?2)",
-            sqlite::params![
-                session_id.to_string(),
-                serde_json::to_string(&session_projection).expect("session projection serializes")
-            ],
-        )
-        .expect("session snapshot inserts");
-    connection
-        .execute(
-            "INSERT INTO run_snapshots(run_id, session_id, sequence, projection_json) VALUES (?1, ?2, 4, ?3)",
-            sqlite::params![
-                run_id.to_string(),
-                session_id.to_string(),
-                serde_json::to_string(&run_projection).expect("run projection serializes")
-            ],
-        )
-        .expect("run snapshot inserts");
-    connection
-        .execute(
-            "INSERT INTO run_cursors(run_id, session_id, cursor) VALUES (?1, ?2, 0)",
-            sqlite::params![run_id.to_string(), session_id.to_string()],
-        )
-        .expect("run cursor inserts");
-    connection
-        .execute(
-            "INSERT INTO model_run_facts(run_id, cursor, event_id) VALUES (?1, 1, ?2)",
-            sqlite::params![run_id.to_string(), fact_event_id.to_string()],
-        )
-        .expect("model fact inserts");
-    let model_snapshot = intention_domain::RunSnapshotDto::new(
-        session_id,
-        run_id,
-        SessionEventSequenceDto::new(4),
-        intention_domain::ModelRunProjectionDto::new(
-            run_projection,
-            intention_domain::RunEventCursorDto::new(0),
-            None,
-            "",
-            None,
-            None,
-            None,
-        )
-        .expect("model projection is valid"),
-    )
-    .expect("model run snapshot is valid");
-    connection
-        .execute(
-            "INSERT INTO model_run_snapshots(run_id, session_id, sequence, cursor, snapshot_json) VALUES (?1, ?2, 4, 0, ?3)",
-            sqlite::params![
-                run_id.to_string(),
-                session_id.to_string(),
-                serde_json::to_string(&model_snapshot).expect("model snapshot serializes")
-            ],
-        )
-        .expect("model run snapshot inserts");
-    connection
-        .execute(
-            "INSERT INTO tool_results(run_id, session_id, call_id, event_id, kind, content, occurred_at) VALUES (?1, ?2, ?3, ?4, 'read', 'file content', 3)",
-            sqlite::params![
-                run_id.to_string(),
-                session_id.to_string(),
-                call_id.to_string(),
-                tool_event_id.to_string()
-            ],
-        )
-        .expect("tool result inserts");
-    connection
-        .pragma_update(None, "user_version", 3_i64)
-        .expect("schema three version sets");
-
-    let tables = [
-        "projects",
-        "workspace_roots",
-        "configuration_revisions",
-        "sessions",
-        "turns",
-        "runs",
-        "queued_turns",
-        "domain_events",
-        "session_snapshots",
-        "run_snapshots",
-        "run_cursors",
-        "model_run_facts",
-        "model_run_snapshots",
-        "tool_results",
-    ];
-    let mut before = Vec::new();
-    for table in tables {
-        before.extend(capture_rows(&connection, table));
-    }
-    drop(connection);
-
-    let repository = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned())
-            .expect("database path is absolute"),
-    )
-    .expect("schema three database migrates to schema four");
-    let replay = repository
-        .load_current_run_replay(session_id, run_id)
-        .expect("migrated run replay loads");
-    assert_eq!(replay.snapshot().cursor().value(), 0);
-    assert_eq!(replay.snapshot().at_sequence().value(), 4);
-    drop(repository);
-
-    let connection = sqlite::Connection::open(&path).expect("migrated database reopens");
-    let version: i64 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .expect("schema version reads");
-    assert_eq!(version, 4);
-    let foreign_keys: i64 = connection
-        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
-        .expect("foreign keys pragma reads");
-    assert_eq!(foreign_keys, 1);
-    let mut after = Vec::new();
-    for table in tables {
-        after.extend(capture_rows(&connection, table));
-    }
-    assert_eq!(
-        before, after,
-        "every pre-existing M3/M4 row is byte-identical after migration to schema four"
-    );
-    for query in [
-        "SELECT COUNT(*) FROM provider_kind_descriptor_revisions",
-        "SELECT COUNT(*) FROM provider_profile_revisions",
-        "SELECT COUNT(*) FROM resolved_run_provider_selections",
-    ] {
-        let count: i64 = connection
-            .query_row(query, [], |row| row.get(0))
-            .expect("provider row count loads");
-        assert_eq!(
-            count, 0,
-            "no synthetic provider rows for historical runs: {query}"
-        );
-    }
-    drop(connection);
-
-    // Reopening repeats the preservation without rewriting any row.
-    let reopened = SqliteStorageRepository::open(
-        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned())
-            .expect("database path is absolute"),
-    )
-    .expect("database reopens");
-    let replay = reopened
-        .load_current_run_replay(session_id, run_id)
-        .expect("replay reloads");
-    assert_eq!(replay.snapshot().cursor().value(), 0);
-    drop(reopened);
-    let connection = sqlite::Connection::open(&path).expect("database reopens raw");
-    let version: i64 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .expect("schema version reads");
-    assert_eq!(version, 4);
-    let mut after_reopen = Vec::new();
-    for table in tables {
-        after_reopen.extend(capture_rows(&connection, table));
-    }
-    assert_eq!(
-        before, after_reopen,
-        "reopen repeats byte-identical preservation"
-    );
-}
-
-/// A valid opaque envelope for one durable tool-lifecycle domain event.
-fn tool_lifecycle_envelope(
-    session_id: SessionId,
-    run_id: RunId,
-    turn_id: TurnId,
-    event_id: EventId,
-    call_id: intention_types::ToolCallId,
-    sequence: u64,
-) -> EventEnvelopeDto<DomainEventDto> {
-    let lifecycle = ToolLifecycleEventDto::new(
-        session_id,
-        run_id,
-        call_id,
-        "read",
-        ToolLifecycleStatusDto::Admitted,
-        "local tool invocation admitted",
-        time(3),
-    )
-    .expect("tool lifecycle event is valid");
-    EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
-            event_id,
-            session_id,
-            Some(run_id),
-            Some(turn_id),
-            SessionEventSequenceDto::new(sequence),
-            time(3),
-        ),
-        DomainEventDto::ToolLifecycle(lifecycle),
-    )
-}
-
-#[test]
-fn schema4_migration_failure_rolls_back_to_schema_three_atomically() {
-    let directory = TempDir::new().expect("temporary directory exists");
-    let path = directory.path().join("broken-migration.sqlite");
-    let connection = sqlite::Connection::open(&path).expect("legacy database opens");
-    connection
-        .execute_batch(intention_storage_sqlite::TEST_SCHEMA_3_SQL)
-        .expect("schema three creates");
-    connection
-        .execute(
-            "INSERT INTO projects(project_id) VALUES (?1)",
-            [ProjectId::new().to_string()],
-        )
-        .expect("project inserts");
-    connection
-        .execute(
-            "INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2)",
-            sqlite::params![
-                WorkspaceId::new().to_string(),
-                workspace_root("failure").as_str()
-            ],
-        )
-        .expect("workspace inserts");
-    let session_id = SessionId::new();
-    connection
-        .execute(
-            "INSERT INTO sessions(session_id, project_id, workspace_id, workspace_root, mode, config_revision_id, last_sequence, next_queue_ticket) VALUES (?1, (SELECT project_id FROM projects), (SELECT workspace_id FROM workspace_roots), ?2, 'build', NULL, 0, 0)",
-            sqlite::params![session_id.to_string(), workspace_root("failure").as_str()],
-        )
-        .expect("session inserts");
-    connection
-        .pragma_update(None, "user_version", 3_i64)
-        .expect("schema three version sets");
-    let before = capture_rows(&connection, "sessions");
-    drop(connection);
-
-    // A schema-4 migration that fails partway must roll back atomically: the
-    // schema-4 tables and the user_version bump are discarded together.
-    let broken = format!(
-        "{}; CREATE TABLE nope (this is not valid sql);",
-        intention_storage_sqlite::SCHEMA_M5_SQL
-    );
-    let migrations = Migrations::new(vec![
-        M::up("CREATE TABLE a (x);"),
-        M::up("CREATE TABLE b (x);"),
-        M::up("CREATE TABLE c (x);"),
-        M::up(&broken),
-    ]);
-    let mut connection = sqlite::Connection::open(&path).expect("database reopens");
-    assert!(
-        migrations.to_latest(&mut connection).is_err(),
-        "broken schema-4 migration must fail"
-    );
-    drop(connection);
-
-    let connection = sqlite::Connection::open(&path).expect("database reopens");
-    let version: i64 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .expect("schema version reads");
-    assert_eq!(version, 3);
-    assert_eq!(
-        capture_rows(&connection, "sessions"),
-        before,
-        "failed migration leaves schema-3 rows unchanged"
-    );
-    for table in [
-        "provider_kind_descriptor_revisions",
-        "provider_catalog_state",
-        "resolved_run_provider_selections",
-    ] {
-        let present: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |row| row.get(0),
-            )
-            .expect("table lookup");
-        assert_eq!(
-            present, 0,
-            "schema-4 table {table} must not exist after failed migration"
-        );
-    }
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! JSON codecs remain private implementation details of this crate.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
@@ -27,21 +27,22 @@ use intention_types::{
     EventId, EventMetadataDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
     SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
-use rusqlite_migration::{M, Migrations};
 use sqlite::OptionalExtension;
 
-const CURRENT_STORAGE_SCHEMA: i64 = 4;
 const MAX_CANONICAL_FACT_BYTES: usize = 512 * 1024;
 const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
 const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
 
-macro_rules! schema_m3_sql {
-    () => {
-        "
-CREATE TABLE projects (project_id TEXT PRIMARY KEY);
-CREATE TABLE workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
-CREATE TABLE sessions (
+/// The complete current storage schema (logical version 1): the M3 base
+/// tables, the M4 run-cursor, model-fact, and model-snapshot tables (with the
+/// cursor-zero seed for existing runs), and the tool-result table. `open()`
+/// appends `control_plane::SCHEMA_M5_SQL` and creates the whole schema in a
+/// single batch; there is no migration chain and no version gate.
+const SCHEMA_SQL: &str = "
+CREATE TABLE IF NOT EXISTS projects (project_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(project_id),
   workspace_id TEXT NOT NULL REFERENCES workspace_roots(workspace_id),
@@ -51,67 +52,53 @@ CREATE TABLE sessions (
   last_sequence INTEGER NOT NULL CHECK(last_sequence >= 0),
   next_queue_ticket INTEGER NOT NULL CHECK(next_queue_ticket >= 0)
 );
-CREATE TABLE turns (
+CREATE TABLE IF NOT EXISTS turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
   content TEXT NOT NULL CHECK(length(trim(content)) > 0), proposed_run_id TEXT NOT NULL,
   config_revision_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('started','queued')),
   queue_ticket INTEGER, PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
 );
-CREATE TABLE runs (
+CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
   turn_id TEXT NOT NULL, status TEXT NOT NULL, config_revision_id TEXT NOT NULL,
   UNIQUE(session_id, turn_id)
 );
-CREATE UNIQUE INDEX one_active_run_per_session ON runs(session_id)
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','cancelled','failed','interrupted');
-CREATE TABLE queued_turns (
+CREATE TABLE IF NOT EXISTS queued_turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
   queue_ticket INTEGER NOT NULL, PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
 );
-CREATE TABLE configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
-CREATE TABLE domain_events (
+CREATE TABLE IF NOT EXISTS configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS domain_events (
   event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL CHECK(sequence > 0), envelope_json TEXT NOT NULL,
   UNIQUE(session_id, sequence)
 );
-CREATE TABLE session_snapshots (
+CREATE TABLE IF NOT EXISTS session_snapshots (
   session_id TEXT PRIMARY KEY REFERENCES sessions(session_id), sequence INTEGER NOT NULL,
   projection_json TEXT NOT NULL
 );
-CREATE TABLE run_snapshots (
+CREATE TABLE IF NOT EXISTS run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL, projection_json TEXT NOT NULL
 );
-"
-    };
-}
-
-macro_rules! schema_m4_sql {
-    () => {
-        "
-CREATE TABLE run_cursors (
+CREATE TABLE IF NOT EXISTS run_cursors (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   cursor INTEGER NOT NULL CHECK(cursor >= 0)
 );
-CREATE TABLE model_run_facts (
+CREATE TABLE IF NOT EXISTS model_run_facts (
   run_id TEXT NOT NULL REFERENCES runs(run_id), cursor INTEGER NOT NULL CHECK(cursor > 0),
   event_id TEXT NOT NULL REFERENCES domain_events(event_id),
   PRIMARY KEY(run_id, cursor), UNIQUE(event_id)
 );
-CREATE TABLE model_run_snapshots (
+CREATE TABLE IF NOT EXISTS model_run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL, cursor INTEGER NOT NULL CHECK(cursor >= 0), snapshot_json TEXT NOT NULL
 );
-INSERT INTO run_cursors(run_id, session_id, cursor)
+INSERT OR IGNORE INTO run_cursors(run_id, session_id, cursor)
   SELECT run_id, session_id, 0 FROM runs;
-"
-    };
-}
-
-macro_rules! schema_m4_tool_results_sql {
-    () => {
-        "
-CREATE TABLE tool_results (
+CREATE TABLE IF NOT EXISTS tool_results (
   run_id TEXT NOT NULL REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   call_id TEXT NOT NULL,
@@ -122,33 +109,7 @@ CREATE TABLE tool_results (
   PRIMARY KEY(run_id, call_id),
   UNIQUE(event_id)
 );
-"
-    };
-}
-
-const SCHEMA_M3_SQL: &str = schema_m3_sql!();
-const SCHEMA_M4_SQL: &str = schema_m4_sql!();
-const SCHEMA_M4_TOOL_RESULTS_SQL: &str = schema_m4_tool_results_sql!();
-
-/// The exact production schema-3 surface: the M3 base tables plus the M4
-/// run-cursor, model-fact, and tool-result tables. Preservation fixtures that
-/// stamp user_version = 3 (where the migration library applies nothing) build
-/// their schema from this single source of truth.
-#[doc(hidden)]
-pub const TEST_SCHEMA_3_SQL: &str = concat!(
-    schema_m3_sql!(),
-    schema_m4_sql!(),
-    schema_m4_tool_results_sql!()
-);
-
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![
-        M::up(SCHEMA_M3_SQL),
-        M::up(SCHEMA_M4_SQL),
-        M::up(SCHEMA_M4_TOOL_RESULTS_SQL),
-        M::up(control_plane::SCHEMA_M5_SQL),
-    ])
-});
+";
 
 /// A local absolute SQLite database location whose string is never exposed again.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,58 +141,27 @@ pub struct SqliteStorageRepository {
 }
 
 impl SqliteStorageRepository {
-    /// Opens or creates a migrated local database at an explicitly supplied absolute location.
+    /// Opens or creates a local database at an explicitly supplied absolute
+    /// location, creating the complete current storage schema directly on open.
     ///
     /// # Errors
     ///
-    /// Returns a safe unavailable error when the database cannot be opened or migrated.
+    /// Returns a safe unavailable error when the database cannot be opened or
+    /// the current schema cannot be created.
     pub fn open(location: SqliteDatabaseLocationDto) -> DtoResult<Self> {
-        let mut connection = sqlite::Connection::open(location.0).map_err(storage_error)?;
+        let connection = sqlite::Connection::open(location.0).map_err(storage_error)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(storage_error)?;
-        let stored_version: i64 = connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(storage_error)?;
-        if stored_version > CURRENT_STORAGE_SCHEMA {
-            return Err(ErrorDto::unavailable(
-                "unsupported_storage_schema",
-                "the local storage schema is newer than this application supports",
-            ));
-        }
-        MIGRATIONS
-            .to_latest(&mut connection)
+        connection
+            .execute_batch(&format!("{SCHEMA_SQL}{}", control_plane::SCHEMA_M5_SQL))
             .map_err(|_| unavailable())?;
-        Self::hydrate_model_run_snapshots(&mut connection)?;
         control_plane::ensure_catalog_state_seed(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             #[cfg(test)]
             fault: Mutex::new(None),
         })
-    }
-
-    fn hydrate_model_run_snapshots(connection: &mut sqlite::Connection) -> DtoResult<()> {
-        let tx = connection
-            .transaction_with_behavior(sqlite::TransactionBehavior::Immediate)
-            .map_err(storage_error)?;
-        let session_ids = {
-            let mut statement = tx
-                .prepare("SELECT session_id FROM sessions ORDER BY session_id")
-                .map_err(storage_error)?;
-            let rows = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(storage_error)?;
-            rows.map(|row| row.map_err(storage_error))
-                .collect::<DtoResult<Vec<_>>>()?
-        };
-        for encoded_session in session_ids {
-            let session_id = SessionId::parse(&encoded_session).map_err(codec_error)?;
-            let projection = Self::project(&tx, session_id)?;
-            Self::ensure_run_cursors(&tx, session_id)?;
-            Self::snapshot_model_runs(&tx, &projection)?;
-        }
-        tx.commit().map_err(storage_error)
     }
 
     fn connection(&self) -> DtoResult<std::sync::MutexGuard<'_, sqlite::Connection>> {
@@ -609,10 +539,6 @@ macro_rules! immediate_transaction {
 }
 
 mod control_plane;
-
-/// The additive schema-4 migration SQL, exposed for preservation fixtures.
-#[doc(hidden)]
-pub use control_plane::SCHEMA_M5_SQL;
 
 impl StorageRepositoryDto for SqliteStorageRepository {
     fn append_tool_lifecycle_event(

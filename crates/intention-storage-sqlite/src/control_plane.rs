@@ -1,12 +1,12 @@
-//! Schema-4 control-plane storage: the additive migration surface and the
-//! DTO-only repository implementations for the provider catalog, configuration
-//! reloads, session provider defaults, resolved selections, the
-//! unavailable-provider queue, provider usage, the removal lifecycle, and
-//! held recovered runs.
+//! Control-plane storage: the DTO-only repository implementations for the
+//! provider catalog, configuration reloads, session provider defaults,
+//! resolved selections, the unavailable-provider queue, provider usage, the
+//! removal lifecycle, and held recovered runs.
 //!
-//! The migration is purely additive: existing M3/M4 tables and rows are never
-//! rewritten. All schema-4 records are credential-free; credentials never
-//! enter any schema-4 text column.
+//! The control-plane DDL is part of the single current storage schema created
+//! directly on open (no migration chain and no version gate). All schema-4
+//! records are credential-free; credentials never enter any schema-4 text
+//! column.
 
 use intention_domain::{
     ContextPreservationCapability, CredentialTransportMode, ModelCapabilitySetV1,
@@ -55,11 +55,12 @@ const MAX_PROMOTION_BATCH: u64 = 8;
 /// The maximum reconciliation batch per pass.
 const MAX_RECONCILIATION_BATCH: u64 = 32;
 
-/// The additive schema-4 migration surface: fourteen new tables, their
-/// supporting indexes, and the seeded provider catalog state singleton. No
-/// pre-existing table or row is touched.
+/// The control-plane part of the current storage schema: the provider
+/// catalog, session-default, selection, queue, usage, removal, and held-run
+/// tables, their supporting indexes, and the seeded provider catalog state
+/// singleton.
 pub const SCHEMA_M5_SQL: &str = "
-CREATE TABLE provider_kind_descriptor_revisions (
+CREATE TABLE IF NOT EXISTS provider_kind_descriptor_revisions (
   kind_id TEXT NOT NULL,
   descriptor_revision_id TEXT NOT NULL,
   descriptor_json TEXT NOT NULL,
@@ -68,8 +69,8 @@ CREATE TABLE provider_kind_descriptor_revisions (
   accepted_at INTEGER NOT NULL CHECK(accepted_at >= 0),
   PRIMARY KEY(kind_id, descriptor_revision_id)
 );
-CREATE INDEX provider_kind_descriptor_revisions_by_catalog ON provider_kind_descriptor_revisions(catalog_revision_id);
-CREATE TABLE provider_profile_revisions (
+CREATE INDEX IF NOT EXISTS provider_kind_descriptor_revisions_by_catalog ON provider_kind_descriptor_revisions(catalog_revision_id);
+CREATE TABLE IF NOT EXISTS provider_profile_revisions (
   profile_id TEXT NOT NULL,
   profile_revision_id TEXT NOT NULL,
   kind_id TEXT NOT NULL,
@@ -93,9 +94,9 @@ CREATE TABLE provider_profile_revisions (
     OR (credential_transport_mode = 'safe_header' AND credential_transport_safe_header_name IS NOT NULL)
   )
 );
-CREATE INDEX provider_profile_revisions_by_catalog ON provider_profile_revisions(catalog_revision_id);
-CREATE INDEX provider_profile_revisions_by_kind ON provider_profile_revisions(kind_id, kind_descriptor_revision_id);
-CREATE TABLE provider_profile_tombstones (
+CREATE INDEX IF NOT EXISTS provider_profile_revisions_by_catalog ON provider_profile_revisions(catalog_revision_id);
+CREATE INDEX IF NOT EXISTS provider_profile_revisions_by_kind ON provider_profile_revisions(kind_id, kind_descriptor_revision_id);
+CREATE TABLE IF NOT EXISTS provider_profile_tombstones (
   profile_id TEXT PRIMARY KEY,
   removed_catalog_revision_id INTEGER NOT NULL,
   removed_at INTEGER NOT NULL CHECK(removed_at >= 0),
@@ -103,7 +104,7 @@ CREATE TABLE provider_profile_tombstones (
   tombstone_json TEXT NOT NULL,
   tombstone_digest TEXT NOT NULL UNIQUE
 );
-CREATE TABLE provider_kind_tombstones (
+CREATE TABLE IF NOT EXISTS provider_kind_tombstones (
   kind_id TEXT PRIMARY KEY,
   removed_catalog_revision_id INTEGER NOT NULL,
   removed_at INTEGER NOT NULL CHECK(removed_at >= 0),
@@ -111,7 +112,7 @@ CREATE TABLE provider_kind_tombstones (
   tombstone_json TEXT NOT NULL,
   tombstone_digest TEXT NOT NULL UNIQUE
 );
-CREATE TABLE provider_catalog_state (
+CREATE TABLE IF NOT EXISTS provider_catalog_state (
   singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
   active_catalog_revision_id INTEGER,
   candidate_catalog_revision_id INTEGER,
@@ -121,9 +122,9 @@ CREATE TABLE provider_catalog_state (
   degraded_reason TEXT,
   updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
 );
-INSERT INTO provider_catalog_state(singleton_id, active_catalog_revision_id, candidate_catalog_revision_id, status, active_default_profile_id, candidate_handle, degraded_reason, updated_at)
+INSERT OR IGNORE INTO provider_catalog_state(singleton_id, active_catalog_revision_id, candidate_catalog_revision_id, status, active_default_profile_id, candidate_handle, degraded_reason, updated_at)
   VALUES (1, NULL, NULL, 'preparing', NULL, NULL, NULL, 0);
-CREATE TABLE provider_catalog_profile_projection (
+CREATE TABLE IF NOT EXISTS provider_catalog_profile_projection (
   projection_state TEXT NOT NULL CHECK(projection_state IN ('active','candidate')),
   catalog_revision_id INTEGER NOT NULL,
   profile_id TEXT NOT NULL,
@@ -137,7 +138,7 @@ CREATE TABLE provider_catalog_profile_projection (
   safe_projection_json TEXT NOT NULL,
   PRIMARY KEY(projection_state, catalog_revision_id, profile_id)
 );
-CREATE TABLE configuration_audit (
+CREATE TABLE IF NOT EXISTS configuration_audit (
   audit_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   operation_id TEXT NOT NULL,
   audit_kind TEXT NOT NULL CHECK(audit_kind IN ('ProviderCatalogCandidatePrepared','ProviderCatalogRemovalPending','ProviderCatalogRemovalAccepted','ProviderCatalogCandidateRejected','ProviderCatalogCandidateExpired','ProviderCatalogAccepted','ProviderCatalogActivated','ProviderCatalogActivationRecoveryRequired','ProviderCatalogRecoveryCompleted')),
@@ -149,17 +150,17 @@ CREATE TABLE configuration_audit (
   audit_json TEXT NOT NULL,
   UNIQUE(operation_id, audit_kind)
 );
-CREATE INDEX configuration_audit_by_catalog ON configuration_audit(catalog_revision_id, audit_sequence);
-CREATE INDEX configuration_audit_by_run ON configuration_audit(run_id, audit_sequence);
-CREATE TABLE session_provider_defaults (
+CREATE INDEX IF NOT EXISTS configuration_audit_by_catalog ON configuration_audit(catalog_revision_id, audit_sequence);
+CREATE INDEX IF NOT EXISTS configuration_audit_by_run ON configuration_audit(run_id, audit_sequence);
+CREATE TABLE IF NOT EXISTS session_provider_defaults (
   session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
   profile_id TEXT NOT NULL,
   projection_revision INTEGER NOT NULL CHECK(projection_revision >= 0),
   last_operation_id TEXT NOT NULL,
   updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
 );
-CREATE INDEX session_provider_defaults_by_profile ON session_provider_defaults(profile_id);
-CREATE TABLE resolved_run_provider_selections (
+CREATE INDEX IF NOT EXISTS session_provider_defaults_by_profile ON session_provider_defaults(profile_id);
+CREATE TABLE IF NOT EXISTS resolved_run_provider_selections (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   selection_canonicalization_version TEXT NOT NULL,
@@ -184,9 +185,9 @@ CREATE TABLE resolved_run_provider_selections (
     OR (credential_transport_mode = 'safe_header' AND credential_transport_safe_header_name IS NOT NULL)
   )
 );
-CREATE INDEX resolved_run_provider_selections_by_profile ON resolved_run_provider_selections(profile_id, provider_profile_revision_id);
-CREATE INDEX resolved_run_provider_selections_by_session ON resolved_run_provider_selections(session_id);
-CREATE TABLE unavailable_provider_queue (
+CREATE INDEX IF NOT EXISTS resolved_run_provider_selections_by_profile ON resolved_run_provider_selections(profile_id, provider_profile_revision_id);
+CREATE INDEX IF NOT EXISTS resolved_run_provider_selections_by_session ON resolved_run_provider_selections(session_id);
+CREATE TABLE IF NOT EXISTS unavailable_provider_queue (
   queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
@@ -200,9 +201,9 @@ CREATE TABLE unavailable_provider_queue (
   selection_json TEXT NOT NULL,
   UNIQUE(session_id, run_id)
 );
-CREATE INDEX unavailable_provider_queue_fifo ON unavailable_provider_queue(state, queue_id);
-CREATE INDEX unavailable_provider_queue_by_profile ON unavailable_provider_queue(profile_id, provider_profile_revision_id);
-CREATE TABLE unavailable_queue_reconciliation_markers (
+CREATE INDEX IF NOT EXISTS unavailable_provider_queue_fifo ON unavailable_provider_queue(state, queue_id);
+CREATE INDEX IF NOT EXISTS unavailable_provider_queue_by_profile ON unavailable_provider_queue(profile_id, provider_profile_revision_id);
+CREATE TABLE IF NOT EXISTS unavailable_queue_reconciliation_markers (
   marker_id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL,
   created_at INTEGER NOT NULL CHECK(created_at >= 0),
@@ -211,7 +212,7 @@ CREATE TABLE unavailable_queue_reconciliation_markers (
   resolved_at INTEGER,
   UNIQUE(session_id, reason, resolved_at)
 );
-CREATE TABLE provider_usage_aggregates (
+CREATE TABLE IF NOT EXISTS provider_usage_aggregates (
   profile_id TEXT NOT NULL,
   provider_profile_revision_id TEXT NOT NULL,
   model_id TEXT NOT NULL,
@@ -225,8 +226,8 @@ CREATE TABLE provider_usage_aggregates (
   updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
   PRIMARY KEY(profile_id, provider_profile_revision_id, model_id, usage_period_start, usage_period_end)
 );
-CREATE INDEX provider_usage_aggregates_by_revision ON provider_usage_aggregates(provider_profile_revision_id, model_id, usage_period_start);
-CREATE TABLE provider_usage_facts (
+CREATE INDEX IF NOT EXISTS provider_usage_aggregates_by_revision ON provider_usage_aggregates(provider_profile_revision_id, model_id, usage_period_start);
+CREATE TABLE IF NOT EXISTS provider_usage_facts (
   run_id TEXT NOT NULL REFERENCES runs(run_id),
   usage_event_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
@@ -239,8 +240,8 @@ CREATE TABLE provider_usage_facts (
   usage_json TEXT NOT NULL,
   PRIMARY KEY(run_id, usage_event_id)
 );
-CREATE INDEX provider_usage_facts_by_profile ON provider_usage_facts(profile_id, provider_profile_revision_id, model_id);
-CREATE TABLE provider_catalog_removal_candidates (
+CREATE INDEX IF NOT EXISTS provider_usage_facts_by_profile ON provider_usage_facts(profile_id, provider_profile_revision_id, model_id);
+CREATE TABLE IF NOT EXISTS provider_catalog_removal_candidates (
   candidate_handle TEXT PRIMARY KEY,
   candidate_catalog_revision_id INTEGER NOT NULL UNIQUE,
   active_catalog_revision_id INTEGER NOT NULL,
@@ -252,8 +253,8 @@ CREATE TABLE provider_catalog_removal_candidates (
   operation_id TEXT,
   completed_at INTEGER
 );
-CREATE UNIQUE INDEX one_pending_provider_catalog_candidate ON provider_catalog_removal_candidates(status) WHERE status = 'pending';
-CREATE TABLE held_recovered_runs (
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_provider_catalog_candidate ON provider_catalog_removal_candidates(status) WHERE status = 'pending';
+CREATE TABLE IF NOT EXISTS held_recovered_runs (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   held_at INTEGER NOT NULL CHECK(held_at >= 0),
@@ -263,7 +264,7 @@ CREATE TABLE held_recovered_runs (
   admitted_at INTEGER,
   UNIQUE(session_id, run_id)
 );
-CREATE INDEX held_recovered_runs_by_admission ON held_recovered_runs(admission_state, held_at);
+CREATE INDEX IF NOT EXISTS held_recovered_runs_by_admission ON held_recovered_runs(admission_state, held_at);
 ";
 
 // ---------------------------------------------------------------------------
@@ -3147,8 +3148,8 @@ impl HeldRunRepositoryDto for SqliteStorageRepository {
     }
 }
 
-/// Ensures the schema-4 seed row exists after opening (defensive; the migration
-/// normally creates it). Never touches pre-existing rows.
+/// Ensures the catalog state seed row exists after opening (defensive; the
+/// schema DDL normally creates it). Never touches pre-existing rows.
 pub fn ensure_catalog_state_seed(connection: &sqlite::Connection) -> DtoResult<()> {
     connection
         .execute(
