@@ -40,11 +40,11 @@ The following detail from
   domain `ReasoningDeltaRecorded`/`ReasoningSummaryDeltaRecorded` variants),
   the closed `provider_reasoning_stream_invalid` failure, the fixed 4-MiB
   combined per-run reasoning-output bound with
-  `reasoning_output_limit_exceeded`, the historical M4
-  `ReasoningDeltaRecorded { content }` decoding as historical `Primary`
-  reasoning evidence without rewriting its stored bytes, and the descriptor
-  owning the fixed field-path and array-index order for values originating in
-  one native response;
+  `reasoning_output_limit_exceeded`, `category` required on the wire with no
+  defaulting to `Primary` per
+  [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md), and the
+  descriptor owning the fixed field-path and array-index order for values
+  originating in one native response;
 - the unified model-capability taxonomy value `model-capability-taxonomy-v1`
   and the supersession note that the concept2 `reasoning_history_transfer`
   field name is research-only (architecture 22 owns

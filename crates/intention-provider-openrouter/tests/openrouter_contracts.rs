@@ -219,7 +219,6 @@ fn openrouter_driver_rejects_wrong_kind_and_maps_all_finish_and_error_classes() 
         ("stop", FinishReasonDto::Stop),
         ("length", FinishReasonDto::Length),
         ("tool_calls", FinishReasonDto::ToolCalls),
-        ("function_call", FinishReasonDto::ToolCalls),
         ("content_filter", FinishReasonDto::ContentFilter),
         ("error", FinishReasonDto::Error),
         ("unknown", FinishReasonDto::Unknown),

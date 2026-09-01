@@ -32,134 +32,15 @@ use intention_model::{
     AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
     ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
-    ReasoningEffortLevel, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
+    ReasoningEffortLevel, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
-
-/// The closed reasoning output field paths a descriptor may declare.
-///
-/// This mirrors the closed `reasoning_content`, `reasoning`,
-/// `reasoning_details[].text`, and `reasoning_details[].message.thinking`
-/// output paths of the domain reasoning dialect.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum ReasoningDialectFieldPath {
-    ReasoningContent,
-    Reasoning,
-    ReasoningDetailsText,
-    ReasoningDetailsMessageThinking,
-}
-
-impl ReasoningDialectFieldPath {
-    fn parse(value: &str) -> DtoResult<Self> {
-        match value {
-            "reasoning_content" => Ok(Self::ReasoningContent),
-            "reasoning" => Ok(Self::Reasoning),
-            "reasoning_details[].text" => Ok(Self::ReasoningDetailsText),
-            "reasoning_details[].message.thinking" => Ok(Self::ReasoningDetailsMessageThinking),
-            _ => Err(ErrorDto::validation(
-                "invalid_reasoning_dialect_path",
-                "reasoning dialect path is not a closed output field path",
-            )),
-        }
-    }
-
-    /// Returns the category assigned to fragments decoded from this path.
-    const fn category(self) -> ReasoningFragmentCategoryDto {
-        match self {
-            Self::ReasoningContent | Self::Reasoning => ReasoningFragmentCategoryDto::Primary,
-            Self::ReasoningDetailsText | Self::ReasoningDetailsMessageThinking => {
-                ReasoningFragmentCategoryDto::Detail
-            }
-        }
-    }
-}
-
-/// The closed thinking activation forms a descriptor may declare.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ThinkingActivation {
-    Enabled,
-    Adaptive,
-}
-
-/// One normalized reasoning fragment decoded from a native payload.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ReasoningDeltaFragment {
-    category: ReasoningFragmentCategoryDto,
-    content: String,
-}
-
-/// A private typed decoder over the closed reasoning dialect field paths.
-///
-/// The decoder is descriptor-declared only: it decodes exactly the declared
-/// paths in declared order, preserving `reasoning_details` array-index order.
-/// The pinned `async-openai` delta type does not yet surface reasoning
-/// fields, so declared paths currently decode no fragments; the decoder keeps
-/// the closed mapping and ordering contract ready for when the SDK exposes
-/// them, and never parses raw JSON templates or unbounded payloads.
-#[derive(Clone, Debug)]
-struct ReasoningDialectDecoder {
-    paths: Vec<ReasoningDialectFieldPath>,
-}
-
-impl ReasoningDialectDecoder {
-    const fn new(paths: Vec<ReasoningDialectFieldPath>) -> Self {
-        Self { paths }
-    }
-
-    /// Decodes the declared reasoning fragments from one native delta.
-    ///
-    /// Declared paths are decoded in declared order, preserving
-    /// `reasoning_details` array-index order.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(())` when the native payload is structurally malformed for
-    /// a declared path (for example `reasoning_details` is not an array).
-    fn decode(
-        &self,
-        delta: &ChatCompletionStreamResponseDelta,
-    ) -> Result<Vec<ReasoningDeltaFragment>, ()> {
-        let mut fragments = Vec::new();
-        for path in &self.paths {
-            for content in self.decode_path(*path, delta)? {
-                fragments.push(ReasoningDeltaFragment {
-                    category: path.category(),
-                    content,
-                });
-            }
-        }
-        Ok(fragments)
-    }
-
-    /// Decodes the raw content fragments of one declared path from the native
-    /// delta.
-    ///
-    /// The pinned `async-openai` delta type does not yet surface reasoning
-    /// fields, so every declared path currently yields no fragments; the
-    /// closed path mapping stays live for when the SDK exposes them.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(())` when the native payload is structurally malformed for
-    /// the declared path.
-    const fn decode_path(
-        &self,
-        _path: ReasoningDialectFieldPath,
-        _delta: &ChatCompletionStreamResponseDelta,
-    ) -> Result<Vec<String>, ()> {
-        Ok(Vec::new())
-    }
-}
 
 /// Additive descriptor-driven driver options; the default is unchanged.
 #[derive(Clone, Debug, Default)]
 pub struct GenericChatDriverOptions {
     header_policy: Option<AuthenticationHeaderPolicyV1>,
-    dialect: Vec<ReasoningDialectFieldPath>,
-    thinking_activation: Option<ThinkingActivation>,
     reasoning_effort: Option<ReasoningEffortLevel>,
-    thinking_budget: Option<u32>,
-    thinking_token_budget: Option<u32>,
 }
 
 impl GenericChatDriverOptions {
@@ -183,96 +64,10 @@ impl GenericChatDriverOptions {
         self
     }
 
-    /// Declares the closed reasoning output field paths in declared order.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when a path is not a closed output field
-    /// path or a path is declared more than once.
-    pub fn with_reasoning_dialect(mut self, paths: Vec<String>) -> DtoResult<Self> {
-        let mut seen = std::collections::HashSet::with_capacity(paths.len());
-        let mut decoded = Vec::with_capacity(paths.len());
-        for path in paths {
-            let field = ReasoningDialectFieldPath::parse(&path)?;
-            if !seen.insert(field) {
-                return Err(ErrorDto::validation(
-                    "duplicate_reasoning_dialect_path",
-                    "a reasoning dialect field path may be declared at most once",
-                ));
-            }
-            decoded.push(field);
-        }
-        self.dialect = decoded;
-        Ok(self)
-    }
-
-    /// Declares the closed thinking activation form.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the activation is not `enabled` or `adaptive`.
-    pub fn with_thinking(mut self, activation: &str) -> DtoResult<Self> {
-        self.thinking_activation = Some(match activation {
-            "enabled" => ThinkingActivation::Enabled,
-            "adaptive" => ThinkingActivation::Adaptive,
-            _ => {
-                return Err(ErrorDto::validation(
-                    "invalid_thinking_activation",
-                    "thinking activation must be enabled or adaptive",
-                ));
-            }
-        });
-        Ok(self)
-    }
-
-    /// Declares thinking activation through the `enable_thinking` form.
-    #[must_use]
-    pub const fn with_enable_thinking(mut self, enabled: bool) -> Self {
-        self.thinking_activation = if enabled {
-            Some(ThinkingActivation::Enabled)
-        } else {
-            None
-        };
-        self
-    }
-
-    /// Declares thinking activation through the `think` boolean form.
-    #[must_use]
-    pub const fn with_think(mut self, enabled: bool) -> Self {
-        self.thinking_activation = if enabled {
-            Some(ThinkingActivation::Enabled)
-        } else {
-            None
-        };
-        self
-    }
-
-    /// Declares thinking activation through the `think` closed effort-string form.
-    #[must_use]
-    pub const fn with_think_effort(mut self, effort: ReasoningEffortLevel) -> Self {
-        self.thinking_activation = Some(ThinkingActivation::Enabled);
-        self.reasoning_effort = Some(effort);
-        self
-    }
-
     /// Declares the closed reasoning effort request field.
     #[must_use]
     pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
         self.reasoning_effort = Some(effort);
-        self
-    }
-
-    /// Declares the closed thinking budget request field.
-    #[must_use]
-    pub const fn with_thinking_budget(mut self, budget: u32) -> Self {
-        self.thinking_budget = Some(budget);
-        self
-    }
-
-    /// Declares the closed thinking token budget request field.
-    #[must_use]
-    pub const fn with_thinking_token_budget(mut self, budget: u32) -> Self {
-        self.thinking_token_budget = Some(budget);
         self
     }
 
@@ -281,9 +76,8 @@ impl GenericChatDriverOptions {
     /// # Errors
     ///
     /// Returns a validation error when the header policy selects the
-    /// safe-header transport, thinking activation or budgets are declared
-    /// (the pinned SDK exposes no thinking request field), or the maximum
-    /// reasoning effort is declared (the pinned SDK effort set has no max).
+    /// safe-header transport or the maximum reasoning effort is declared (the
+    /// pinned SDK effort set has no max).
     pub fn build(self) -> DtoResult<Self> {
         if self.header_policy.as_ref().is_some_and(|policy| {
             policy.selected_transport() == CredentialTransportMode::SafeHeader
@@ -291,15 +85,6 @@ impl GenericChatDriverOptions {
             return Err(ErrorDto::validation(
                 "unsupported_safe_header_transport",
                 "the generic chat adapter does not yet support safe-header credential transport",
-            ));
-        }
-        if self.thinking_activation.is_some()
-            || self.thinking_budget.is_some()
-            || self.thinking_token_budget.is_some()
-        {
-            return Err(ErrorDto::validation(
-                "unsupported_thinking_configuration",
-                "the generic chat adapter cannot yet express thinking activation or budgets",
             ));
         }
         if self.reasoning_effort == Some(ReasoningEffortLevel::Max) {
@@ -496,8 +281,6 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
-        let dialect_decoder = (!self.options.dialect.is_empty())
-            .then(|| ReasoningDialectDecoder::new(self.options.dialect.clone()));
         let client = self.client.clone();
         Box::pin(
             stream::once(async move {
@@ -510,7 +293,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                             Box::pin(stream::once(async move { Err(map_openai_error(&error)) }))
                                 as ModelEventStream
                         },
-                        |native| normalize_stream(native, cancellation, dialect_decoder),
+                        |native| normalize_stream(native, cancellation),
                     )
             })
             .flatten(),
@@ -518,16 +301,12 @@ impl ModelExecutionDriver for GenericChatDriver {
     }
 }
 
-fn normalize_stream<S>(
-    native: S,
-    cancellation: ModelCancellationSignal,
-    dialect_decoder: Option<ReasoningDialectDecoder>,
-) -> ModelEventStream
+fn normalize_stream<S>(native: S, cancellation: ModelCancellationSignal) -> ModelEventStream
 where
     S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>> + Send + 'static,
 {
     Box::pin(stream::unfold(
-        GenericStreamState::new(native, cancellation, dialect_decoder),
+        GenericStreamState::new(native, cancellation),
         |mut state| async move { state.next().await.map(|event| (event, state)) },
     ))
 }
@@ -537,8 +316,6 @@ struct GenericStreamState<S> {
     cancellation: ModelCancellationSignal,
     pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
-    legacy_tools: BTreeMap<u32, FunctionToolFragments>,
-    dialect_decoder: Option<ReasoningDialectDecoder>,
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
 }
@@ -547,11 +324,7 @@ impl<S> GenericStreamState<S>
 where
     S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>>,
 {
-    fn new(
-        native: S,
-        cancellation: ModelCancellationSignal,
-        dialect_decoder: Option<ReasoningDialectDecoder>,
-    ) -> Self {
+    fn new(native: S, cancellation: ModelCancellationSignal) -> Self {
         let mut pending = VecDeque::new();
         pending.push_back(Ok(ModelEventDto::started()));
         Self {
@@ -559,8 +332,6 @@ where
             cancellation,
             pending,
             tools: BTreeMap::new(),
-            legacy_tools: BTreeMap::new(),
-            dialect_decoder,
             terminal: false,
             terminal_reason: None,
         }
@@ -625,39 +396,9 @@ where
         choice_index: u32,
         delta: ChatCompletionStreamResponseDelta,
     ) -> Result<(), ()> {
-        if let Some(decoder) = &self.dialect_decoder {
-            match decoder.decode(&delta) {
-                Ok(fragments) => {
-                    for fragment in fragments {
-                        match ModelEventDto::reasoning_delta_categorized(
-                            fragment.category,
-                            fragment.content,
-                        ) {
-                            Ok(event) => self.pending.push_back(Ok(event)),
-                            Err(_) => {
-                                self.fail("provider_reasoning_stream_invalid");
-                                return Err(());
-                            }
-                        }
-                    }
-                }
-                Err(()) => {
-                    self.fail("provider_reasoning_stream_invalid");
-                    return Err(());
-                }
-            }
-        }
         if let Some(content) = delta.content.filter(|content| !content.is_empty()) {
             self.pending
                 .push_back(Ok(ModelEventDto::text_delta(content).map_err(|_| ())?));
-        }
-        #[allow(
-            deprecated,
-            reason = "Chat Completions exposes legacy function-call stream fragments."
-        )]
-        if let Some(function) = delta.function_call {
-            let fragments = self.legacy_tools.entry(choice_index).or_default();
-            fragments.merge_legacy(function)?;
         }
         if let Some(calls) = delta.tool_calls {
             for call in calls {
@@ -673,27 +414,21 @@ where
     }
 
     fn finish(&mut self, reason: FinishReasonDto) {
-        let modern = std::mem::take(&mut self.tools)
+        match std::mem::take(&mut self.tools)
             .into_values()
             .map(FunctionToolFragments::finish)
-            .collect::<Result<Vec<_>, _>>();
-        let legacy = std::mem::take(&mut self.legacy_tools)
-            .into_values()
-            .map(FunctionToolFragments::finish_legacy)
-            .collect::<Result<Vec<_>, _>>();
-        match (modern, legacy) {
-            (Ok(modern), Ok(legacy)) if modern.is_empty() || legacy.is_empty() => {
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(calls) => {
                 self.pending.extend(
-                    modern
+                    calls
                         .into_iter()
-                        .chain(legacy)
                         .map(|call| Ok(ModelEventDto::tool_call(call))),
                 );
                 self.pending.push_back(Ok(ModelEventDto::finished(reason)));
                 self.terminal = true;
             }
-            (Ok(_), Ok(_)) => self.fail("generic_chat_conflicting_tool_call"),
-            (Err(()), _) | (_, Err(())) => self.fail("generic_chat_invalid_tool_call"),
+            Err(()) => self.fail("generic_chat_invalid_tool_call"),
         }
     }
 
@@ -736,22 +471,6 @@ impl FunctionToolFragments {
         Ok(())
     }
 
-    fn finish_legacy(self) -> Result<ToolCallDto, ()> {
-        let name = self.name.ok_or(())?;
-        ToolCallDto::new(ToolCallId::new(), name, self.arguments).map_err(|_| ())
-    }
-
-    fn merge_legacy(
-        &mut self,
-        function: async_openai::types::chat::FunctionCallStream,
-    ) -> Result<(), ()> {
-        merge_constant(&mut self.name, function.name)?;
-        if let Some(arguments) = function.arguments {
-            self.arguments.push_str(&arguments);
-        }
-        Ok(())
-    }
-
     fn finish(self) -> Result<ToolCallDto, ()> {
         let _id = self.id.ok_or(())?;
         let name = self.name.ok_or(())?;
@@ -773,7 +492,7 @@ fn map_finish_reason(reason: &str) -> FinishReasonDto {
     match reason {
         "stop" => FinishReasonDto::Stop,
         "length" => FinishReasonDto::Length,
-        "tool_calls" | "function_call" => FinishReasonDto::ToolCalls,
+        "tool_calls" => FinishReasonDto::ToolCalls,
         "content_filter" => FinishReasonDto::ContentFilter,
         "error" => FinishReasonDto::Error,
         _ => FinishReasonDto::Unknown,
@@ -784,8 +503,9 @@ const fn map_native_finish(reason: FinishReason) -> FinishReasonDto {
     match reason {
         FinishReason::Stop => FinishReasonDto::Stop,
         FinishReason::Length => FinishReasonDto::Length,
-        FinishReason::ToolCalls | FinishReason::FunctionCall => FinishReasonDto::ToolCalls,
+        FinishReason::ToolCalls => FinishReasonDto::ToolCalls,
         FinishReason::ContentFilter => FinishReasonDto::ContentFilter,
+        FinishReason::FunctionCall => FinishReasonDto::Unknown,
     }
 }
 
@@ -1165,50 +885,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_function_fragments_complete_only_at_terminal() {
-        let mut fragments = FunctionToolFragments::default();
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{\"path\"".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: None,
-                arguments: Some(":\"src\"}".to_owned()),
-            })
-            .expect("legacy continuation is valid");
-        let call = fragments.finish_legacy().expect("legacy call completes");
-        assert_eq!(call.name(), "inspect");
-        assert_eq!(call.arguments_json(), "{\"path\":\"src\"}");
-        assert!(FunctionToolFragments::default().finish_legacy().is_err());
-        let mut malformed = FunctionToolFragments::default();
-        malformed
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("not-json".to_owned()),
-            })
-            .expect("legacy fragment shape is valid");
-        assert!(malformed.finish_legacy().is_err());
-        let mut conflicting = FunctionToolFragments::default();
-        conflicting
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        assert!(
-            conflicting
-                .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                    name: Some("other".to_owned()),
-                    arguments: None,
-                })
-                .is_err()
-        );
-    }
-
-    #[test]
     fn native_errors_preserve_safe_retry_guidance() {
         let rate_limited = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
             status_code: http::StatusCode::TOO_MANY_REQUESTS,
@@ -1255,7 +931,6 @@ mod tests {
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
             ),
             ModelCancellationSignal::new(),
-            None,
         );
         state.accept_chunk(CreateChatCompletionStreamResponse {
             id: "fixture".to_owned(),
@@ -1290,45 +965,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn conflicting_modern_and_legacy_calls_fail_without_duplicate_output() {
-        let mut state = GenericStreamState::new(
-            futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
-            ),
-            ModelCancellationSignal::new(),
-            None,
-        );
-        let mut modern = FunctionToolFragments::default();
-        modern
-            .merge(
-                Some("modern".to_owned()),
-                Some("function".to_owned()),
-                Some(async_openai::types::chat::FunctionCallStream {
-                    name: Some("inspect".to_owned()),
-                    arguments: Some("{}".to_owned()),
-                }),
-            )
-            .expect("modern fixture is valid");
-        let mut legacy = FunctionToolFragments::default();
-        legacy
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy fixture is valid");
-        state.tools.insert((0, 0), modern);
-        state.legacy_tools.insert(0, legacy);
-        state.finish(FinishReasonDto::ToolCalls);
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert!(matches!(
-            state.pending.pop_front(),
-            Some(Err(error)) if error.code() == "generic_chat_conflicting_tool_call"
-        ));
-    }
-
     #[allow(
         deprecated,
         reason = "The private fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
@@ -1351,7 +987,7 @@ mod tests {
 
     #[allow(
         deprecated,
-        reason = "The private fixture constructs the SDK legacy-field shape accepted by normalization."
+        reason = "The pinned SDK delta struct requires its deprecated function-call field in initializers."
     )]
     fn delta(
         content: Option<&str>,
@@ -1374,8 +1010,7 @@ mod tests {
 
     #[test]
     fn native_chunks_normalize_content_tools_and_terminal_finish() {
-        let mut state =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         state.accept_chunk(chunk(
             vec![delta(
                 Some("answer"),
@@ -1418,7 +1053,7 @@ mod tests {
     #[test]
     fn native_chunks_reject_duplicate_finish_invalid_usage_and_incomplete_tools() {
         let mut duplicate =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         duplicate.accept_chunk(chunk(
             vec![delta(None, None, Some(FinishReason::Stop))],
             None,
@@ -1433,7 +1068,7 @@ mod tests {
         ));
 
         let mut invalid_usage =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         invalid_usage.accept_chunk(chunk(
             Vec::new(),
             Some(async_openai::types::chat::CompletionUsage {
@@ -1450,7 +1085,7 @@ mod tests {
         ));
 
         let mut incomplete =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         incomplete.accept_chunk(chunk(
             vec![delta(
                 None,
@@ -1478,128 +1113,6 @@ mod tests {
             incomplete.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
-    }
-
-    #[test]
-    fn reasoning_dialect_accepts_each_closed_path_and_preserves_declared_order() {
-        for path in [
-            "reasoning_content",
-            "reasoning",
-            "reasoning_details[].text",
-            "reasoning_details[].message.thinking",
-        ] {
-            let options = GenericChatDriverOptions::new()
-                .with_reasoning_dialect(vec![path.to_owned()])
-                .expect("closed path is accepted")
-                .build()
-                .expect("options build");
-            assert_eq!(options.dialect.len(), 1);
-        }
-
-        let options = GenericChatDriverOptions::new()
-            .with_reasoning_dialect(vec![
-                "reasoning_details[].text".to_owned(),
-                "reasoning".to_owned(),
-                "reasoning_content".to_owned(),
-                "reasoning_details[].message.thinking".to_owned(),
-            ])
-            .expect("declared dialect is accepted")
-            .build()
-            .expect("options build");
-        assert_eq!(
-            options.dialect,
-            vec![
-                ReasoningDialectFieldPath::ReasoningDetailsText,
-                ReasoningDialectFieldPath::Reasoning,
-                ReasoningDialectFieldPath::ReasoningContent,
-                ReasoningDialectFieldPath::ReasoningDetailsMessageThinking,
-            ]
-        );
-        assert_eq!(
-            ReasoningDialectFieldPath::ReasoningContent.category(),
-            ReasoningFragmentCategoryDto::Primary
-        );
-        assert_eq!(
-            ReasoningDialectFieldPath::Reasoning.category(),
-            ReasoningFragmentCategoryDto::Primary
-        );
-        assert_eq!(
-            ReasoningDialectFieldPath::ReasoningDetailsText.category(),
-            ReasoningFragmentCategoryDto::Detail
-        );
-        assert_eq!(
-            ReasoningDialectFieldPath::ReasoningDetailsMessageThinking.category(),
-            ReasoningFragmentCategoryDto::Detail
-        );
-    }
-
-    #[test]
-    fn reasoning_dialect_rejects_unknown_paths_and_duplicates() {
-        assert_eq!(
-            GenericChatDriverOptions::new()
-                .with_reasoning_dialect(vec!["raw_thoughts".to_owned()])
-                .expect_err("unknown dialect path is rejected")
-                .code(),
-            "invalid_reasoning_dialect_path"
-        );
-        assert_eq!(
-            GenericChatDriverOptions::new()
-                .with_reasoning_dialect(vec![
-                    "reasoning_content".to_owned(),
-                    "reasoning_content".to_owned(),
-                ])
-                .expect_err("duplicate dialect path is rejected")
-                .code(),
-            "duplicate_reasoning_dialect_path"
-        );
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "The private fixture constructs the SDK delta shape with its deprecated function-call field."
-    )]
-    fn reasoning_dialect_decoder_accepts_the_pinned_typed_delta_for_every_path() {
-        let options = GenericChatDriverOptions::new()
-            .with_reasoning_dialect(vec![
-                "reasoning_content".to_owned(),
-                "reasoning".to_owned(),
-                "reasoning_details[].text".to_owned(),
-                "reasoning_details[].message.thinking".to_owned(),
-            ])
-            .expect("declared dialect is accepted")
-            .build()
-            .expect("options build");
-        let decoder = ReasoningDialectDecoder::new(options.dialect);
-        let delta = ChatCompletionStreamResponseDelta {
-            content: Some("answer".to_owned()),
-            function_call: None,
-            tool_calls: None,
-            role: None,
-            refusal: None,
-        };
-        // The pinned SDK delta type does not surface reasoning fields, so no
-        // fragments decode and the stream state stays well-ordered.
-        assert_eq!(
-            decoder.decode(&delta).expect("typed delta is accepted"),
-            Vec::new()
-        );
-
-        let mut state = GenericStreamState::new(
-            stream::empty(),
-            ModelCancellationSignal::new(),
-            Some(decoder),
-        );
-        state.accept_delta(0, delta).expect("delta is accepted");
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::text_delta("answer").expect("valid text")))
-        );
-        assert!(state.pending.is_empty());
     }
 
     #[test]
@@ -1641,28 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn unapplicable_thinking_and_effort_declarations_reject_before_any_request() {
-        for options in [
-            GenericChatDriverOptions::new()
-                .with_thinking("enabled")
-                .expect("activation form is valid"),
-            GenericChatDriverOptions::new()
-                .with_thinking("adaptive")
-                .expect("activation form is valid"),
-            GenericChatDriverOptions::new().with_enable_thinking(true),
-            GenericChatDriverOptions::new().with_think(true),
-            GenericChatDriverOptions::new().with_think_effort(ReasoningEffortLevel::High),
-            GenericChatDriverOptions::new().with_thinking_budget(1024),
-            GenericChatDriverOptions::new().with_thinking_token_budget(4096),
-        ] {
-            assert_eq!(
-                options
-                    .build()
-                    .expect_err("unapplicable option is rejected")
-                    .code(),
-                "unsupported_thinking_configuration"
-            );
-        }
+    fn unapplicable_effort_declarations_reject_before_any_request() {
         assert_eq!(
             GenericChatDriverOptions::new()
                 .with_reasoning_effort(ReasoningEffortLevel::Max)
@@ -1670,13 +1162,6 @@ mod tests {
                 .expect_err("maximum effort is rejected")
                 .code(),
             "unsupported_reasoning_effort"
-        );
-        assert_eq!(
-            GenericChatDriverOptions::new()
-                .with_thinking("bogus")
-                .expect_err("unknown activation is rejected")
-                .code(),
-            "invalid_thinking_activation"
         );
     }
 
@@ -1710,8 +1195,7 @@ mod tests {
 
     #[test]
     fn normalized_reasoning_failures_never_carry_raw_provider_text() {
-        let mut state =
-            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new(), None);
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         state.fail("provider_reasoning_stream_invalid");
         let error = state
             .pending

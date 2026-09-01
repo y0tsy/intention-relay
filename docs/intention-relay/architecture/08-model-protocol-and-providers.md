@@ -102,7 +102,7 @@ not expose SDK resources.
 It owns:
 
 - generic endpoint/auth/config translation;
-- private SDK request construction and fixture normalization for text, usage, finish, function-style tool-call, and error facts;
+- private SDK request construction and fixture normalization for text, usage, finish, `tool_calls` tool-call, and error facts;
 - documented capability limitations; and
 - normalized failures.
 
@@ -111,7 +111,7 @@ private provider composition path. Provider crates continue to expose only
 provider-neutral contracts; runtime-owned execution and persistent delivery do
 not expose SDK resources.
 
-Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, usage, finish reasons, and function-style tool calls; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
+Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, usage, finish reasons, and `tool_calls` tool-call fragments; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
 
 ## Provider selection
 

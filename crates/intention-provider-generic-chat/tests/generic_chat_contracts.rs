@@ -249,7 +249,6 @@ fn generic_mapping_covers_known_finish_status_and_invalid_fixture_values() {
         ("stop", FinishReasonDto::Stop),
         ("length", FinishReasonDto::Length),
         ("tool_calls", FinishReasonDto::ToolCalls),
-        ("function_call", FinishReasonDto::ToolCalls),
         ("content_filter", FinishReasonDto::ContentFilter),
         ("error", FinishReasonDto::Error),
         ("unknown", FinishReasonDto::Unknown),

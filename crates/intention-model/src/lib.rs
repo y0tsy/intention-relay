@@ -499,8 +499,7 @@ impl<'de> Deserialize<'de> for ModelEventDto {
                 content: String,
             },
             ReasoningDelta {
-                #[serde(default)]
-                category: Option<ReasoningFragmentCategoryDto>,
+                category: ReasoningFragmentCategoryDto,
                 content: String,
             },
             ReasoningSummaryDelta {
@@ -523,11 +522,7 @@ impl<'de> Deserialize<'de> for ModelEventDto {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ReasoningDelta { category, content } => {
-                Self::reasoning_delta_categorized(
-                    category.unwrap_or(ReasoningFragmentCategoryDto::Primary),
-                    content,
-                )
-                .map_err(de::Error::custom)
+                Self::reasoning_delta_categorized(category, content).map_err(de::Error::custom)
             }
             RawModelEventDto::ReasoningSummaryDelta { content } => {
                 Self::reasoning_summary_delta(content).map_err(de::Error::custom)

@@ -12,18 +12,7 @@ use intention_model::{
 };
 
 #[test]
-fn reasoning_deltas_round_trip_with_legacy_and_categorized_wire_shapes() {
-    let legacy: ModelEventDto =
-        serde_json::from_str(r#"{"kind":"reasoning_delta","content":"thought"}"#)
-            .expect("legacy reasoning delta decodes");
-    assert_eq!(
-        legacy,
-        ModelEventDto::ReasoningDelta {
-            category: ReasoningFragmentCategoryDto::Primary,
-            content: "thought".to_owned(),
-        }
-    );
-
+fn reasoning_deltas_round_trip_with_categorized_wire_shapes() {
     let categorized: ModelEventDto = serde_json::from_str(
         r#"{"kind":"reasoning_delta","category":"detail","content":"detail"}"#,
     )

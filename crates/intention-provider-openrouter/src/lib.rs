@@ -15,7 +15,7 @@ use intention_model::{
     AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
     ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
     ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
-    ProviderNativePreservationControlsV1, ReasoningEffortLevel, ToolCallDto, UsageDto,
+    ReasoningEffortLevel, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 use openrouter_rs::{
@@ -29,7 +29,6 @@ use openrouter_rs::{
 #[derive(Clone, Debug, Default)]
 pub struct OpenRouterDriverOptions {
     header_policy: Option<AuthenticationHeaderPolicyV1>,
-    preservation_controls: Option<ProviderNativePreservationControlsV1>,
     reasoning_effort: Option<ReasoningEffortLevel>,
 }
 
@@ -47,19 +46,6 @@ impl OpenRouterDriverOptions {
     #[must_use]
     pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
         self.header_policy = Some(policy);
-        self
-    }
-
-    /// Declares native reasoning preservation controls.
-    ///
-    /// The OpenRouter chat SDK exposes no thinking-preservation request field,
-    /// so the controls are validated and stored but not applied to requests.
-    #[must_use]
-    pub const fn with_preservation_controls(
-        mut self,
-        controls: ProviderNativePreservationControlsV1,
-    ) -> Self {
-        self.preservation_controls = Some(controls);
         self
     }
 
@@ -461,7 +447,7 @@ fn map_finish_reason(reason: &str) -> FinishReasonDto {
     match reason {
         "stop" => FinishReasonDto::Stop,
         "length" => FinishReasonDto::Length,
-        "tool_calls" | "function_call" => FinishReasonDto::ToolCalls,
+        "tool_calls" => FinishReasonDto::ToolCalls,
         "content_filter" => FinishReasonDto::ContentFilter,
         "error" => FinishReasonDto::Error,
         _ => FinishReasonDto::Unknown,

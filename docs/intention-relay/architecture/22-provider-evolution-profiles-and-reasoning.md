@@ -314,10 +314,11 @@ corresponding: `ModelEventDto::ReasoningDelta { category, content }` and
 `ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it;
 and the domain taxonomy has matching `ReasoningDeltaRecorded` and
 `ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a
-separate closed durable fact, never a provider stream event. A supported legacy
-M4 `ReasoningDeltaRecorded { content }` decodes as historical `Primary`
-reasoning evidence without rewriting its stored bytes; it has no synthetic
-summary, category field, or history manifest.
+separate closed durable fact, never a provider stream event. Per
+[ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md),
+`category` is required on the wire in the model and domain reasoning
+representations with no defaulting to `Primary` and no historical decode
+class; reasoning never synthesizes a summary or history manifest.
 
 The existing 512 KiB canonical individual-fact bound remains in force. The
 combined canonical reasoning fragments and summaries of one run have a fixed
