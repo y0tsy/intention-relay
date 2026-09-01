@@ -28,6 +28,16 @@
 - Remove imports, variables, functions, or tests only when the current change makes them unused or obsolete.
 - Fix issues introduced by the current change, but do not use a task as an excuse for unrelated cleanup.
 
+### No backward compatibility
+
+- Backward compatibility is neither required nor in demand. Nothing built or run from this project exists outside the development machine: no deployed users, no externally persisted data, and no third-party consumers.
+- When an execution path becomes outdated, remove it. Do not add compatibility layers, fallback branches, or migration paths to keep old behavior readable, replayable, or upgradeable.
+- Until every roadmap milestone is complete and fully closed, each versioned system keeps exactly one live version — version 1:
+  - Database schemas: exactly one schema version, version 1. Tables, columns, and indexes are removed, updated, and added only within that version. There are no migrations, no versioned upgrade steps, and no opening of older schema versions.
+  - The same single-version rule applies to protocol versions, wire formats, configuration formats, storage formats, and any other versioned system: evolve in place, never carry two versions at once.
+- Do not write compatibility fixtures, golden files, or tests that assert behavior of any version other than the current one.
+- When this policy conflicts with architecture documents or ADRs that mandate migration or preservation behavior, update those documents in the same change that removes the obsolete path.
+
 ### Goal-driven delivery
 
 - Define observable success criteria before implementation.
