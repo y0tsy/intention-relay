@@ -3015,19 +3015,33 @@ mod tests {
                 entry.value
             );
             values.push(entry.value);
-            let wired = matches!(
-                entry.name,
+            let expected_status = match entry.name {
+                // Slice 2 wires the ten active ledger families: the three
+                // historical families plus model-capability-taxonomy-v1
+                // through legacy-m4-selection-binding.
                 "run-execution-meaning"
-                    | "programmatic-caller-policy-selection-v1"
-                    | "agent-activity-selection-v1"
-            );
+                | "programmatic-caller-policy-selection-v1"
+                | "agent-activity-selection-v1"
+                | "model-capability-taxonomy-v1"
+                | "provider-profile-revision-v1"
+                | "provider-selection-v1"
+                | "reasoning-history-manifest-v1"
+                | "context-source-manifest-v1"
+                | "model-context-projection-v1"
+                | "legacy-m4-selection-binding" => TagStatus::Wired,
+                // Slice 3 owns the selection and tool-loop families.
+                "goal-run-selection-v1"
+                | "continual-harness-selection-v1"
+                | "mcp-method-catalog-selection-v1"
+                | "tool-descriptor-revision"
+                | "tool-registry-revision"
+                | "model-tool-loop-v1"
+                | "bridge-invocation-v1" => TagStatus::ReservedForSlice3,
+                // Slice 4 owns the fork and agent-activity families.
+                _ => TagStatus::ReservedForSlice4,
+            };
             assert_eq!(
-                entry.status,
-                if wired {
-                    TagStatus::Wired
-                } else {
-                    TagStatus::ReservedForSlice2
-                },
+                entry.status, expected_status,
                 "unexpected status for ledger tag {}",
                 entry.name
             );
