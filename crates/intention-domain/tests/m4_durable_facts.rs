@@ -225,6 +225,8 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         serde_json::json!({"cursor":1,"kind":"retry_scheduled","failed_attempt":1,"next_attempt":2}),
         serde_json::json!({"cursor":1,"kind":"assistant_content_appended","assistant_turn_id":AssistantTurnId::new(),"content":"answer"}),
         serde_json::json!({"cursor":1,"kind":"reasoning_delta_recorded","content":"thought"}),
+        serde_json::json!({"cursor":1,"kind":"reasoning_delta_recorded","category":"detail","content":"thought"}),
+        serde_json::json!({"cursor":1,"kind":"reasoning_summary_delta_recorded","content":"summary"}),
         serde_json::json!({"cursor":1,"kind":"usage_recorded","usage":{"state":"not_reported"}}),
         serde_json::json!({"cursor":1,"kind":"tool_call_recorded","call":{"call_id":ToolCallId::new(),"name":"inspect","arguments_json":"{}"}}),
         serde_json::json!({"cursor":1,"kind":"tool_result_recorded","call_id":ToolCallId::new(),"outcome":{"state":"succeeded","content":"ok"}}),
@@ -235,6 +237,24 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         let fact: ModelRunFactDto = serde_json::from_value(value).expect("valid fact wire");
         assert_eq!(fact.cursor().value(), 1);
     }
+    // The historical M4 reasoning fact without a category decodes as Primary.
+    let legacy: ModelRunFactDto = serde_json::from_value(serde_json::json!({
+        "cursor": 1,
+        "kind": "reasoning_delta_recorded",
+        "content": "thought"
+    }))
+    .expect("legacy reasoning wire decodes");
+    assert_eq!(
+        legacy.kind(),
+        intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded
+    );
+    assert_eq!(
+        legacy.input(),
+        &ModelRunFactInputDto::ReasoningDeltaRecorded {
+            category: intention_domain::ReasoningDeltaCategory::Primary,
+            content: "thought".to_owned(),
+        }
+    );
     let unknown =
         serde_json::json!({"cursor":1,"kind":"provider_attempt_started","attempt":1,"extra":true});
     assert!(serde_json::from_value::<ModelRunFactDto>(unknown).is_ok());
@@ -273,4 +293,62 @@ fn tail_page_accessors_and_empty_replay_are_covered() {
     let replay = RunReplayDto::new(snapshot, page).expect("replay is valid");
     assert_eq!(replay.snapshot().run_id(), run_id);
     assert_eq!(replay.tail().after_cursor().value(), 7);
+}
+
+#[test]
+fn reasoning_fact_variants_enforce_per_fact_and_per_run_bounds() {
+    let primary = ModelRunFactInputDto::reasoning_delta_recorded(" x ")
+        .expect("primary reasoning fact is valid");
+    assert_eq!(
+        primary.kind(),
+        intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded
+    );
+    assert_eq!(
+        primary,
+        ModelRunFactInputDto::ReasoningDeltaRecorded {
+            category: intention_domain::ReasoningDeltaCategory::Primary,
+            content: " x ".to_owned(),
+        }
+    );
+    let detail = ModelRunFactInputDto::reasoning_delta_recorded_categorized(
+        intention_domain::ReasoningDeltaCategory::Detail,
+        "detail",
+    )
+    .expect("detail reasoning fact is valid");
+    assert!(matches!(
+        detail,
+        ModelRunFactInputDto::ReasoningDeltaRecorded {
+            category: intention_domain::ReasoningDeltaCategory::Detail,
+            ..
+        }
+    ));
+    let summary = ModelRunFactInputDto::reasoning_summary_delta_recorded("summary")
+        .expect("summary is valid");
+    assert_eq!(
+        summary.kind(),
+        intention_domain::ModelRunFactKindDto::ReasoningSummaryDeltaRecorded
+    );
+    assert_eq!(
+        intention_domain::ModelRunFactKindDto::ReasoningSummaryDeltaRecorded.as_str(),
+        "reasoning_summary_delta_recorded"
+    );
+
+    // The closed per-fact bound accepts exactly 512 KiB and rejects one byte more.
+    assert!(ModelRunFactInputDto::reasoning_delta_recorded("x".repeat(512 * 1024)).is_ok());
+    assert!(ModelRunFactInputDto::reasoning_delta_recorded("x".repeat(512 * 1024 + 1)).is_err());
+    assert!(
+        ModelRunFactInputDto::reasoning_summary_delta_recorded("x".repeat(512 * 1024 + 1)).is_err()
+    );
+
+    // The closed per-run bound rejects combined output beyond 4 MiB.
+    assert!(intention_domain::validate_reasoning_fact_output_bound(4 * 1024 * 1024, 1).is_err());
+    assert!(intention_domain::validate_reasoning_fact_output_bound(4 * 1024 * 1024 - 1, 1).is_ok());
+    assert!(intention_domain::validate_reasoning_fact_output_bound(0, 1).is_ok());
+    assert!(intention_domain::validate_reasoning_fact_output_bound(u64::MAX, u64::MAX).is_err());
+    assert_eq!(
+        intention_domain::validate_reasoning_fact_output_bound(4 * 1024 * 1024, 1)
+            .expect_err("over-limit combined reasoning is rejected")
+            .code(),
+        "reasoning_output_limit_exceeded"
+    );
 }
