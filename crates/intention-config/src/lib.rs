@@ -17,6 +17,22 @@ use serde::{Deserialize, Serialize};
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
 const CURRENT_SCHEMA_MINOR: u16 = 0;
 
+/// Requires a schema version exactly equal to the current configuration schema.
+///
+/// # Errors
+///
+/// Returns an unavailable error when the schema version differs from the
+/// current configuration schema (no same-major tolerance).
+fn require_current_schema_version(schema_version: SchemaVersionDto) -> DtoResult<()> {
+    if schema_version != SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR) {
+        return Err(ErrorDto::unavailable(
+            "incompatible_schema_version",
+            "schema version must equal the current configuration schema",
+        ));
+    }
+    Ok(())
+}
+
 /// A validated, absolute configuration path with semantic configuration intent.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ConfigPathDto(String);
@@ -433,8 +449,7 @@ impl ResolvedConfigDto {
         provider_execution: ProviderExecutionPolicyDto,
         source_kind: ConfigSourceKindDto,
     ) -> DtoResult<Self> {
-        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
-            .ensure_compatible_with(schema_version)?;
+        require_current_schema_version(schema_version)?;
         Ok(Self {
             schema_version,
             provider,
@@ -522,9 +537,7 @@ impl<'de> Deserialize<'de> for ConfigSnapshotDto {
         }
 
         let raw = RawConfigSnapshotDto::deserialize(deserializer)?;
-        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
-            .ensure_compatible_with(raw.schema_version)
-            .map_err(serde::de::Error::custom)?;
+        require_current_schema_version(raw.schema_version).map_err(serde::de::Error::custom)?;
         Ok(Self {
             schema_version: raw.schema_version,
             revision_id: raw.revision_id,
@@ -539,16 +552,15 @@ impl ConfigSnapshotDto {
     ///
     /// # Errors
     ///
-    /// Returns a safe unavailable error when the snapshot schema major differs
-    /// from the supported configuration snapshot major.
+    /// Returns a safe unavailable error when the snapshot schema version
+    /// differs from the current configuration schema.
     pub fn new(
         schema_version: SchemaVersionDto,
         revision_id: ConfigRevisionId,
         captured_at: TimestampDto,
         resolved: ResolvedConfigDto,
     ) -> DtoResult<Self> {
-        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
-            .ensure_compatible_with(schema_version)?;
+        require_current_schema_version(schema_version)?;
         Ok(Self {
             schema_version,
             revision_id,
@@ -585,12 +597,11 @@ impl ConfigSnapshotDto {
     ///
     /// # Errors
     ///
-    /// Returns an unavailable error when either nested public schema major is unsupported.
+    /// Returns an unavailable error when either nested public schema version
+    /// differs from the current configuration schema.
     pub fn validate_for_persistence(&self) -> DtoResult<()> {
-        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
-            .ensure_compatible_with(self.schema_version)?;
-        SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR)
-            .ensure_compatible_with(self.resolved.schema_version())
+        require_current_schema_version(self.schema_version)?;
+        require_current_schema_version(self.resolved.schema_version())
     }
 }
 

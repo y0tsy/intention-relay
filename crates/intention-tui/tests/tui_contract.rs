@@ -50,7 +50,7 @@ fn tui_proof_reaches_the_shared_fixture_daemon_only_through_the_client() {
     assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
     let session = tui
         .subscribe(SubscribeSessionCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             session_id,
             Some(SessionEventSequenceDto::new(0)),
             intention_domain::RunModeDto::Build,
@@ -114,7 +114,7 @@ fn tui_and_shared_client_preserve_identical_typed_tool_events_from_session_tail(
     .expect("tool event is valid");
     let envelope = EventEnvelopeDto::new(
         EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             EventId::new(),
             session_id,
             Some(run_id),
@@ -125,7 +125,7 @@ fn tui_and_shared_client_preserve_identical_typed_tool_events_from_session_tail(
         intention_domain::DomainEventDto::ToolLifecycle(event),
     );
     let tail = SessionEventTailBatchDto::new(
-        SchemaVersionDto::new(1, 0),
+        SchemaVersionDto::new(1, 1),
         session_id,
         SessionEventSequenceDto::new(0),
         vec![envelope.clone()],

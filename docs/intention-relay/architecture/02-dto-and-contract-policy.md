@@ -157,10 +157,18 @@ A live event is emitted only after the storage commit succeeds. The command resu
 ## Versioning and compatibility
 
 - Every transport and persisted event schema has an explicit version.
-- Changes are additive by default. Supported legacy payloads may omit additive fields such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode as `None`.
-- Public M1 DTOs tolerate unknown additive JSON fields unless a closed configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and incompatible schema/protocol majors always fail safely.
-- Daemon/client protocol negotiation rejects incompatible major versions with a typed error.
-- SQLite migrations and persisted DTO decoders must preserve enough information to read prior supported records.
+- Changes are additive by default. Current payloads may omit additive fields
+  such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields
+  decode as `None`.
+- Public DTOs tolerate unknown additive JSON fields unless a closed
+  configuration schema explicitly documents `deny_unknown_fields`. Required
+  fields, invalid types, invalid IDs, unknown closed variants, and any
+  schema/protocol version other than the current one always fail safely.
+- Daemon/client protocol negotiation accepts only the exact current protocol
+  version (1.1) and rejects any other version with a typed error; the public
+  DTO schema compares by exact equality (no same-major tolerance).
+- SQLite migrations and persisted DTO decoders must preserve enough
+  information to read prior supported records.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation

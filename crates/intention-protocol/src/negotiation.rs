@@ -346,40 +346,31 @@ mod tests {
     }
 
     #[test]
-    fn compatible_minor_hello_fixture_deserializes_at_protocol_1_1() {
+    fn current_version_hello_fixture_deserializes_at_protocol_1_1() {
         let hello: crate::ProtocolHelloDto = serde_json::from_str(include_str!(
-            "../tests/fixtures/goldens/hello-compatible-minor-v1.json"
+            "../tests/fixtures/goldens/hello-current-version-v1.json"
         ))
-        .expect("compatible-minor fixture must decode");
+        .expect("current-version fixture must decode");
         assert_eq!(hello.version(), crate::ProtocolVersionDto::new(1, 1));
         assert_eq!(
             hello.capabilities(),
             crate::POST_M5_CAPABILITIES.as_slice(),
-            "compatible-minor fixture must declare all post-M5 capabilities"
+            "current-version fixture must declare all post-M5 capabilities"
         );
-        assert!(
-            hello
-                .version()
-                .ensure_compatible_with(crate::ProtocolVersionDto::new(1, 1))
-                .is_ok()
-        );
+        assert_eq!(hello.version(), crate::CURRENT_PROTOCOL_VERSION);
     }
 
     #[test]
-    fn incompatible_major_hello_fixture_fails_version_compatibility() {
+    fn incompatible_major_hello_fixture_is_not_the_current_version() {
         let hello: crate::ProtocolHelloDto = serde_json::from_str(include_str!(
             "../tests/fixtures/goldens/hello-incompatible-major-v2.json"
         ))
         .expect("incompatible-major fixture must decode");
         assert_eq!(hello.version(), crate::ProtocolVersionDto::new(2, 0));
-        assert_eq!(
-            hello
-                .version()
-                .ensure_compatible_with(crate::ProtocolVersionDto::new(1, 1))
-                .expect_err("protocol major 2 is incompatible with 1.1")
-                .code(),
-            "incompatible_protocol_version"
-        );
+        // Negotiation accepts only the exact current version; the transport
+        // gate rejects this fixture with `incompatible_protocol_version`
+        // (covered by intention-transport integration tests).
+        assert_ne!(hello.version(), crate::CURRENT_PROTOCOL_VERSION);
     }
 
     #[test]
@@ -454,20 +445,19 @@ mod tests {
             "duplicate_protocol_capability"
         );
 
-        // Same-major compatible minor versions pass.
-        assert!(
-            ProtocolVersionDto::new(1, 2)
-                .ensure_compatible_with(ProtocolVersionDto::new(1, 1))
-                .is_ok()
-        );
-
-        // Incompatible major versions fail closed.
+        // Only the exact current protocol version passes negotiation
+        // equality; a differing minor is rejected like a differing major.
         assert_eq!(
-            ProtocolVersionDto::new(2, 0)
-                .ensure_compatible_with(ProtocolVersionDto::new(1, 1))
-                .expect_err("major mismatch is rejected")
-                .code(),
-            "incompatible_protocol_version"
+            ProtocolVersionDto::new(1, 1),
+            crate::CURRENT_PROTOCOL_VERSION
+        );
+        assert_ne!(
+            ProtocolVersionDto::new(1, 2),
+            crate::CURRENT_PROTOCOL_VERSION
+        );
+        assert_ne!(
+            ProtocolVersionDto::new(2, 0),
+            crate::CURRENT_PROTOCOL_VERSION
         );
 
         // A control-plane command must be rejected before effect when the

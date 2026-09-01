@@ -24,9 +24,26 @@ fn workspace_root() -> WorkspaceRootDto {
     .expect("native fixture workspace is valid")
 }
 
+fn fixture_projection(
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+        at_sequence,
+    )
+    .expect("fixture projection is coherent")
+}
+
 #[test]
-fn typed_acceptance_results_carry_required_durable_evidence_and_legacy_acceptance_remains_compatible()
- {
+fn typed_acceptance_results_carry_required_durable_evidence() {
     let correlation = CorrelationIdDto::new();
     let session_id = SessionId::new();
     let workspace_id = WorkspaceId::new();
@@ -70,37 +87,31 @@ fn typed_acceptance_results_carry_required_durable_evidence_and_legacy_acceptanc
         accepted.result(),
         Some(ProtocolAcceptedResultDto::CreateSession(_))
     ));
-    let legacy: ProtocolAcceptedDto =
-        serde_json::from_str(r#"{"correlation_id":"11111111-1111-4111-8111-111111111111"}"#)
-            .expect("legacy accepted result remains decodable");
-    assert_eq!(legacy.result(), None);
+    let encoded = serde_json::to_string(&accepted).expect("accepted result serializes");
+    assert!(
+        serde_json::from_str::<ProtocolAcceptedDto>(&encoded).expect("accepted result decodes")
+            == accepted
+    );
 }
 
 #[test]
-fn snapshots_validate_optional_m3_projection_but_accept_legacy_shape() {
+fn snapshots_validate_the_required_m3_projection() {
     let session_id = SessionId::new();
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-        SessionEventSequenceDto::new(4),
-    )
-    .expect("projection is coherent");
     let snapshot = SessionSnapshotDto::with_projection(
-        SchemaVersionDto::new(1, 0),
+        SchemaVersionDto::new(1, 1),
         session_id,
         SessionEventSequenceDto::new(4),
-        projection,
+        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
     )
     .expect("matching projection is valid");
     assert!(snapshot.projection().is_some());
-    let legacy: SessionSnapshotDto = serde_json::from_str(r#"{"schema_version":{"major":1,"minor":0},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":4}"#).expect("legacy snapshot remains decodable");
-    assert_eq!(legacy.projection(), None);
+    assert!(
+        serde_json::from_str::<SessionSnapshotDto>(
+            r#"{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":4}"#
+        )
+        .is_err(),
+        "a snapshot without its required projection must fail closed"
+    );
 }
 
 #[test]
@@ -136,24 +147,12 @@ fn acceptance_accessors_and_snapshot_validation_cover_m3_failure_boundaries() {
     assert_eq!(stopped.run_id(), run_id);
     assert_eq!(stopped.committed_sequence(), sequence);
 
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
-        SessionId::new(),
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-        sequence,
-    )
-    .expect("projection is coherent");
     assert_eq!(
         SessionSnapshotDto::with_projection(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             session_id,
             sequence,
-            projection,
+            fixture_projection(SessionId::new(), sequence),
         )
         .expect_err("projection session mismatch rejects")
         .code(),
@@ -163,10 +162,15 @@ fn acceptance_accessors_and_snapshot_validation_cover_m3_failure_boundaries() {
 
 #[test]
 fn subscription_snapshot_and_tail_remains_an_unboxed_compatible_wire_value() {
-    let schema_version = SchemaVersionDto::new(1, 0);
+    let schema_version = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(schema_version, session_id, SessionEventSequenceDto::new(0));
+    let snapshot = SessionSnapshotDto::with_projection(
+        schema_version,
+        session_id,
+        SessionEventSequenceDto::new(0),
+        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+    )
+    .expect("fixture snapshot is valid");
     let tail = SessionEventTailBatchDto::new(
         schema_version,
         session_id,

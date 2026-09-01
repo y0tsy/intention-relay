@@ -81,6 +81,8 @@ use intention_workspace::WorkspaceRoot;
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
     intention_protocol::CURRENT_PROTOCOL_VERSION;
+/// The single live configuration snapshot schema (intention-config current schema).
+const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 
 /// Public M3 daemon application facade over a private durable composition.
@@ -2326,7 +2328,7 @@ fn load_provider_configuration(
     let material =
         ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
     let snapshot = ConfigSnapshotDto::new(
-        SCHEMA_VERSION,
+        CONFIG_SCHEMA_VERSION,
         ConfigRevisionId::new(),
         now()?,
         material.safe_resolved().clone(),
@@ -2497,7 +2499,7 @@ mod tests {
         ))
         .expect("fixture configuration resolves");
         ConfigSnapshotDto::new(
-            SCHEMA_VERSION,
+            CONFIG_SCHEMA_VERSION,
             ConfigRevisionId::new(),
             TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
             resolved,

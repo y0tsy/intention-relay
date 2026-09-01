@@ -397,7 +397,7 @@ impl SqliteStorageRepository {
                 sqlite_integer(position, "event sequence is outside the SQLite range")?;
             let event = EventEnvelopeDto::new(
                 EventMetadataDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    SchemaVersionDto::new(1, 1),
                     EventId::new(),
                     session_id,
                     draft.run_id,

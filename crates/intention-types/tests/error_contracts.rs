@@ -14,16 +14,6 @@ const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 const WORKSPACE_ROOT: &str = "/workspace/private-project";
 
 #[test]
-fn legacy_error_fixture_decodes_without_additive_detail_fields() {
-    let error: ErrorDto = serde_json::from_str(include_str!("fixtures/error-v1-legacy.json"))
-        .expect("legacy error fixture must decode");
-
-    assert_eq!(error.code(), "legacy_not_found");
-    assert_eq!(error.correlation_id(), None);
-    assert_eq!(error.detail(), None);
-}
-
-#[test]
 fn versioned_missing_path_fixture_decodes_and_round_trips_safely() {
     let error: ErrorDto = serde_json::from_str(include_str!(
         "fixtures/error-v1-missing-workspace-path.json"
@@ -56,6 +46,8 @@ fn typed_missing_path_detail_round_trips_without_exposing_root_or_secret() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, error);
+    assert!(error.detail().is_some(), "typed detail is retained");
+    assert!(error.correlation_id().is_some(), "correlation is retained");
     assert!(!encoded.contains(FAKE_CREDENTIAL));
     assert!(!encoded.contains(WORKSPACE_ROOT));
     assert!(!error.to_string().contains("src/missing.rs"));

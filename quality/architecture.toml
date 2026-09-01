@@ -283,8 +283,8 @@ coverage_tier = "B"
 [[future_crates]]
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
-test_target = "protocol compatibility fixtures"
-test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts", "m4_run_stream_contracts", "control_plane_contracts"]
+test_target = "current-version wire contract fixtures"
+test_targets = ["contracts", "accessors", "m3_contracts", "m4_run_stream_contracts", "control_plane_contracts"]
 coverage_tier = "A"
 
 [[future_crates]]

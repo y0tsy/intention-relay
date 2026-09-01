@@ -763,11 +763,7 @@ impl RunStreamClient {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == remote.version()
-                    && response
-                        .message()
-                        .schema_version()
-                        .ensure_compatible_with(subscription.schema_version())
-                        .is_ok() =>
+                    && response.message().schema_version() == subscription.schema_version() =>
             {
                 response
             }
@@ -840,11 +836,7 @@ impl RunStreamSubscription {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == self.daemon_version
-                    && response
-                        .message()
-                        .schema_version()
-                        .ensure_compatible_with(self.schema_version)
-                        .is_ok() =>
+                    && response.message().schema_version() == self.schema_version =>
             {
                 response
             }

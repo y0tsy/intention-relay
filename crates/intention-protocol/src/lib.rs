@@ -54,22 +54,6 @@ impl ProtocolVersionDto {
     pub const fn minor(self) -> u16 {
         self.minor
     }
-
-    /// Rejects a protocol version with a different major component.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the remote major version differs.
-    pub fn ensure_compatible_with(self, remote: Self) -> DtoResult<()> {
-        if self.major == remote.major {
-            Ok(())
-        } else {
-            Err(ErrorDto::unavailable(
-                "incompatible_protocol_version",
-                "protocol major versions are incompatible",
-            ))
-        }
-    }
 }
 
 /// A feature the local adapter and daemon both understand.
@@ -730,8 +714,7 @@ pub enum ProtocolCommandResultDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProtocolAcceptedDto {
     correlation_id: CorrelationIdDto,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    result: Option<ProtocolAcceptedResultDto>,
+    result: ProtocolAcceptedResultDto,
 }
 
 impl<'de> Deserialize<'de> for ProtocolAcceptedDto {
@@ -742,8 +725,7 @@ impl<'de> Deserialize<'de> for ProtocolAcceptedDto {
         #[derive(Deserialize)]
         struct RawProtocolAcceptedDto {
             correlation_id: CorrelationIdDto,
-            #[serde(default)]
-            result: Option<ProtocolAcceptedResultDto>,
+            result: ProtocolAcceptedResultDto,
         }
         let raw = RawProtocolAcceptedDto::deserialize(deserializer)?;
         Ok(Self {
@@ -754,15 +736,6 @@ impl<'de> Deserialize<'de> for ProtocolAcceptedDto {
 }
 
 impl ProtocolAcceptedDto {
-    /// Creates a legacy-compatible acceptance containing no operation payload.
-    #[must_use]
-    pub const fn new(correlation_id: CorrelationIdDto) -> Self {
-        Self {
-            correlation_id,
-            result: None,
-        }
-    }
-
     /// Creates an acceptance with one operation-specific typed result.
     #[must_use]
     pub const fn with_result(
@@ -771,7 +744,7 @@ impl ProtocolAcceptedDto {
     ) -> Self {
         Self {
             correlation_id,
-            result: Some(result),
+            result,
         }
     }
 
@@ -781,10 +754,10 @@ impl ProtocolAcceptedDto {
         self.correlation_id
     }
 
-    /// Returns operation-specific acceptance evidence when supplied by an M3 peer.
+    /// Returns operation-specific acceptance evidence.
     #[must_use]
     pub const fn result(&self) -> Option<&ProtocolAcceptedResultDto> {
-        self.result.as_ref()
+        Some(&self.result)
     }
 }
 
@@ -1003,8 +976,7 @@ pub struct SessionSnapshotDto {
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     at_sequence: SessionEventSequenceDto,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    projection: Option<SessionProjectionDto>,
+    projection: SessionProjectionDto,
 }
 
 impl<'de> Deserialize<'de> for SessionSnapshotDto {
@@ -1017,11 +989,10 @@ impl<'de> Deserialize<'de> for SessionSnapshotDto {
             schema_version: SchemaVersionDto,
             session_id: SessionId,
             at_sequence: SessionEventSequenceDto,
-            #[serde(default)]
-            projection: Option<SessionProjectionDto>,
+            projection: SessionProjectionDto,
         }
         let raw = RawSessionSnapshotDto::deserialize(deserializer)?;
-        Self::from_optional_projection(
+        Self::with_projection(
             raw.schema_version,
             raw.session_id,
             raw.at_sequence,
@@ -1032,22 +1003,7 @@ impl<'de> Deserialize<'de> for SessionSnapshotDto {
 }
 
 impl SessionSnapshotDto {
-    /// Creates a legacy-compatible session snapshot without a projection.
-    #[must_use]
-    pub const fn new(
-        schema_version: SchemaVersionDto,
-        session_id: SessionId,
-        at_sequence: SessionEventSequenceDto,
-    ) -> Self {
-        Self {
-            schema_version,
-            session_id,
-            at_sequence,
-            projection: None,
-        }
-    }
-
-    /// Creates an M3 session snapshot containing a coherent state projection.
+    /// Creates a session snapshot containing a coherent state projection.
     ///
     /// # Errors
     ///
@@ -1059,18 +1015,7 @@ impl SessionSnapshotDto {
         at_sequence: SessionEventSequenceDto,
         projection: SessionProjectionDto,
     ) -> DtoResult<Self> {
-        Self::from_optional_projection(schema_version, session_id, at_sequence, Some(projection))
-    }
-
-    fn from_optional_projection(
-        schema_version: SchemaVersionDto,
-        session_id: SessionId,
-        at_sequence: SessionEventSequenceDto,
-        projection: Option<SessionProjectionDto>,
-    ) -> DtoResult<Self> {
-        if projection.as_ref().is_some_and(|value| {
-            value.session_id() != session_id || value.at_sequence() != at_sequence
-        }) {
+        if projection.session_id() != session_id || projection.at_sequence() != at_sequence {
             return Err(ErrorDto::validation(
                 "invalid_session_snapshot_projection",
                 "snapshot projection must share the snapshot session and sequence",
@@ -1099,10 +1044,10 @@ impl SessionSnapshotDto {
     pub const fn at_sequence(&self) -> SessionEventSequenceDto {
         self.at_sequence
     }
-    /// Returns the M3 public state projection, or `None` for an M1/M2 snapshot.
+    /// Returns the public state projection carried by the snapshot.
     #[must_use]
     pub const fn projection(&self) -> Option<&SessionProjectionDto> {
-        self.projection.as_ref()
+        Some(&self.projection)
     }
 }
 
@@ -1574,11 +1519,39 @@ mod tests {
     use super::*;
     use intention_types::{EventId, EventMetadataDto, TimestampDto, TurnId};
 
+    fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
+        intention_domain::WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-protocol-unit-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture workspace root is valid")
+    }
+
+    fn fixture_projection(
+        session_id: SessionId,
+        at_sequence: SessionEventSequenceDto,
+    ) -> SessionProjectionDto {
+        SessionProjectionDto::new(
+            ProjectId::new(),
+            session_id,
+            WorkspaceId::new(),
+            fixture_workspace_root(),
+            RunModeDto::Build,
+            None,
+            None,
+            Vec::new(),
+            at_sequence,
+        )
+        .expect("fixture projection is valid")
+    }
+
     fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
         let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
         EventEnvelopeDto::new(
             EventMetadataDto::new(
-                SchemaVersionDto::new(1, 0),
+                SchemaVersionDto::new(1, 1),
                 EventId::new(),
                 session_id,
                 None,
@@ -1600,17 +1573,13 @@ mod tests {
         let version = ProtocolVersionDto::new(1, 2);
         assert_eq!(version.major(), 1);
         assert_eq!(version.minor(), 2);
-        assert!(
-            version
-                .ensure_compatible_with(ProtocolVersionDto::new(1, 3))
-                .is_ok()
-        );
-        assert_eq!(
-            version
-                .ensure_compatible_with(ProtocolVersionDto::new(2, 0))
-                .expect_err("major mismatch must fail")
-                .category(),
-            intention_types::ErrorCategoryDto::Unavailable
+        // Negotiation accepts only the exact current version: a differing
+        // minor is rejected exactly like a differing major (no same-major
+        // tolerance remains).
+        assert_ne!(version, crate::CURRENT_PROTOCOL_VERSION);
+        assert_ne!(
+            ProtocolVersionDto::new(2, 0),
+            crate::CURRENT_PROTOCOL_VERSION
         );
         let hello = ProtocolHelloDto::new(
             version,
@@ -1638,7 +1607,7 @@ mod tests {
     fn protocol_wrappers_and_results_preserve_domain_dtos() {
         let session_id = SessionId::new();
         let subscription = SubscribeSessionCommandDto::with_run_id(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             session_id,
             Some(RunId::new()),
             Some(SessionEventSequenceDto::new(4)),
@@ -1661,7 +1630,14 @@ mod tests {
             let _: ProtocolCommandDto =
                 serde_json::from_str(&encoded).expect("command parsing succeeds");
         }
-        let accepted = ProtocolAcceptedDto::new(CorrelationIdDto::new());
+        let accepted = ProtocolAcceptedDto::with_result(
+            CorrelationIdDto::new(),
+            ProtocolAcceptedResultDto::StopRun(StopRunAcceptedDto::new(
+                session_id,
+                RunId::new(),
+                SessionEventSequenceDto::new(1),
+            )),
+        );
         assert_eq!(accepted.correlation_id(), accepted.correlation_id());
         let result = ProtocolCommandResultDto::Accepted(accepted);
         let encoded = serde_json::to_string(&result).expect("result serialization succeeds");
@@ -1671,9 +1647,15 @@ mod tests {
 
     #[test]
     fn tails_and_subscription_responses_validate_continuity() {
-        let schema = SchemaVersionDto::new(1, 0);
+        let schema = SchemaVersionDto::new(1, 1);
         let session_id = SessionId::new();
-        let snapshot = SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(2));
+        let snapshot = SessionSnapshotDto::with_projection(
+            schema,
+            session_id,
+            SessionEventSequenceDto::new(2),
+            fixture_projection(session_id, SessionEventSequenceDto::new(2)),
+        )
+        .expect("fixture snapshot is valid");
         let tail = SessionEventTailBatchDto::new(
             schema,
             session_id,
@@ -1696,7 +1678,7 @@ mod tests {
 
     #[test]
     fn all_protocol_accessors_and_envelope_variants_are_exercised() {
-        let schema = SchemaVersionDto::new(1, 0);
+        let schema = SchemaVersionDto::new(1, 1);
         let version = ProtocolVersionDto::new(3, 4);
         let session_id = SessionId::new();
         let run_id = RunId::new();
@@ -1751,7 +1733,7 @@ mod tests {
 
     #[test]
     fn protocol_capabilities_readiness_and_acceptance_accessors_cover_all_variants() {
-        let version = ProtocolVersionDto::new(1, 0);
+        let version = ProtocolVersionDto::new(1, 1);
         let capabilities = [
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
@@ -1769,7 +1751,7 @@ mod tests {
             DaemonReadinessDto::Unavailable,
         ] {
             assert_eq!(
-                DaemonHealthDto::new(SchemaVersionDto::new(1, 0), version, readiness).readiness(),
+                DaemonHealthDto::new(SchemaVersionDto::new(1, 1), version, readiness).readiness(),
                 readiness
             );
         }
@@ -1845,7 +1827,7 @@ mod tests {
     fn protocol_round_trip_covers_all_closed_enum_shapes() {
         let session = SessionId::new();
         let run = RunId::new();
-        let schema = SchemaVersionDto::new(1, 0);
+        let schema = SchemaVersionDto::new(1, 1);
         let commands = vec![
             ProtocolCommandDto::CreateSession(CreateSessionCommandDto::new(
                 ProjectId::new(),
@@ -1884,7 +1866,14 @@ mod tests {
         let error = ErrorDto::validation("rejected", "rejected");
         for value in [
             ProtocolCommandResultDto::Rejected(error.clone()),
-            ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::new(CorrelationIdDto::new())),
+            ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
+                CorrelationIdDto::new(),
+                ProtocolAcceptedResultDto::StopRun(StopRunAcceptedDto::new(
+                    session,
+                    run,
+                    SessionEventSequenceDto::new(1),
+                )),
+            )),
         ] {
             let wire = serde_json::to_vec(&value).expect("result encodes");
             let _: ProtocolCommandResultDto =
@@ -1908,16 +1897,16 @@ mod tests {
 
     #[test]
     fn remaining_constructor_and_deserialization_error_paths_are_checked() {
-        let schema = SchemaVersionDto::new(1, 0);
+        let schema = SchemaVersionDto::new(1, 1);
         let session = SessionId::new();
         let run = RunId::new();
         let bad_tail = serde_json::json!({
-            "schema_version": {"major": 1, "minor": 0},
+            "schema_version": {"major": 1, "minor": 1},
             "session_id": session,
             "after_sequence": 4,
             "events": [{
                 "metadata": {
-                    "schema_version": {"major": 1, "minor": 0},
+                    "schema_version": {"major": 1, "minor": 1},
                     "event_id": EventId::new(), "session_id": SessionId::new(),
                     "run_id": null, "turn_id": null, "sequence": 5,
                     "occurred_at": 1
@@ -1929,7 +1918,13 @@ mod tests {
         });
         assert!(serde_json::from_value::<SessionEventTailBatchDto>(bad_tail).is_err());
 
-        let snapshot = SessionSnapshotDto::new(schema, session, SessionEventSequenceDto::new(1));
+        let snapshot = SessionSnapshotDto::with_projection(
+            schema,
+            session,
+            SessionEventSequenceDto::new(1),
+            fixture_projection(session, SessionEventSequenceDto::new(1)),
+        )
+        .expect("fixture snapshot is valid");
         let tail = SessionEventTailBatchDto::new(
             schema,
             SessionId::new(),
@@ -2124,7 +2119,7 @@ mod tests {
                 candidate_config_revision: "config-rev-2".to_owned(),
                 validation_result:
                     crate::contract_families::ConfigurationValidationOutcomeDto::Valid,
-                migration_result: "no_migrations_required".to_owned(),
+                migration_result: "not-applicable".to_owned(),
                 commit_outcome: crate::contract_families::ConfigurationCommitOutcomeDto::Committed,
                 safe_failure_code: None,
                 safe_failure_detail: None,

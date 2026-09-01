@@ -128,9 +128,10 @@ Protocol 1.1 and public DTO schema 1.1 are now the active advertised versions.
 `intention-client`, `intention-transport`, and `intention-daemon` reference
 them. TOML configuration schema remains 1 and SQLite storage schema remains 3.
 Historical M3/M4 fixtures and committed v1 protocol fixtures remain 1.0 and are
-not rewritten. Same-major compatibility (1.0 ↔ 1.1) is preserved by the
-existing `ensure_compatible_with` logic, which accepts any peer with an equal
-major version and rejects a differing major with `incompatible_protocol_version`.
+not rewritten. [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)
+removes the same-major compatibility (1.0 ↔ 1.1) `ensure_compatible_with`
+logic: negotiation accepts only the exact current version 1.1 and rejects any
+other version with `incompatible_protocol_version`.
 
 ### Registry tag activation status
 

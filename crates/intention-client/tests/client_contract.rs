@@ -12,7 +12,9 @@ use intention_client::{
     DaemonLauncher, IntentionClient, ProcessDaemonLauncher, SessionSubscriptionRecovery,
     SessionSubscriptionReducer,
 };
-use intention_domain::{DomainEventDto, RunStatusChangedEventDto, RunStatusDto};
+use intention_domain::{
+    DomainEventDto, RunModeDto, RunStatusChangedEventDto, RunStatusDto, SessionProjectionDto,
+};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolHelloDto,
     ProtocolMessageDto, ProtocolQueryResultDto, ProtocolResponseEnvelopeDto,
@@ -22,12 +24,36 @@ use intention_protocol::{
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
+    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, WorkspaceId,
 };
 use tempfile::TempDir;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+
+fn fixture_projection(
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        intention_domain::WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-client-fixture-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture workspace root is valid"),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+        at_sequence,
+    )
+    .expect("fixture projection is valid")
+}
 
 #[derive(Clone)]
 enum FixtureResponse {
@@ -393,8 +419,13 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(4));
+    let snapshot = SessionSnapshotDto::with_projection(
+        SCHEMA_VERSION,
+        session_id,
+        SessionEventSequenceDto::new(4),
+        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
+    )
+    .expect("fixture snapshot is valid");
     let valid_snapshot_endpoint = endpoint(&directory);
     let server = start_fixture_server(
         valid_snapshot_endpoint.clone(),
@@ -549,8 +580,13 @@ fn stateful_recovery_reuses_the_last_sequence_or_clears_on_resync() {
     let directory = TempDir::new().expect("temporary directory is available");
     let endpoint = endpoint(&directory);
     let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
+    let snapshot = SessionSnapshotDto::with_projection(
+        SCHEMA_VERSION,
+        session_id,
+        SessionEventSequenceDto::new(0),
+        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+    )
+    .expect("fixture snapshot is valid");
     let first = SessionSubscriptionResponseDto::snapshot_and_tail(
         snapshot.clone(),
         SessionEventTailBatchDto::new(
@@ -604,8 +640,13 @@ fn stateful_recovery_reuses_the_last_sequence_or_clears_on_resync() {
 fn subscription_reducer_accepts_ordered_state_and_requires_resync_for_bad_state() {
     let _guard = fixture_guard();
     let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
+    let snapshot = SessionSnapshotDto::with_projection(
+        SCHEMA_VERSION,
+        session_id,
+        SessionEventSequenceDto::new(0),
+        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+    )
+    .expect("fixture snapshot is valid");
     let event = fixture_event(session_id, 1);
     let tail = SessionEventTailBatchDto::new(
         SCHEMA_VERSION,

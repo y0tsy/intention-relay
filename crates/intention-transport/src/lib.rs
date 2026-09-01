@@ -374,7 +374,7 @@ impl AsyncLocalClientConnection {
     ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncResponseReceiver)> {
         write_async_frame(&mut self.stream, &local).await?;
         let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        local.version().ensure_compatible_with(remote.version())?;
+        require_exact_protocol_version(local.version(), remote.version())?;
         let (receiver, sender) = self.stream.split();
         Ok((
             remote,
@@ -399,7 +399,7 @@ impl AsyncLocalClientConnection {
     )> {
         write_async_frame(&mut self.stream, &local).await?;
         let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        local.version().ensure_compatible_with(remote.version())?;
+        require_exact_protocol_version(local.version(), remote.version())?;
         let (receiver, sender) = self.stream.split();
         Ok((
             remote,
@@ -431,7 +431,7 @@ impl AsyncLocalDaemonConnection {
         local: ProtocolHelloDto,
     ) -> DtoResult<(ProtocolHelloDto, AsyncDaemonConnectionRoles)> {
         let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        local.version().ensure_compatible_with(remote.version())?;
+        require_exact_protocol_version(local.version(), remote.version())?;
         write_async_frame(&mut self.stream, &local).await?;
         let (receiver, sender) = self.stream.split();
         let roles = if remote
@@ -465,7 +465,7 @@ impl AsyncLocalDaemonConnection {
         local: ProtocolHelloDto,
     ) -> DtoResult<(ProtocolHelloDto, AsyncRequestReceiver, AsyncResponseSender)> {
         let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        local.version().ensure_compatible_with(remote.version())?;
+        require_exact_protocol_version(local.version(), remote.version())?;
         write_async_frame(&mut self.stream, &local).await?;
         let (receiver, sender) = self.stream.split();
         Ok((
@@ -490,7 +490,7 @@ impl AsyncLocalDaemonConnection {
         AsyncDaemonFrameSender,
     )> {
         let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        local.version().ensure_compatible_with(remote.version())?;
+        require_exact_protocol_version(local.version(), remote.version())?;
         write_async_frame(&mut self.stream, &local).await?;
         let (receiver, sender) = self.stream.split();
         Ok((
@@ -632,15 +632,16 @@ impl AsyncDaemonFrameSender {
 ///
 /// # Errors
 ///
-/// Returns the typed protocol mismatch error when the peer major version differs,
-/// or a typed transport error when the handshake cannot complete.
+/// Returns the typed protocol mismatch error when the peer protocol version
+/// differs from the current version, or a typed transport error when the
+/// handshake cannot complete.
 pub fn negotiate_client(
     connection: &mut LocalConnection,
     local: ProtocolHelloDto,
 ) -> DtoResult<ProtocolHelloDto> {
     connection.send_hello(&local)?;
     let remote = connection.receive_hello()?;
-    local.version().ensure_compatible_with(remote.version())?;
+    require_exact_protocol_version(local.version(), remote.version())?;
     Ok(remote)
 }
 
@@ -648,14 +649,15 @@ pub fn negotiate_client(
 ///
 /// # Errors
 ///
-/// Returns the typed protocol mismatch error when the peer major version differs,
-/// or a typed transport error when the handshake cannot complete.
+/// Returns the typed protocol mismatch error when the peer protocol version
+/// differs from the current version, or a typed transport error when the
+/// handshake cannot complete.
 pub fn negotiate_daemon(
     connection: &mut LocalConnection,
     local: ProtocolHelloDto,
 ) -> DtoResult<ProtocolHelloDto> {
     let remote = connection.receive_hello()?;
-    local.version().ensure_compatible_with(remote.version())?;
+    require_exact_protocol_version(local.version(), remote.version())?;
     connection.send_hello(&local)?;
     Ok(remote)
 }
@@ -664,6 +666,28 @@ pub fn negotiate_daemon(
 #[must_use]
 pub const fn local_protocol_version() -> ProtocolVersionDto {
     intention_protocol::CURRENT_PROTOCOL_VERSION
+}
+
+/// Requires the peer hello to carry the exact current protocol version.
+///
+/// # Errors
+///
+/// Returns an unavailable error when either peer version differs from
+/// [`intention_protocol::CURRENT_PROTOCOL_VERSION`].
+fn require_exact_protocol_version(
+    local: ProtocolVersionDto,
+    remote: ProtocolVersionDto,
+) -> DtoResult<()> {
+    if local != remote
+        || local != intention_protocol::CURRENT_PROTOCOL_VERSION
+        || remote != intention_protocol::CURRENT_PROTOCOL_VERSION
+    {
+        return Err(ErrorDto::unavailable(
+            "incompatible_protocol_version",
+            "protocol version must equal the current version",
+        ));
+    }
+    Ok(())
 }
 
 fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {

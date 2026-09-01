@@ -38,7 +38,7 @@ use intention_runtime::{
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 #[cfg(feature = "test-support")]
-use intention_types::{CorrelationIdDto, SchemaVersionDto};
+use intention_types::CorrelationIdDto;
 use intention_types::{RunId, SessionId, TimestampDto, TurnId};
 use tempfile::TempDir;
 
@@ -348,7 +348,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
                     SendUserTurnCommandDto::new(session_id, TurnId::new(), "host turn")
                         .expect("turn is valid"),
@@ -407,7 +407,7 @@ async fn stop_run_through_host(endpoint: &LocalEndpoint, session_id: SessionId, 
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
                     intention_domain::StopRunCommandDto::new(session_id, run_id),
                 )),
@@ -458,7 +458,7 @@ async fn send_queued_turn_through_host(
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
                     SendUserTurnCommandDto::new(session_id, turn_id, "queued host turn")
                         .expect("queued turn is valid"),
@@ -539,7 +539,7 @@ async fn real_async_host_returns_current_run_snapshot_and_accepts_repeated_repla
     let client = RunStreamClient::new(endpoint, "m4-host-test").expect("stream client is valid");
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_types::SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -597,7 +597,7 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
         RunStreamClient::new(endpoint, "m4-host-outcome-test").expect("stream client is valid");
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -643,7 +643,7 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
 
     let mut reconnected = client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -970,9 +970,9 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
             local_protocol_version(),
             replay_correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 SubscribeRunCommandDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     first_run,
                     None,
@@ -991,9 +991,9 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
             local_protocol_version(),
             error_correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 SubscribeRunCommandDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     RunId::new(),
                     None,

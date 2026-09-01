@@ -5374,7 +5374,7 @@ mod tests {
 
         // No committed golden fixture may embed the fake secret.
         for fixture in [
-            include_str!("../tests/fixtures/goldens/hello-compatible-minor-v1.json"),
+            include_str!("../tests/fixtures/goldens/hello-current-version-v1.json"),
             include_str!("../tests/fixtures/goldens/hello-incompatible-major-v2.json"),
             include_str!("../tests/fixtures/goldens/hello-unnegotiated-capability-v1.json"),
         ] {
@@ -6514,7 +6514,7 @@ mod tests {
             previous_config_revision: "config-rev-1".to_owned(),
             candidate_config_revision: "config-rev-2".to_owned(),
             validation_result: ConfigurationValidationOutcomeDto::Valid,
-            migration_result: "no_migrations_required".to_owned(),
+            migration_result: "not-applicable".to_owned(),
             commit_outcome: if committed {
                 ConfigurationCommitOutcomeDto::Committed
             } else {

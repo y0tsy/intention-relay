@@ -330,16 +330,21 @@ fn control_plane_acceptance_and_query_results_round_trip_through_wire_payloads()
 }
 
 #[test]
-fn pre_slice2_golden_fixtures_remain_decodable_with_the_additive_surface() {
+fn golden_hello_fixtures_remain_decodable_at_the_current_version() {
     // The Slice 2 control-plane surface is additive: the committed M3/M4/M5
     // hello goldens must keep decoding identically at protocol 1.1.
     for fixture in [
-        include_str!("fixtures/goldens/hello-compatible-minor-v1.json"),
+        include_str!("fixtures/goldens/hello-current-version-v1.json"),
         include_str!("fixtures/goldens/hello-unnegotiated-capability-v1.json"),
     ] {
         let hello: intention_protocol::ProtocolHelloDto =
             serde_json::from_str(fixture).expect("golden hello fixture must decode");
         assert_eq!(hello.version(), ProtocolVersionDto::new(1, 1));
+        assert_eq!(
+            hello.version(),
+            intention_protocol::CURRENT_PROTOCOL_VERSION,
+            "golden hello fixtures must carry the exact current protocol version"
+        );
     }
     // The incompatible-major fixture is intentionally 2.0 and must keep
     // decoding to that version so the version gate still rejects it.

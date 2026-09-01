@@ -90,7 +90,7 @@ Every planned crate must declare a test target before implementation. Minimum ex
 
 | Crate area | Minimum evidence |
 | --- | --- |
-| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, versioned valid/invalid compatibility fixtures, and explicit additive-field policy proof. |
+| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, current-version fixtures with non-current-version rejection, and explicit additive-field policy proof. |
 | `config` | TOML migration/validation, credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
 | `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
 | `storage`, `storage-sqlite` | Repository contract tests, migration tests, transaction fault injection. |
@@ -105,11 +105,11 @@ The goal is not an arbitrary number of tests. The required quantity is the small
 
 ## M1 serialized-contract evidence
 
-M1 owns versioned JSON fixtures for legacy and current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
+M1 owns versioned JSON fixtures for current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
 
-- supported legacy errors decode with absent additive `detail` and `correlation_id` fields;
+- current `ErrorDto` optional `correlation_id`/`detail` fields decode as `None` when absent;
 - typed `MissingWorkspacePath` detail and canonical `CorrelationIdDto` serialize safely, and malformed/absolute/traversing paths or malformed correlations fail at wire decoding;
-- required fields, IDs, closed enum variants, incompatible config/protocol schema majors, and invalid scalar types fail safely;
+- required fields, IDs, closed enum variants, any schema/protocol version other than the current one, and invalid scalar types fail safely;
 - the documented additive-field policy is tested, rather than inferred from serde defaults;
 - public resolved-config and snapshot projections exclude credentials and local `ConfigPathDto` values.
 
@@ -136,7 +136,7 @@ never substitutes for the following required semantic evidence.
 
 | M3 concern | Required test/evidence target | Required observable result |
 | --- | --- | --- |
-| DTO and event evolution | `m3_contracts`, event-fixture, and protocol-fixture suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while current fixtures remain decodable. |
+| DTO and event evolution | `m3_contracts`, event-fixture, and protocol contract suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while current fixtures remain decodable. |
 | SQLite durability and migration | `sqlite_contracts` plus migration fixtures. | Bundled SQLite applies supported `rusqlite_migration` versions, rejects a future on-disk schema, persists only credential-free config snapshots, and rejects a known-session future/overflow tail cursor with `invalid_event_tail_position` before SQLite conversion. |
 | Semantic atomicity | SQLite fault-injection outcome fixture at event, projection, and snapshot boundaries. | Each injected write-stage failure rolls back completely: no new projection, event envelope, or session/run snapshot row persists. |
 | Canonical config revisions | SQLite config-revision contract fixture. | Reaccepting an equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID returns a typed conflict without sensitive details. |

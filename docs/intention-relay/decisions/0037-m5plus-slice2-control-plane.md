@@ -179,8 +179,10 @@ configuration schema remains 1. SQLite storage schema advances from 3 to 4
 additively: the migration preserves M3/M4 rows byte-for-byte and adds the
 control-plane tables listed in Appendix B. Historical M3/M4 fixtures and
 committed v1 protocol fixtures remain 1.0 and are not rewritten. Same-major
-compatibility (1.0 to 1.1) is preserved by the existing
-`ensure_compatible_with` logic.
+compatibility (1.0 to 1.1) is superseded by
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): negotiation
+accepts only the exact current protocol version 1.1 (the
+`ensure_compatible_with` logic is removed).
 
 ### Registry tag activation status
 
