@@ -6,6 +6,8 @@
 //! configuration persistence, daemon reload, and per-run application remain
 //! deferred to M3 and M4.
 
+pub mod control_plane;
+
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
