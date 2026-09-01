@@ -153,6 +153,16 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
 impl HostState {
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
+        // Recovery-promoted runs held pending explicit admission are never
+        // auto-scheduled; they are admitted only through the
+        // AdmitRecoveredRun command, after which the held marker clears.
+        if self
+            .facade
+            .is_recovered_run_held_for_daemon(session_id, run_id)
+            .unwrap_or(false)
+        {
+            return;
+        }
         // Admission and StopRun share this registry lock. Once admission begins,
         // it either registers an executor before StopRun can persist Cancelling,
         // or StopRun installs its own terminalization task before a later
@@ -688,14 +698,22 @@ impl ModelRunCommitObserver for HostCommitObserver {
     fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
         self.host
             .publish_current(committed.session_id(), committed.run_id());
-        if committed.snapshot().run_projection().status().is_terminal()
-            && let Ok(Some(promoted)) = self
+        if committed.snapshot().run_projection().status().is_terminal() {
+            // FIFO unavailable-provider promotion (max 8) after every terminal
+            // transition; the storage never reroutes an entry and preserves
+            // the original run identity.
+            let _ = self
+                .host
+                .facade
+                .promote_unavailable_runs_for_daemon(committed.session_id(), committed.run_id());
+            if let Ok(Some(promoted)) = self
                 .host
                 .facade
                 .current_starting_run_for_daemon(committed.session_id())
-        {
-            self.host
-                .schedule_if_starting(committed.session_id(), promoted);
+            {
+                self.host
+                    .schedule_if_starting(committed.session_id(), promoted);
+            }
         }
     }
 }
@@ -851,6 +869,9 @@ pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
     // Tokio reactor context when it wraps the Unix socket listener.
     let listener = runtime.block_on(async { AsyncLocalListener::bind(endpoint) })?;
     let facade = DaemonApplicationFacade::open_platform()?;
+    // Catalog startup runs after storage opens and unfinished runs are
+    // interrupted; a degraded outcome leaves the control plane read-only.
+    facade.provider_control_startup()?;
     runtime.block_on(serve_async_listener(listener, facade))
 }
 
@@ -933,7 +954,7 @@ async fn serve_async_ordinary(
                 ProtocolResponsePayloadDto::CommandResult(result)
             }
             ProtocolRequestPayloadDto::Command(command) => {
-                let result = host.facade.command(command.clone());
+                let result = gated_command_result(&host.facade, command);
                 if let ProtocolCommandDto::SendUserTurn(_) = command
                     && let ProtocolCommandResultDto::Accepted(accepted) = &result
                     && let Some(intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn)) =
@@ -943,10 +964,17 @@ async fn serve_async_ordinary(
                 {
                     host.schedule_if_starting(turn.session_id(), run_id);
                 }
+                if let ProtocolCommandDto::AdmitRecoveredRun(command) = command
+                    && let ProtocolCommandResultDto::Accepted(_) = &result
+                    && let Ok(session_id) = SessionId::parse(&command.session_id)
+                    && let Ok(run_id) = RunId::parse(&command.run_id)
+                {
+                    host.schedule_if_starting(session_id, run_id);
+                }
                 ProtocolResponsePayloadDto::CommandResult(result)
             }
             ProtocolRequestPayloadDto::Query(query) => {
-                ProtocolResponsePayloadDto::QueryResult(host.facade.query(*query))
+                ProtocolResponsePayloadDto::QueryResult(host.facade.query(query.clone()))
             }
         };
         let response = ProtocolResponseEnvelopeDto::new(
@@ -958,6 +986,59 @@ async fn serve_async_ordinary(
             return;
         }
     }
+}
+
+/// Dispatches one ordinary command through the degraded-mode gate.
+///
+/// While the provider control plane is degraded, every provider state
+/// change, fresh provider-backed admission, promotion, and default change is
+/// rejected with `execution_not_ready`; accept/reject of the one pending
+/// removal candidate, health, and all reads remain allowed.
+fn gated_command_result(
+    facade: &DaemonApplicationFacade,
+    command: &ProtocolCommandDto,
+) -> ProtocolCommandResultDto {
+    if provider_affecting_command(command) && !control_plane_serving(facade) {
+        return ProtocolCommandResultDto::Rejected(execution_not_ready());
+    }
+    facade.command(command.clone())
+}
+
+/// Returns whether one command requires provider execution readiness.
+const fn provider_affecting_command(command: &ProtocolCommandDto) -> bool {
+    matches!(
+        command,
+        ProtocolCommandDto::SetSessionProviderProfile(_)
+            | ProtocolCommandDto::ReconcileUnavailableQueue(_)
+            | ProtocolCommandDto::AdmitRecoveredRun(_)
+            | ProtocolCommandDto::SendUserTurn(_)
+    )
+}
+
+/// Returns whether the provider control plane may serve provider-backed work.
+fn control_plane_serving(facade: &DaemonApplicationFacade) -> bool {
+    matches!(
+        facade.provider_control_readiness(),
+        intention::CatalogReadiness::Ready
+            | intention::CatalogReadiness::Uninitialized
+            | intention::CatalogReadiness::Loading
+    )
+}
+
+fn execution_not_ready() -> ErrorDto {
+    ErrorDto::new(
+        "execution_not_ready",
+        intention_types::ErrorCategoryDto::Unavailable,
+        "the provider control plane is degraded and read-only",
+        intention_types::ErrorRetryDto::Delayed,
+        None,
+    )
+    .unwrap_or_else(|_| {
+        ErrorDto::unavailable(
+            "execution_not_ready",
+            "the provider control plane is degraded and read-only",
+        )
+    })
 }
 
 async fn serve_async_run_stream(
@@ -1371,7 +1452,7 @@ fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFa
             _ => ProtocolResponsePayloadDto::CommandResult(facade.command(command.clone())),
         },
         ProtocolRequestPayloadDto::Query(query) => {
-            ProtocolResponsePayloadDto::QueryResult(facade.query(*query))
+            ProtocolResponsePayloadDto::QueryResult(facade.query(query.clone()))
         }
     };
     let response = ProtocolResponseEnvelopeDto::new(
