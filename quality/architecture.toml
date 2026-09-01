@@ -178,7 +178,7 @@ coverage_tier = "A"
 name = "intention-domain"
 responsibility = "Domain DTOs, value validation, domain events, and invariants."
 test_target = "domain state and invariant tests"
-test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
+test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_control_plane_canonical", "m5_control_plane_rejections", "m5_session_selection_overrides", "m5_tool_results"]
 coverage_tier = "A"
 
 # Active M3 application lifecycle targets are checked against Cargo metadata.
@@ -186,7 +186,7 @@ coverage_tier = "A"
 name = "intention-application"
 responsibility = "Commands, queries, use cases, and transaction orchestration."
 test_target = "use-case and architecture tests"
-test_targets = ["m3_application", "m4_application_scheduling"]
+test_targets = ["m3_application", "m4_application_scheduling", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -207,21 +207,21 @@ coverage_tier = "B"
 name = "intention-storage-sqlite"
 responsibility = "SQLite schema, migrations, projections, and repository implementation."
 test_target = "migration and transaction fault-injection tests"
-test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
+test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "m5_control_plane_repos", "sqlite_contracts"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-config"
 responsibility = "TOML parsing, validation, migrations, and resolved configuration DTOs."
 test_target = "configuration fixture tests"
-test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts"]
+test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts", "m5_control_plane_config"]
 coverage_tier = "A"
 
 [[future_crates]]
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]
+test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports", "m6_reasoning_surface"]
 coverage_tier = "C"
 
 [[future_crates]]
@@ -284,7 +284,7 @@ coverage_tier = "B"
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
 test_target = "protocol compatibility fixtures"
-test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts", "m4_run_stream_contracts"]
+test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts", "m4_run_stream_contracts", "control_plane_contracts"]
 coverage_tier = "A"
 
 [[future_crates]]
@@ -298,7 +298,7 @@ coverage_tier = "C"
 name = "intention-client"
 responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
 test_target = "client contract and reconnect tests"
-test_targets = ["client_contract", "run_stream_contract"]
+test_targets = ["client_contract", "run_stream_contract", "control_plane_client", "session_selection_client"]
 coverage_tier = "C"
 
 [[future_crates]]
