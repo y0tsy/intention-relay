@@ -92,7 +92,6 @@ fn domain_error(error: CanonicalError) -> ErrorDto {
         | CanonicalError::ContextSourceManifestInvalid
         | CanonicalError::ModelContextProjectionInvalid
         | CanonicalError::ModelContextProjectionTooLarge
-        | CanonicalError::LegacySelectionReferenceInvalid
         | CanonicalError::ProviderKindImmutableMismatch
         | CanonicalError::ProviderKindHasDependents
         | CanonicalError::ReasoningHistoryUnavailable

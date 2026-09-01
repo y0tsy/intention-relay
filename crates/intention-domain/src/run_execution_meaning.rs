@@ -2983,7 +2983,6 @@ mod tests {
                 "reasoning-history-manifest-v1" => Some(TagRegistry::REASONING_HISTORY_MANIFEST_V1),
                 "context-source-manifest-v1" => Some(TagRegistry::CONTEXT_SOURCE_MANIFEST_V1),
                 "model-context-projection-v1" => Some(TagRegistry::MODEL_CONTEXT_PROJECTION_V1),
-                "legacy-m4-selection-binding" => Some(TagRegistry::LEGACY_M4_SELECTION_BINDING),
                 "tool-descriptor-revision" => Some(TagRegistry::TOOL_DESCRIPTOR_REVISION),
                 "tool-registry-revision" => Some(TagRegistry::TOOL_REGISTRY_REVISION),
                 "model-tool-loop-v1" => Some(TagRegistry::MODEL_TOOL_LOOP_V1),
@@ -3016,9 +3015,9 @@ mod tests {
             );
             values.push(entry.value);
             let expected_status = match entry.name {
-                // Slice 2 wires the ten active ledger families: the three
+                // Slice 2 wires the nine active ledger families: the three
                 // historical families plus model-capability-taxonomy-v1
-                // through legacy-m4-selection-binding.
+                // through model-context-projection-v1.
                 "run-execution-meaning"
                 | "programmatic-caller-policy-selection-v1"
                 | "agent-activity-selection-v1"
@@ -3027,8 +3026,7 @@ mod tests {
                 | "provider-selection-v1"
                 | "reasoning-history-manifest-v1"
                 | "context-source-manifest-v1"
-                | "model-context-projection-v1"
-                | "legacy-m4-selection-binding" => TagStatus::Wired,
+                | "model-context-projection-v1" => TagStatus::Wired,
                 // Slice 3 owns the selection and tool-loop families.
                 "goal-run-selection-v1"
                 | "continual-harness-selection-v1"
@@ -3066,7 +3064,7 @@ mod tests {
             0x0402
         );
         // Every registry constant appears in the ledger table exactly once.
-        let registry_entries: [(u32, &str); 25] = [
+        let registry_entries: [(u32, &str); 24] = [
             (TagRegistry::RUN_EXECUTION_MEANING, "run-execution-meaning"),
             (
                 TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
@@ -3105,10 +3103,6 @@ mod tests {
             (
                 TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
                 "model-context-projection-v1",
-            ),
-            (
-                TagRegistry::LEGACY_M4_SELECTION_BINDING,
-                "legacy-m4-selection-binding",
             ),
             (
                 TagRegistry::TOOL_DESCRIPTOR_REVISION,

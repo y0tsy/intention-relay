@@ -73,8 +73,6 @@ pub enum CanonicalError {
     ModelContextProjectionInvalid,
     /// A model context projection exceeds its aggregate byte bound.
     ModelContextProjectionTooLarge,
-    /// A legacy selection reference is not a canonical legacy UUID.
-    LegacySelectionReferenceInvalid,
     /// A credential-shaped value reached a field that must never carry secrets.
     CredentialsForbidden,
     /// A provider kind revision changes immutable kind identity or closed parts.
@@ -122,7 +120,6 @@ impl CanonicalError {
             Self::ContextSourceManifestInvalid => "context_source_manifest_invalid",
             Self::ModelContextProjectionInvalid => "model_context_projection_invalid",
             Self::ModelContextProjectionTooLarge => "model_context_projection_too_large",
-            Self::LegacySelectionReferenceInvalid => "legacy_selection_reference_invalid",
             Self::CredentialsForbidden => "credentials_forbidden",
             Self::ProviderKindImmutableMismatch => "provider_kind_immutable_mismatch",
             Self::ProviderKindHasDependents => "provider_kind_has_dependents",
@@ -966,7 +963,6 @@ impl TagRegistry {
     pub const REASONING_HISTORY_MANIFEST_V1: u32 = 0x0209;
     pub const CONTEXT_SOURCE_MANIFEST_V1: u32 = 0x020A;
     pub const MODEL_CONTEXT_PROJECTION_V1: u32 = 0x020B;
-    pub const LEGACY_M4_SELECTION_BINDING: u32 = 0x020C;
     pub const TOOL_DESCRIPTOR_REVISION: u32 = 0x0301;
     pub const TOOL_REGISTRY_REVISION: u32 = 0x0302;
     pub const MODEL_TOOL_LOOP_V1: u32 = 0x0303;
@@ -1043,11 +1039,6 @@ impl TagRegistry {
         LedgerTag {
             name: "model-context-projection-v1",
             value: 0x020B,
-            status: TagStatus::Wired,
-        },
-        LedgerTag {
-            name: "legacy-m4-selection-binding",
-            value: 0x020C,
             status: TagStatus::Wired,
         },
         LedgerTag {

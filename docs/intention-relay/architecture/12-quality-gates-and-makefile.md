@@ -435,7 +435,7 @@ expected-failure architecture fixtures, redaction evidence, and Linux/Windows
 outcomes atomically with production work. The M5+ Slice 2 control-plane
 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) is
 that activating change for the provider catalog, selection, capability
-taxonomy, reasoning surface, legacy bridge, header/preservation/parser
+taxonomy, reasoning surface, header/preservation/parser
 contracts, and the configuration/provider control-plane cluster; it declares
 the exact test targets above and the schema-4 storage/wire policy, and passes
 the standard gates.

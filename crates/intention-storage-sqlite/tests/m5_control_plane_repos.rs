@@ -2,8 +2,8 @@
 //! unavailable-provider queue, provider usage, and provider catalog removal
 //! traits. Every repository method, its conflict and validation branches, the
 //! typed JSON codecs, and the credential-free storage property are exercised
-//! here; the defaults, resolved-selection, held-run, legacy-binding, and
-//! reload traits live in `sqlite_contracts.rs`.
+//! here; the defaults, resolved-selection, held-run, and reload traits live in
+//! `sqlite_contracts.rs`.
 
 #![allow(
     clippy::expect_used,

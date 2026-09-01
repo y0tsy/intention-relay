@@ -632,32 +632,25 @@ struct LocalToolCancellationEntry {
     inflight: usize,
 }
 
-/// The deterministic first-party default profile id of the active snapshot.
-const DEFAULT_PROFILE_ID: &str = "default";
-/// The deterministic capability subset of snapshot-derived bindings.
-const COMPOSITION_CAPABILITY_SUBSET: [&str; 2] = ["text_input", "text_streaming"];
-/// The deterministic driver contract revision of snapshot-derived bindings.
-const COMPOSITION_DRIVER_CONTRACT_REVISION: &str = "config-driver-1.0";
-/// The deterministic loopback policy of snapshot-derived bindings.
-const COMPOSITION_LOOPBACK_POLICY: &str = "not-applicable";
 /// The protocol schema-version text used by control-plane projections.
 const PROTOCOL_SCHEMA_VERSION_TEXT: &str = "1.1";
 /// The maximum retained prepared reload candidates for reference reloads.
 const MAX_RELOAD_CANDIDATES: usize = 16;
 
-/// The composition's active-configuration binding source.
+/// The composition's catalog-runtime-backed binding source.
 ///
-/// The binding is derived deterministically from the active snapshot. Profile
-/// revision, kind descriptor revision, capability subset, loopback policy,
-/// and driver contract identity are owned by the provider catalog runtime
-/// (zone 6a); until that runtime is wired into this facade, the binding
-/// mirrors the deterministic first-party derivation of the legacy M4 bridge
-/// so the safe composition stays stable across rotations.
-struct SnapshotBindingSource<'a> {
+/// The provider binding identity (profile revision, kind descriptor
+/// revision, capability subset, loopback policy, and driver contract) is
+/// owned by the provider catalog runtime: the source resolves each profile
+/// through the catalog admission port and derives the credential-free
+/// composition revision from the resolved profile identity. Active
+/// configuration revision and snapshot come from the fresh-run snapshot.
+struct CatalogBindingSource<'a> {
     snapshot: &'a Mutex<ConfigSnapshotDto>,
+    admission: CompositionCatalogAdmissionPort<'a>,
 }
 
-impl SafeBindingSource for SnapshotBindingSource<'_> {
+impl SafeBindingSource for CatalogBindingSource<'_> {
     fn active_revision(&self) -> DtoResult<String> {
         self.snapshot
             .lock()
@@ -683,21 +676,19 @@ impl SafeBindingSource for SnapshotBindingSource<'_> {
     }
 
     fn binding(&self, profile_id: &str) -> DtoResult<SafeCompositionBindingDto> {
-        if profile_id != DEFAULT_PROFILE_ID {
-            return Err(ErrorDto::unavailable(
-                "provider_profile_unavailable",
-                "the requested provider profile is not bound to the active configuration",
-            ));
-        }
-        let snapshot = self.active_snapshot()?;
-        let resolved = snapshot.resolved();
-        let revision = snapshot.revision_id().to_string();
-        let endpoint = resolved.provider().endpoint().map(str::to_owned);
+        let resolved = self.admission.resolve_enabled_profile(profile_id)?;
         let canonical = format!(
-            "ir-binding-v1|profile={DEFAULT_PROFILE_ID}|revision={revision}|kind={}|model={}|endpoint={}",
-            resolved.provider().kind().as_str(),
-            resolved.provider().model(),
-            endpoint.as_deref().unwrap_or(""),
+            "ir-binding-v1|profile={}|profile-revision={}|kind={}|kind-descriptor={}|model={}|endpoint={}|capabilities={}|execution={}|loopback={}|driver={}",
+            resolved.profile_id,
+            resolved.profile_revision_id,
+            resolved.kind_id,
+            resolved.kind_descriptor_revision_id,
+            resolved.model_id,
+            resolved.normalized_effective_endpoint,
+            resolved.declared_model_capability_subset.join(","),
+            resolved.effective_execution_policy,
+            resolved.effective_loopback_policy_or_not_applicable,
+            resolved.provider_driver_contract_revision,
         );
         let digest = Digest256::sha256(canonical.as_bytes()).bytes();
         let mut composition_revision = String::with_capacity(64);
@@ -705,20 +696,18 @@ impl SafeBindingSource for SnapshotBindingSource<'_> {
             composition_revision.push_str(&format!("{byte:02x}"));
         }
         Ok(SafeCompositionBindingDto {
-            profile_id: DEFAULT_PROFILE_ID.to_owned(),
-            provider_profile_revision_id: format!("default-{}", &composition_revision[..8]),
-            safe_composition_revision: composition_revision.clone(),
-            kind_id: resolved.provider().kind().as_str().to_owned(),
-            kind_descriptor_revision_id: format!("config-kind-{}", &composition_revision[..16]),
-            model_id: resolved.provider().model().to_owned(),
-            endpoint,
-            declared_model_capability_subset: COMPOSITION_CAPABILITY_SUBSET
-                .iter()
-                .map(|capability| (*capability).to_owned())
-                .collect(),
-            effective_execution_policy: execution_policy_string(&snapshot),
-            effective_loopback_policy_or_not_applicable: COMPOSITION_LOOPBACK_POLICY.to_owned(),
-            provider_driver_contract_revision: COMPOSITION_DRIVER_CONTRACT_REVISION.to_owned(),
+            profile_id: resolved.profile_id,
+            provider_profile_revision_id: resolved.profile_revision_id,
+            safe_composition_revision: composition_revision,
+            kind_id: resolved.kind_id,
+            kind_descriptor_revision_id: resolved.kind_descriptor_revision_id,
+            model_id: resolved.model_id,
+            endpoint: Some(resolved.normalized_effective_endpoint),
+            declared_model_capability_subset: resolved.declared_model_capability_subset,
+            effective_execution_policy: resolved.effective_execution_policy,
+            effective_loopback_policy_or_not_applicable: resolved
+                .effective_loopback_policy_or_not_applicable,
+            provider_driver_contract_revision: resolved.provider_driver_contract_revision,
         })
     }
 }
@@ -1906,9 +1895,7 @@ impl DaemonApplicationFacade {
         command: RawTomlEditCommandDto,
         timestamp: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let binding = SnapshotBindingSource {
-            snapshot: &self.inner.config_snapshot,
-        };
+        let binding = self.composition_binding_source();
         let previous = binding.active_snapshot()?;
         let previous_revision = binding.active_revision()?;
         let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
@@ -1942,9 +1929,7 @@ impl DaemonApplicationFacade {
         command: ConfigurationEditCommandDto,
         timestamp: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let binding = SnapshotBindingSource {
-            snapshot: &self.inner.config_snapshot,
-        };
+        let binding = self.composition_binding_source();
         let previous = binding.active_snapshot()?;
         let previous_revision = binding.active_revision()?;
         let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
@@ -1976,9 +1961,7 @@ impl DaemonApplicationFacade {
         command: RotateProviderCredentialsCommandDto,
         timestamp: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let binding = SnapshotBindingSource {
-            snapshot: &self.inner.config_snapshot,
-        };
+        let binding = self.composition_binding_source();
         let service = CredentialRotationService::new(&binding, &CompositionDriverRebuildPort);
         let result = service.rotate(command, &CompositionCredentialPort, now_seconds(timestamp))?;
         Ok(ProtocolAcceptedResultDto::RotateProviderCredentials(result))
@@ -2040,9 +2023,7 @@ impl DaemonApplicationFacade {
         operation_id: String,
         now_seconds: u64,
     ) -> DtoResult<ReloadCommitOutcomeDto> {
-        let binding = SnapshotBindingSource {
-            snapshot: &self.inner.config_snapshot,
-        };
+        let binding = self.composition_binding_source();
         let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
         let outcome = service.commit(
             candidate.clone(),
@@ -2062,6 +2043,14 @@ impl DaemonApplicationFacade {
         CompositionCatalogAdmissionPort {
             controller: &self.inner.control_plane.controller,
             catalog: self.inner.repository.as_ref(),
+        }
+    }
+
+    /// Builds the composition's catalog-runtime-backed binding source.
+    fn composition_binding_source(&self) -> CatalogBindingSource<'_> {
+        CatalogBindingSource {
+            snapshot: &self.inner.config_snapshot,
+            admission: self.catalog_admission_port(),
         }
     }
 
@@ -3872,7 +3861,7 @@ mod tests {
     // Zone 4 control-plane composition tests.
     // ---------------------------------------------------------------------
 
-    const COMPOSITION_FAKE_SECRET: &str = "sk-zone4-composition-fake-secret";
+    const ROTATION_FAKE_SECRET: &str = "sk-zone4-composition-fake-secret";
 
     fn valid_edit(model: &str) -> String {
         format!(
@@ -4084,10 +4073,21 @@ mod tests {
             startup.clone(),
         )
         .expect("durable facade opens");
-        let binding = SnapshotBindingSource {
-            snapshot: &facade.inner.config_snapshot,
-        };
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade.composition_binding_source();
         let composition = binding.binding("default").expect("default binding reads");
+        // The catalog runtime owns the binding identity: the resolved profile
+        // revision and composition revision are deterministic per resolve.
+        assert_eq!(composition.profile_id, "default");
+        assert_eq!(
+            binding
+                .binding("default")
+                .expect("default binding re-resolves")
+                .safe_composition_revision,
+            composition.safe_composition_revision,
+            "the catalog-derived composition revision is deterministic"
+        );
+        assert_eq!(composition.model_id, "fixture-model");
 
         // A stale composition revision is rejected before any replacement.
         let stale = facade.command(ProtocolCommandDto::RotateProviderCredentials(
@@ -4140,6 +4140,91 @@ mod tests {
             startup.revision_id().to_string()
         );
         assert_eq!(active.resolved().provider().model(), "fixture");
+    }
+
+    #[test]
+    fn composition_binding_source_resolves_the_active_catalog_profile() {
+        // Without an active catalog the binding source fails closed.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("binding-unseeded.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let binding = facade.composition_binding_source();
+        for profile_id in ["default", "unknown-profile"] {
+            assert_eq!(
+                binding
+                    .binding(profile_id)
+                    .expect_err("an unseeded catalog cannot resolve a profile")
+                    .code(),
+                "catalog_not_ready",
+                "profile {profile_id} fails closed without an active catalog"
+            );
+        }
+
+        // With a seeded catalog the binding mirrors the resolved profile.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("binding-seeded.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade.composition_binding_source();
+        let resolved = facade
+            .catalog_admission_port()
+            .resolve_enabled_profile("default")
+            .expect("seeded profile resolves");
+        let composition = binding.binding("default").expect("default binding reads");
+        assert_eq!(composition.profile_id, resolved.profile_id);
+        assert_eq!(
+            composition.provider_profile_revision_id,
+            resolved.profile_revision_id
+        );
+        assert_eq!(composition.kind_id, resolved.kind_id);
+        assert_eq!(
+            composition.kind_descriptor_revision_id,
+            resolved.kind_descriptor_revision_id
+        );
+        assert_eq!(composition.model_id, resolved.model_id);
+        assert_eq!(
+            composition.endpoint.as_deref(),
+            Some(resolved.normalized_effective_endpoint.as_str())
+        );
+        assert_eq!(
+            composition.declared_model_capability_subset,
+            resolved.declared_model_capability_subset
+        );
+        assert_eq!(
+            composition.effective_execution_policy,
+            resolved.effective_execution_policy
+        );
+        assert_eq!(
+            composition.effective_loopback_policy_or_not_applicable,
+            resolved.effective_loopback_policy_or_not_applicable
+        );
+        assert_eq!(
+            composition.provider_driver_contract_revision,
+            resolved.provider_driver_contract_revision
+        );
+        assert_eq!(composition.safe_composition_revision.len(), 64);
+        assert!(
+            composition
+                .safe_composition_revision
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+            "the composition revision is one lowercase hex digest"
+        );
+
+        // An unknown profile fails closed with the catalog's typed error.
+        assert_eq!(
+            binding
+                .binding("unknown-profile")
+                .expect_err("unknown profile is rejected")
+                .code(),
+            "provider_profile_unavailable"
+        );
     }
 
     #[test]
@@ -4306,19 +4391,19 @@ mod tests {
         let poisoned = facade.command(raw_edit_command(
             "op-1",
             &startup_revision,
-            format!("schema_version = 1\n[provider]\nmodel = \"{COMPOSITION_FAKE_SECRET}\"\n"),
+            format!("schema_version = 1\n[provider]\nmodel = \"{ROTATION_FAKE_SECRET}\"\n"),
         ));
         let ProtocolCommandResultDto::Rejected(error) = poisoned else {
             unreachable!("credential-shaped raw edit is rejected")
         };
         assert_eq!(error.code(), "credentials_forbidden");
-        assert!(!error.to_string().contains(COMPOSITION_FAKE_SECRET));
+        assert!(!error.to_string().contains(ROTATION_FAKE_SECRET));
 
         let rotation = facade.command(ProtocolCommandDto::RotateProviderCredentials(
             RotateProviderCredentialsCommandDto {
                 profile_id: "default".to_owned(),
                 provider_profile_revision_id: "profile-rev-1".to_owned(),
-                expected_credential_composition_revision: COMPOSITION_FAKE_SECRET.to_owned(),
+                expected_credential_composition_revision: ROTATION_FAKE_SECRET.to_owned(),
                 operation_id: "op-2".to_owned(),
             },
         ));
@@ -4326,7 +4411,7 @@ mod tests {
             unreachable!("credential-shaped rotation is rejected")
         };
         assert_eq!(error.code(), "credentials_forbidden");
-        assert!(!error.to_string().contains(COMPOSITION_FAKE_SECRET));
+        assert!(!error.to_string().contains(ROTATION_FAKE_SECRET));
 
         // The active snapshot is untouched by rejected commands.
         assert_eq!(

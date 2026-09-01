@@ -1539,7 +1539,6 @@ def test_slice2_tag_registry_parity(root: Path) -> None:
         "| `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |",
         "| `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |",
         "| `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |",
-        "| `legacy-m4-selection-binding` | `0x020C` | Wired (Slice 2) |",
     ]
     for row in wired_slice2:
         if row not in text:

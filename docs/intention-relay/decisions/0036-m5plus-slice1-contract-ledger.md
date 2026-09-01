@@ -100,9 +100,10 @@ remain untouched, and M6–M9 behavior is untouched.
 
 M3/M4 config revisions, snapshots, sessions, runs, events, cursors, queue
 tickets, and bytes remain authoritative and unchanged. Historical runs receive
-no synthetic post-M5 records; current state is never reconstructed. A
-`LegacyM4SelectionBindingDto` references legacy bytes without rewriting them
-(`legacy-uuid:<canonical UUID>`).
+no synthetic post-M5 records; current state is never reconstructed. The legacy
+M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) is removed by
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md); no synthetic
+binding is ever materialized for historical runs.
 
 ## Evidence and non-goals
 
@@ -574,6 +575,6 @@ ledger tag values. `intention-protocol` references those constants through
 nonserialized `ContractFamilyDescriptor` entries in
 `PUBLIC_WIRE_CONTRACT_FAMILIES`; there is no protocol-side numeric mirror. The
 protocol parity tests fail on any missing, duplicate, or mismatched tag: the
-wire families must cover exactly the 24 wire-ledger tags, may duplicate only
+wire families must cover exactly the 23 wire-ledger tags, may duplicate only
 for the versioned fork snapshot and preview families, and must match the
 domain registry values by name.

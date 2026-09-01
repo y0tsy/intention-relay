@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use intention_application::{
     CatalogAcceptanceOutcomeDto, CatalogCandidateOutcomeDto, CatalogProviderDeclarationDto,
-    CatalogSourceInputDto, LegacyM4Bridge, ModelRunDriverHandle, PrivateProviderProfileMaterial,
-    PrivateRegistry, PrivateRegistryKey, ProviderCatalogController, ProviderDriverFactory,
+    CatalogSourceInputDto, ModelRunDriverHandle, PrivateProviderProfileMaterial, PrivateRegistry,
+    PrivateRegistryKey, ProviderCatalogController, ProviderDriverFactory,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -27,20 +27,19 @@ use intention_domain::{
     ContextPreservationCapability, CredentialTransportMode, ModelCapabilitySetV1,
     ModelInputCapability, ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1,
     ProviderProfileRevisionV1, ReasoningCapability, StructuredOutputCapability,
-    canonical::Digest256, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
+    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
-    AppendLegacyM4SelectionBindingInputDto, AppendProviderKindDescriptorRevisionInputDto,
-    AppendProviderProfileRevisionInputDto, CreateProviderCatalogRemovalCandidateInputDto,
-    ExpireProviderCatalogCandidateInputDto, ExpireProviderCatalogRemovalCandidateInputDto,
-    LegacyBindingRepositoryDto, LegacyBindingValidationStatusDto, LoadProviderCatalogPageInputDto,
-    PersistedConfigRevisionRecordDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
-    ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
-    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
-    ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
-    ProviderReadinessDto, ProviderRemovalRepositoryDto, RejectProviderCatalogCandidateInputDto,
-    RejectProviderCatalogRemovalInputDto, StorageRepositoryDto,
+    AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
+    CreateProviderCatalogRemovalCandidateInputDto, ExpireProviderCatalogCandidateInputDto,
+    ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
+    ProviderCatalogMaterialDto, ProviderCatalogPageDto, ProviderCatalogProfileEntryDto,
+    ProviderCatalogRemovalCandidateDto, ProviderCatalogRemovalStatusDto,
+    ProviderCatalogRepositoryDto, ProviderCatalogStateDto, ProviderCatalogStatusDto,
+    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+    ProviderRemovalRepositoryDto, RejectProviderCatalogCandidateInputDto,
+    RejectProviderCatalogRemovalInputDto,
 };
 use intention_types::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
 
@@ -790,210 +789,6 @@ impl ProviderRemovalRepositoryDto for &FakeCatalog {
             state.updated_at = input.now;
         }
         Ok(expired)
-    }
-}
-
-// ============================================================================
-// Fake legacy storage (StorageRepositoryDto + LegacyBindingRepositoryDto)
-// ============================================================================
-
-struct LegacyRevisionSeed {
-    revision_id: String,
-    original_bytes: String,
-    snapshot: Option<ConfigSnapshotDto>,
-}
-
-struct FakeLegacy {
-    revisions: RefCell<Vec<LegacyRevisionSeed>>,
-    bindings: RefCell<Vec<AppendLegacyM4SelectionBindingInputDto>>,
-    calls: RefCell<Vec<&'static str>>,
-}
-
-impl FakeLegacy {
-    const fn new() -> Self {
-        Self {
-            revisions: RefCell::new(Vec::new()),
-            bindings: RefCell::new(Vec::new()),
-            calls: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn seed_valid(&self, snapshot: ConfigSnapshotDto) {
-        let revision_id = snapshot.revision_id().to_string();
-        let original_bytes = format!("original-bytes-{revision_id}");
-        self.revisions.borrow_mut().push(LegacyRevisionSeed {
-            revision_id,
-            original_bytes,
-            snapshot: Some(snapshot),
-        });
-    }
-
-    fn seed_corrupt(&self, revision_id: &str) {
-        self.revisions.borrow_mut().push(LegacyRevisionSeed {
-            revision_id: revision_id.to_owned(),
-            original_bytes: format!("corrupt-bytes-{revision_id}"),
-            snapshot: None,
-        });
-    }
-
-    fn original_bytes(&self, revision_id: &str) -> Option<String> {
-        self.revisions
-            .borrow()
-            .iter()
-            .find(|seed| seed.revision_id == revision_id)
-            .map(|seed| seed.original_bytes.clone())
-    }
-}
-
-impl StorageRepositoryDto for FakeLegacy {
-    fn create_session(
-        &self,
-        _input: intention_storage::CreateSessionInputDto,
-    ) -> DtoResult<intention_storage::CommittedChangeDto> {
-        Err(unavailable("fixture_unused", "session storage is unused"))
-    }
-
-    fn accept_user_turn(
-        &self,
-        _input: intention_storage::AcceptUserTurnInputDto,
-    ) -> DtoResult<intention_storage::CommittedChangeDto> {
-        Err(unavailable("fixture_unused", "turn storage is unused"))
-    }
-
-    fn remove_queued_turn(
-        &self,
-        _input: intention_storage::RemoveQueuedTurnInputDto,
-    ) -> DtoResult<intention_storage::CommittedChangeDto> {
-        Err(unavailable("fixture_unused", "turn storage is unused"))
-    }
-
-    fn transition_run(
-        &self,
-        _input: intention_storage::TransitionRunInputDto,
-    ) -> DtoResult<intention_storage::CommittedChangeDto> {
-        Err(unavailable("fixture_unused", "run storage is unused"))
-    }
-
-    fn recover_unfinished_runs(
-        &self,
-        _input: intention_storage::RecoverUnfinishedRunsInputDto,
-    ) -> DtoResult<Vec<intention_storage::CommittedChangeDto>> {
-        Err(unavailable("fixture_unused", "recovery storage is unused"))
-    }
-
-    fn load_session_snapshot(
-        &self,
-        _session_id: intention_types::SessionId,
-    ) -> DtoResult<intention_domain::SessionProjectionDto> {
-        Err(unavailable("fixture_unused", "session storage is unused"))
-    }
-
-    fn load_tail(
-        &self,
-        _session_id: intention_types::SessionId,
-        _after_sequence: intention_types::SessionEventSequenceDto,
-    ) -> DtoResult<Vec<intention_types::EventEnvelopeDto<intention_domain::DomainEventDto>>> {
-        Err(unavailable("fixture_unused", "tail storage is unused"))
-    }
-
-    fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()> {
-        self.calls
-            .borrow_mut()
-            .push("accept_configuration_revision");
-        self.seed_valid(snapshot);
-        Ok(())
-    }
-
-    fn load_config_revision_records(&self) -> DtoResult<Vec<PersistedConfigRevisionRecordDto>> {
-        self.calls.borrow_mut().push("load_config_revision_records");
-        Ok(self
-            .revisions
-            .borrow()
-            .iter()
-            .map(|seed| {
-                let snapshot_bytes_digest = Digest256::sha256(seed.original_bytes.as_bytes())
-                    .bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-                PersistedConfigRevisionRecordDto {
-                    revision_id: seed.revision_id.clone(),
-                    snapshot_bytes_digest,
-                    snapshot: seed.snapshot.clone(),
-                }
-            })
-            .collect())
-    }
-}
-
-impl LegacyBindingRepositoryDto for FakeLegacy {
-    fn append_legacy_m4_selection_binding(
-        &self,
-        input: AppendLegacyM4SelectionBindingInputDto,
-    ) -> DtoResult<()> {
-        self.calls
-            .borrow_mut()
-            .push("append_legacy_m4_selection_binding");
-        let mut bindings = self.bindings.borrow_mut();
-        if let Some(existing) = bindings
-            .iter()
-            .find(|existing| existing.config_revision_id == input.config_revision_id)
-        {
-            if existing.snapshot_bytes_digest != input.snapshot_bytes_digest {
-                return Err(conflict(
-                    "legacy_binding_conflict",
-                    "the configuration revision already bound a different legacy selection",
-                ));
-            }
-            return Ok(());
-        }
-        bindings.push(input);
-        Ok(())
-    }
-
-    fn load_legacy_m4_selection_binding(
-        &self,
-        config_revision_id: String,
-    ) -> DtoResult<Option<intention_storage::LegacyM4SelectionBindingRecordDto>> {
-        let binding = self
-            .bindings
-            .borrow()
-            .iter()
-            .find(|binding| binding.config_revision_id == config_revision_id)
-            .map(
-                |binding| intention_storage::LegacyM4SelectionBindingRecordDto {
-                    config_revision_id: binding.config_revision_id.clone(),
-                    profile_id: binding
-                        .binding
-                        .as_ref()
-                        .map_or_else(String::new, |binding| binding.default_profile_id.clone()),
-                    provider_profile_revision_id: binding
-                        .binding
-                        .as_ref()
-                        .map_or_else(String::new, |binding| {
-                            binding.default_profile_revision_id.clone()
-                        }),
-                    kind_id: String::new(),
-                    kind_descriptor_revision_id: binding
-                        .binding
-                        .as_ref()
-                        .map_or_else(String::new, |binding| {
-                            binding.kind_descriptor_revision_id.clone()
-                        }),
-                    provider_driver_contract_revision: binding
-                        .binding
-                        .as_ref()
-                        .map_or_else(String::new, |binding| {
-                            binding.driver_contract_revision.clone()
-                        }),
-                    binding_digest: String::new(),
-                    snapshot_bytes_digest: binding.snapshot_bytes_digest.clone(),
-                    validation_status: binding.validation_status,
-                    binding_json: String::new(),
-                    created_at: binding.created_at,
-                },
-            );
-        Ok(binding)
     }
 }
 
@@ -1922,116 +1717,6 @@ fn admission_is_denied_when_the_catalog_is_not_ready() {
         .registry_lookup(&key_for(&profile.profile))
         .expect_err("admission requires ready readiness");
     assert_eq!(error.code(), "catalog_not_ready");
-}
-
-// ============================================================================
-// Legacy M4 bridge
-// ============================================================================
-
-#[test]
-fn legacy_bridge_materializes_deterministically_and_idempotently() {
-    let legacy = FakeLegacy::new();
-    let revision_a = ConfigRevisionId::new();
-    let revision_b = ConfigRevisionId::new();
-    legacy.seed_valid(snapshot("openrouter", "model-a", ENDPOINT, revision_a));
-    legacy.seed_valid(snapshot(
-        "generic-chat-completion-api",
-        "model-b",
-        ENDPOINT,
-        revision_b,
-    ));
-    legacy.seed_corrupt("11111111-1111-4111-8111-111111111111");
-    let bridge = LegacyM4Bridge;
-    let count = bridge
-        .materialize(&legacy, &legacy, 1_000)
-        .expect("materialization succeeds");
-    assert_eq!(count, 3);
-    let bindings = legacy.bindings.borrow();
-    assert_eq!(bindings.len(), 3);
-    let validated = bindings
-        .iter()
-        .filter(|binding| binding.validation_status == LegacyBindingValidationStatusDto::Validated)
-        .count();
-    let corrupt = bindings
-        .iter()
-        .filter(|binding| binding.validation_status == LegacyBindingValidationStatusDto::Corrupt)
-        .count();
-    assert_eq!(validated, 2);
-    assert_eq!(corrupt, 1);
-    let corrupt_binding = bindings
-        .iter()
-        .find(|binding| binding.validation_status == LegacyBindingValidationStatusDto::Corrupt)
-        .expect("corrupt binding exists");
-    assert!(corrupt_binding.binding.is_none());
-    let first_binding = bindings[0].clone();
-    drop(bindings);
-    // Deterministic: a second pass produces the same bindings idempotently.
-    let second = bridge
-        .materialize(&legacy, &legacy, 1_000)
-        .expect("re-materialization succeeds");
-    assert_eq!(second, 3);
-    assert_eq!(legacy.bindings.borrow().len(), 3);
-    let persisted_bindings = legacy.bindings.borrow();
-    let persisted = persisted_bindings
-        .iter()
-        .find(|binding| binding.config_revision_id == first_binding.config_revision_id)
-        .expect("binding persists");
-    assert_eq!(
-        persisted.snapshot_bytes_digest,
-        first_binding.snapshot_bytes_digest
-    );
-    assert_eq!(persisted.validation_status, first_binding.validation_status);
-}
-
-#[test]
-fn legacy_bridge_never_rewrites_the_original_snapshot_bytes() {
-    let legacy = FakeLegacy::new();
-    let revision = ConfigRevisionId::new();
-    let revision_id = revision.to_string();
-    legacy.seed_valid(snapshot("openrouter", "model-a", ENDPOINT, revision));
-    let before = legacy
-        .original_bytes(&revision_id)
-        .expect("seed bytes exist");
-    let bridge = LegacyM4Bridge;
-    let _ = bridge
-        .materialize(&legacy, &legacy, 1_000)
-        .expect("materialization succeeds");
-    let after = legacy
-        .original_bytes(&revision_id)
-        .expect("seed bytes exist");
-    assert_eq!(before, after);
-    let legacy_bindings = legacy.bindings.borrow();
-    let binding = legacy_bindings
-        .iter()
-        .find(|binding| binding.config_revision_id == revision_id)
-        .expect("binding exists");
-    assert_eq!(binding.snapshot_bytes_digest.len(), 64);
-    let expected_digest = Digest256::sha256(before.as_bytes())
-        .bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    assert_eq!(binding.snapshot_bytes_digest, expected_digest);
-}
-
-#[test]
-fn legacy_bridge_synthesizes_zero_provider_selections() {
-    let legacy = FakeLegacy::new();
-    legacy.seed_valid(snapshot(
-        "openrouter",
-        "model-a",
-        ENDPOINT,
-        ConfigRevisionId::new(),
-    ));
-    let bridge = LegacyM4Bridge;
-    let _ = bridge
-        .materialize(&legacy, &legacy, 1_000)
-        .expect("materialization succeeds");
-    let calls = legacy.calls.borrow();
-    assert!(calls.contains(&"load_config_revision_records"));
-    assert!(calls.contains(&"append_legacy_m4_selection_binding"));
-    assert!(!calls.contains(&"persist_resolved_run_provider_selection"));
-    assert!(!calls.contains(&"accept_configuration_revision"));
 }
 
 // ============================================================================

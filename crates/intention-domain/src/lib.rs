@@ -13,7 +13,6 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub mod canonical;
 pub mod context_projection;
-pub mod legacy_bridge;
 pub mod provider_catalog;
 pub mod provider_selection;
 pub mod reasoning_history;
@@ -35,7 +34,6 @@ pub use context_projection::{
     ContextSourceEntryV1, ContextSourceManifestV1, ModelContextProjectionV1,
     context_source_manifest_digest, model_context_projection_digest,
 };
-pub use legacy_bridge::{LegacyM4SelectionBindingDto, validate_legacy_safe_selection};
 pub use provider_catalog::{
     CredentialTransportMode, ProviderCatalogLimits, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto, ProviderProfileRevisionV1,

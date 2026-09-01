@@ -30,14 +30,12 @@ use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
 use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
 
-pub mod legacy_m4_bridge;
 pub mod provider_catalog;
 pub mod provider_control_plane;
 pub mod provider_gate;
 pub mod provider_registry;
 pub mod session_selection;
 
-pub use legacy_m4_bridge::LegacyM4Bridge;
 pub use provider_catalog::{
     CatalogAcceptanceOutcomeDto, CatalogCandidateOutcomeDto, CatalogProviderDeclarationDto,
     CatalogSourceInputDto, CatalogStartupOutcomeDto, ProviderAdmissionDto,

@@ -16,11 +16,11 @@ use intention_domain::canonical::{
 };
 use intention_domain::{
     ContextPreservationCapability, ContextSourceEntryV1, ContextSourceManifestV1,
-    LegacyM4SelectionBindingDto, ModelCapabilitySetV1, ModelContextProjectionV1,
-    ModelInputCapability, ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1,
-    ProviderProfileRevisionV1, ProviderSelectionV1, ReasoningCapability, ReasoningHistoryBound,
-    ReasoningHistoryManifestDto, StructuredOutputCapability, context_source_manifest_digest,
-    model_context_projection_digest, reasoning_history_manifest_digest,
+    ModelCapabilitySetV1, ModelContextProjectionV1, ModelInputCapability,
+    ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1,
+    ProviderSelectionV1, ReasoningCapability, ReasoningHistoryBound, ReasoningHistoryManifestDto,
+    StructuredOutputCapability, context_source_manifest_digest, model_context_projection_digest,
+    reasoning_history_manifest_digest,
 };
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -271,40 +271,6 @@ fn projection_fields() -> Vec<(u32, u8, Vec<u8>)> {
             WireType::Utf8 as u8,
             encode_utf8(&projection.model_context_digest),
         ),
-    ]
-}
-
-fn binding_fields() -> Vec<(u32, u8, Vec<u8>)> {
-    vec![
-        (
-            1,
-            WireType::Utf8 as u8,
-            encode_utf8("11111111-1111-4111-8111-111111111111"),
-        ),
-        (
-            2,
-            WireType::Utf8 as u8,
-            encode_utf8("m4-config-snapshot-v1"),
-        ),
-        (
-            3,
-            WireType::Utf8 as u8,
-            encode_utf8("legacy-uuid:22222222-2222-4222-8222-222222222222"),
-        ),
-        (4, WireType::Utf8 as u8, encode_utf8("default")),
-        (5, WireType::Utf8 as u8, encode_utf8("rev-0001")),
-        (
-            6,
-            WireType::Utf8 as u8,
-            encode_utf8("kind-descriptor-rev-0001"),
-        ),
-        (
-            7,
-            WireType::List as u8,
-            encode_utf8_list(&["text_input".to_owned(), "text_streaming".to_owned()]),
-        ),
-        (8, WireType::Utf8 as u8, encode_utf8("ordinary")),
-        (9, WireType::Utf8 as u8, encode_utf8("responses-1.0")),
     ]
 }
 
@@ -1228,135 +1194,6 @@ fn projection_rejects_malformed_and_noncanonical_framing() {
     );
 }
 
-// ---- Legacy M4 selection binding (0x020C) ----
-
-#[test]
-fn legacy_binding_rejects_malformed_and_noncanonical_framing() {
-    let tag = TagRegistry::LEGACY_M4_SELECTION_BINDING;
-    let fields = binding_fields();
-
-    for missing in 1..=9 {
-        let partial = fields
-            .iter()
-            .filter(|(number, ..)| *number != missing)
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&partial)))
-                .expect_err("missing field is rejected"),
-            CanonicalError::InvalidField,
-            "missing binding field {missing}"
-        );
-    }
-    let mut duplicate = fields.clone();
-    duplicate.push((1, WireType::Utf8 as u8, encode_utf8("dup")));
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&duplicate)))
-            .expect_err("duplicate field is rejected"),
-        CanonicalError::DuplicateOrDescendingField
-    );
-    let descending = raw_record(
-        tag,
-        1,
-        &[
-            (2, WireType::Utf8 as u8, b"x"),
-            (1, WireType::Utf8 as u8, b"y"),
-        ],
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&descending).expect_err("descending tags are rejected"),
-        CanonicalError::DuplicateOrDescendingField
-    );
-    let unknown = raw_record(
-        tag,
-        1,
-        &[
-            (1, WireType::Utf8 as u8, b"x"),
-            (10, WireType::U64 as u8, &[0]),
-        ],
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&unknown).expect_err("unknown field is rejected"),
-        CanonicalError::UnknownField(10)
-    );
-    let wrong_wire = raw_record(tag, 1, &[(1, WireType::U64 as u8, &[0])]);
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&wrong_wire).expect_err("wrong wire type is rejected"),
-        CanonicalError::InvalidField
-    );
-    let truncated = {
-        let mut out = Vec::new();
-        out.extend_from_slice(b"IRCR");
-        out.extend_from_slice(&1u32.to_be_bytes());
-        out.extend_from_slice(&tag.to_be_bytes());
-        out.extend_from_slice(&1u32.to_be_bytes());
-        out.extend_from_slice(&raw_field(1, WireType::Utf8 as u8, 100, b"ab"));
-        out
-    };
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&truncated).expect_err("truncated field is rejected"),
-        CanonicalError::Truncated
-    );
-    let mut trailing = raw_record(tag, 1, &refs(&fields));
-    trailing.extend_from_slice(&[0x55, 0x44]);
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&trailing).expect_err("trailing bytes are rejected"),
-        CanonicalError::TrailingBytes
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 2, &[]))
-            .expect_err("version is rejected"),
-        CanonicalError::InvalidTag
-    );
-    let bad_utf8 = with_invalid_utf8(&fields, 1);
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&bad_utf8)))
-            .expect_err("invalid utf8 is rejected"),
-        CanonicalError::InvalidUtf8
-    );
-    // An invalid legacy safe selection reference.
-    let bad_reference = replace_field(
-        &fields,
-        3,
-        WireType::Utf8 as u8,
-        encode_utf8("22222222-2222-4222-8222-222222222222"),
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&bad_reference)))
-            .expect_err("invalid legacy reference is rejected")
-            .code(),
-        "legacy_selection_reference_invalid"
-    );
-    // Empty required legacy config revision id.
-    let empty = replace_field(&fields, 1, WireType::Utf8 as u8, Vec::new());
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&empty)))
-            .expect_err("empty legacy config revision id is rejected")
-            .code(),
-        "legacy_selection_reference_invalid"
-    );
-    // Over-limit scalar.
-    let over = replace_field(
-        &fields,
-        4,
-        WireType::Utf8 as u8,
-        encode_utf8(&"p".repeat(257)),
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&over)))
-            .expect_err("over-limit scalar is rejected")
-            .code(),
-        "legacy_selection_reference_invalid"
-    );
-    // A malformed capability-subset list.
-    let bad_list = replace_field(&fields, 7, WireType::List as u8, vec![0xAA, 0xBB]);
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&raw_record(tag, 1, &refs(&bad_list)))
-            .expect_err("truncated capability list is rejected"),
-        CanonicalError::Truncated
-    );
-}
-
 // ---- Shared scalar and list codec discipline ----
 
 #[test]
@@ -1463,10 +1300,6 @@ fn new_error_codes_are_stable_and_never_leak_values() {
         (
             CanonicalError::ModelContextProjectionTooLarge,
             "model_context_projection_too_large",
-        ),
-        (
-            CanonicalError::LegacySelectionReferenceInvalid,
-            "legacy_selection_reference_invalid",
         ),
         (
             CanonicalError::CredentialsForbidden,

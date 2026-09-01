@@ -58,7 +58,7 @@ with the family errors:
 | Negotiation and readiness | `provider_profiles_capability_required`, `execution_not_ready`, `catalog_not_ready`, `provider_profile_runtime_unavailable`, `provider_configuration_unavailable`, `provider_profile_unavailable`, `provider_profile_tombstoned`, `provider_admission_not_found` |
 | Profile revisions | `provider_profile_revision_invalid`, `provider_profile_override_invalid`, `provider_profile_revision_mismatch`, `session_profile_revision_mismatch`, `session_provider_default_stale`, `config_revision_mismatch` |
 | Kind, endpoint, and credentials | `provider_kind_immutable_mismatch`, `provider_kind_has_dependents`, `invalid_provider_kind`, `invalid_endpoint`, `credentials_forbidden`, `invalid_digest` |
-| Catalog | `legacy_config_cannot_represent_active_catalog`, `historical_selection_corrupt`, `legacy_selection_reference_invalid`, `catalog_page_token_stale`, `provider_catalog_projection_invalid`, `candidate_too_large`, `catalog_change_requires_restart` |
+| Catalog | `legacy_config_cannot_represent_active_catalog`, `catalog_page_token_stale`, `provider_catalog_projection_invalid`, `candidate_too_large`, `catalog_change_requires_restart` |
 | Reasoning | `provider_reasoning_stream_invalid`, `reasoning_history_unavailable`, `reasoning_history_incompatible`, `reasoning_history_too_large`, `reasoning_output_limit_exceeded` |
 | Context | `context_source_manifest_invalid`, `model_context_projection_invalid`, `model_context_projection_too_large` |
 | Rotation, health, and discovery | `credential_rotation_frozen_meaning_mismatch`, `credential_rotation_source_unavailable`, `provider_health_unavailable`, `provider_discovery_unavailable` |
@@ -74,7 +74,7 @@ The format is `IRCR` / `typed-tlv-v1` / SHA-256, unchanged from Slice 1.
 Digest text is `<namespace>:sha256:<64 lowercase hex>`; new identities are
 `sha256-v1:<64 hex>`. A digest excludes its own field. Digest inputs exclude
 credentials, paths, display data, readiness, and current state. The newly
-wired canonical families (0x0206-0x020C) carry no numeric field tags on their
+wired canonical families (0x0206-0x020B) carry no numeric field tags on their
 public DTO families; canonical record families derive from
 `crates/intention-domain` and public DTO families from
 `crates/intention-protocol/src/contract_families.rs`.
@@ -83,8 +83,8 @@ public DTO families; canonical record families derive from
 
 `intention-domain` owns this registry. The `TagStatus` enum has exactly the
 variants `Wired`, `ReservedForSlice3`, and `ReservedForSlice4`. Three tags were
-already `Wired` from Slice 1; Slice 2 newly wires the seven control-plane tags
-(0x0206-0x020C). All other ledger tags remain reserved and carry no production
+already `Wired` from Slice 1; Slice 2 newly wires the six control-plane tags
+(0x0206-0x020B). All other ledger tags remain reserved and carry no production
 codec in this slice.
 
 | Tag | Value | Status |
@@ -98,7 +98,6 @@ codec in this slice.
 | `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |
 | `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |
 | `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |
-| `legacy-m4-selection-binding` | `0x020C` | Wired (Slice 2) |
 | `goal-run-selection-v1` | `0x0203` | ReservedForSlice3 |
 | `continual-harness-selection-v1` | `0x0204` | ReservedForSlice3 |
 | `mcp-method-catalog-selection-v1` | `0x0205` | ReservedForSlice3 |
@@ -141,9 +140,10 @@ Skeleton `intention-headroom`, `intention-plans`, `intention-vfr`, and
 config revisions, snapshots, sessions, runs, events, cursors, queue tickets,
 and bytes remain authoritative and unchanged. The schema-4 migration is
 additive: `user_version` moves to 4, M3/M4 rows are byte-preserved, and no
-synthetic post-M5 record is added to historical runs. A
-`LegacyM4SelectionBindingDto` references legacy bytes without rewriting them
-(`legacy-uuid:<canonical UUID>`).
+synthetic post-M5 record is added to historical runs. The legacy M4 selection
+bridge (tag `legacy-m4-selection-binding` 0x020C) is removed by
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no synthetic
+binding is ever materialized for historical runs.
 
 ## Evidence and non-goals
 
@@ -187,8 +187,8 @@ compatibility (1.0 to 1.1) is preserved by the existing
 The numeric tag registry is owned by `intention-domain`
 (`crates/intention-domain/src/canonical.rs`). Every ledger tag is classified in
 the `TagRegistry::LEDGER` table by `TagStatus` as `Wired`, `ReservedForSlice3`,
-or `ReservedForSlice4`. Ten tags are `Wired` (three from Slice 1 plus the seven
-Slice 2 additions 0x0206-0x020C); every other tag is reserved and carries no
+or `ReservedForSlice4`. Nine tags are `Wired` (three from Slice 1 plus the six
+Slice 2 additions 0x0206-0x020B); every other tag is reserved and carries no
 production codec in this slice.
 
 ### Capability and delivery outcomes
@@ -287,20 +287,6 @@ Required column says otherwise. No table cell spans multiple lines.
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.ordered_messages | Vec<String> | Yes | 1..=1024 nonblank entries; up to 1 MiB aggregate; `model_context_projection_invalid`/`_too_large` |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.model_context_digest | String | Yes | 64 lowercase hex |
 
-### legacy-m4-selection-binding (0x020C)
-
-| Family | Version | Field tag | Field | Type | Required | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_config_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_snapshot_schema | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_safe_selection | String | Yes | Normative invariant: must be `legacy-uuid:<canonical UUID>`; legacy bytes are never rewritten; `legacy_selection_reference_invalid` otherwise |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.default_profile_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.default_profile_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.kind_descriptor_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.capability_subset | Vec<String> | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.execution_policy | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.driver_contract_revision | String | Yes |  |
-
 ## Appendix B: SQLite schema-4 migration table inventory
 
 The schema-4 migration adds the following durable tables. Each table is
@@ -323,7 +309,6 @@ additive; M3/M4 tables and rows are byte-preserved and never rewritten.
 | `provider_usage_facts` | Per-run usage facts |
 | `provider_catalog_removal_candidates` | Pending-removal candidates |
 | `held_recovered_runs` | Held recovery-promoted runs awaiting admission |
-| `legacy_m4_selection_bindings` | Immutable legacy M4 selection bindings |
 
 ## Version and tag linkage
 
@@ -332,6 +317,6 @@ ledger tag values. `intention-protocol` references those constants through
 nonserialized `ContractFamilyDescriptor` entries in
 `PUBLIC_WIRE_CONTRACT_FAMILIES`; there is no protocol-side numeric mirror. The
 protocol parity tests fail on any missing, duplicate, or mismatched tag: the
-wire families must cover exactly the 24 wire-ledger tags, may duplicate only
+wire families must cover exactly the 23 wire-ledger tags, may duplicate only
 for the versioned fork snapshot and preview families, and must match the domain
 registry values by name.

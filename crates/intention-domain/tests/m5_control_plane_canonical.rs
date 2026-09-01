@@ -13,8 +13,8 @@ use intention_domain::canonical::{
 };
 use intention_domain::{
     ContextPreservationCapability, ContextSourceEntryV1, ContextSourceManifestV1,
-    CredentialTransportMode, LegacyM4SelectionBindingDto, ModelCapabilitySelectionV1,
-    ModelCapabilitySetV1, ModelContextProjectionV1, ModelInputCapability, ProviderCatalogLimits,
+    CredentialTransportMode, ModelCapabilitySelectionV1, ModelCapabilitySetV1,
+    ModelContextProjectionV1, ModelInputCapability, ProviderCatalogLimits,
     ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto,
     ProviderProfileRevisionV1, ProviderProfileTombstoneDto, ProviderSelectionV1,
     ReasoningCapability, ReasoningHistoryBound, ReasoningHistoryManifestDto,
@@ -176,20 +176,6 @@ fn context_projection() -> ModelContextProjectionV1 {
     projection
 }
 
-fn legacy_binding() -> LegacyM4SelectionBindingDto {
-    LegacyM4SelectionBindingDto {
-        legacy_config_revision_id: "11111111-1111-4111-8111-111111111111".to_owned(),
-        legacy_snapshot_schema: "m4-config-snapshot-v1".to_owned(),
-        legacy_safe_selection: "legacy-uuid:22222222-2222-4222-8222-222222222222".to_owned(),
-        default_profile_id: "default".to_owned(),
-        default_profile_revision_id: "rev-0001".to_owned(),
-        kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
-        capability_subset: vec!["text_input".to_owned(), "text_streaming".to_owned()],
-        execution_policy: "ordinary".to_owned(),
-        driver_contract_revision: "responses-1.0".to_owned(),
-    }
-}
-
 fn kind_descriptor() -> ProviderKindDescriptorRevisionV1 {
     ProviderKindDescriptorRevisionV1 {
         kind_id: "responses".to_owned(),
@@ -297,7 +283,6 @@ fn all_family_bytes() -> Vec<u8> {
         reasoning_manifest().encode().expect("manifest encodes"),
         context_manifest().encode().expect("manifest encodes"),
         context_projection().encode().expect("projection encodes"),
-        legacy_binding().encode().expect("binding encodes"),
     ] {
         bytes.extend_from_slice(&record);
     }
@@ -307,12 +292,12 @@ fn all_family_bytes() -> Vec<u8> {
 // ---- Registry ----
 
 #[test]
-fn slice2_registry_has_exactly_ten_wired_tags() {
+fn slice2_registry_has_exactly_nine_wired_tags() {
     let wired: Vec<&intention_domain::canonical::LedgerTag> = TagRegistry::LEDGER
         .iter()
         .filter(|entry| entry.status == TagStatus::Wired)
         .collect();
-    assert_eq!(wired.len(), 10, "exactly ten families are wired in Slice 2");
+    assert_eq!(wired.len(), 9, "exactly nine families are wired in Slice 2");
     let names: Vec<&str> = wired.iter().map(|entry| entry.name).collect();
     assert_eq!(
         names,
@@ -326,14 +311,13 @@ fn slice2_registry_has_exactly_ten_wired_tags() {
             "reasoning-history-manifest-v1",
             "context-source-manifest-v1",
             "model-context-projection-v1",
-            "legacy-m4-selection-binding",
         ]
     );
     let values: Vec<u32> = wired.iter().map(|entry| entry.value).collect();
     assert_eq!(
         values,
         vec![
-            0x0101, 0x0201, 0x0202, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B, 0x020C
+            0x0101, 0x0201, 0x0202, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B
         ]
     );
 }
@@ -363,7 +347,7 @@ fn slice2_registry_classifies_future_tags_by_slice() {
         );
     }
     for tag in [
-        0x0101, 0x0201, 0x0202, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B, 0x020C,
+        0x0101, 0x0201, 0x0202, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B,
     ] {
         assert_eq!(status_of(tag), Some(TagStatus::Wired), "tag 0x{tag:04x}");
     }
@@ -380,7 +364,7 @@ fn registry_constants_appear_once() {
         );
         values.push(entry.value);
     }
-    let constants: [u32; 25] = [
+    let constants: [u32; 24] = [
         TagRegistry::RUN_EXECUTION_MEANING,
         TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
         TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
@@ -393,7 +377,6 @@ fn registry_constants_appear_once() {
         TagRegistry::REASONING_HISTORY_MANIFEST_V1,
         TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
         TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-        TagRegistry::LEGACY_M4_SELECTION_BINDING,
         TagRegistry::TOOL_DESCRIPTOR_REVISION,
         TagRegistry::TOOL_REGISTRY_REVISION,
         TagRegistry::MODEL_TOOL_LOOP_V1,
@@ -427,7 +410,7 @@ fn reserved_tags_are_not_active_capabilities() {
         .collect();
     assert_eq!(reserved.len(), 15);
     type Decoder = fn(&[u8]) -> Result<(), CanonicalError>;
-    let decoders: [(&str, Decoder); 7] = [
+    let decoders: [(&str, Decoder); 6] = [
         ("taxonomy", |bytes| {
             ModelCapabilitySetV1::decode(bytes).map(|_| ())
         }),
@@ -445,9 +428,6 @@ fn reserved_tags_are_not_active_capabilities() {
         }),
         ("context projection", |bytes| {
             ModelContextProjectionV1::decode(bytes).map(|_| ())
-        }),
-        ("legacy binding", |bytes| {
-            LegacyM4SelectionBindingDto::decode(bytes).map(|_| ())
         }),
     ];
     for tag in reserved {
@@ -555,19 +535,6 @@ fn model_context_projection_round_trips_exactly() {
     );
 }
 
-#[test]
-fn legacy_m4_selection_binding_round_trips_exactly() {
-    let record = legacy_binding();
-    let bytes = record.encode().expect("binding encodes");
-    let decoded = LegacyM4SelectionBindingDto::decode(&bytes).expect("binding decodes");
-    assert_eq!(decoded, record);
-    assert_eq!(
-        decoded.encode().expect("binding re-encodes"),
-        bytes,
-        "decode and re-encode must reproduce the exact input bytes"
-    );
-}
-
 // ---- Golden compatibility ----
 
 #[test]
@@ -668,23 +635,6 @@ fn golden_model_context_projection_matches_the_encoder_and_round_trips() {
     );
     assert_eq!(
         ModelContextProjectionV1::decode(&encoded).expect("golden projection decodes"),
-        record
-    );
-}
-
-#[test]
-fn golden_legacy_m4_selection_binding_matches_the_encoder_and_round_trips() {
-    let record = legacy_binding();
-    let encoded = record.encode().expect("binding encodes");
-    assert_golden_fixture(
-        include_str!("fixtures/goldens/legacy-m4-selection-binding.txt"),
-        "legacy-m4-selection-binding",
-        0x020C,
-        1,
-        &encoded,
-    );
-    assert_eq!(
-        LegacyM4SelectionBindingDto::decode(&encoded).expect("golden binding decodes"),
         record
     );
 }
@@ -1368,68 +1318,6 @@ fn context_manifest_digest_excludes_safe_label() {
             .expect_err("credential-shaped label is rejected")
             .code(),
         "credentials_forbidden"
-    );
-}
-
-#[test]
-fn legacy_binding_preserves_legacy_reference_exactly() {
-    let binding = legacy_binding();
-    let bytes = binding.encode().expect("binding encodes");
-    let decoded = LegacyM4SelectionBindingDto::decode(&bytes).expect("binding decodes");
-    assert_eq!(decoded.legacy_safe_selection, binding.legacy_safe_selection);
-    assert_eq!(
-        decoded.legacy_config_revision_id,
-        binding.legacy_config_revision_id
-    );
-    assert_eq!(
-        decoded.encode().expect("binding re-encodes"),
-        bytes,
-        "the legacy reference survives decode and re-encode byte-for-byte"
-    );
-}
-
-#[test]
-fn legacy_binding_requires_legacy_uuid_prefix() {
-    let mut binding = legacy_binding();
-    binding.legacy_safe_selection = "22222222-2222-4222-8222-222222222222".to_owned();
-    assert_eq!(
-        binding
-            .encode()
-            .expect_err("missing prefix is rejected")
-            .code(),
-        "legacy_selection_reference_invalid"
-    );
-    binding.legacy_safe_selection = "legacy-uuid:NOT-A-UUID".to_owned();
-    assert_eq!(
-        binding
-            .encode()
-            .expect_err("invalid uuid is rejected")
-            .code(),
-        "legacy_selection_reference_invalid"
-    );
-}
-
-#[test]
-fn legacy_snapshot_bytes_are_not_rewritten() {
-    let binding = legacy_binding();
-    let bytes = binding.encode().expect("binding encodes");
-    // The binding carries only the schema reference; no legacy snapshot body
-    // or JSON is ever embedded or rewritten.
-    assert!(String::from_utf8_lossy(&bytes).contains("m4-config-snapshot-v1"));
-    assert!(
-        !bytes.contains(&b'{'),
-        "no raw snapshot JSON may enter the binding record"
-    );
-    assert!(
-        !bytes.contains(&b'}'),
-        "no raw snapshot JSON may enter the binding record"
-    );
-    let decoded = LegacyM4SelectionBindingDto::decode(&bytes).expect("binding decodes");
-    assert_eq!(decoded.legacy_snapshot_schema, "m4-config-snapshot-v1");
-    assert_eq!(
-        decoded.encode().expect("binding re-encodes"),
-        bytes,
-        "legacy snapshot references are never rewritten"
     );
 }
 

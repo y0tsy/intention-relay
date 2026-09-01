@@ -5,7 +5,7 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, LegacyM4SelectionBindingDto, ModelRunFactInputDto,
+    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
     RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunProjectionDto,
     RunReplayDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
@@ -967,38 +967,6 @@ pub trait StorageRepositoryDto {
     /// Returns a validation or conflict error when the revision cannot be
     /// recorded, or an unavailable error when durable storage fails.
     fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()>;
-
-    /// Loads every persisted credential-free configuration revision with its
-    /// original persisted snapshot bytes.
-    ///
-    /// The snapshot bytes are the exact persisted JSON document, returned
-    /// unchanged so historical replays never rewrite legacy bytes. `snapshot`
-    /// carries the decoded credential-free snapshot when the persisted bytes
-    /// decode and validate, and `None` when the historical record is
-    /// unsupported or malformed; `snapshot_bytes_digest` always covers the
-    /// original bytes. Revisions are returned in deterministic order.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the persisted revisions cannot be read.
-    fn load_config_revision_records(&self) -> DtoResult<Vec<PersistedConfigRevisionRecordDto>> {
-        Err(ErrorDto::unavailable(
-            "config_revision_records_unavailable",
-            "persisted configuration revision records are unavailable",
-        ))
-    }
-}
-
-/// One persisted credential-free configuration revision and its original bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PersistedConfigRevisionRecordDto {
-    /// The immutable persisted configuration revision identity.
-    pub revision_id: String,
-    /// The digest over the exact original persisted snapshot bytes.
-    pub snapshot_bytes_digest: String,
-    /// The decoded credential-free snapshot, or `None` when the historical
-    /// bytes are unsupported or malformed.
-    pub snapshot: Option<ConfigSnapshotDto>,
 }
 
 // ============================================================================
@@ -1432,41 +1400,6 @@ pub struct AdmitHeldRecoveredRunInputDto {
     pub operation_id: String,
 }
 
-/// The closed validation status of one legacy M4 selection binding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LegacyBindingValidationStatusDto {
-    Validated,
-    Corrupt,
-}
-
-/// Input appending one deterministic legacy M4 selection binding.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AppendLegacyM4SelectionBindingInputDto {
-    pub config_revision_id: String,
-    /// The valid legacy binding, or `None` when the historical selection is
-    /// unsupported or malformed and must be recorded as corrupt.
-    pub binding: Option<LegacyM4SelectionBindingDto>,
-    pub snapshot_bytes_digest: String,
-    pub validation_status: LegacyBindingValidationStatusDto,
-    pub created_at: i64,
-}
-
-/// One durable legacy M4 selection binding record.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LegacyM4SelectionBindingRecordDto {
-    pub config_revision_id: String,
-    pub profile_id: String,
-    pub provider_profile_revision_id: String,
-    pub kind_id: String,
-    pub kind_descriptor_revision_id: String,
-    pub provider_driver_contract_revision: String,
-    pub binding_digest: String,
-    pub snapshot_bytes_digest: String,
-    pub validation_status: LegacyBindingValidationStatusDto,
-    pub binding_json: String,
-    pub created_at: i64,
-}
-
 /// DTO-only repository contract for the provider catalog control plane.
 pub trait ProviderCatalogRepositoryDto {
     /// Appends one provider kind descriptor revision to append-only catalog history.
@@ -1775,27 +1708,4 @@ pub trait HeldRunRepositoryDto {
     ///
     /// Returns an unavailable error when the record cannot be read.
     fn load_held_recovered_run(&self, run_id: RunId) -> DtoResult<Option<HeldRecoveredRunDto>>;
-}
-
-/// DTO-only repository contract for legacy M4 selection bindings.
-pub trait LegacyBindingRepositoryDto {
-    /// Appends one deterministic legacy M4 selection binding idempotently.
-    ///
-    /// # Errors
-    ///
-    /// Returns a conflict error when the revision already bound a different
-    /// binding, or an unavailable error when storage fails.
-    fn append_legacy_m4_selection_binding(
-        &self,
-        input: AppendLegacyM4SelectionBindingInputDto,
-    ) -> DtoResult<()>;
-    /// Loads the durable legacy M4 selection binding for one config revision, if any.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the binding cannot be read.
-    fn load_legacy_m4_selection_binding(
-        &self,
-        config_revision_id: String,
-    ) -> DtoResult<Option<LegacyM4SelectionBindingRecordDto>>;
 }

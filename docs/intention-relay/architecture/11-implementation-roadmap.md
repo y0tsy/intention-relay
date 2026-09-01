@@ -455,9 +455,8 @@ activated by earlier slices in this order:
 4. **UI foundation** — session branching, activity/notification, reasoning/
    catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
    0028/0029/0032/0033/0034): `session_fork_v1`; activity journal and
-   notification projections; normalized reasoning delivery; the legacy M4
-   selection bridge; RLM packaging and export; and the exact typed
-   client/protocol surface that M6 consumes.
+   notification projections; normalized reasoning delivery; RLM packaging and
+   export; and the exact typed client/protocol surface that M6 consumes.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
@@ -1304,8 +1303,8 @@ profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package extending architecture 22.** It records typed
 cross-turn reasoning history, reasoning usage, paged delivery, the dialect
-catalog, catalog limits/tombstones/audit, and the legacy M4 selection bridge,
-adopted by [decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
+catalog, and catalog limits/tombstones/audit, adopted by
+[decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
 It activates no crate, schema, migration, protocol implementation, feature
 profile, quality-policy target, or implementation milestone.
 
@@ -1318,7 +1317,6 @@ profile, quality-policy target, or implementation milestone.
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
   minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
-- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`;
 - the taxonomy value `model-capability-taxonomy-v1`, the
   `reasoning_input_contract` field name (superseding the concept2
   `reasoning_history_transfer`), and the descriptor-owned field-path/

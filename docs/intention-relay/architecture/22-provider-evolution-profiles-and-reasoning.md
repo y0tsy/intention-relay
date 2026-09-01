@@ -9,7 +9,7 @@
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
 - Reconciliation topics: `PRV-001..012, RSN-001..020`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (catalog, selection, capability-taxonomy, reasoning-history, legacy-bridge, header/preservation/parser contracts; `responses` driver remains not activated).
+- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (catalog, selection, capability-taxonomy, reasoning-history, header/preservation/parser contracts; `responses` driver remains not activated).
 
 
 **Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
@@ -18,7 +18,7 @@ provider/model-capability selections, endpoint and credential-transport
 semantics, driver-contract compatibility, provider-local availability, and
 normalized textual reasoning. Slice 2 activates the catalog lifecycle,
 provider selection and capability resolution, the normalized reasoning
-surface, the typed dialect decoder contract, the legacy M4 bridge, typed
+surface, the typed dialect decoder contract, typed
 header policy validation, preservation controls, and parser configuration. It
 does not authorize a `responses` SDK/driver, remote continuation, live wire
 header injection (`SafeHeader`), a user-kind parser, provider-native live
@@ -576,23 +576,14 @@ profile owns an independent private client/driver entry, and no SDK/credential/
 client/handle crosses a DTO, persistence, protocol, runtime public API, or
 adapter boundary.
 
-## Legacy M4 selection bridge
+## Legacy M4 selection bridge (removed)
 
-Migration eagerly maps every persisted legacy M4 `ConfigRevisionId` to one
-immutable `LegacyM4SelectionBindingDto` for its supported safe snapshot; equal
-snapshots may share one equivalent binding. The binding references the original
-legacy ID and snapshot bytes unchanged, records validation of the supported M4
-snapshot schema, materializes a deterministic first-party `default` profile ID,
-profile revision, kind descriptor revision, capability subset, execution policy,
-and M4 driver-contract revision, and protects the bridge fields with a canonical
-binding digest; it is never recomputed from future TOML. An old queued run
-executes only when the active `default` entry exactly matches the binding AND
-the current driver explicitly supports the materialized M4 contract; otherwise
-the same closed unavailable outcome applies. It preserves the original `RunId`,
-legacy `ConfigSnapshotDto`, event history, and replay data; the old snapshot JSON
-and old UUID are never replaced with a SHA ID. A missing, malformed, or
-digest-inconsistent binding is `historical_selection_corrupt`; replay remains
-readable where possible and is never reconstructed from current TOML.
+The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) is
+removed by [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md):
+no `LegacyM4SelectionBindingDto` is materialized, no `legacy_m4_selection_bindings`
+table exists, and no synthetic binding or provider selection is ever created for
+historical runs. Provider binding identity is owned by the provider catalog
+runtime; the composition resolves it through the catalog admission port.
 
 ## Session selection, degraded recovery, and protocol
 

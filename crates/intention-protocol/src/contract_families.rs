@@ -1657,65 +1657,6 @@ pub enum ToolTerminalOutcome {
     ExecutionUnavailable,
     ExternalEffectUnknown,
 }
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LegacyM4SelectionBindingDto {
-    pub legacy_config_revision_id: String,
-    pub legacy_snapshot_schema: String,
-    pub legacy_safe_selection: String,
-    pub default_profile_id: String,
-    pub default_profile_revision_id: String,
-    pub kind_descriptor_revision_id: String,
-    pub capability_subset: Vec<String>,
-    pub execution_policy: String,
-    pub driver_contract_revision: String,
-}
-impl LegacyM4SelectionBindingDto {
-    /// Validates the binding fields and legacy reference.
-    ///
-    /// # Errors
-    ///
-    /// Returns `legacy_selection_reference_invalid` when the safe selection
-    /// is not a lowercase canonical `legacy-uuid:` reference with a valid
-    /// UUID variant and version, `legacy_selection_binding_invalid` for a
-    /// blank, over-long, or control-bearing field or capability entry, and
-    /// `credentials_forbidden` for a credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        if !is_canonical_legacy_uuid_reference(&self.legacy_safe_selection) {
-            return Err(ErrorDto::validation(
-                "legacy_selection_reference_invalid",
-                "legacy selection must be a canonical legacy-uuid reference",
-            ));
-        }
-        let fields = [
-            &self.legacy_config_revision_id,
-            &self.legacy_snapshot_schema,
-            &self.legacy_safe_selection,
-            &self.default_profile_id,
-            &self.default_profile_revision_id,
-            &self.kind_descriptor_revision_id,
-            &self.execution_policy,
-            &self.driver_contract_revision,
-        ];
-        for field in fields {
-            valid_text(field, 256, "legacy_selection_binding_invalid")?;
-        }
-        for capability in &self.capability_subset {
-            valid_text(capability, 256, "legacy_selection_binding_invalid")?;
-        }
-        if fields.iter().any(|value| credential_shaped(value))
-            || self
-                .capability_subset
-                .iter()
-                .any(|value| credential_shaped(value))
-        {
-            return Err(ErrorDto::validation(
-                "credentials_forbidden",
-                "credentials are forbidden",
-            ));
-        }
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Slice 2 control-plane protocol surface.
@@ -4057,41 +3998,6 @@ impl ProviderReasoningCatalogProjectionDto {
     }
 }
 
-/// Returns whether `value` is exactly `legacy-uuid:<canonical UUID>` where the
-/// UUID is the lowercase hyphenated canonical form with a valid RFC 4122
-/// variant and version.
-#[must_use]
-pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("legacy-uuid:") else {
-        return false;
-    };
-    let bytes = rest.as_bytes();
-    if bytes.len() != 36 {
-        return false;
-    }
-    let is_lower_hex = |byte: u8| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase();
-    for (index, &byte) in bytes.iter().enumerate() {
-        if matches!(index, 8 | 13 | 18 | 23) {
-            if byte != b'-' {
-                return false;
-            }
-            continue;
-        }
-        if !is_lower_hex(byte) {
-            return false;
-        }
-    }
-    // The third group's first digit is the RFC 4122 version.
-    if !matches!(bytes[14], b'1'..=b'5') {
-        return false;
-    }
-    // The fourth group's first digit is the RFC 4122 variant.
-    if !matches!(bytes[19], b'8' | b'9' | b'a' | b'b') {
-        return false;
-    }
-    true
-}
-
 /// Metadata linking one public wire contract family to its domain-owned tag.
 ///
 /// This descriptor is nonserialized metadata: it never appears in DTO JSON.
@@ -4161,11 +4067,6 @@ pub const MODEL_CONTEXT_PROJECTION_V1: ContractFamilyDescriptor = ContractFamily
     name: "model-context-projection-v1",
     version: 1,
     tag: TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-};
-pub const LEGACY_M4_SELECTION_BINDING: ContractFamilyDescriptor = ContractFamilyDescriptor {
-    name: "legacy-m4-selection-binding",
-    version: 1,
-    tag: TagRegistry::LEGACY_M4_SELECTION_BINDING,
 };
 pub const TOOL_DESCRIPTOR_REVISION: ContractFamilyDescriptor = ContractFamilyDescriptor {
     name: "tool-descriptor-revision",
@@ -4255,7 +4156,6 @@ pub const PUBLIC_WIRE_CONTRACT_FAMILIES: &[ContractFamilyDescriptor] = &[
     REASONING_HISTORY_MANIFEST_V1,
     CONTEXT_SOURCE_MANIFEST_V1,
     MODEL_CONTEXT_PROJECTION_V1,
-    LEGACY_M4_SELECTION_BINDING,
     TOOL_DESCRIPTOR_REVISION,
     TOOL_REGISTRY_REVISION,
     MODEL_TOOL_LOOP_V1,
@@ -4627,104 +4527,6 @@ mod tests {
             ToolTerminalOutcome::ExternalEffectUnknown,
         ] {
             round_trip(&outcome);
-        }
-    }
-
-    #[test]
-    fn legacy_m4_selection_binding_round_trips() {
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        assert!(binding.validate().is_ok());
-        round_trip(&binding);
-    }
-
-    #[test]
-    fn legacy_selection_reference_is_preserved_byte_for_byte() {
-        let reference = "legacy-uuid:11111111-1111-4111-8111-111111111111";
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: reference.to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        let wire = serde_json::to_vec(&binding).expect("binding encodes");
-        assert!(String::from_utf8_lossy(&wire).contains(reference));
-        let decoded: LegacyM4SelectionBindingDto =
-            serde_json::from_slice(&wire).expect("binding decodes");
-        assert_eq!(decoded.legacy_safe_selection, reference);
-        assert_eq!(decoded, binding);
-    }
-
-    #[test]
-    fn legacy_selection_reference_validation_rejects_non_canonical_forms() {
-        for value in [
-            "selection",
-            "legacy-uuid:",
-            "legacy-uuid:11111111-1111-4111-8111-11111111111",
-            "LEGACY-UUID:11111111-1111-4111-8111-111111111111",
-            "legacy-uuid:11111111-1111-4111-8111-1111111111111",
-            "legacy-uuid:11111111-1111-4111-8111-11111111111G",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111 ",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111\n",
-            "legacy-uuid:/tmp/11111111-1111-4111-8111-111111111111",
-            "legacy-uuid:11111111-1111-0111-8111-111111111111",
-            "legacy-uuid:11111111-1111-4111-7111-111111111111",
-        ] {
-            assert!(
-                !is_canonical_legacy_uuid_reference(value),
-                "{value:?} must not be canonical"
-            );
-            let binding = LegacyM4SelectionBindingDto {
-                legacy_config_revision_id: "config-1".to_owned(),
-                legacy_snapshot_schema: "schema-1".to_owned(),
-                legacy_safe_selection: value.to_owned(),
-                default_profile_id: "profile-1".to_owned(),
-                default_profile_revision_id: "rev-1".to_owned(),
-                kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-                capability_subset: vec!["text".to_owned()],
-                execution_policy: "execution-policy".to_owned(),
-                driver_contract_revision: "driver-1.0".to_owned(),
-            };
-            assert_eq!(
-                binding
-                    .validate()
-                    .expect_err("non-canonical reference is rejected")
-                    .code(),
-                "legacy_selection_reference_invalid"
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_uuid_reference_accepts_only_rfc_4122_versions_one_through_five() {
-        let reference = |version_digit: char| {
-            format!("legacy-uuid:11111111-1111-{version_digit}111-8111-111111111111")
-        };
-        for version in ['1', '2', '3', '4', '5'] {
-            assert!(
-                is_canonical_legacy_uuid_reference(&reference(version)),
-                "version {version} is RFC 4122 and must be canonical"
-            );
-        }
-        for version in ['0', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'] {
-            assert!(
-                !is_canonical_legacy_uuid_reference(&reference(version)),
-                "version {version} is outside RFC 4122 1..=5 and must be rejected"
-            );
         }
     }
 
@@ -5140,7 +4942,6 @@ mod tests {
             "provider-profiles",
             "model-1",
             "x-safe-header",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111",
             "bearer",
             "bearer ",
             "responses",
@@ -5499,58 +5300,6 @@ mod tests {
                 .expect_err("control-bearing descriptor field is rejected")
                 .code(),
             "model_tool_loop_invalid"
-        );
-    }
-
-    #[test]
-    fn legacy_m4_selection_binding_validates_all_fields() {
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        assert!(binding.validate().is_ok());
-        let mut blank = binding.clone();
-        blank.driver_contract_revision = "   ".to_owned();
-        assert_eq!(
-            blank
-                .validate()
-                .expect_err("blank binding field is rejected")
-                .code(),
-            "legacy_selection_binding_invalid"
-        );
-        let mut blank_capability = binding.clone();
-        blank_capability.capability_subset = vec!["  ".to_owned()];
-        assert_eq!(
-            blank_capability
-                .validate()
-                .expect_err("blank capability entry is rejected")
-                .code(),
-            "legacy_selection_binding_invalid"
-        );
-        let mut credential = binding.clone();
-        credential.default_profile_id = "sk-profile".to_owned();
-        assert_eq!(
-            credential
-                .validate()
-                .expect_err("credential-shaped binding field is rejected")
-                .code(),
-            "credentials_forbidden"
-        );
-        let mut credential_capability = binding;
-        credential_capability.capability_subset = vec!["Bearer cap".to_owned()];
-        assert_eq!(
-            credential_capability
-                .validate()
-                .expect_err("credential-shaped capability is rejected")
-                .code(),
-            "credentials_forbidden"
         );
     }
 
@@ -6410,7 +6159,7 @@ mod tests {
     fn public_wire_families_cover_exactly_the_ledger_tags() {
         // The expected tag set is rebuilt solely from the domain-owned
         // registry constants: there is no protocol-side numeric mirror.
-        const LEDGER_TAGS: [u32; 24] = [
+        const LEDGER_TAGS: [u32; 23] = [
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
             TagRegistry::GOAL_RUN_SELECTION_V1,
@@ -6422,7 +6171,6 @@ mod tests {
             TagRegistry::REASONING_HISTORY_MANIFEST_V1,
             TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
             TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-            TagRegistry::LEGACY_M4_SELECTION_BINDING,
             TagRegistry::TOOL_DESCRIPTOR_REVISION,
             TagRegistry::TOOL_REGISTRY_REVISION,
             TagRegistry::MODEL_TOOL_LOOP_V1,
@@ -6444,7 +6192,7 @@ mod tests {
         tags.dedup();
         assert_eq!(
             tags, LEDGER_TAGS,
-            "wire families must cover exactly the 24 ADR 0036 ledger tags"
+            "wire families must cover exactly the 23 ADR 0036 ledger tags"
         );
     }
 
@@ -6472,7 +6220,7 @@ mod tests {
 
     #[test]
     fn public_wire_family_tags_match_the_domain_tag_registry() {
-        let registry: [(&str, u32); 26] = [
+        let registry: [(&str, u32); 25] = [
             (
                 "programmatic-caller-policy-selection-v1",
                 TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
@@ -6510,10 +6258,6 @@ mod tests {
             (
                 "model-context-projection-v1",
                 TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-            ),
-            (
-                "legacy-m4-selection-binding",
-                TagRegistry::LEGACY_M4_SELECTION_BINDING,
             ),
             (
                 "tool-descriptor-revision",

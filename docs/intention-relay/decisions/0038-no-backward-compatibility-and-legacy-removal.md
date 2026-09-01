@@ -4,7 +4,7 @@
 
 Accepted as the superseding specification that removes all backward-compatibility,
 legacy, fallback, and migration machinery from the project, in accordance with the
-[AGENTS.md](../../AGENTS.md) "No backward compatibility" policy (main commit
+[AGENTS.md](../../../AGENTS.md) "No backward compatibility" policy (main commit
 `b5fa71e`). It is subordinate to [ADR 0035](0035-m5plus-complete-foundation-activation.md),
 which remains the activation home and slice-sequence authority, and it supersedes
 the specific preservation and migration commitments listed in the inventory below.

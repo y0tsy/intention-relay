@@ -1,8 +1,8 @@
 //! Schema-4 control-plane storage: the additive migration surface and the
 //! DTO-only repository implementations for the provider catalog, configuration
 //! reloads, session provider defaults, resolved selections, the
-//! unavailable-provider queue, provider usage, the removal lifecycle, held
-//! recovered runs, and legacy M4 selection bindings.
+//! unavailable-provider queue, provider usage, the removal lifecycle, and
+//! held recovered runs.
 //!
 //! The migration is purely additive: existing M3/M4 tables and rows are never
 //! rewritten. All schema-4 records are credential-free; credentials never
@@ -16,18 +16,15 @@ use intention_domain::{
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
-    AdmitHeldRecoveredRunInputDto, AppendLegacyM4SelectionBindingInputDto,
-    AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
-    CommitConfigurationReloadInputDto, ConfigurationReloadRepositoryDto,
-    CreateProviderCatalogRemovalCandidateInputDto, EnqueueUnavailableRunInputDto,
-    ExpireProviderCatalogCandidateInputDto, ExpireProviderCatalogRemovalCandidateInputDto,
-    HeldRecoveredRunDto, HeldRunAdmissionStateDto, HeldRunRepositoryDto,
-    LegacyBindingRepositoryDto, LegacyBindingValidationStatusDto,
-    LegacyM4SelectionBindingRecordDto, LoadProviderCatalogPageInputDto,
-    LoadUnavailableQueuePageInputDto, MarkRecoveredRunHeldInputDto,
-    PersistResolvedRunProviderSelectionInputDto, PromoteUnavailableRunsInputDto,
-    PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
-    ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
+    AdmitHeldRecoveredRunInputDto, AppendProviderKindDescriptorRevisionInputDto,
+    AppendProviderProfileRevisionInputDto, CommitConfigurationReloadInputDto,
+    ConfigurationReloadRepositoryDto, CreateProviderCatalogRemovalCandidateInputDto,
+    EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
+    ExpireProviderCatalogRemovalCandidateInputDto, HeldRecoveredRunDto, HeldRunAdmissionStateDto,
+    HeldRunRepositoryDto, LoadProviderCatalogPageInputDto, LoadUnavailableQueuePageInputDto,
+    MarkRecoveredRunHeldInputDto, PersistResolvedRunProviderSelectionInputDto,
+    PromoteUnavailableRunsInputDto, PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto,
+    ProviderCatalogPageDto, ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
     ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
     ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
@@ -267,20 +264,6 @@ CREATE TABLE held_recovered_runs (
   UNIQUE(session_id, run_id)
 );
 CREATE INDEX held_recovered_runs_by_admission ON held_recovered_runs(admission_state, held_at);
-CREATE TABLE legacy_m4_selection_bindings (
-  config_revision_id TEXT PRIMARY KEY,
-  profile_id TEXT NOT NULL,
-  provider_profile_revision_id TEXT NOT NULL,
-  kind_id TEXT NOT NULL,
-  kind_descriptor_revision_id TEXT NOT NULL,
-  provider_driver_contract_revision TEXT NOT NULL,
-  binding_digest TEXT NOT NULL UNIQUE,
-  snapshot_bytes_digest TEXT NOT NULL,
-  validation_status TEXT NOT NULL CHECK(validation_status IN ('validated','corrupt')),
-  binding_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL CHECK(created_at >= 0)
-);
-CREATE INDEX legacy_m4_selection_bindings_by_profile ON legacy_m4_selection_bindings(profile_id, provider_profile_revision_id);
 ";
 
 // ---------------------------------------------------------------------------
@@ -952,54 +935,6 @@ impl KindTombstoneJson {
     }
 }
 
-/// Typed encoding of one legacy M4 selection binding record.
-#[derive(Clone, Debug)]
-struct LegacyBindingJson {
-    capability_subset: Vec<String>,
-    default_profile_id: String,
-    default_profile_revision_id: String,
-    driver_contract_revision: String,
-    execution_policy: String,
-    kind_descriptor_revision_id: String,
-    legacy_config_revision_id: String,
-    legacy_safe_selection: String,
-    legacy_snapshot_schema: String,
-}
-
-impl LegacyBindingJson {
-    fn to_json(&self) -> String {
-        format!(
-            "{{\"capability_subset\":{},\"default_profile_id\":{},\"default_profile_revision_id\":{},\"driver_contract_revision\":{},\"execution_policy\":{},\"kind_descriptor_revision_id\":{},\"legacy_config_revision_id\":{},\"legacy_safe_selection\":{},\"legacy_snapshot_schema\":{}}}",
-            encode_json_string_list(&self.capability_subset),
-            encode_json_string(&self.default_profile_id),
-            encode_json_string(&self.default_profile_revision_id),
-            encode_json_string(&self.driver_contract_revision),
-            encode_json_string(&self.execution_policy),
-            encode_json_string(&self.kind_descriptor_revision_id),
-            encode_json_string(&self.legacy_config_revision_id),
-            encode_json_string(&self.legacy_safe_selection),
-            encode_json_string(&self.legacy_snapshot_schema),
-        )
-    }
-}
-
-/// Typed encoding of one corrupt legacy M4 selection binding record.
-#[derive(Clone, Debug)]
-struct CorruptLegacyBindingJson {
-    config_revision_id: String,
-    corrupt: bool,
-}
-
-impl CorruptLegacyBindingJson {
-    fn to_json(&self) -> String {
-        format!(
-            "{{\"config_revision_id\":{},\"corrupt\":{}}}",
-            encode_json_string(&self.config_revision_id),
-            encode_json_bool(self.corrupt),
-        )
-    }
-}
-
 /// Typed encoding of one safe provider catalog projection record.
 #[derive(Clone, Debug)]
 struct SafeProjectionJson {
@@ -1282,29 +1217,6 @@ fn kind_tombstone_json(tombstone: &ProviderKindTombstoneDto) -> KindTombstoneJso
     }
 }
 
-fn legacy_binding_json(
-    binding: &intention_domain::LegacyM4SelectionBindingDto,
-) -> LegacyBindingJson {
-    LegacyBindingJson {
-        capability_subset: binding.capability_subset.clone(),
-        default_profile_id: binding.default_profile_id.clone(),
-        default_profile_revision_id: binding.default_profile_revision_id.clone(),
-        driver_contract_revision: binding.driver_contract_revision.clone(),
-        execution_policy: binding.execution_policy.clone(),
-        kind_descriptor_revision_id: binding.kind_descriptor_revision_id.clone(),
-        legacy_config_revision_id: binding.legacy_config_revision_id.clone(),
-        legacy_safe_selection: binding.legacy_safe_selection.clone(),
-        legacy_snapshot_schema: binding.legacy_snapshot_schema.clone(),
-    }
-}
-
-fn corrupt_legacy_binding_json(config_revision_id: &str) -> CorruptLegacyBindingJson {
-    CorruptLegacyBindingJson {
-        config_revision_id: config_revision_id.to_owned(),
-        corrupt: true,
-    }
-}
-
 fn safe_projection_json(candidate: &ProviderProfileCandidateDto) -> SafeProjectionJson {
     SafeProjectionJson {
         credential_transport_mode: transport_mode_name(candidate.profile.credential_transport_mode)
@@ -1379,14 +1291,6 @@ fn parse_removal_status(value: &str) -> DtoResult<ProviderCatalogRemovalStatusDt
         "rejected" => Ok(ProviderCatalogRemovalStatusDto::Rejected),
         "expired" => Ok(ProviderCatalogRemovalStatusDto::Expired),
         _ => Err(codec_error("invalid durable removal candidate status")),
-    }
-}
-
-fn parse_legacy_validation_status(value: &str) -> DtoResult<LegacyBindingValidationStatusDto> {
-    match value {
-        "validated" => Ok(LegacyBindingValidationStatusDto::Validated),
-        "corrupt" => Ok(LegacyBindingValidationStatusDto::Corrupt),
-        _ => Err(codec_error("invalid durable legacy binding status")),
     }
 }
 
@@ -3239,147 +3143,6 @@ impl HeldRunRepositoryDto for SqliteStorageRepository {
             admission_state: parse_admission_state(&state)?,
             admission_operation_id: operation_id,
             admitted_at,
-        }))
-    }
-}
-
-impl LegacyBindingRepositoryDto for SqliteStorageRepository {
-    fn append_legacy_m4_selection_binding(
-        &self,
-        input: AppendLegacyM4SelectionBindingInputDto,
-    ) -> DtoResult<()> {
-        immediate_transaction!(self, |tx| {
-            let (binding_json, binding_digest) = match &input.binding {
-                Some(binding) => {
-                    let json = legacy_binding_json(binding).to_json();
-                    let digest = record_digest(&json);
-                    (json, digest)
-                }
-                None => {
-                    let json = corrupt_legacy_binding_json(&input.config_revision_id).to_json();
-                    let digest = record_digest(&json);
-                    (json, digest)
-                }
-            };
-            let existing = tx
-                .query_row(
-                    "SELECT binding_digest FROM legacy_m4_selection_bindings WHERE config_revision_id=?1",
-                    [&input.config_revision_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(storage_error)?;
-            if let Some(existing_digest) = existing {
-                if existing_digest != binding_digest {
-                    return Err(conflict(
-                        "legacy_binding_conflict",
-                        "the configuration revision already bound a different legacy selection",
-                    ));
-                }
-                return Ok(());
-            }
-            let (profile_id, revision_id, kind_id, kind_revision, driver_contract) =
-                input.binding.as_ref().map_or_else(
-                    || {
-                        (
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                            String::new(),
-                        )
-                    },
-                    |binding| {
-                        (
-                            binding.default_profile_id.clone(),
-                            binding.default_profile_revision_id.clone(),
-                            String::new(),
-                            binding.kind_descriptor_revision_id.clone(),
-                            binding.driver_contract_revision.clone(),
-                        )
-                    },
-                );
-            let validation_status = match input.validation_status {
-                LegacyBindingValidationStatusDto::Validated => "validated",
-                LegacyBindingValidationStatusDto::Corrupt => "corrupt",
-            };
-            tx.execute(
-                "INSERT INTO legacy_m4_selection_bindings(config_revision_id, profile_id, provider_profile_revision_id, kind_id, kind_descriptor_revision_id, provider_driver_contract_revision, binding_digest, snapshot_bytes_digest, validation_status, binding_json, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-                sqlite::params![
-                    input.config_revision_id,
-                    profile_id,
-                    revision_id,
-                    kind_id,
-                    kind_revision,
-                    driver_contract,
-                    binding_digest,
-                    input.snapshot_bytes_digest,
-                    validation_status,
-                    binding_json,
-                    input.created_at
-                ],
-            )
-            .map_err(storage_error)?;
-            tx.commit().map_err(storage_error)
-        })
-    }
-
-    fn load_legacy_m4_selection_binding(
-        &self,
-        config_revision_id: String,
-    ) -> DtoResult<Option<LegacyM4SelectionBindingRecordDto>> {
-        let connection = self.connection()?;
-        let row = connection
-            .query_row(
-                "SELECT config_revision_id, profile_id, provider_profile_revision_id, kind_id, kind_descriptor_revision_id, provider_driver_contract_revision, binding_digest, snapshot_bytes_digest, validation_status, binding_json, created_at FROM legacy_m4_selection_bindings WHERE config_revision_id=?1",
-                [&config_revision_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
-                        row.get::<_, String>(9)?,
-                        row.get::<_, i64>(10)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(storage_error)?;
-        drop(connection);
-        let Some((
-            revision,
-            profile_id,
-            revision_id,
-            kind_id,
-            kind_revision,
-            driver_contract,
-            binding_digest,
-            snapshot_bytes_digest,
-            validation_status,
-            binding_json,
-            created_at,
-        )) = row
-        else {
-            return Ok(None);
-        };
-        Ok(Some(LegacyM4SelectionBindingRecordDto {
-            config_revision_id: revision,
-            profile_id,
-            provider_profile_revision_id: revision_id,
-            kind_id,
-            kind_descriptor_revision_id: kind_revision,
-            provider_driver_contract_revision: driver_contract,
-            binding_digest,
-            snapshot_bytes_digest,
-            validation_status: parse_legacy_validation_status(&validation_status)?,
-            binding_json,
-            created_at,
         }))
     }
 }

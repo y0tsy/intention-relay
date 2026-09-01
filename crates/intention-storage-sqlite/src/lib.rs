@@ -1467,43 +1467,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             tx.commit().map_err(storage_error)
         })
     }
-
-    fn load_config_revision_records(
-        &self,
-    ) -> DtoResult<Vec<intention_storage::PersistedConfigRevisionRecordDto>> {
-        let connection = self.connection()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT revision_id, snapshot_json FROM configuration_revisions ORDER BY revision_id",
-            )
-            .map_err(storage_error)?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .map_err(storage_error)?;
-        let mut records = Vec::new();
-        for row in rows {
-            let (revision_id, snapshot_json) = row.map_err(storage_error)?;
-            let snapshot_bytes_digest =
-                intention_domain::canonical::Digest256::sha256(snapshot_json.as_bytes())
-                    .bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>();
-            let snapshot = serde_json::from_str::<ConfigSnapshotDto>(&snapshot_json)
-                .ok()
-                .filter(|snapshot| snapshot.revision_id().to_string() == revision_id);
-            records.push(intention_storage::PersistedConfigRevisionRecordDto {
-                revision_id,
-                snapshot_bytes_digest,
-                snapshot,
-            });
-        }
-        drop(statement);
-        drop(connection);
-        Ok(records)
-    }
 }
 
 fn latest_tool_lifecycle_status(

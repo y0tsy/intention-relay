@@ -8,8 +8,8 @@ use intention_config::{
 };
 use intention_domain::{
     ContextPreservationCapability, CreateSessionCommandDto, CredentialTransportMode,
-    DomainEventDto, LegacyM4SelectionBindingDto, ModelCapabilitySetV1, ModelInputCapability,
-    ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ProviderDriverContractRevisionDto,
+    DomainEventDto, ModelCapabilitySetV1, ModelInputCapability, ModelRunFactDto,
+    ModelRunFactEventDto, ModelRunFactInputDto, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
     ReasoningCapability, RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunStatusDto,
     StructuredOutputCapability, ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
@@ -17,13 +17,12 @@ use intention_domain::{
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptUserTurnInputDto, AcceptedTurnOutcomeDto,
-    AdmitHeldRecoveredRunInputDto, AppendLegacyM4SelectionBindingInputDto,
-    AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
-    AppendToolLifecycleEventInputDto, CommitConfigurationReloadInputDto,
-    ConfigurationReloadRepositoryDto, CreateProviderCatalogRemovalCandidateInputDto,
-    CreateSessionInputDto, EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
-    HeldRunAdmissionStateDto, HeldRunRepositoryDto, LegacyBindingRepositoryDto,
-    LegacyBindingValidationStatusDto, LoadProviderCatalogPageInputDto,
+    AdmitHeldRecoveredRunInputDto, AppendProviderKindDescriptorRevisionInputDto,
+    AppendProviderProfileRevisionInputDto, AppendToolLifecycleEventInputDto,
+    CommitConfigurationReloadInputDto, ConfigurationReloadRepositoryDto,
+    CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
+    EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
+    HeldRunAdmissionStateDto, HeldRunRepositoryDto, LoadProviderCatalogPageInputDto,
     MarkRecoveredRunHeldInputDto, PersistResolvedRunProviderSelectionInputDto,
     ProviderCatalogRepositoryDto, ProviderProfileCandidateDto, ProviderReadinessDto,
     ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto, ProviderUsageRepositoryDto,
@@ -880,7 +879,6 @@ fn slice1_storage_schema_four_remains_authoritative() {
         "provider_usage_facts",
         "provider_catalog_removal_candidates",
         "held_recovered_runs",
-        "legacy_m4_selection_bindings",
     ];
     for table in expected {
         let present: i64 = connection
@@ -1232,7 +1230,7 @@ fn tool_result_reread_is_typed_not_found_without_durably_committed_evidence() {
 }
 
 // ============================================================================
-// Schema-4 migration, preservation, legacy-bridge, and fake-secret fixtures.
+// Schema-4 migration, preservation, and fake-secret fixtures.
 // ============================================================================
 
 /// A byte-exact captured cell typed by SQLite storage class: text stays raw
@@ -1707,7 +1705,6 @@ fn schema4_migration_preserves_schema_three_rows_byte_for_byte() {
         "SELECT COUNT(*) FROM provider_kind_descriptor_revisions",
         "SELECT COUNT(*) FROM provider_profile_revisions",
         "SELECT COUNT(*) FROM resolved_run_provider_selections",
-        "SELECT COUNT(*) FROM legacy_m4_selection_bindings",
     ] {
         let count: i64 = connection
             .query_row(query, [], |row| row.get(0))
@@ -1863,115 +1860,6 @@ fn schema4_migration_failure_rolls_back_to_schema_three_atomically() {
 }
 
 #[test]
-fn legacy_m4_selection_bindings_are_deterministic_and_never_synthesized_on_open() {
-    let (directory, store) = repository();
-    let revision_a = ConfigRevisionId::new();
-    let revision_b = ConfigRevisionId::new();
-    store
-        .accept_configuration_revision(snapshot_with_revision_and_model(revision_a, "fixture-a"))
-        .expect("revision a persists");
-    store
-        .accept_configuration_revision(snapshot_with_revision_and_model(revision_b, "fixture-b"))
-        .expect("revision b persists");
-    let original_a: String = {
-        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-            .expect("database reopens");
-        connection
-            .query_row(
-                "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
-                [revision_a.to_string()],
-                |row| row.get(0),
-            )
-            .expect("snapshot a loads")
-    };
-    let binding = LegacyM4SelectionBindingDto {
-        legacy_config_revision_id: revision_a.to_string(),
-        legacy_snapshot_schema: "m4-config-snapshot-v1".to_owned(),
-        legacy_safe_selection: format!("legacy-uuid:{}", revision_a),
-        default_profile_id: "default".to_owned(),
-        default_profile_revision_id: "rev-0001".to_owned(),
-        kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
-        capability_subset: vec!["text_input".to_owned(), "text_streaming".to_owned()],
-        execution_policy: "ordinary".to_owned(),
-        driver_contract_revision: "responses-1.0".to_owned(),
-    };
-    let input = AppendLegacyM4SelectionBindingInputDto {
-        config_revision_id: revision_a.to_string(),
-        binding: Some(binding),
-        snapshot_bytes_digest: "sha256:deadbeef".to_owned(),
-        validation_status: LegacyBindingValidationStatusDto::Validated,
-        created_at: 5,
-    };
-    store
-        .append_legacy_m4_selection_binding(input.clone())
-        .expect("binding appends");
-    store
-        .append_legacy_m4_selection_binding(input)
-        .expect("binding append is deterministic and idempotent");
-    let record = store
-        .load_legacy_m4_selection_binding(revision_a.to_string())
-        .expect("binding loads")
-        .expect("binding exists");
-    assert_eq!(record.profile_id, "default");
-    assert_eq!(record.provider_profile_revision_id, "rev-0001");
-    assert_eq!(
-        record.validation_status,
-        LegacyBindingValidationStatusDto::Validated
-    );
-    assert!(!contains_credential_shape(&record.binding_json));
-    assert!(!record.binding_json.contains("fixture-secret"));
-    let after_a: String = {
-        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-            .expect("database reopens");
-        connection
-            .query_row(
-                "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
-                [revision_a.to_string()],
-                |row| row.get(0),
-            )
-            .expect("snapshot a reloads")
-    };
-    assert_eq!(
-        original_a, after_a,
-        "the original legacy revision JSON is unchanged by binding"
-    );
-
-    // Unsupported or malformed historical selections are recorded as corrupt.
-    store
-        .append_legacy_m4_selection_binding(AppendLegacyM4SelectionBindingInputDto {
-            config_revision_id: revision_b.to_string(),
-            binding: None,
-            snapshot_bytes_digest: "sha256:cafe".to_owned(),
-            validation_status: LegacyBindingValidationStatusDto::Corrupt,
-            created_at: 6,
-        })
-        .expect("corrupt binding appends");
-    let corrupt = store
-        .load_legacy_m4_selection_binding(revision_b.to_string())
-        .expect("corrupt binding loads")
-        .expect("corrupt binding exists");
-    assert_eq!(
-        corrupt.validation_status,
-        LegacyBindingValidationStatusDto::Corrupt
-    );
-    assert!(!contains_credential_shape(&corrupt.binding_json));
-
-    // No provider selection is synthesized for historical runs on open.
-    let selection_count: i64 = {
-        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-            .expect("database reopens");
-        connection
-            .query_row(
-                "SELECT COUNT(*) FROM resolved_run_provider_selections",
-                [],
-                |row| row.get(0),
-            )
-            .expect("selection count loads")
-    };
-    assert_eq!(selection_count, 0);
-}
-
-#[test]
 fn schema4_tables_never_persist_fake_secrets() {
     let (directory, store) = repository();
     let session_id = create(&store);
@@ -2078,26 +1966,6 @@ fn schema4_tables_never_persist_fake_secrets() {
             reloaded_at: 4,
         })
         .expect("configuration reload commits");
-    store
-        .append_legacy_m4_selection_binding(AppendLegacyM4SelectionBindingInputDto {
-            config_revision_id: ConfigRevisionId::new().to_string(),
-            binding: Some(LegacyM4SelectionBindingDto {
-                legacy_config_revision_id: "11111111-1111-4111-8111-111111111111".to_owned(),
-                legacy_snapshot_schema: "m4-config-snapshot-v1".to_owned(),
-                legacy_safe_selection: "legacy-uuid:22222222-2222-4222-8222-222222222222"
-                    .to_owned(),
-                default_profile_id: "default".to_owned(),
-                default_profile_revision_id: "rev-0001".to_owned(),
-                kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
-                capability_subset: vec!["text_input".to_owned()],
-                execution_policy: "ordinary".to_owned(),
-                driver_contract_revision: "responses-1.0".to_owned(),
-            }),
-            snapshot_bytes_digest: "sha256:deadbeef".to_owned(),
-            validation_status: LegacyBindingValidationStatusDto::Validated,
-            created_at: 5,
-        })
-        .expect("legacy binding appends");
 
     let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
         .expect("database reopens");
@@ -2117,7 +1985,6 @@ fn schema4_tables_never_persist_fake_secrets() {
         "provider_usage_facts",
         "provider_catalog_removal_candidates",
         "held_recovered_runs",
-        "legacy_m4_selection_bindings",
     ];
     for table in tables {
         let mut statement = connection
@@ -2617,100 +2484,6 @@ fn provider_selection_invalid_domain_record_fails_the_typed_load() {
             .code(),
         "storage_decode_failed"
     );
-}
-
-#[test]
-fn legacy_m4_binding_conflicts_missing_rows_and_secret_free_json() {
-    let (_directory, store) = repository();
-    let revision_a = ConfigRevisionId::new();
-    let revision_b = ConfigRevisionId::new();
-    store
-        .accept_configuration_revision(snapshot_with_revision_and_model(revision_a, "fixture-a"))
-        .expect("revision a persists");
-    store
-        .accept_configuration_revision(snapshot_with_revision_and_model(revision_b, "fixture-b"))
-        .expect("revision b persists");
-    let binding = LegacyM4SelectionBindingDto {
-        legacy_config_revision_id: revision_a.to_string(),
-        legacy_snapshot_schema: "m4-config-snapshot-v1".to_owned(),
-        legacy_safe_selection: "legacy-uuid:aaaa".to_owned(),
-        default_profile_id: "default".to_owned(),
-        default_profile_revision_id: "rev-0001".to_owned(),
-        kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
-        capability_subset: vec!["text_input".to_owned()],
-        execution_policy: "ordinary".to_owned(),
-        driver_contract_revision: "responses-1.0".to_owned(),
-    };
-    let input = AppendLegacyM4SelectionBindingInputDto {
-        config_revision_id: revision_a.to_string(),
-        binding: Some(binding.clone()),
-        snapshot_bytes_digest: "sha256:aaaa".to_owned(),
-        validation_status: LegacyBindingValidationStatusDto::Validated,
-        created_at: 5,
-    };
-    store
-        .append_legacy_m4_selection_binding(input.clone())
-        .expect("binding appends");
-    // Appending the identical binding twice is idempotent.
-    store
-        .append_legacy_m4_selection_binding(input)
-        .expect("identical binding append is idempotent");
-    // The same revision bound to different bytes conflicts.
-    let conflicting = AppendLegacyM4SelectionBindingInputDto {
-        config_revision_id: revision_a.to_string(),
-        binding: Some(LegacyM4SelectionBindingDto {
-            default_profile_id: "other-default".to_owned(),
-            ..binding
-        }),
-        snapshot_bytes_digest: "sha256:bbbb".to_owned(),
-        validation_status: LegacyBindingValidationStatusDto::Validated,
-        created_at: 6,
-    };
-    assert_eq!(
-        store
-            .append_legacy_m4_selection_binding(conflicting)
-            .expect_err("revision cannot bind a different legacy selection")
-            .code(),
-        "legacy_binding_conflict"
-    );
-    // Missing revisions read None.
-    assert!(
-        store
-            .load_legacy_m4_selection_binding(ConfigRevisionId::new().to_string())
-            .expect("missing binding reads")
-            .is_none()
-    );
-    // The binding JSON stays free of fake secrets and credential shapes.
-    let record = store
-        .load_legacy_m4_selection_binding(revision_a.to_string())
-        .expect("binding loads")
-        .expect("binding exists");
-    assert_eq!(
-        record.validation_status,
-        LegacyBindingValidationStatusDto::Validated
-    );
-    assert!(!record.binding_json.contains("fixture-secret"));
-    assert!(!contains_credential_shape(&record.binding_json));
-    // Corrupt historical selections record the corrupt payload and status.
-    store
-        .append_legacy_m4_selection_binding(AppendLegacyM4SelectionBindingInputDto {
-            config_revision_id: revision_b.to_string(),
-            binding: None,
-            snapshot_bytes_digest: "sha256:cccc".to_owned(),
-            validation_status: LegacyBindingValidationStatusDto::Corrupt,
-            created_at: 7,
-        })
-        .expect("corrupt binding appends");
-    let corrupt = store
-        .load_legacy_m4_selection_binding(revision_b.to_string())
-        .expect("corrupt binding loads")
-        .expect("corrupt binding exists");
-    assert_eq!(
-        corrupt.validation_status,
-        LegacyBindingValidationStatusDto::Corrupt
-    );
-    assert!(!corrupt.binding_json.contains("fixture-secret"));
-    assert!(!contains_credential_shape(&corrupt.binding_json));
 }
 
 #[test]
