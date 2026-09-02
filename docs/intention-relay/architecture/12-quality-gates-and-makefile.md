@@ -437,8 +437,8 @@ activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) is
 that activating change for the provider catalog, selection, capability
 taxonomy, reasoning surface, header/preservation/parser
 contracts, and the configuration/provider control-plane cluster; it declares
-the exact test targets above and the schema-4 storage/wire policy, and passes
-the standard gates.
+the exact test targets above and the single current-schema storage/wire policy,
+and passes the standard gates.
 
 The post-M4 Session branching and regeneration package is documentation-only. It
 activates no crate, test target, coverage tier, feature profile, storage/wire

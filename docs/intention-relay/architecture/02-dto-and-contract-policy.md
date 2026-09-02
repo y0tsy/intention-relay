@@ -167,8 +167,10 @@ A live event is emitted only after the storage commit succeeds. The command resu
 - Daemon/client protocol negotiation accepts only the exact current protocol
   version (1.1) and rejects any other version with a typed error; the public
   DTO schema compares by exact equality (no same-major tolerance).
-- SQLite migrations and persisted DTO decoders must preserve enough
-  information to read prior supported records.
+- SQLite storage is the single live schema (logical version 1) created
+  directly on open; there is no migration chain, no version gate, and no
+  opening of older schemas, and persisted rows keep their recorded bytes and
+  meaning.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation
@@ -252,8 +254,9 @@ SDK resources, or recreate stored selection from a current registry.
 
 Historical M3/M4 and ordinary records must not receive synthetic Mandate,
 verifier, Skill, MCP, child, activity, policy, profile, or execution-kind
-fields. Future migrations may add bridges or projections but may not rewrite old
-payload bytes, IDs, digests, cursors, snapshots, or event envelopes. Unknown or
+fields. The single live storage schema may evolve in place to add tables,
+bridges, or projections but may not rewrite old payload bytes, IDs, digests,
+cursors, snapshots, or event envelopes. Unknown or
 corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 

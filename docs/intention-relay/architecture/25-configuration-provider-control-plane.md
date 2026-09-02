@@ -192,8 +192,9 @@ targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 `make verify`, and Linux/Windows CI.
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
-activating specification: it declares the exact test targets, the schema-4
-migration, and the per-direction evidence anchors. Required evidence includes:
+activating specification: it declares the exact test targets, the single
+current-schema storage policy, and the per-direction evidence anchors. Required
+evidence includes:
 
 - reload transaction fault injection: atomic commit or fail-closed, no
   partial snapshot, no mutation of existing runs;

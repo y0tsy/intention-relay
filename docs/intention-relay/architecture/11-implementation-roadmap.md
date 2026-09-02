@@ -433,7 +433,8 @@ activated by earlier slices in this order:
    capability families (`provider_profiles_v1`, `session_fork_v1`,
    `normalized_reasoning_stream_v1`, `agent_activity_v1`,
    `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`);
-   additive storage migration with M3/M4 byte preservation; canonical tags
+   SQLite as one live storage schema created directly on open (no migration
+   chain; ADR 0038); canonical tags
    and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
    ownership, feature-profile, and coverage-tier declarations for every
    activated family. The activating contract ledger is [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md).
@@ -466,9 +467,9 @@ inside its slice, each with its own contract, transaction, and outcome test.
 ### Tests first
 
 - slice 1: DTO round-trip and golden digest fixtures; version-negotiation
-  fixtures (compatible minor, incompatible major, unnegotiated capability
-  fail-closed); additive migration fixtures proving M3/M4 values unchanged;
-  future-schema rejection; canonical-tag and digest goldens;
+  fixtures (exact current-version equality, incompatible major, unnegotiated
+  capability fail-closed); current-schema creation fixtures; canonical-tag
+  and digest goldens;
 - slice 2: reload transaction fault injection (atomic commit or fail-closed,
   no partial snapshot, no mutation of existing runs); rotation redaction and
   no-frozen-meaning-change; health/discovery non-authority (no RunId/reason/
@@ -520,8 +521,9 @@ inside its slice, each with its own contract, transaction, and outcome test.
   policy or boundary logic; every activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
-  owner, tests, policy mapping, migration behavior, and evidence together.
-  Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices 3-4 remain.
+  owner, tests, policy mapping, storage/schema treatment, and evidence
+  together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
+  3-4 remain.
 
 ### Exit criteria
 

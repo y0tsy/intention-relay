@@ -192,8 +192,9 @@ This document depends on architectures 13, 14, 15, 16, 22, 23, 25, and 27 plus
 decisions 0001, 0003, 0008, 0014, 0015, 0020, 0022, and 0024. It does not
 define a Responses SDK/driver, user-kind parser, profile picker/editor
 presentation, credential entry/keychain, telemetry, multimodal or structured
-output, plugin drivers, or remote continuation; the catalog database, schema-4
-migrations, credential rotation, health checks, discovery, pricing, controlled
+output, plugin drivers, or remote continuation; the catalog database, the
+single current storage schema (logical version 1),
+credential rotation, health checks, discovery, pricing, controlled
 live reload, typed header policy, and server-side parser configuration are
 activated by Slice 2
 ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)). UI, Cargo,
@@ -205,8 +206,9 @@ targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 `make verify`, and Linux/Windows CI.
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
-activating specification: it declares the exact test targets, the schema-4
-migration, and the per-direction evidence anchors. Required evidence includes:
+activating specification: it declares the exact test targets, the single
+current-schema storage policy, and the per-direction evidence anchors. Required
+evidence includes:
 
 - session default/override command and query fixtures with idempotency and
   `changed = false` no-op;

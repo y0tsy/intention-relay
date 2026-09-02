@@ -34,7 +34,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Domain tests | Prove invariants and state transitions. | One active run, plan number monotonicity. |
 | Contract tests | Prove crate-to-crate and client-to-daemon contracts. | `intention-client` command/event fixtures. |
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
-| Storage tests | Prove transaction, migration, projection, recovery correctness. | Projection and event atomicity. |
+| Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Projection and event atomicity. |
 | Runtime tests | Prove actor lifecycle, cancellation, queue, stream ordering. | Queued turn starts after terminal run. |
 | Tool/policy tests | Prove workspace, hook order, Plan restrictions, VFR/Headroom behavior. | Path escape rejected, VFR then Headroom ordering. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
@@ -91,9 +91,9 @@ Every planned crate must declare a test target before implementation. Minimum ex
 | Crate area | Minimum evidence |
 | --- | --- |
 | `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, current-version fixtures with non-current-version rejection, and explicit additive-field policy proof. |
-| `config` | TOML migration/validation, credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
+| `config` | TOML current-shape parsing/validation (unversioned documents fail closed), credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
 | `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
-| `storage`, `storage-sqlite` | Repository contract tests, migration tests, transaction fault injection. |
+| `storage`, `storage-sqlite` | Repository contract tests, current-schema creation tests, transaction fault injection. |
 | `model`, providers | Stream/error fixtures, capability and redaction tests. |
 | `tools`, workspace, hooks | Invocation policy, path boundary, deterministic hook-order tests. |
 | VFR, Headroom, plans | Transform/retrieval/frontmatter/mode-policy outcome tests. |

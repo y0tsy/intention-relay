@@ -27,7 +27,7 @@ version ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-remov
 | Owner | Responsibility | Not responsible for |
 | --- | --- | --- |
 | Domain | Envelope/payload DTOs, tags, canonicalization, digest validation, semantic decoders and compatibility classes. | Storage resources or concrete drivers. |
-| Storage | Atomic binding/read contracts, additive bridge/migration behavior and byte preservation. | Meaning selection or canonical policy. |
+| Storage | Atomic binding/read contracts and byte preservation under the single live schema. | Meaning selection or canonical policy. |
 | Protocol | Later negotiated safe projections only. | Raw canonical bytes or semantic ownership. |
 | Provider/tool/context owners | Their nested selection versions and validation. | Execution-kind selection or fallback. |
 | Application/runtime | Admission selection and pre-effect compatibility enforcement. | Concrete implementation selection. |
