@@ -804,7 +804,6 @@ version = "0.0.0"
 dependencies = [
  "futures-util",
  "intention-application",
- "intention-client",
  "intention-config",
  "intention-domain",
  "intention-hooks",
