@@ -278,27 +278,28 @@ impl DegradedModeService {
 pub struct SelectionResolutionService;
 
 impl SelectionResolutionService {
-    /// Resolves the effective profile for one user turn.
+    /// Resolves the effective provider selection for one user turn.
     ///
     /// The effective profile is the explicit per-turn override, then the
     /// session durable default, then the global catalog default. When no
-    /// profile applies (the legacy path) this returns `Ok(None)` and the
-    /// caller keeps the legacy selection-less commit. An expected profile
-    /// revision mismatch rejects before any durable commit with
-    /// `provider_profile_revision_mismatch`; a registry failure maps to
+    /// profile applies the turn fails closed with
+    /// `provider_profile_runtime_unavailable` before any durable commit:
+    /// selection-less (no-profile) deployments are not a supported state. An
+    /// expected profile revision mismatch rejects before any durable commit
+    /// with `provider_profile_revision_mismatch`; a registry failure maps to
     /// `provider_profile_runtime_unavailable`.
     ///
     /// # Errors
     ///
-    /// Returns the typed resolution error of the admission port or the
-    /// revision-mismatch validation error.
+    /// Returns the typed resolution error of the admission port, the closed
+    /// no-profile error, or the revision-mismatch validation error.
     pub fn resolve_for_turn(
         &self,
         command: &SendUserTurnCommandDto,
         session_default: Option<String>,
         global_default: Option<String>,
         port: &impl CatalogAdmissionPort,
-    ) -> DtoResult<Option<ResolvedRunProviderSelectionDto>> {
+    ) -> DtoResult<ResolvedRunProviderSelectionDto> {
         let (profile_id, expected_revision, source) =
             if let Some(override_id) = command.profile_override() {
                 (
@@ -311,7 +312,13 @@ impl SelectionResolutionService {
             } else if let Some(default) = global_default {
                 (default, None, "global_default")
             } else {
-                return Ok(None);
+                return Err(ErrorDto::new(
+                    "provider_profile_runtime_unavailable",
+                    ErrorCategoryDto::Unavailable,
+                    "the resolved provider profile cannot serve this run",
+                    ErrorRetryDto::Delayed,
+                    None,
+                )?);
             };
         let resolved = port
             .resolve_enabled_profile(&profile_id)
@@ -324,38 +331,7 @@ impl SelectionResolutionService {
                 "the resolved provider profile revision does not match the expected revision",
             ));
         }
-        let selection = resolved_selection(resolved, source)?;
-        Ok(Some(selection))
-    }
-
-    /// Resolves one explicit fork override, when present.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed resolution error of the admission port or the
-    /// revision-mismatch validation error.
-    pub fn resolve_for_override(
-        &self,
-        profile_override: Option<&str>,
-        expected_profile_revision: Option<&str>,
-        port: &impl CatalogAdmissionPort,
-    ) -> DtoResult<Option<ResolvedRunProviderSelectionDto>> {
-        let Some(profile_id) = profile_override else {
-            return Ok(None);
-        };
-        let resolved = port
-            .resolve_enabled_profile(profile_id)
-            .map_err(runtime_unavailable)?;
-        if let Some(expected) = expected_profile_revision
-            && expected != resolved.profile_revision_id
-        {
-            return Err(ErrorDto::validation(
-                "provider_profile_revision_mismatch",
-                "the resolved provider profile revision does not match the expected revision",
-            ));
-        }
-        let selection = resolved_selection(resolved, "fork_override")?;
-        Ok(Some(selection))
+        resolved_selection(resolved, source)
     }
 }
 

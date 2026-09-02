@@ -205,7 +205,8 @@ snapshot** and an empty contiguous tail at that snapshot's included sequence,
 or a typed resync when the session cannot be supplied. It is **replay-only**,
 not a retained connection and not a live event feed. Historical projection
 reconstruction is not represented in M3. The post-commit publication seam is
-intentionally a no-op in M3.
+removed (ADR 0038 Wave 7): committed evidence is published only through the
+daemon host's commit-observation path, never through a no-op session seam.
 
 M3 durability, unscoped snapshot/tail replay, ordering, and resync remain
 unchanged. Persistent delivery is implemented only for the separate M4

@@ -437,7 +437,15 @@ where
             validate_candidate_limits(&source)?;
             let kind_changed =
                 reject_catalog_affecting_edits(&source.candidate, &source.previous).is_err();
-            if semantic_equivalence(source.candidate.safe_snapshot(), &source.previous) {
+            let active = self.load_active_material()?;
+            // A semantically equal candidate produces no new revision once a
+            // catalog is active. When no catalog is active yet, the first
+            // startup declaration is still accepted: the daemon activates its
+            // startup provider configuration exactly once (ADR 0038 single
+            // execution path; no selection-less fallback).
+            if active.is_some()
+                && semantic_equivalence(source.candidate.safe_snapshot(), &source.previous)
+            {
                 let (issues, truncated, total) = bounded_issues(&source.candidate);
                 return Ok(CatalogCandidateOutcomeDto {
                     changed: false,
@@ -453,7 +461,6 @@ where
             }
             let resolved = source.candidate.safe_snapshot().resolved();
             let (kind_descriptors, profiles) = self.build_candidate_records(&source, resolved)?;
-            let active = self.load_active_material()?;
             if let Some(active) = &active {
                 for kind in &kind_descriptors {
                     if let Some(previous) = active

@@ -8,7 +8,6 @@ use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
     RemoveQueuedTurnCommandDto, RunModeDto, RunStatusDto, SendUserTurnCommandDto,
-    StopRunCommandDto,
 };
 use intention_protocol::{
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
@@ -34,6 +33,14 @@ fn facade() -> (TempDir, intention::DaemonApplicationFacade) {
     let directory = TempDir::new().expect("temporary directory exists");
     let facade = open_facade(directory.path().join("relay.sqlite"), snapshot())
         .expect("durable facade opens");
+    facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     (directory, facade)
 }
 
@@ -76,25 +83,24 @@ fn durable_lifecycle_and_replay_contracts_hold() {
         )),
         ProtocolCommandResultDto::Accepted(_)
     ));
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::StopRun(StopRunCommandDto::new(
-            session_id, active_run
-        ))),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
+    facade
+        .stop_run_for_daemon_host(session_id, active_run)
+        .expect("host stop moves the run to cancelling");
     let events = durable_events(&facade, session_id).expect("durable event tail loads");
     assert!(matches!(
-        events[events.len() - 3].payload(),
-        DomainEventDto::RunStatusChanged(event) if event.status() == RunStatusDto::Cancelling
+        events.last().expect("cancelling event exists").payload(),
+        DomainEventDto::RunStatusChanged(event)
+            if event.status() == RunStatusDto::Cancelling
     ));
-    assert!(matches!(
-        events[events.len() - 2].payload(),
-        DomainEventDto::RunStatusChanged(event) if event.status() == RunStatusDto::Cancelled
-    ));
-    assert!(matches!(
-        events.last().expect("promotion event exists").payload(),
-        DomainEventDto::RunStarted(event) if event.run_id() != active_run
-    ));
+    // The daemon task registry owns the Cancelling -> Cancelled terminal
+    // transition and the queued-turn promotion that follows it; without a
+    // task registry the run stays durably Cancelling and the queued turn
+    // stays queued (single execution path per operation under ADR 0038).
+    assert!(events.iter().all(|event| !matches!(
+        event.payload(),
+        DomainEventDto::RunStatusChanged(change)
+            if change.status() == RunStatusDto::Cancelled
+    )));
     assert!(matches!(
         facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)

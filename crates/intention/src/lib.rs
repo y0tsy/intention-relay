@@ -64,9 +64,9 @@ use intention_runtime::{
     fail_starting_run,
 };
 use intention_storage::{
-    CommittedChangeDto, EnqueueUnavailableRunInputDto, HeldRunRepositoryDto,
-    MarkRecoveredRunHeldInputDto, ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto,
-    StorageRepositoryDto, UnavailableQueueRepositoryDto,
+    EnqueueUnavailableRunInputDto, HeldRunRepositoryDto, MarkRecoveredRunHeldInputDto,
+    ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto, StorageRepositoryDto,
+    UnavailableQueueRepositoryDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_tools::{CancellationSignal, ToolInput, ToolResult};
@@ -98,7 +98,6 @@ struct FacadeInner {
     config_snapshot: Mutex<ConfigSnapshotDto>,
     _selected_provider: SelectedProvider,
     dispatch: PrivateModelRunDispatch,
-    publisher: Box<dyn PostCommitPublisher>,
     command_gate: Mutex<()>,
     tool_cancellations: Mutex<HashMap<(SessionId, RunId), LocalToolCancellationEntry>>,
     reload_candidates: Mutex<HashMap<String, ConfigCandidateDto>>,
@@ -518,16 +517,6 @@ impl ModelRunDispatchPort for PrivateModelRunDispatch {
     }
 }
 
-trait PostCommitPublisher: Send + Sync {
-    /// Retained M3 session publisher seam, invoked only after an independent durable read.
-    ///
-    /// M3 composition supplies the no-op implementation. M4 run-scoped streaming
-    /// publishes through the daemon host's dedicated commit observer instead.
-    fn publish(&self, change: &CommittedChangeDto) -> DtoResult<()>;
-}
-
-struct NoopPostCommitPublisher;
-
 struct SafeWorkspaceBoundary;
 impl WorkspaceBoundaryPort for SafeWorkspaceBoundary {
     fn resolve(&self, _workspace: &WorkspaceRoot) -> DtoResult<()> {
@@ -567,22 +556,16 @@ fn production_hooks() -> DtoResult<HookRegistry> {
     Ok(registry)
 }
 
-impl PostCommitPublisher for NoopPostCommitPublisher {
-    fn publish(&self, _change: &CommittedChangeDto) -> DtoResult<()> {
-        Ok(())
-    }
-}
-
-/// Publishes one committed tool result after an independent durable reread.
+/// Verifies that a scoped durable reread contains committed `Completed` typed
+/// evidence for the exact invocation identity.
 ///
 /// The reread is scoped to the invoking session's exact pre-invocation durable
-/// position and must contain `Completed` typed evidence for the exact invocation
-/// identity before the retained post-commit publisher seam fires. Publication
-/// therefore follows commit plus a scoped reread, and the application dispatches
-/// `AfterToolResultPublished` only after this publication succeeds.
+/// position and must contain `Completed` typed evidence for the exact
+/// invocation identity before publication proceeds. Publication therefore
+/// follows commit plus a scoped reread, and the application dispatches
+/// `AfterToolResultPublished` only after this verification succeeds.
 struct DurableToolResultPublisher<'a> {
     repository: &'a SqliteStorageRepository,
-    publisher: &'a dyn PostCommitPublisher,
     after_sequence: SessionEventSequenceDto,
 }
 
@@ -591,11 +574,7 @@ impl ToolResultPublicationPort for DurableToolResultPublisher<'_> {
         let events = self
             .repository
             .load_tail(input.session_id(), self.after_sequence)?;
-        committed_tool_result_evidence(&events, input)?;
-        let projection = self.repository.load_session_snapshot(input.session_id())?;
-        let position = projection.at_sequence();
-        let committed = CommittedChangeDto::new(projection, position, events, None)?;
-        self.publisher.publish(&committed)
+        committed_tool_result_evidence(&events, input)
     }
 }
 
@@ -956,6 +935,21 @@ fn reload_edit_source() -> DtoResult<ConfigSourceDto> {
     ConfigPathDto::parse(path.to_string_lossy().into_owned()).map(ConfigSourceDto::Explicit)
 }
 
+/// Builds the absolute fixture source used by test-support catalog seeding.
+///
+/// The path is used only for source classification inside the configuration
+/// crate and is never disclosed in a DTO, projection, or error.
+///
+/// # Errors
+///
+/// Returns a validation error when the platform temporary directory cannot
+/// form an absolute path.
+#[cfg(any(test, feature = "test-support"))]
+fn fixture_catalog_source() -> DtoResult<ConfigSourceDto> {
+    let path = std::env::temp_dir().join("intention-relay-test-support-seed.toml");
+    ConfigPathDto::parse(path.to_string_lossy().into_owned()).map(ConfigSourceDto::Explicit)
+}
+
 /// Converts one whole-second timestamp to the service `u64` representation.
 fn now_seconds(timestamp: TimestampDto) -> u64 {
     u64::try_from(timestamp.unix_seconds()).unwrap_or(u64::MAX)
@@ -988,11 +982,10 @@ impl DaemonApplicationFacade {
     /// Executes one explicit local tool call through the durable lifecycle path.
     ///
     /// Publication independently rereads the committed typed result evidence for
-    /// the exact invocation before the post-commit publisher seam fires, and the
-    /// application dispatches `AfterToolResultPublished` only after that
-    /// publication succeeds. The M4 model `ToolCallRecorded` fact remains
-    /// denial-only; this API is an internal, caller-admitted single invocation
-    /// and never starts a loop.
+    /// the exact invocation, and the application dispatches
+    /// `AfterToolResultPublished` only after that verification succeeds. The M4
+    /// model `ToolCallRecorded` fact remains denial-only; this API is an
+    /// internal, caller-admitted single invocation and never starts a loop.
     #[doc(hidden)]
     pub fn invoke_local_tool_for_daemon(
         &self,
@@ -1013,7 +1006,6 @@ impl DaemonApplicationFacade {
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
         let publisher = DurableToolResultPublisher {
             repository: self.inner.repository.as_ref(),
-            publisher: self.inner.publisher.as_ref(),
             after_sequence,
         };
         let result = intention_application::ApplicationService::with_hooks(
@@ -1090,13 +1082,68 @@ impl DaemonApplicationFacade {
     /// Returns safe typed failures when platform configuration cannot be resolved,
     /// permission-checked, read, validated, persisted, or recovered.
     pub fn open_platform() -> DtoResult<Self> {
-        let (config_snapshot, selected_provider) = load_platform_provider_configuration()?;
-        Self::open_with_selected_provider(
+        let (config_snapshot, selected_provider, raw_toml) =
+            load_platform_provider_configuration()?;
+        let facade = Self::open_with_selected_provider(
             platform_database_location()?,
             config_snapshot,
             selected_provider,
-            Box::new(NoopPostCommitPublisher),
-        )
+        )?;
+        facade.activate_startup_catalog(&raw_toml)?;
+        Ok(facade)
+    }
+
+    /// Activates the startup provider configuration as the first catalog
+    /// revision exactly once.
+    ///
+    /// The daemon opens with an empty provider catalog: the startup TOML is
+    /// the single source of the first provider declaration. When a catalog is
+    /// already active (a restart) this is a no-op. Activation is required
+    /// because selection-less acceptance is removed under ADR 0038: every
+    /// admitted run resolves a provider profile from the active catalog, and
+    /// no wire command prepares a first catalog in this slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed candidate, catalog, or storage error; an invalid
+    /// startup declaration fails the daemon open path closed.
+    pub fn activate_startup_catalog(&self, raw_toml: &str) -> DtoResult<()> {
+        use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
+        use intention_config::control_plane::parse_candidate;
+
+        let state = self.inner.repository.load_provider_catalog_status()?;
+        if state.active_catalog_revision_id.is_some() {
+            return Ok(());
+        }
+        let previous = self.active_config_snapshot()?;
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw_toml.to_owned(), ConfigPathResolver::resolve(None)?),
+            &previous,
+        )?;
+        let provider = candidate.safe_snapshot().resolved().provider();
+        self.inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: "startup-catalog".to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw_toml.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: provider.kind().as_str().to_owned(),
+                        model: provider.model().to_owned(),
+                        endpoint: provider.endpoint().map(str::to_owned),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now_seconds(now()?),
+            )
+            .map(|_| ())
     }
 
     /// Opens a caller-provided absolute database exclusively for tests or controlled fixtures.
@@ -1116,7 +1163,6 @@ impl DaemonApplicationFacade {
             database_location,
             config_snapshot,
             SelectedProvider::for_test_support(driver),
-            Box::new(NoopPostCommitPublisher),
         )
     }
 
@@ -1142,21 +1188,6 @@ impl DaemonApplicationFacade {
             database_location,
             config_snapshot,
             SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
-            Box::new(NoopPostCommitPublisher),
-        )
-    }
-
-    #[cfg(test)]
-    fn open_with_publisher(
-        database_location: impl AsRef<Path>,
-        config_snapshot: ConfigSnapshotDto,
-        publisher: Box<dyn PostCommitPublisher>,
-    ) -> DtoResult<Self> {
-        Self::open_with_selected_provider(
-            database_location,
-            config_snapshot,
-            SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
-            publisher,
         )
     }
 
@@ -1175,43 +1206,14 @@ impl DaemonApplicationFacade {
         WorkspaceRoot::resolve(projection.workspace_root())
     }
 
-    /// Executes one scheduled run through the privately selected provider driver.
+    /// Executes one scheduled run through the privately selected provider
+    /// driver with the mandatory tool executor.
     ///
     /// This bridge is provider-neutral and safe: it accepts only scheduling DTOs,
-    /// cancellation, a time port, and committed-observation evidence. It does not
-    /// expose provider SDKs, credentials, Tokio, or storage resources.
-    #[doc(hidden)]
-    pub async fn execute_scheduled_model_run_for_daemon<Time>(
-        &self,
-        schedule: ScheduleModelRunDto,
-        cancellation: ModelCancellationSignal,
-        time: &Time,
-        observer: &dyn ModelRunCommitObserver,
-    ) -> DtoResult<ModelRunExecutionOutcomeDto>
-    where
-        Time: ModelTimePort + Sync,
-    {
-        ModelRunExecutionService::with_commit_observer(
-            self.inner.repository.as_ref(),
-            self.inner._selected_provider.driver(),
-            time,
-            observer,
-        )
-        .execute(ModelRunExecutionInputDto::new(
-            schedule.session_id(),
-            schedule.run_id(),
-            schedule.request().clone(),
-            schedule.safe_config().clone(),
-            cancellation,
-        ))
-        .await
-    }
-
-    /// Executes one scheduled run through the provider driver with a tool executor.
-    ///
-    /// This is the model-tool loop bridge: tool calls emitted by the provider
-    /// execute through the caller-supplied durable tool path instead of the
-    /// retained M4 denial fallback.
+    /// cancellation, a time port, committed-observation evidence, and the tool
+    /// executor. It does not expose provider SDKs, credentials, Tokio, or
+    /// storage resources. Provider-emitted tool calls execute through the
+    /// caller-supplied durable tool path.
     #[doc(hidden)]
     pub async fn execute_scheduled_model_run_for_daemon_with_tool_executor<Time>(
         &self,
@@ -1224,7 +1226,7 @@ impl DaemonApplicationFacade {
     where
         Time: ModelTimePort + Sync,
     {
-        ModelRunExecutionService::with_commit_observer_and_tool_executor(
+        ModelRunExecutionService::with_commit_observer(
             self.inner.repository.as_ref(),
             self.inner._selected_provider.driver(),
             time,
@@ -1251,6 +1253,7 @@ impl DaemonApplicationFacade {
         time: &Time,
         observer: &dyn ModelRunCommitObserver,
         first_append_gate: &dyn ModelRunFirstAppendGate,
+        tool_executor: &dyn ToolExecutionPort,
     ) -> DtoResult<ModelRunExecutionOutcomeDto>
     where
         Time: ModelTimePort + Sync,
@@ -1261,6 +1264,7 @@ impl DaemonApplicationFacade {
             time,
             observer,
             first_append_gate,
+            tool_executor,
         )
         .execute(ModelRunExecutionInputDto::new(
             schedule.session_id(),
@@ -1275,8 +1279,7 @@ impl DaemonApplicationFacade {
     /// Durably moves the exact active run to `Cancelling` without terminalizing it.
     ///
     /// A streaming daemon host must signal the matching execution task after this
-    /// commit. The retained synchronous `command(StopRun)` path terminalizes only
-    /// for legacy M3 callers outside that host.
+    /// commit; synchronous stop dispatch no longer exists outside that host.
     #[doc(hidden)]
     pub fn stop_run_for_daemon_host(
         &self,
@@ -1425,7 +1428,6 @@ impl DaemonApplicationFacade {
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
         selected_provider: SelectedProvider,
-        publisher: Box<dyn PostCommitPublisher>,
     ) -> DtoResult<Self> {
         if selected_provider
             .safe_kind()
@@ -1448,7 +1450,6 @@ impl DaemonApplicationFacade {
                 config_snapshot: Mutex::new(config_snapshot),
                 _selected_provider: selected_provider,
                 dispatch: PrivateModelRunDispatch::default(),
-                publisher,
                 command_gate: Mutex::new(()),
                 tool_cancellations: Mutex::new(HashMap::new()),
                 reload_candidates: Mutex::new(HashMap::new()),
@@ -1458,6 +1459,58 @@ impl DaemonApplicationFacade {
         facade.recover_before_ready()?;
         facade.provider_control_startup()?;
         Ok(facade)
+    }
+
+    /// Seeds one auto-accepted provider catalog revision with one enabled
+    /// profile for test fixtures.
+    ///
+    /// The seeded profile is `default`, derived from the supplied kind, model,
+    /// and endpoint. It mirrors the credential-free startup declarations the
+    /// daemon admits; the catalog becomes active with `default` as its global
+    /// default so user turns resolve a selection.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn seed_fixture_catalog_for_test_support(
+        &self,
+        operation_id: &str,
+        kind: &str,
+        model: &str,
+        endpoint: &str,
+    ) -> DtoResult<()> {
+        use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
+        use intention_config::control_plane::parse_candidate;
+
+        let previous = self.active_config_snapshot()?;
+        let raw = format!(
+            "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"{model}\"\ncredential = \"fixture-credential\"\nendpoint = \"{endpoint}\"\n"
+        );
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.clone(), fixture_catalog_source()?),
+            &previous,
+        )?;
+        self.inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: operation_id.to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: kind.to_owned(),
+                        model: model.to_owned(),
+                        endpoint: Some(endpoint.to_owned()),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now_seconds(now()?),
+            )
+            .map(|_| ())
     }
 
     #[cfg(test)]
@@ -1787,7 +1840,7 @@ impl DaemonApplicationFacade {
             .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"))
     }
 
-    /// Dispatches a durable M3 command and invokes the publisher only after commit.
+    /// Dispatches a durable M3 command.
     #[must_use]
     pub fn command(&self, command: ProtocolCommandDto) -> ProtocolCommandResultDto {
         let result = self.command_result(command);
@@ -2063,21 +2116,6 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        let session_id = command_session_id(&command);
-        let prior_position =
-            session_id.map_or(Ok(SessionEventSequenceDto::new(0)), |session_id| {
-                self.inner
-                    .repository
-                    .load_session_snapshot(session_id)
-                    .map(|projection| projection.at_sequence())
-                    .or_else(|error| {
-                        if error.code() == "storage_record_not_found" {
-                            Ok(SessionEventSequenceDto::new(0))
-                        } else {
-                            Err(error)
-                        }
-                    })
-            })?;
         let timestamp = now()?;
         let result = match command {
             ProtocolCommandDto::CreateSession(command) => {
@@ -2109,21 +2147,11 @@ impl DaemonApplicationFacade {
                 ApplicationService::new(self.inner.repository.as_ref())
                     .remove_queued_turn(command, timestamp)?
             }
-            ProtocolCommandDto::StopRun(command) => {
-                let result = ApplicationService::new(self.inner.repository.as_ref()).stop_run(
-                    command,
-                    RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, timestamp),
-                )?;
-                RuntimeService::new(
-                    self.inner.repository.as_ref(),
-                    RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, now()?),
-                )
-                .complete_terminal(
-                    command.session_id(),
-                    command.run_id(),
-                    intention_domain::RunStatusDto::Cancelled,
-                )?;
-                result
+            ProtocolCommandDto::StopRun(_) => {
+                return Err(ErrorDto::validation(
+                    "invalid_stop_dispatch",
+                    "run stops use the daemon host stop path",
+                ));
             }
             ProtocolCommandDto::SubscribeSession(_) => {
                 return Err(ErrorDto::validation(
@@ -2199,103 +2227,16 @@ impl DaemonApplicationFacade {
                 self.reload_from_typed_edit(command, timestamp)?
             }
         };
-        if let Some(session_id) = accepted_session_id(&result) {
-            self.publish_after_durable_read(session_id, prior_position)?;
-        }
         Ok(result)
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
-        let changes = RuntimeService::new(
+        RuntimeService::new(
             self.inner.repository.as_ref(),
             RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, now()?),
         )
         .recover_before_ready()?;
-        for change in changes {
-            let event_count = u64::try_from(change.events().len()).map_err(|_| {
-                ErrorDto::unavailable(
-                    "daemon_storage_unavailable",
-                    "daemon durable storage is unavailable",
-                )
-            })?;
-            let prior = SessionEventSequenceDto::new(
-                change
-                    .position()
-                    .value()
-                    .checked_sub(event_count)
-                    .ok_or_else(|| {
-                        ErrorDto::unavailable(
-                            "daemon_storage_unavailable",
-                            "daemon durable storage is unavailable",
-                        )
-                    })?,
-            );
-            self.publish_after_durable_read(change.projection().session_id(), prior)?;
-        }
         Ok(())
-    }
-
-    fn publish_after_durable_read(
-        &self,
-        session_id: SessionId,
-        after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<()> {
-        let projection = self.inner.repository.load_session_snapshot(session_id)?;
-        let events = self
-            .inner
-            .repository
-            .load_tail(session_id, after_sequence)?;
-        let committed =
-            CommittedChangeDto::new(projection.clone(), projection.at_sequence(), events, None)?;
-        let _ = self.inner.publisher.publish(&committed);
-        Ok(())
-    }
-}
-
-fn command_session_id(command: &ProtocolCommandDto) -> Option<SessionId> {
-    match command {
-        ProtocolCommandDto::CreateSession(command) => Some(command.session_id()),
-        ProtocolCommandDto::SendUserTurn(command) => Some(command.session_id()),
-        ProtocolCommandDto::RemoveQueuedTurn(command) => Some(command.session_id()),
-        ProtocolCommandDto::StopRun(command) => Some(command.session_id()),
-        ProtocolCommandDto::SubscribeSession(_) => None,
-        ProtocolCommandDto::SetSessionProviderProfile(command) => {
-            SessionId::parse(&command.session_id).ok()
-        }
-        ProtocolCommandDto::AcceptProviderCatalogRemoval(_)
-        | ProtocolCommandDto::RejectProviderCatalogCandidate(_) => None,
-        ProtocolCommandDto::ReconcileUnavailableQueue(command) => {
-            SessionId::parse(&command.session_id).ok()
-        }
-        ProtocolCommandDto::AdmitRecoveredRun(command) => {
-            SessionId::parse(&command.session_id).ok()
-        }
-        ProtocolCommandDto::ReloadConfiguration(_)
-        | ProtocolCommandDto::RotateProviderCredentials(_)
-        | ProtocolCommandDto::SubmitRawTomlEdit(_)
-        | ProtocolCommandDto::ApplyConfigurationEdit(_) => None,
-    }
-}
-
-fn accepted_session_id(result: &ProtocolAcceptedResultDto) -> Option<SessionId> {
-    match result {
-        ProtocolAcceptedResultDto::CreateSession(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::SendUserTurn(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::RemoveQueuedTurn(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::StopRun(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::SetSessionProviderProfile(result) => {
-            SessionId::parse(&result.session_id).ok()
-        }
-        ProtocolAcceptedResultDto::AcceptProviderCatalogRemoval(_)
-        | ProtocolAcceptedResultDto::RejectProviderCatalogCandidate(_) => None,
-        ProtocolAcceptedResultDto::ReconcileUnavailableQueue(result) => {
-            SessionId::parse(&result.session_id).ok()
-        }
-        ProtocolAcceptedResultDto::AdmitRecoveredRun(result) => {
-            SessionId::parse(&result.session_id).ok()
-        }
-        ProtocolAcceptedResultDto::ReloadConfiguration(_)
-        | ProtocolAcceptedResultDto::RotateProviderCredentials(_) => None,
     }
 }
 
@@ -2310,13 +2251,14 @@ const fn resync(
     ))
 }
 
-fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String)>
+{
     load_provider_configuration(ConfigPathResolver::resolve(None)?)
 }
 
 fn load_provider_configuration(
     source: ConfigSourceDto,
-) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+) -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String)> {
     #[cfg(unix)]
     intention_config::ensure_user_only_permissions(source.path())?;
     let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
@@ -2325,8 +2267,10 @@ fn load_provider_configuration(
             "daemon configuration could not be read",
         )
     })?;
-    let material =
-        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
+    let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+        raw_toml.clone(),
+        source,
+    ))?;
     let snapshot = ConfigSnapshotDto::new(
         CONFIG_SCHEMA_VERSION,
         ConfigRevisionId::new(),
@@ -2334,12 +2278,12 @@ fn load_provider_configuration(
         material.safe_resolved().clone(),
     )?;
     let selected_provider = SelectedProvider::from_startup_material(material)?;
-    Ok((snapshot, selected_provider))
+    Ok((snapshot, selected_provider, raw_toml))
 }
 
 #[cfg(test)]
 fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto> {
-    load_provider_configuration(source).map(|(snapshot, _)| snapshot)
+    load_provider_configuration(source).map(|(snapshot, _, _)| snapshot)
 }
 
 fn now() -> DtoResult<TimestampDto> {
@@ -2413,61 +2357,15 @@ mod tests {
     )]
 
     use super::*;
-    use std::sync::Mutex;
 
-    use intention_client::SessionSubscriptionReducer;
     use intention_domain::SendUserTurnCommandDto;
     use tempfile::TempDir;
 
-    #[derive(Default)]
-    struct RecordingPublisher {
-        records: Mutex<Vec<CommittedChangeDto>>,
-        fail: bool,
-    }
-
-    impl RecordingPublisher {
-        const fn failing() -> Self {
-            Self {
-                records: Mutex::new(Vec::new()),
-                fail: true,
-            }
-        }
-
-        fn records(&self) -> Vec<CommittedChangeDto> {
-            self.records
-                .lock()
-                .expect("publisher recorder mutex remains available")
-                .clone()
-        }
-    }
-
-    impl PostCommitPublisher for Arc<RecordingPublisher> {
-        fn publish(&self, change: &CommittedChangeDto) -> DtoResult<()> {
-            self.records
-                .lock()
-                .map_err(|_| {
-                    ErrorDto::unavailable("publisher_unavailable", "publisher is unavailable")
-                })?
-                .push(change.clone());
-            if self.fail {
-                Err(ErrorDto::unavailable(
-                    "publisher_unavailable",
-                    "publisher is unavailable",
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    fn facade_with_recorder(
-        recorder: Arc<RecordingPublisher>,
-    ) -> (TempDir, DaemonApplicationFacade) {
+    fn test_facade() -> (TempDir, DaemonApplicationFacade) {
         let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_with_publisher(
-            directory.path().join("recorder.sqlite"),
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("facade.sqlite"),
             fixture_config_snapshot(),
-            Box::new(recorder),
         )
         .expect("durable facade opens");
         (directory, facade)
@@ -2552,7 +2450,7 @@ mod tests {
     fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId, label: &str) -> RunId {
         let accepted = send_user_turn(facade, session_id, label);
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("fixture turn is accepted")
+            unreachable!("fixture turn is accepted, got {accepted:?}")
         };
         let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
             unreachable!("fixture turn has user-turn evidence")
@@ -2574,6 +2472,62 @@ mod tests {
         ))
     }
 
+    /// Creates one session bound to a caller-owned workspace directory.
+    fn create_in_workspace(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        workspace_path: &std::path::Path,
+    ) {
+        let root = WorkspaceRootDto::parse(workspace_path.to_string_lossy().into_owned())
+            .expect("fixture workspace is absolute");
+        let accepted = facade.command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                root,
+                RunModeDto::Build,
+            ),
+        ));
+        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+    }
+
+    /// Commits one durable starting run with the supplied immutable selection
+    /// directly through the storage repository.
+    ///
+    /// The wire path always derives the same selection from one active
+    /// catalog, and the durable storage contract binds each selection digest
+    /// to exactly one run; fixtures that need several selected runs in one
+    /// database therefore commit distinct selections through the repository.
+    fn fabricate_started_run_with_selection(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        selection: ProviderSelectionV1,
+        content: &str,
+    ) -> RunId {
+        let run_id = RunId::new();
+        let input = AcceptUserTurnInputDto::new(
+            session_id,
+            intention_types::TurnId::new(),
+            content,
+            run_id,
+            fixture_config_snapshot(),
+            TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
+        )
+        .expect("fixture turn input is valid")
+        .with_provider_selection(selection);
+        let change = facade
+            .inner
+            .repository
+            .accept_user_turn(input)
+            .expect("fixture run commits");
+        assert!(
+            change.turn_outcome().is_some(),
+            "the fixture turn starts immediately"
+        );
+        run_id
+    }
+
     #[test]
     fn direct_turn_admits_post_commit_dispatch_without_provider_execution() {
         let directory = TempDir::new().expect("temporary directory exists");
@@ -2584,6 +2538,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let result = send_user_turn(&facade, session_id, "started turn");
         let ProtocolCommandResultDto::Accepted(accepted_result) = result else {
@@ -2678,6 +2633,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let command = SendUserTurnCommandDto::new(
             session_id,
             intention_types::TurnId::new(),
@@ -2730,6 +2686,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let first = send_user_turn(&facade, session_id, "started turn");
         assert!(matches!(first, ProtocolCommandResultDto::Accepted(_)));
@@ -2775,6 +2732,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let accepted = send_user_turn(&facade, session_id, "facade turn");
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
@@ -2794,6 +2752,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let accepted = send_user_turn(&facade, session_id, "host bridge turn");
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
@@ -2879,13 +2838,12 @@ mod tests {
                     .expect("fixture config path is absolute"),
             );
 
-            let (snapshot, selected_provider) =
+            let (snapshot, selected_provider, _) =
                 load_provider_configuration(source).expect("valid provider config composes");
             let facade = DaemonApplicationFacade::open_with_selected_provider(
                 directory.path().join("provider.sqlite"),
                 snapshot.clone(),
                 selected_provider,
-                Box::new(NoopPostCommitPublisher),
             )
             .expect("selected provider remains owned by the facade");
 
@@ -2987,7 +2945,7 @@ mod tests {
 
     #[test]
     fn subscriptions_handle_current_and_unknown_durable_sessions() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         assert!(matches!(
@@ -3014,7 +2972,7 @@ mod tests {
 
     #[test]
     fn subscription_rejects_run_scoped_and_invalid_positions() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let run_id = RunId::new();
@@ -3051,6 +3009,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = send_user_turn(&facade, session_id, "bridge");
         let ProtocolCommandResultDto::Accepted(a) = accepted else {
             unreachable!()
@@ -3097,6 +3056,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let started = send_user_turn(&facade, session_id, "started");
         let ProtocolCommandResultDto::Accepted(a) = started else {
             unreachable!()
@@ -3124,12 +3084,24 @@ mod tests {
             )),
             ProtocolCommandResultDto::Accepted(_)
         ));
-        assert!(matches!(
-            facade.command(ProtocolCommandDto::StopRun(
+        // Stops no longer dispatch through the synchronous command path; the
+        // daemon host owns the exact two-step cancellation transition.
+        assert!(matches!(facade.command(ProtocolCommandDto::StopRun(
                 intention_domain::StopRunCommandDto::new(session_id, run_id)
-            )),
-            ProtocolCommandResultDto::Accepted(_)
-        ));
+            )), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_stop_dispatch"));
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling");
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling,
+            "the host stop leaves the run waiting on the daemon task"
+        );
         assert!(
             matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, None, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
         );
@@ -3137,7 +3109,7 @@ mod tests {
 
     #[test]
     fn subscribe_returns_checkpoint_for_current_position() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let response = facade.subscribe(SubscribeSessionCommandDto::new(
@@ -3152,22 +3124,16 @@ mod tests {
     }
 
     #[test]
-    fn persistence_failure_never_publishes_and_publisher_failure_preserves_durable_replay() {
-        let recorder = Arc::new(RecordingPublisher::failing());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+    fn committed_evidence_is_durable_and_replays_without_duplication() {
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let records_after_create = recorder.records();
-        assert_eq!(records_after_create.len(), 1);
         let durable_create_events = facade
             .inner
             .repository
             .load_tail(session_id, SessionEventSequenceDto::new(0))
-            .expect("independent durable read sees created event");
-        assert_eq!(
-            records_after_create[0].events(),
-            durable_create_events.as_slice()
-        );
+            .expect("independent durable read sees the created event");
+        assert_eq!(durable_create_events.len(), 1);
 
         let duplicate = facade.command(ProtocolCommandDto::CreateSession(
             CreateSessionCommandDto::new(
@@ -3180,57 +3146,61 @@ mod tests {
         ));
         assert!(matches!(duplicate, ProtocolCommandResultDto::Rejected(_)));
         assert_eq!(
-            recorder.records().len(),
+            facade
+                .inner
+                .repository
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("rejected persistence changes nothing")
+                .len(),
             1,
-            "failed persistence has no publish"
+            "failed persistence leaves no durable trace"
         );
 
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "committed")
                 .expect("fixture user turn is valid"),
         ));
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
-        let records = recorder.records();
-        assert_eq!(
-            records.len(),
-            2,
-            "post-commit publisher was invoked despite failure"
-        );
-        assert_eq!(records[1].events().len(), 2);
         let durable_events = facade
             .inner
             .repository
             .load_tail(session_id, SessionEventSequenceDto::new(1))
             .expect("independent durable read sees committed turn batch");
-        assert_eq!(records[1].events(), durable_events.as_slice());
+        assert_eq!(durable_events.len(), 2);
 
+        // The committed evidence replays as an authoritative snapshot: the
+        // M3 seam returns the current durable checkpoint with an empty
+        // contiguous tail, and replaying at that checkpoint is a stable
+        // no-op that duplicates or loses nothing.
         let replay = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
             session_id,
             Some(SessionEventSequenceDto::new(0)),
             RunModeDto::Build,
         ));
-        let mut reducer = SessionSubscriptionReducer::new(session_id);
-        assert!(!reducer.apply(replay).expect("durable replay is contiguous"));
+        let SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } = replay else {
+            unreachable!("durable replay is contiguous")
+        };
         assert_eq!(
-            reducer.last_sequence(),
-            Some(SessionEventSequenceDto::new(3)),
-            "publisher failure does not duplicate or lose durable events"
+            snapshot.at_sequence(),
+            SessionEventSequenceDto::new(3),
+            "the snapshot advanced through the committed create and turn batches"
+        );
+        assert!(
+            tail.events().is_empty(),
+            "the checkpoint replay carries no duplicate events"
         );
         let current = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
             session_id,
-            reducer.last_sequence(),
+            Some(snapshot.at_sequence()),
             RunModeDto::Build,
         ));
         assert!(
-            !reducer
-                .apply(current)
-                .expect("current checkpoint is replayable")
-        );
-        assert_eq!(
-            reducer.last_sequence(),
-            Some(SessionEventSequenceDto::new(3))
+            matches!(current, SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
+                if snapshot.at_sequence() == SessionEventSequenceDto::new(3) && tail.events().is_empty()),
+            "the current checkpoint is replayable without duplication"
         );
     }
 
@@ -3249,7 +3219,6 @@ mod tests {
                     )).expect("fixture material parses"),
                 ).expect("generic provider builds"),
             ),
-            Box::new(NoopPostCommitPublisher),
         );
         let error = match result {
             Ok(_) => return,
@@ -3259,15 +3228,18 @@ mod tests {
     }
 
     #[test]
-    fn command_rejects_malformed_turn_identifier() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+    fn command_rejects_turn_without_an_applicable_profile() {
+        let (_directory, facade) = test_facade();
+        // No session exists, no profile applies, and no catalog is active:
+        // the typed closed resolution rejects before any durable commit.
         let result = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(SessionId::new(), intention_types::TurnId::new(), "turn")
                 .expect("fixture turn is valid"),
         ));
-        assert!(
-            matches!(result, ProtocolCommandResultDto::Rejected(error) if error.code() == "storage_record_not_found" || error.code() == "daemon_command_unavailable")
-        );
+        let ProtocolCommandResultDto::Rejected(error) = result else {
+            unreachable!("a turn without an applicable profile is rejected")
+        };
+        assert_eq!(error.code(), "provider_profile_runtime_unavailable");
     }
 
     #[test]
@@ -3285,6 +3257,7 @@ mod tests {
         };
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = send_user_turn(&facade, session_id, "execution bridge");
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("turn is accepted")
@@ -3316,7 +3289,7 @@ mod tests {
 
     #[test]
     fn current_starting_run_returns_none_after_terminalization() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         assert_eq!(
@@ -3329,7 +3302,7 @@ mod tests {
 
     #[test]
     fn facade_rejects_invalid_commands_and_unknown_run_bridges() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         let unknown = RunId::new();
 
@@ -3366,7 +3339,7 @@ mod tests {
 
     #[test]
     fn subscription_accepts_exact_checkpoint_and_rejects_unknown_position() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let exact = facade.subscribe(SubscribeSessionCommandDto::new(
@@ -3391,28 +3364,8 @@ mod tests {
     }
 
     #[test]
-    fn no_op_publisher_and_dispatch_cover_success_paths() {
-        let publisher = NoopPostCommitPublisher;
+    fn private_dispatch_covers_success_paths() {
         let session_id = SessionId::new();
-        let change = CommittedChangeDto::new(
-            intention_domain::SessionProjectionDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                fixture_workspace_root(),
-                RunModeDto::Build,
-                None,
-                None,
-                Vec::new(),
-                SessionEventSequenceDto::new(0),
-            )
-            .expect("empty projection is valid"),
-            SessionEventSequenceDto::new(0),
-            Vec::new(),
-            None,
-        )
-        .expect("empty committed change is valid");
-        publisher.publish(&change).expect("noop publisher succeeds");
         let run_id = RunId::new();
         let request = intention_model::ModelRequestDto::new(
             run_id,
@@ -3479,9 +3432,10 @@ mod tests {
 
     #[test]
     fn daemon_stop_blocks_later_local_invocation_before_any_new_effect() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "stop first");
         let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
@@ -3523,9 +3477,10 @@ mod tests {
 
     #[test]
     fn daemon_stop_reaches_in_flight_execute_and_classifies_unknown_external_effect() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "in flight stop");
         let (workspace_directory, workspace) = workspace_fixture("keep.txt", "kept");
         let sentinel = workspace_directory.path().join("sentinel.txt");
@@ -3600,9 +3555,10 @@ mod tests {
 
     #[test]
     fn committed_tool_results_survive_a_late_stop_which_then_fences_new_effects() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "late stop");
         let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
@@ -3666,19 +3622,18 @@ mod tests {
     }
 
     #[test]
-    fn local_tool_publication_publishes_only_independently_reread_evidence() {
-        let recorder = Arc::new(RecordingPublisher::default());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+    fn local_tool_invocation_commits_only_its_own_reread_evidence() {
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "publication reread");
-        let records_before = recorder.records();
-        assert_eq!(
-            records_before.len(),
-            2,
-            "create and turn published once each"
-        );
-        let committed_through = records_before[1].position();
+        let committed_through = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
@@ -3697,33 +3652,22 @@ mod tests {
             _ => unreachable!("read dispatch returns a read result"),
         }
 
-        let records = recorder.records();
-        assert_eq!(records.len(), 3, "one publication follows the invocation");
-        let published = &records[2];
         let durable_tail = facade
             .inner
             .repository
             .load_tail(session_id, committed_through)
             .expect("independent durable read sees the committed invocation");
-        assert_eq!(
-            published.events(),
-            durable_tail.as_slice(),
-            "publication carries exactly the independently reread committed scope"
+        assert!(
+            durable_tail.iter().all(|envelope| matches!(
+                envelope.payload(),
+                intention_domain::DomainEventDto::ToolLifecycle(event)
+                    if event.session_id() == session_id
+                        && event.run_id() == run_id
+                        && event.call_id() == call_id
+            )),
+            "every committed event is this exact call's lifecycle evidence"
         );
-        for envelope in published.events() {
-            assert!(
-                matches!(
-                    envelope.payload(),
-                    intention_domain::DomainEventDto::ToolLifecycle(event)
-                        if event.session_id() == session_id
-                            && event.run_id() == run_id
-                            && event.call_id() == call_id
-                ),
-                "every published event is this exact call's lifecycle evidence"
-            );
-        }
-        match published
-            .events()
+        match durable_tail
             .last()
             .expect("committed scope is non-empty")
             .payload()
@@ -3749,41 +3693,40 @@ mod tests {
                 workspace,
             )
             .expect("second read completes");
-        let records = recorder.records();
-        assert_eq!(records.len(), 4, "each committed invocation publishes once");
-        let second_publication = &records[3];
+        let second_position = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let second_tail = facade
             .inner
             .repository
-            .load_tail(session_id, records[2].position())
+            .load_tail(session_id, second_position)
             .expect("independent durable read sees the second invocation");
-        assert_eq!(
-            second_publication.events(),
-            second_tail.as_slice(),
-            "each publication is scoped to its own invocation"
-        );
         assert!(
-            second_publication.events().iter().all(|envelope| matches!(
+            second_tail.iter().all(|envelope| matches!(
                 envelope.payload(),
                 intention_domain::DomainEventDto::ToolLifecycle(event)
                     if event.call_id() == second_call
             )),
-            "the second publication never repeats the first call's evidence"
+            "the second invocation never repeats the first call's evidence"
         );
     }
 
     #[test]
     fn tool_result_publication_requires_evidence_for_the_exact_committed_call() {
-        let recorder = Arc::new(RecordingPublisher::default());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "exact correlation");
-        let committed_through = recorder
-            .records()
-            .last()
-            .expect("the started turn published once")
-            .position();
+        let committed_through = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
@@ -3797,11 +3740,9 @@ mod tests {
                 workspace,
             )
             .expect("read completes");
-        let records_after_invocation = recorder.records().len();
 
         let publisher = DurableToolResultPublisher {
             repository: &facade.inner.repository,
-            publisher: &recorder,
             after_sequence: committed_through,
         };
         let uncommitted = ToolResultPublicationInputDto::new(
@@ -3834,7 +3775,6 @@ mod tests {
             .at_sequence();
         let drained = DurableToolResultPublisher {
             repository: &facade.inner.repository,
-            publisher: &recorder,
             after_sequence: current_position,
         };
         let exact =
@@ -3843,20 +3783,10 @@ mod tests {
             .publish_tool_result(&exact)
             .expect_err("a reread window after the commit contains no evidence");
         assert_eq!(error.code(), "tool_result_evidence_unavailable");
-        assert_eq!(
-            recorder.records().len(),
-            records_after_invocation,
-            "refused correlations never publish"
-        );
 
         publisher
             .publish_tool_result(&exact)
             .expect("the exact committed identity correlates");
-        assert_eq!(
-            recorder.records().len(),
-            records_after_invocation + 1,
-            "exact correlation publishes once"
-        );
     }
 
     // ---------------------------------------------------------------------
@@ -3929,6 +3859,7 @@ mod tests {
         // A fresh run now schedules with the committed snapshot.
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let result = send_user_turn(&facade, session_id, "fresh turn");
         let ProtocolCommandResultDto::Accepted(accepted) = result else {
             unreachable!("fresh turn is accepted")
@@ -4437,10 +4368,7 @@ mod tests {
         GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
         ReconcileUnavailableQueueCommandDto, SetSessionProviderProfileCommandDto,
     };
-    use intention_storage::{
-        PersistResolvedRunProviderSelectionInputDto, ProviderSelectionRepositoryDto,
-        ProviderUsageRepositoryDto,
-    };
+    use intention_storage::{AcceptUserTurnInputDto, ProviderUsageRepositoryDto};
 
     const FAKE_SECRET: &str = "sk-test-sweep-zone5";
 
@@ -4666,19 +4594,24 @@ mod tests {
     }
 
     #[test]
-    fn legacy_turns_stay_selection_less_without_a_catalog() {
+    fn turn_without_an_applicable_profile_is_rejected_before_any_commit() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
-            directory.path().join("legacy-turn.sqlite"),
+            directory.path().join("selection-less-turn.sqlite"),
             fixture_config_snapshot(),
         )
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let accepted = send_user_turn(&facade, session_id, "legacy turn");
-        let ProtocolCommandResultDto::Accepted(_) = accepted else {
-            unreachable!("legacy turn without a catalog keeps the selection-less path")
+        // No catalog is active, so no profile applies: the turn fails closed
+        // with a typed resolution error before any durable commit.
+        // Selection-less (no-profile) deployments are not a supported state.
+        let rejected = send_user_turn(&facade, session_id, "unresolvable turn");
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("a turn without any applicable profile is rejected")
         };
+        assert_eq!(error.code(), "provider_profile_runtime_unavailable");
+        assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
     }
 
     #[test]
@@ -4828,8 +4761,9 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
-        // The run starts before any catalog is active, so the legacy path
-        // commits it without a persisted immutable provider selection.
+        // Every accepted run carries its persisted immutable selection: the
+        // run starts only after the catalog is seeded and active.
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "held fixture turn");
 
         facade
@@ -4841,58 +4775,24 @@ mod tests {
                 .expect("held status reads"),
             "held runs are never auto-scheduled"
         );
-        // A legacy M4 run without a persisted immutable selection fails
-        // closed verification: the run stays held and nothing dispatches.
+
+        // Admission verifies the exact registry key of the persisted
+        // selection against the active seeded catalog and dispatches exactly
+        // once after the durable commit.
         let before = facade
             .inner
             .dispatch
             .admitted()
             .expect("dispatch record reads")
             .len();
-
         let admit = AdmitRecoveredRunCommandDto {
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
             operation_id: "admit-1".to_owned(),
         };
         let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(admit.clone()));
-        let ProtocolCommandResultDto::Rejected(error) = result else {
-            unreachable!("admission without a persisted selection fails verification")
-        };
-        assert_eq!(error.code(), "held_run_admission_verification_failed");
-        assert!(
-            facade
-                .is_recovered_run_held_for_daemon(session_id, run_id)
-                .expect("held status reads"),
-            "failed verification leaves the run held"
-        );
-        assert_eq!(
-            facade
-                .inner
-                .dispatch
-                .admitted()
-                .expect("dispatch record reads")
-                .len(),
-            before,
-            "failed verification never dispatches"
-        );
-        // Persist the exact immutable selection of the seeded catalog:
-        // admission then verifies the exact registry key and dispatches
-        // exactly once after the durable commit.
-        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
-        facade
-            .inner
-            .repository
-            .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-                session_id,
-                run_id,
-                selection: seeded_catalog_selection(),
-                occurred_at: 3,
-            })
-            .expect("resolved selection persists");
-        let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(admit.clone()));
         let ProtocolCommandResultDto::Accepted(accepted) = result else {
-            unreachable!("held run admission is accepted")
+            unreachable!("held run admission is accepted after exact verification")
         };
         let Some(ProtocolAcceptedResultDto::AdmitRecoveredRun(_)) = accepted.result() else {
             unreachable!("held run admission returns typed evidence")
@@ -4910,76 +4810,78 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(_) = result else {
             unreachable!("repeat admission is accepted")
         };
-        let admitted_twice = facade
-            .inner
-            .dispatch
-            .admitted()
-            .expect("dispatch record reads");
         assert_eq!(
-            admitted_twice.len(),
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch record reads")
+                .len(),
             before + 1,
             "admission never schedules a second task"
         );
-    }
 
-    /// Formats one digest as sixty-four lowercase hexadecimal characters.
-    fn digest_hex(digest: Digest256) -> String {
-        digest
-            .bytes()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-    /// Builds the exact immutable selection of the seeded catalog fixture.
-    ///
-    /// `seed_catalog` derives the profile revision, kind descriptor revision,
-    /// and driver contract deterministically; this fixture mirrors that
-    /// derivation so the persisted selection resolves the exact admitted
-    /// registry key.
-    fn seeded_catalog_selection() -> ProviderSelectionV1 {
-        let kind = "openrouter";
-        let model = "fixture-model";
-        let endpoint = "https://api.example.invalid/v0";
-        let subset = ["text_input", "text_streaming"];
-        let profile_revision = format!(
-            "profile-{}",
-            &digest_hex(Digest256::sha256(
-                format!(
-                    "ir-profile-v1|kind={kind}|model={model}|endpoint={endpoint}|subset={}",
-                    subset.join(",")
-                )
-                .as_bytes(),
-            ))[..16]
+        // A held run whose persisted selection is not admitted by the active
+        // catalog fails closed verification: the run stays held and nothing
+        // dispatches. The storage contract binds each selection digest to one
+        // run, so this second selected run is committed directly through the
+        // repository with a stale fixture selection instead of re-resolving
+        // the catalog's (already bound) default selection.
+        let second_session = SessionId::new();
+        create_in_workspace(
+            &facade,
+            second_session,
+            &std::env::temp_dir().join(format!("intention-held-drift-{second_session}")),
         );
-        let kind_descriptor_revision = format!(
-            "kind-{}",
-            &digest_hex(Digest256::sha256(
-                format!(
-                    "ir-kind-v1|kind={kind}|family={kind}-descriptor-v1|endpoint_policy=https-only|transport_contract=bearer|driver_family={kind}"
-                )
-                .as_bytes(),
-            ))[..16]
+        let stale_selection = ProviderSelectionV1 {
+            provider_profile_revision_id: "rev-1".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kd-1".to_owned(),
+            model_id: "stale-model".to_owned(),
+            normalized_effective_endpoint: "https://api.example.invalid/v9".to_owned(),
+            ..fixture_selection()
+        };
+        let second_run = fabricate_started_run_with_selection(
+            &facade,
+            second_session,
+            stale_selection,
+            "held stale turn",
         );
-        ProviderSelectionV1 {
-            selection_canonicalization_version: "1".to_owned(),
-            profile_id: "default".to_owned(),
-            provider_profile_revision_id: profile_revision,
-            kind_id: kind.to_owned(),
-            kind_descriptor_revision_id: kind_descriptor_revision,
-            model_id: model.to_owned(),
-            normalized_effective_endpoint: endpoint.to_owned(),
-            credential_transport_mode: DomainCredentialTransportMode::Bearer,
-            credential_transport_safe_header_name: None,
-            declared_model_capability_subset: subset
-                .iter()
-                .map(|capability| (*capability).to_owned())
-                .collect(),
-            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
-            effective_execution_policy: "execution-timeout-30-attempts-3".to_owned(),
-            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
-            provider_driver_contract_revision: format!("{kind}-1.1"),
-            selection_source: Some("catalog-rev-1".to_owned()),
-        }
+        facade
+            .mark_recovered_run_held_for_daemon(second_session, second_run)
+            .expect("second recovered run is held");
+        let drift_admit = AdmitRecoveredRunCommandDto {
+            session_id: second_session.to_string(),
+            run_id: second_run.to_string(),
+            operation_id: "admit-2".to_owned(),
+        };
+        let before_drift = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch record reads")
+            .len();
+        let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(drift_admit));
+        let ProtocolCommandResultDto::Rejected(error) = result else {
+            unreachable!("a stale persisted selection fails verification")
+        };
+        assert_eq!(error.code(), "held_run_admission_verification_failed");
+        assert!(
+            facade
+                .is_recovered_run_held_for_daemon(second_session, second_run)
+                .expect("held status reads"),
+            "failed verification leaves the run held"
+        );
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch record reads")
+                .len(),
+            before_drift,
+            "failed verification never dispatches"
+        );
     }
     #[test]
     fn usage_is_never_double_counted() {
@@ -4991,6 +4893,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "usage fixture turn");
         let event = intention_storage::ProviderUsageEventInputDto {
             run_id,
@@ -5054,6 +4957,7 @@ mod tests {
             fixture_config_snapshot(),
         )
         .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let selection = fixture_selection();
         let mut enqueued = Vec::new();
         for index in 0..9 {
@@ -5075,7 +4979,19 @@ mod tests {
                 ),
             ));
             assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
-            let run_id = started_run(&facade, session_id, &format!("queue turn {index}"));
+            // The durable storage contract binds each selection digest to one
+            // run, so each queued run commits a distinct immutable selection
+            // directly through the repository; the wire path would always
+            // resolve the same single catalog profile.
+            let mut run_selection = fixture_selection();
+            run_selection.model_id = format!("fixture-model-{index}");
+            run_selection.provider_profile_revision_id = format!("rev-{index}");
+            let run_id = fabricate_started_run_with_selection(
+                &facade,
+                session_id,
+                run_selection,
+                &format!("queue turn {index}"),
+            );
             facade
                 .enqueue_unavailable_run_for_daemon(
                     run_id,

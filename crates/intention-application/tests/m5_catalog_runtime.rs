@@ -1103,18 +1103,32 @@ fn candidate_issues_are_bounded_at_thirty_two() {
 // ============================================================================
 
 #[test]
-fn semantic_equal_candidate_produces_no_new_revision() {
+fn semantic_equal_candidate_activates_an_empty_catalog_then_produces_no_new_revision() {
     let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
     let fake = FakeCatalog::new();
     let builds = Arc::new(AtomicUsize::new(0));
     let controller = fake.build_controller(vec![responses_factory(builds.clone())]);
-    let outcome = controller
+
+    // No catalog is active yet: the first startup declaration is accepted
+    // even when it is semantically equal to the active configuration
+    // snapshot, so a fresh daemon activates its startup provider exactly once
+    // (no selection-less fallback under ADR 0038).
+    let first = controller
         .prepare_candidate(base_source(&previous, "model-a"), 1_000)
-        .expect("semantic-equal candidate is a no-op");
-    assert!(!outcome.changed);
-    assert_eq!(outcome.catalog_revision_id, None);
-    assert!(!outcome.pending_removal);
-    assert_eq!(builds.load(Ordering::SeqCst), 0);
+        .expect("first semantic-equal candidate activates the empty catalog");
+    assert!(first.changed);
+    assert_eq!(first.catalog_revision_id, Some(1));
+    assert!(!first.pending_removal);
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+    // With an active catalog, a semantically equal candidate is a no-op.
+    let second = controller
+        .prepare_candidate(base_source(&previous, "model-a"), 2_000)
+        .expect("semantic-equal candidate is a no-op once a catalog is active");
+    assert!(!second.changed);
+    assert_eq!(second.catalog_revision_id, None);
+    assert!(!second.pending_removal);
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
 }
 
 #[test]

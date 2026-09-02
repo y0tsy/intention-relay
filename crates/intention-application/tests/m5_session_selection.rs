@@ -1891,7 +1891,7 @@ fn degraded_mode_rejects_blocked_pending_removal_and_recovery_required() {
 }
 
 // ============================================================================
-// provider_selection_from through the application service
+// provider_selection_from through the live user-turn variant
 // ============================================================================
 
 #[test]
@@ -1900,16 +1900,18 @@ fn provider_selection_from_attaches_the_resolved_selection_to_the_durable_input(
     let catalog = seeded_catalog();
     let defaults = FakeDefaults::new();
     let repo = FakeAppRepo::new(catalog, defaults, queued_change(session_id));
+    let dispatch = FakeDispatch::new();
     let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
     let turn = SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
         .expect("fixture command is valid")
         .with_profile_override("default", None)
         .expect("fixture override is valid");
     let result = ApplicationService::new(&repo)
-        .send_user_turn_with_provider_selection(
+        .send_user_turn_and_schedule_with_provider_selection(
             turn,
             SendUserTurnWorkflowInputDto::new(RunId::new(), fixture_snapshot(), time()),
             &port,
+            &dispatch,
         )
         .expect("selected turn acceptance succeeds");
     assert!(matches!(
@@ -1929,6 +1931,11 @@ fn provider_selection_from_attaches_the_resolved_selection_to_the_durable_input(
         attached.selection_source.as_deref(),
         Some("per_turn_override")
     );
+    assert_eq!(
+        dispatch.call_count(),
+        0,
+        "a queued outcome never enters the scheduling path"
+    );
 }
 
 #[test]
@@ -1937,6 +1944,7 @@ fn provider_selection_from_maps_domain_validation_failure_to_provider_profile_re
     let catalog = seeded_catalog();
     let defaults = FakeDefaults::new();
     let repo = FakeAppRepo::new(catalog, defaults, queued_change(session_id));
+    let dispatch = FakeDispatch::new();
     // The resolved profile id passes the protocol bound but violates the
     // canonical domain 63-character bound, so the failure is raised by the
     // durable selection validation inside provider_selection_from.
@@ -1947,14 +1955,16 @@ fn provider_selection_from_maps_domain_validation_failure_to_provider_profile_re
         .with_profile_override("default", None)
         .expect("fixture override is valid");
     let error = ApplicationService::new(&repo)
-        .send_user_turn_with_provider_selection(
+        .send_user_turn_and_schedule_with_provider_selection(
             turn,
             SendUserTurnWorkflowInputDto::new(RunId::new(), fixture_snapshot(), time()),
             &port,
+            &dispatch,
         )
         .expect_err("over-bound profile id is rejected");
     assert_eq!(error.code(), "provider_profile_revision_invalid");
     assert!(repo.accepted.borrow().is_none());
+    assert_eq!(dispatch.call_count(), 0);
 }
 
 #[test]
@@ -1963,16 +1973,18 @@ fn provider_selection_from_preserves_the_safe_header_transport() {
     let catalog = seeded_catalog();
     let defaults = FakeDefaults::new();
     let repo = FakeAppRepo::new(catalog, defaults, queued_change(session_id));
+    let dispatch = FakeDispatch::new();
     let port = FakeAdmissionPort::with("default", Ok(safe_header_profile("default", "rev-0001")));
     let turn = SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
         .expect("fixture command is valid")
         .with_profile_override("default", None)
         .expect("fixture override is valid");
     ApplicationService::new(&repo)
-        .send_user_turn_with_provider_selection(
+        .send_user_turn_and_schedule_with_provider_selection(
             turn,
             SendUserTurnWorkflowInputDto::new(RunId::new(), fixture_snapshot(), time()),
             &port,
+            &dispatch,
         )
         .expect("safe-header selection acceptance succeeds");
     let accepted_borrow = repo.accepted.borrow();
@@ -1989,6 +2001,7 @@ fn provider_selection_from_preserves_the_safe_header_transport() {
         attached.credential_transport_safe_header_name.as_deref(),
         Some("x-auth-header")
     );
+    assert_eq!(dispatch.call_count(), 0);
 }
 
 // ============================================================================
@@ -2005,8 +2018,7 @@ fn resolve_for_turn_uses_the_per_turn_override() {
             Some("global-default".to_owned()),
             &port,
         )
-        .expect("override resolves")
-        .expect("override produces a selection");
+        .expect("override resolves");
     assert_eq!(resolved.profile_id, "default");
     assert_eq!(
         resolved.selection_source.as_deref(),
@@ -2027,8 +2039,7 @@ fn resolve_for_turn_uses_the_session_default_when_no_override() {
             Some("global-default".to_owned()),
             &port,
         )
-        .expect("session default resolves")
-        .expect("session default produces a selection");
+        .expect("session default resolves");
     assert_eq!(resolved.profile_id, "session-default");
     assert_eq!(
         resolved.selection_source.as_deref(),
@@ -2049,19 +2060,19 @@ fn resolve_for_turn_uses_the_global_default_when_no_override_or_session_default(
             Some("global-default".to_owned()),
             &port,
         )
-        .expect("global default resolves")
-        .expect("global default produces a selection");
+        .expect("global default resolves");
     assert_eq!(resolved.profile_id, "global-default");
     assert_eq!(resolved.selection_source.as_deref(), Some("global_default"));
 }
 
 #[test]
-fn resolve_for_turn_keeps_the_legacy_none_path_when_no_profile_applies() {
+fn resolve_for_turn_rejects_when_no_profile_applies() {
     let port = FakeAdmissionPort::new();
-    let resolved = SelectionResolutionService
+    let error = SelectionResolutionService
         .resolve_for_turn(&command(None, None), None, None, &port)
-        .expect("legacy resolution succeeds");
-    assert!(resolved.is_none());
+        .expect_err("a turn without any applicable profile is rejected");
+    assert_eq!(error.code(), "provider_profile_runtime_unavailable");
+    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
 }
 
 #[test]
@@ -2107,50 +2118,6 @@ fn resolve_for_turn_passes_through_unrelated_port_errors() {
         .resolve_for_turn(&command(Some("default"), None), None, None, &port)
         .expect_err("unrelated error passes through");
     assert_eq!(error.code(), "execution_not_ready");
-}
-
-#[test]
-fn resolve_for_override_returns_none_without_an_override() {
-    let port = FakeAdmissionPort::new();
-    let resolved = SelectionResolutionService
-        .resolve_for_override(None, None, &port)
-        .expect("absent override resolves");
-    assert!(resolved.is_none());
-}
-
-#[test]
-fn resolve_for_override_rejects_an_expected_revision_mismatch() {
-    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
-    let error = SelectionResolutionService
-        .resolve_for_override(Some("default"), Some("rev-0009"), &port)
-        .expect_err("fork revision mismatch is rejected");
-    assert_eq!(error.code(), "provider_profile_revision_mismatch");
-}
-
-#[test]
-fn resolve_for_override_builds_a_fork_override_selection() {
-    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
-    let resolved = SelectionResolutionService
-        .resolve_for_override(Some("default"), Some("rev-0001"), &port)
-        .expect("fork override resolves")
-        .expect("fork override produces a selection");
-    assert_eq!(resolved.profile_id, "default");
-    assert_eq!(resolved.selection_source.as_deref(), Some("fork_override"));
-}
-
-#[test]
-fn resolve_for_override_maps_tombstoned_admission_failures_to_runtime_unavailable() {
-    let port = FakeAdmissionPort::with(
-        "default",
-        Err(ErrorDto::unavailable(
-            "provider_profile_tombstoned",
-            "the resolved provider profile is tombstoned",
-        )),
-    );
-    let error = SelectionResolutionService
-        .resolve_for_override(Some("default"), None, &port)
-        .expect_err("tombstoned profile is mapped");
-    assert_eq!(error.code(), "provider_profile_runtime_unavailable");
 }
 
 // ============================================================================

@@ -17,6 +17,7 @@ use intention_application::ScheduleModelRunDto;
 #[cfg(feature = "test-support")]
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
+use intention_daemon::DaemonToolExecutor;
 use intention_domain::{GetSessionSnapshotQueryDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
@@ -230,6 +231,14 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
+    facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 
@@ -491,11 +500,12 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
     let observer = RecordingObserver::default();
 
     let outcome = facade
-        .execute_scheduled_model_run_for_daemon(
+        .execute_scheduled_model_run_for_daemon_with_tool_executor(
             schedule(session_id, run_id, snapshot),
             ModelCancellationSignal::new(),
             &TokioTime,
             &observer,
+            &DaemonToolExecutor::new(facade.clone()),
         )
         .await
         .expect("scripted execution completes");
@@ -856,6 +866,14 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         first_driver.clone(),
     )
     .expect("first durable host facade opens");
+    first_facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     let session_id = SessionId::new();
     assert!(matches!(
         first_facade.command(ProtocolCommandDto::CreateSession(

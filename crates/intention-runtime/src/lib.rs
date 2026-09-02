@@ -397,14 +397,15 @@ pub trait ModelRunCommitObserver: Send + Sync {
     fn observe_model_run_commit(&self, committed: ModelRunCommitDto);
 }
 
-/// DTO-only executor over injected storage, selected driver, time port, and optional observer.
+/// DTO-only executor over injected storage, selected driver, time port, optional
+/// observer and gate, and the mandatory tool executor.
 pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
     observer: Option<&'a dyn ModelRunCommitObserver>,
     first_append_gate: Option<&'a dyn ModelRunFirstAppendGate>,
-    tool_executor: Option<&'a dyn ToolExecutionPort>,
+    tool_executor: &'a dyn ToolExecutionPort,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
@@ -413,16 +414,24 @@ where
     Driver: ModelExecutionDriver + ?Sized,
     Time: ModelTimePort,
 {
-    /// Creates an executor without selecting providers or owning an async runtime.
+    /// Creates an executor with the mandatory tool executor.
+    ///
+    /// Provider-emitted tool calls always execute through the supplied
+    /// `ToolExecutionPort`; a no-port fallback no longer exists.
     #[must_use]
-    pub const fn new(repository: &'a Repository, driver: &'a Driver, time: &'a Time) -> Self {
+    pub const fn new(
+        repository: &'a Repository,
+        driver: &'a Driver,
+        time: &'a Time,
+        tool_executor: &'a dyn ToolExecutionPort,
+    ) -> Self {
         Self {
             repository,
             driver,
             time,
             observer: None,
             first_append_gate: None,
-            tool_executor: None,
+            tool_executor,
         }
     }
 
@@ -433,6 +442,7 @@ where
         driver: &'a Driver,
         time: &'a Time,
         observer: &'a dyn ModelRunCommitObserver,
+        tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
             repository,
@@ -440,7 +450,7 @@ where
             time,
             observer: Some(observer),
             first_append_gate: None,
-            tool_executor: None,
+            tool_executor,
         }
     }
 
@@ -455,6 +465,7 @@ where
         time: &'a Time,
         observer: &'a dyn ModelRunCommitObserver,
         first_append_gate: &'a dyn ModelRunFirstAppendGate,
+        tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
             repository,
@@ -462,47 +473,7 @@ where
             time,
             observer: Some(observer),
             first_append_gate: Some(first_append_gate),
-            tool_executor: None,
-        }
-    }
-
-    /// Adds a deterministic tool executor for the model-tool loop.
-    ///
-    /// Without an executor, tool calls durably deny with
-    /// `tool_execution_unavailable` exactly as in the pre-loop runtime.
-    #[must_use]
-    pub const fn with_tool_executor(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: None,
-            first_append_gate: None,
-            tool_executor: Some(tool_executor),
-        }
-    }
-
-    /// Adds a post-commit observer and a deterministic tool executor together.
-    #[must_use]
-    pub const fn with_commit_observer_and_tool_executor(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        observer: &'a dyn ModelRunCommitObserver,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: Some(observer),
-            first_append_gate: None,
-            tool_executor: Some(tool_executor),
+            tool_executor,
         }
     }
 
@@ -723,124 +694,80 @@ where
                     calls,
                 } => {
                     cursor = calls_cursor;
-                    match self.tool_executor {
-                        None => {
-                            let failure = RunFailureDto::new(
-                                "tool_execution_unavailable",
-                                ErrorRetryDto::Never,
-                                None,
-                            )?;
-                            let mut facts = calls
-                                .iter()
-                                .cloned()
-                                .map(ModelRunFactInputDto::tool_call_recorded)
-                                .collect::<Vec<_>>();
-                            facts.push(ModelRunFactInputDto::failed(failure));
-                            cursor = self.append(
-                                input.session_id,
-                                input.run_id,
-                                cursor,
-                                facts,
-                                Some(RunStatusDto::Failed),
-                            )?;
-                            return Ok(AttemptResult::FailedTerminal { cursor });
+                    tool_round += 1;
+                    messages.push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
+                    for call in calls {
+                        let facts = vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
+                        cursor =
+                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
+                        if input.cancellation.is_cancelled() {
+                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
                         }
-                        Some(port) => {
-                            tool_round += 1;
-                            messages
-                                .push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
-                            for call in calls {
-                                let facts =
-                                    vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    facts,
-                                    None,
-                                )?;
-                                if input.cancellation.is_cancelled() {
-                                    return self.cancel_attempt(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                    );
-                                }
-                                let outcome = match port
-                                    .execute_tool(input.session_id, input.run_id, call.clone())
-                                    .await
-                                {
-                                    Ok(outcome) => outcome,
-                                    Err(error) => {
-                                        // A tool infrastructure error is a typed failed
-                                        // tool result: record it first, then terminalize.
-                                        let failure = failure_from_error(&error)?;
-                                        let outcome = ToolResultOutcomeDto::failed(failure.clone());
-                                        let fact = ModelRunFactInputDto::tool_result_recorded(
-                                            call.call_id(),
-                                            outcome,
-                                        )?;
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            vec![fact],
-                                            None,
-                                        )?;
-                                        *durable_output = true;
-                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            facts,
-                                            Some(RunStatusDto::Failed),
-                                        )?;
-                                        return Ok(AttemptResult::FailedTerminal { cursor });
-                                    }
-                                };
-                                if input.cancellation.is_cancelled() {
-                                    return self.cancel_attempt(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                    );
-                                }
+                        let outcome = match self
+                            .tool_executor
+                            .execute_tool(input.session_id, input.run_id, call.clone())
+                            .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                // A tool infrastructure error is a typed failed
+                                // tool result: record it first, then terminalize.
+                                let failure = failure_from_error(&error)?;
+                                let outcome = ToolResultOutcomeDto::failed(failure.clone());
                                 let fact = ModelRunFactInputDto::tool_result_recorded(
                                     call.call_id(),
-                                    outcome.clone(),
+                                    outcome,
                                 )?;
-                                let facts = vec![fact];
                                 cursor = self.append(
                                     input.session_id,
                                     input.run_id,
                                     cursor,
-                                    facts,
+                                    vec![fact],
                                     None,
                                 )?;
                                 *durable_output = true;
-                                match outcome {
-                                    ToolResultOutcomeDto::Succeeded { content } => {
-                                        let message =
-                                            ModelMessageDto::tool_result(call.call_id(), content)?;
-                                        messages.push(message);
-                                    }
-                                    ToolResultOutcomeDto::Failed { failure } => {
-                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            facts,
-                                            Some(RunStatusDto::Failed),
-                                        )?;
-                                        return Ok(AttemptResult::FailedTerminal { cursor });
-                                    }
-                                }
+                                let facts = vec![ModelRunFactInputDto::failed(failure)];
+                                cursor = self.append(
+                                    input.session_id,
+                                    input.run_id,
+                                    cursor,
+                                    facts,
+                                    Some(RunStatusDto::Failed),
+                                )?;
+                                return Ok(AttemptResult::FailedTerminal { cursor });
                             }
-                            request = input.request.with_messages(messages.clone())?;
+                        };
+                        if input.cancellation.is_cancelled() {
+                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
+                        }
+                        let fact = ModelRunFactInputDto::tool_result_recorded(
+                            call.call_id(),
+                            outcome.clone(),
+                        )?;
+                        let facts = vec![fact];
+                        cursor =
+                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
+                        *durable_output = true;
+                        match outcome {
+                            ToolResultOutcomeDto::Succeeded { content } => {
+                                let message =
+                                    ModelMessageDto::tool_result(call.call_id(), content)?;
+                                messages.push(message);
+                            }
+                            ToolResultOutcomeDto::Failed { failure } => {
+                                let facts = vec![ModelRunFactInputDto::failed(failure)];
+                                cursor = self.append(
+                                    input.session_id,
+                                    input.run_id,
+                                    cursor,
+                                    facts,
+                                    Some(RunStatusDto::Failed),
+                                )?;
+                                return Ok(AttemptResult::FailedTerminal { cursor });
+                            }
                         }
                     }
+                    request = input.request.with_messages(messages.clone())?;
                 }
             }
         }
@@ -848,9 +775,9 @@ where
 
     /// Drives one provider round: a single stream with its own start event.
     ///
-    /// Tool-call events are only collected here; durable recording, execution,
-    /// and request extension happen in [`Self::drive_attempt`] so the no-port
-    /// denial stays a single atomic append.
+    /// Tool-call events are only collected here; durable recording and
+    /// execution happen in [`Self::drive_attempt`] against the mandatory tool
+    /// executor.
     #[expect(
         clippy::too_many_arguments,
         reason = "The round helper carries the attempt's mutable state explicitly so the caller owns the tool loop."

@@ -210,6 +210,7 @@ impl HostState {
                         &TokioTime,
                         &observer,
                         first_append_gate,
+                        &executor,
                     )
                     .await
             } else {
@@ -248,11 +249,12 @@ impl HostState {
             {
                 let _ = host
                     .facade
-                    .execute_scheduled_model_run_for_daemon(
+                    .execute_scheduled_model_run_for_daemon_with_tool_executor(
                         schedule,
                         cancellation,
                         &TokioTime,
                         &observer,
+                        &executor,
                     )
                     .await;
             }
@@ -1637,7 +1639,21 @@ mod tests {
         }
     }
 
+    /// Seeds one auto-accepted provider catalog revision with an enabled
+    /// `default` profile so user turns resolve a provider selection.
+    fn seed_catalog(facade: &DaemonApplicationFacade) {
+        facade
+            .seed_fixture_catalog_for_test_support(
+                "seed-1",
+                "openrouter",
+                "fixture-model",
+                "https://api.example.invalid/v1",
+            )
+            .expect("fixture catalog seeds")
+    }
+
     fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
+        seed_catalog(facade);
         let session_id = SessionId::new();
         assert!(matches!(
             facade.command(ProtocolCommandDto::CreateSession(
@@ -1693,6 +1709,7 @@ mod tests {
     #[tokio::test]
     async fn async_host_keeps_m3_requests_and_run_streams_on_one_listener() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
+        seed_catalog(&facade);
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let host = host_for_test(facade);

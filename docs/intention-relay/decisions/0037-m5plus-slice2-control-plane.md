@@ -63,9 +63,9 @@ with the family errors:
 | Context | `context_source_manifest_invalid`, `model_context_projection_invalid`, `model_context_projection_too_large` |
 | Rotation, health, and discovery | `credential_rotation_frozen_meaning_mismatch`, `credential_rotation_source_unavailable`, `provider_health_unavailable`, `provider_discovery_unavailable` |
 
-The former `control_plane_unavailable` dispatch stub is not active in Slice 2.
-A dispatch stub remains in `crates/intention/src/lib.rs`; its removal is owned
-by the code zone and is reported to the controller as a required follow-up.
+The former `control_plane_unavailable` dispatch stub is removed from
+`crates/intention/src/lib.rs` (ADR 0038 Wave 7); control-plane dispatch
+failures surface as their typed catalog or admission errors.
 
 ## Canonical codec and identity
 

@@ -525,7 +525,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -539,7 +539,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(

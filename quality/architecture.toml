@@ -186,14 +186,14 @@ coverage_tier = "A"
 name = "intention-application"
 responsibility = "Commands, queries, use cases, and transaction orchestration."
 test_target = "use-case and architecture tests"
-test_targets = ["m3_application", "m4_application_scheduling", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]
+test_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-runtime"
 responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
 test_target = "deterministic actor integration tests"
-test_targets = ["m3_runtime", "m4_application_scheduling", "m4_model_execution", "m5_tool_loop"]
+test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
 coverage_tier = "B"
 
 [[future_crates]]

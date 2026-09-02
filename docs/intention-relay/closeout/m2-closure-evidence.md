@@ -58,7 +58,7 @@ and [Implementation Roadmap](../architecture/11-implementation-roadmap.md).
 | Endpoint boundary | Unix fixture checks `0700`, `0600`, and owned-socket cleanup; Windows fixture checks named-pipe lifecycle. | Linux and Windows evidence separated by platform. |
 | Bootstrap readiness | Client fixtures reject missing capabilities, health/version divergence, non-`Ready` states, malformed response versions, and correlation mismatch. | Pass. |
 | Shared daemon state | `daemon_bootstrap` concurrently bootstraps two clients, then compares typed health, snapshot, and subscription tail for one explicit fixture SessionId. | Pass. |
-| Recovery | `SessionSubscriptionRecovery` uses its recorded last sequence on a fresh request connection and clears state on typed resync. | Pass. |
+| Recovery | The client's one-shot snapshot-and-tail subscription returns the current durable projection with a contiguous tail or a typed resync; the test-only `SessionSubscriptionRecovery` wrapper was removed under ADR 0038 (no production caller). | Pass. |
 | TUI adapter proof | `tui_contract` reaches ready health and the fixture subscription only through `TuiProofClient` → `IntentionClient`; architecture policy rejects a daemon production dependency. | Pass. |
 | Tier C coverage | `quality/reports/coverage-{default,no_default,all}.json` meet every active M2 Tier C threshold. | Local default: transport 87.06%, client 89.39%, composition 94.07%, daemon library 89.60%; thin daemon `main.rs` is the sole reviewed exclusion because Windows `llvm-cov` does not merge child-process instrumentation, while `daemon_bootstrap` exercises the real binary. All ≥85%. |
 | Supply chain | `cargo deny`, audit, udeps, machete, outdated and locked metadata run under `make verify`. | Pass. |

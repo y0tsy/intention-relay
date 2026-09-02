@@ -380,18 +380,6 @@ where
         self.invoke_local_tool_with_publication(input, &())
     }
 
-    /// Executes one local tool through the supplied workspace-rooted tool
-    /// service and lifecycle hooks. This remains a single invocation: it does
-    /// not admit model work or enter a mandate loop.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed validation, storage, workspace, or tool execution
-    /// error.
-    pub fn invoke_local_tool_once(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult> {
-        self.invoke_local_tool(input)
-    }
-
     /// Executes, durably commits, publishes, then dispatches the after-publish hook.
     ///
     /// # Errors
@@ -869,150 +857,11 @@ where
         ))
     }
 
-    /// Accepts a user turn and maps the repository's durable started/queued outcome.
-    ///
-    /// The repository is the sole idempotency authority. Repeating identical
-    /// content returns its committed result; conflicting content remains a typed
-    /// repository conflict.
-    ///
-    /// # Errors
-    ///
-    /// Returns typed validation, conflict, or availability errors from the
-    /// storage contract, or an internal consistency error for a malformed
-    /// accepted-turn commit.
-    pub fn send_user_turn(
-        &self,
-        command: SendUserTurnCommandDto,
-        input: SendUserTurnWorkflowInputDto,
-    ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let change = self
-            .repository
-            .accept_user_turn(AcceptUserTurnInputDto::new(
-                command.session_id(),
-                command.turn_id(),
-                command.content(),
-                input.proposed_run_id,
-                input.config_snapshot,
-                input.occurred_at,
-            )?)?;
-        let accepted = accepted_user_turn(&command, &change)?;
-        Ok(accepted)
-    }
-
-    /// Accepts a user turn and schedules an exactly-started run only after its initial commit.
-    ///
-    /// Queued outcomes and idempotent retry evidence never load model context or
-    /// dispatch. Any post-commit context or dispatch failure is durably recorded
-    /// against the exact `Starting` run and this method still returns the original
-    /// acceptance.
-    ///
-    /// # Errors
-    ///
-    /// Returns an admission or malformed durable-acceptance error. Post-commit
-    /// scheduling failures deliberately preserve the committed acceptance result.
-    pub fn send_user_turn_and_schedule<Dispatch>(
-        &self,
-        command: SendUserTurnCommandDto,
-        input: SendUserTurnWorkflowInputDto,
-        dispatch: &Dispatch,
-    ) -> DtoResult<ProtocolAcceptedResultDto>
-    where
-        Dispatch: ModelRunDispatchPort,
-    {
-        let occurred_at = input.occurred_at();
-        let change = self
-            .repository
-            .accept_user_turn(AcceptUserTurnInputDto::new(
-                command.session_id(),
-                command.turn_id(),
-                command.content(),
-                input.proposed_run_id,
-                input.config_snapshot,
-                input.occurred_at,
-            )?)?;
-        let accepted = accepted_user_turn(&command, &change)?;
-        let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted else {
-            unreachable!("accepted user turn always returns user-turn acceptance")
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = accepted_turn.outcome() else {
-            return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-        };
-        if !started_run_committed_in(&change, run_id) {
-            return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-        }
-        let session_id = accepted_turn.session_id();
-        let schedule = match self
-            .repository
-            .load_starting_run_model_context(session_id, run_id)
-        {
-            Ok(context) if context.session_id() == session_id && context.run_id() == run_id => {
-                match schedule_from_context(context) {
-                    Ok(schedule) => schedule,
-                    Err(_) => {
-                        preserve_accepted_after_scheduling_failure(
-                            self.repository,
-                            session_id,
-                            run_id,
-                            "model_context_unavailable",
-                            occurred_at,
-                        );
-                        return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-                    }
-                }
-            }
-            Ok(_) | Err(_) => {
-                preserve_accepted_after_scheduling_failure(
-                    self.repository,
-                    session_id,
-                    run_id,
-                    "model_context_unavailable",
-                    occurred_at,
-                );
-                return Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn));
-            }
-        };
-        if dispatch.dispatch_model_run(schedule).is_err() {
-            preserve_accepted_after_scheduling_failure(
-                self.repository,
-                session_id,
-                run_id,
-                "model_scheduling_unavailable",
-                occurred_at,
-            );
-        }
-        Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn))
-    }
-
-    /// Accepts a user turn after resolving its provider selection.
-    ///
-    /// The effective profile (per-turn override, then session default, then
-    /// global default) is resolved before any durable commit; a resolution
-    /// failure rejects before `accept_user_turn` runs. A selection-less
-    /// legacy turn keeps the unchanged legacy commit path.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed resolution error before any commit, or the typed
-    /// storage error.
-    pub fn send_user_turn_with_provider_selection(
-        &self,
-        command: SendUserTurnCommandDto,
-        input: SendUserTurnWorkflowInputDto,
-        port: &impl CatalogAdmissionPort,
-    ) -> DtoResult<ProtocolAcceptedResultDto>
-    where
-        Repository: SessionProviderDefaultsRepositoryDto + ProviderCatalogRepositoryDto,
-    {
-        let accept = self.accept_user_turn_input_with_selection(&command, &input, port)?;
-        let change = self.repository.accept_user_turn(accept)?;
-        accepted_user_turn(&command, &change)
-    }
-
     /// Accepts and schedules a user turn after resolving its provider selection.
     ///
-    /// Selection resolution runs before the durable commit exactly like
-    /// [`Self::send_user_turn_with_provider_selection`]; scheduling follows
-    /// the same post-commit rules as [`Self::send_user_turn_and_schedule`].
+    /// Selection resolution runs before the durable commit; scheduling
+    /// follows the same post-commit rules as the selection-less scheduling
+    /// path it replaced. The repository is the sole idempotency authority.
     ///
     /// # Errors
     ///
@@ -1202,8 +1051,8 @@ where
     /// Resolves and builds the durable turn-acceptance input for one turn.
     ///
     /// The effective profile is resolved before any durable commit; a failed
-    /// resolution returns its typed error so no commit happens. A selection
-    /// is attached only when a profile resolved.
+    /// or absent resolution returns its typed error so no commit happens.
+    /// Every accepted turn carries a resolved provider selection.
     fn accept_user_turn_input_with_selection(
         &self,
         command: &SendUserTurnCommandDto,
@@ -1236,12 +1085,11 @@ where
             input.config_snapshot.clone(),
             input.occurred_at,
         )?;
-        match selection {
-            Some(selection) => Ok(base.with_provider_selection(
-                crate::session_selection::provider_selection_from(&selection)?,
-            )),
-            None => Ok(base),
-        }
+        Ok(
+            base.with_provider_selection(crate::session_selection::provider_selection_from(
+                &selection,
+            )?),
+        )
     }
 }
 
