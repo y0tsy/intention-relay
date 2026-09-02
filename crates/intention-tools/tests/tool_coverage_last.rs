@@ -1,6 +1,7 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
-    BoundedText, GlobInput, GrepInput, GrepScope, ToolInput, ToolResult, ToolService,
+    BoundedText, CancellationSignal, GlobInput, GrepInput, GrepScope, ToolInput, ToolResult,
+    ToolService,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -33,24 +34,26 @@ fn rejects_read_write_edit_symlinks() {
     std::fs::write(&target, "old").unwrap_or_else(|_| unreachable!("seed"));
     symlink(&target, dir.path().join("link")).unwrap_or_else(|_| unreachable!("link"));
     let s = service(&dir);
-    let read = s.dispatch(
+    let read = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Read(ReadInput { path: path("link") }),
+        CancellationSignal::new(),
     );
     assert!(read.is_err());
-    let write = s.dispatch(
+    let write = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: path("link"),
             content: text("x"),
             expected_content: None,
         }),
+        CancellationSignal::new(),
     );
     assert_eq!(
         write.as_ref().err().map(|e| e.code()),
         Some("workspace_path_symlink")
     );
-    let edit = s.dispatch(
+    let edit = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: path("link"),
@@ -58,6 +61,7 @@ fn rejects_read_write_edit_symlinks() {
             new: text("new"),
             expected_content: None,
         }),
+        CancellationSignal::new(),
     );
     assert_eq!(
         edit.as_ref().err().map(|e| e.code()),
@@ -74,13 +78,14 @@ fn direct_grep_rejects_missing_and_directory() {
             std::fs::create_dir_all(dir.path().join(name))
                 .unwrap_or_else(|_| unreachable!("directory"));
         }
-        let result = s.dispatch(
+        let result = s.dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("x"),
                 scope: None,
                 path: Some(path(name)),
             }),
+            CancellationSignal::new(),
         );
         let expected = if name == "missing" {
             "workspace_path_unavailable"
@@ -97,27 +102,30 @@ fn glob_filters_symlink_and_invalid_pattern() {
     std::fs::write(dir.path().join("ok.txt"), "x").unwrap_or_else(|_| unreachable!("seed"));
     let s = service(&dir);
 
-    let result = s.dispatch(
+    let result = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: text("*.txt"),
         }),
+        CancellationSignal::new(),
     );
     assert!(matches!(result, Ok(ToolResult::Glob(_))));
-    let bad = s.dispatch(
+    let bad = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Glob(GlobInput {
             pattern: text("../*"),
         }),
+        CancellationSignal::new(),
     );
     assert!(bad.is_err());
-    let scoped = s.dispatch(
+    let scoped = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Grep(GrepInput {
             pattern: text("x"),
             scope: Some(GrepScope::Workspace),
             path: None,
         }),
+        CancellationSignal::new(),
     );
     assert!(scoped.is_ok());
 }

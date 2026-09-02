@@ -217,9 +217,10 @@ impl ToolProcessStatus {
         match status.code() {
             Some(0) => Self::Success,
             Some(code) => Self::NonZero { code },
-            // Matches the legacy `exit_code:` text rendering for statuses
-            // without a numeric code.
-            None => Self::NonZero { code: -1 },
+            // A reaped child always reports either a recorded signal (checked
+            // above on Unix) or a numeric exit code (Windows always reports
+            // one); a status with neither cannot occur.
+            None => unreachable!("child status has neither signal nor exit code"),
         }
     }
 }
@@ -1107,15 +1108,6 @@ impl ToolService {
     pub const fn new(root: WorkspaceRoot) -> Self {
         Self { root }
     }
-    /// Dispatches a typed call.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe typed error when validation, workspace resolution, or execution fails.
-    pub fn dispatch(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult> {
-        self.dispatch_with_cancellation(call, input, CancellationSignal::new())
-    }
-
     /// Dispatches a typed tool call with cooperative cancellation.
     ///
     /// # Errors
@@ -1158,39 +1150,9 @@ impl ToolService {
         })
     }
 
-    /// Invokes exactly one explicitly admitted local tool call.
-    ///
-    /// This deliberately does not implement a model/tool loop.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while dispatching the tool call.
-    pub fn invoke(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult> {
-        self.dispatch(call, input)
-    }
-
-    /// Compatibility adapter for callers that already have a call id while
-    /// still executing through the correlated invocation boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while dispatching the tool call.
-    pub fn invoke_with_context(
-        &self,
-        context: ToolContext,
-        input: ToolInput,
-    ) -> DtoResult<ToolResultEnvelope> {
-        self.invoke_enveloped(ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context,
-            input,
-        })
-    }
-
     /// Invokes a tool and returns the result-boundary envelope.
     ///
-    /// The invocation context is validated before any tool effect occurs. The
-    /// bare-result APIs remain available for compatibility with existing callers.
+    /// The invocation context is validated before any tool effect occurs.
     ///
     /// # Errors
     ///
@@ -1284,9 +1246,15 @@ fn execute_tool(
     let (stdout, _) = bounded_lossy(&output.stdout);
     let (stderr, _) = bounded_lossy(&output.stderr);
     let truncated = output.stdout_truncated || output.stderr_truncated;
+    // Render the terminal status from the typed classification so the text and
+    // the typed `ToolProcessStatus` can never disagree.
+    let status_text = match process_status {
+        ToolProcessStatus::Success => "exit_code:0".to_owned(),
+        ToolProcessStatus::NonZero { code } => format!("exit_code:{code}"),
+        ToolProcessStatus::Signal { signal } => format!("signal:{signal}"),
+    };
     let text = format!(
-        "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}{}",
-        output.status.code().unwrap_or(-1),
+        "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
     // A known non-zero exit or known signal termination is a normalized

@@ -77,15 +77,6 @@ impl WorkspaceRoot {
         }
     }
 
-    /// Resolves a path while retaining the logical path in a safe DTO boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same safe validation errors as [`Self::resolve_path`].
-    pub fn resolve_path_for_tool(&self, path: &WorkspaceRelativePathDto) -> DtoResult<PathBuf> {
-        self.resolve_path(path)
-    }
-
     /// Resolves the parent of a new file, preserving the final missing component.
     /// Every existing component is canonicalized, so symlink traversal fails closed.
     ///
@@ -295,19 +286,6 @@ mod tests {
             "workspace_root_not_directory"
         );
         let _ = fs::remove_file(file);
-    }
-
-    #[test]
-    fn tool_resolution_matches_path_resolution() {
-        let root = temp_root();
-        fs::write(root.join("tool.txt"), "x").expect("file");
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let path = WorkspaceRelativePathDto::parse("tool.txt").expect("path");
-        assert_eq!(ws.resolve_path_for_tool(&path), ws.resolve_path(&path));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
