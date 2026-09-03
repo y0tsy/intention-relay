@@ -651,9 +651,78 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
         let state = self.state.borrow();
         material_at(&state)
     }
+
+    fn load_prepared_catalog_material(&self) -> DtoResult<ProviderCatalogMaterialDto> {
+        let state = self.state.borrow();
+        let Some(revision) = state.candidate_catalog_revision_id else {
+            return Err(not_found(
+                "provider_catalog_not_active",
+                "no prepared provider catalog candidate is committed",
+            ));
+        };
+        let kind_descriptors = state
+            .kind_records
+            .iter()
+            .filter(|(record_revision, _)| *record_revision == revision)
+            .map(|(_, kind)| kind.clone())
+            .collect::<Vec<_>>();
+        let profiles = state
+            .profile_records
+            .iter()
+            .filter(|(record_revision, _)| *record_revision == revision)
+            .map(|(_, profile)| profile.clone())
+            .collect::<Vec<_>>();
+        Ok(ProviderCatalogMaterialDto {
+            catalog_revision_id: revision,
+            default_profile_id: None,
+            kind_descriptors,
+            profiles,
+        })
+    }
 }
 
 impl ProviderRemovalRepositoryDto for &FakeCatalog {
+    fn load_highest_removal_candidate_revision(&self) -> DtoResult<u64> {
+        let state = self.state.borrow();
+        Ok(state
+            .removal_candidates
+            .iter()
+            .map(|candidate| candidate.candidate_catalog_revision_id)
+            .max()
+            .unwrap_or(0))
+    }
+
+    fn load_pending_removal_candidate(
+        &self,
+    ) -> DtoResult<Option<intention_storage::PendingRemovalCandidateDto>> {
+        let state = self.state.borrow();
+        let Some(candidate_revision) = state.candidate_catalog_revision_id else {
+            return Ok(None);
+        };
+        let Some(candidate) = state.removal_candidates.iter().find(|candidate| {
+            candidate.candidate_catalog_revision_id == candidate_revision
+                && matches!(
+                    candidate.status,
+                    ProviderCatalogRemovalStatusDto::Pending
+                        | ProviderCatalogRemovalStatusDto::Accepted
+                )
+        }) else {
+            return Ok(None);
+        };
+        // The fake never decodes the removed-identity evidence; the removal
+        // lifecycle tests assert readiness and revision identity, and the
+        // SQLite repository tests own the evidence decoding.
+        Ok(Some(intention_storage::PendingRemovalCandidateDto {
+            candidate_handle: candidate.candidate_handle.clone(),
+            candidate_catalog_revision_id: candidate.candidate_catalog_revision_id,
+            active_catalog_revision_id: candidate.active_catalog_revision_id,
+            expires_at: candidate.expires_at,
+            removal_status: candidate.status,
+            removed_profile_ids: Vec::new(),
+            removed_kind_ids: Vec::new(),
+        }))
+    }
+
     fn create_provider_catalog_removal_candidate(
         &self,
         input: CreateProviderCatalogRemovalCandidateInputDto,
@@ -1218,6 +1287,117 @@ fn pending_removal_creation_carries_a_thirty_minute_expiry() {
 }
 
 #[test]
+fn startup_rebuilds_a_pending_removal_candidate_and_acceptance_succeeds() {
+    // PR24-003: after a restart the controller rebuilds the prepared
+    // candidate from durable rows and preserves the real deadline, so
+    // accept/reject work without process memory.
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+
+    let restarted = fake.build_controller(vec![
+        responses_factory(Arc::new(AtomicUsize::new(0))),
+        generic_chat_factory(Arc::new(AtomicUsize::new(0))),
+    ]);
+    let startup = restarted
+        .startup(2_000)
+        .expect("startup rebuilds the pending removal");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::PendingRemoval {
+            candidate_revision: "2".to_owned(),
+            expires_at: 1_000 + 30 * 60,
+        }
+    );
+    assert_eq!(startup.active_catalog_revision_id, Some(1));
+    let accepted = restarted
+        .accept_pending(
+            handle,
+            "1".to_owned(),
+            "2".to_owned(),
+            "op-after-restart".to_owned(),
+            2_100,
+        )
+        .expect("acceptance works from the rebuilt candidate");
+    assert_eq!(accepted.catalog_revision_id, 2);
+    assert!(matches!(
+        restarted.inspect().expect("inspect succeeds").readiness,
+        intention_application::CatalogReadiness::Ready
+    ));
+}
+
+#[test]
+fn startup_rolls_forward_an_accepted_removal_whose_catalog_acceptance_never_committed() {
+    // PR24-004: a crash between the removal acceptance commit and the catalog
+    // acceptance leaves an accepted removal row under a pending state;
+    // startup rolls the catalog acceptance forward from the durable material.
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    (&fake)
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: handle,
+            accepted_at: 1_200,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+
+    let restarted = fake.build_controller(vec![
+        responses_factory(Arc::new(AtomicUsize::new(0))),
+        generic_chat_factory(Arc::new(AtomicUsize::new(0))),
+    ]);
+    let startup = restarted
+        .startup(2_000)
+        .expect("startup rolls the acceptance forward");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+    assert_eq!(startup.active_catalog_revision_id, Some(2));
+    assert_eq!(startup.entry_count, 1);
+}
+
+#[test]
+fn startup_expires_an_overdue_pending_removal_and_restores_readiness() {
+    // PR24-003: startup drives expiry from the durable deadline; the overdue
+    // candidate degrades through the expiry path before any registry work.
+    let fake = seeded_catalog();
+    let (_, _) = removal_controller(&fake, 1_000);
+
+    let restarted = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = restarted
+        .startup(1_000 + 30 * 60 + 1)
+        .expect("startup expires the overdue candidate");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+    assert_eq!(startup.active_catalog_revision_id, Some(1));
+    let state = (&fake)
+        .load_provider_catalog_status()
+        .expect("durable state reads");
+    assert_eq!(state.status, ProviderCatalogStatusDto::Active);
+    // The stale candidate marker does not block a corrected proposal: the
+    // next prepare allocates a fresh durable revision.
+    let (_, corrected) = removal_controller(&fake, 2_000);
+    assert_eq!(corrected.candidate_handle.as_deref(), Some("catalog-3"));
+}
+
+#[test]
+fn startup_blocks_when_pending_removal_state_has_no_durable_row() {
+    let fake = seeded_catalog();
+    fake.state.borrow_mut().status = ProviderCatalogStatusDto::PendingRemoval;
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller.startup(2_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "catalog_state_inconsistent_missing_removal_row".to_owned(),
+        }
+    );
+}
+
+#[test]
 fn pending_removal_acceptance_commits_tombstones_and_the_ordered_audit() {
     let fake = seeded_catalog();
     let (controller, outcome) = removal_controller(&fake, 1_000);
@@ -1255,6 +1435,80 @@ fn pending_removal_acceptance_commits_tombstones_and_the_ordered_audit() {
     );
     let state = fake.state.borrow();
     assert_eq!(state.kind_tombstones, vec!["responses".to_owned()]);
+}
+
+#[test]
+fn reintroduced_identifiers_are_admitted_after_a_later_removal_acceptance() {
+    // PR24-017: durable tombstones are append-only removal history and the
+    // in-memory controller tombstones clear when an identifier is
+    // reintroduced by an accepted catalog. Remove the seeded responses
+    // kind/profile, then accept a catalog that reintroduces them (while
+    // removing the interim generic-chat profile): admission must succeed
+    // again instead of returning provider_profile_tombstoned.
+    let fake = seeded_catalog();
+    let (controller, removal) = removal_controller(&fake, 1_000);
+    let handle = removal.candidate_handle.expect("removal handle exists");
+    controller
+        .accept_pending(
+            handle,
+            "1".to_owned(),
+            "2".to_owned(),
+            "op-accept-remove".to_owned(),
+            1_100,
+        )
+        .expect("first removal acceptance commits");
+
+    let previous = snapshot("openrouter", "model-b", ENDPOINT, ConfigRevisionId::new());
+    let reintroduced = controller
+        .prepare_candidate(base_source(&previous, "model-a"), 2_000)
+        .expect("reintroduction candidate prepares");
+    assert!(
+        reintroduced.pending_removal,
+        "reintroducing responses removes the interim generic-chat profile"
+    );
+    let reintroduce_handle = reintroduced
+        .candidate_handle
+        .expect("reintroduction handle exists");
+    controller
+        .accept_pending(
+            reintroduce_handle,
+            "2".to_owned(),
+            "3".to_owned(),
+            "op-accept-reintroduce".to_owned(),
+            2_100,
+        )
+        .expect("reintroduction acceptance commits");
+
+    let material = fake.active_material().expect("material loads");
+    let default = material
+        .profiles
+        .iter()
+        .find(|entry| entry.profile.profile_id == "default")
+        .expect("the reintroduced default profile is active");
+    let admission = controller
+        .registry_lookup(&key_for(&default.profile))
+        .expect("the reintroduced profile is admitted again");
+    assert_eq!(admission.profile_id, "default");
+    // The removal history still records both removal events.
+    let state = fake.state.borrow();
+    assert_eq!(
+        state
+            .kind_tombstones
+            .iter()
+            .filter(|id| id.as_str() == "responses")
+            .count(),
+        1,
+        "the responses removal is recorded once"
+    );
+    assert_eq!(
+        state
+            .kind_tombstones
+            .iter()
+            .filter(|id| id.as_str() == "generic-chat-completion-api")
+            .count(),
+        1,
+        "the interim generic-chat removal is recorded"
+    );
 }
 
 #[test]

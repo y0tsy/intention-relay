@@ -96,9 +96,14 @@ implementation specification can be prepared:
   rotation, health checks, discovery, pricing, raw-TOML/configuration
   editing, session defaults and per-turn/fork overrides, unavailable-queue
   promotion/reconciliation, `provider_profiles_v1`, pending-removal/degraded
-  recovery, and the reasoning/catalog surface, with SQLite schema advancing
-  3 to 4 additively
-  ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)).
+  recovery, and the reasoning/catalog surface, with the SQLite control-plane
+  tables as part of the single live schema (logical version 1) created
+  directly on open (no 3-to-4 migration chain)
+  ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); and
+- M5+ no-backward-compatibility policy: the single-version rule for every
+  versioned system and the removal of legacy, fallback, and migration
+  machinery
+  ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -167,6 +172,7 @@ following map is navigation and provenance; it does not restate their rules:
 | M5+ complete foundation activation | architectures 25-30, 23, 22, 24, roadmap | decision 0035 |
 | M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
 | M5+ Slice 2 control-plane activation | architectures 25/29/22, roadmap, quality gates | decision 0037 |
+| No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

@@ -56,6 +56,29 @@ fn typed_missing_path_detail_round_trips_without_exposing_root_or_secret() {
 }
 
 #[test]
+fn current_shape_minimal_error_decodes_absent_optional_fields_as_none() {
+    // The current ErrorDto shape keeps `correlation_id` and `detail` optional
+    // on the wire: a minimal current error without either field must decode
+    // both as None and re-encode without inventing values.
+    let error: ErrorDto = serde_json::from_str(
+        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual"}"#,
+    )
+    .expect("minimal current-shape error decodes");
+    assert_eq!(error.code(), "fixture");
+    assert_eq!(error.category(), ErrorCategoryDto::NotFound);
+    assert_eq!(error.retry(), ErrorRetryDto::Manual);
+    assert!(
+        error.correlation_id().is_none(),
+        "absent correlation is None"
+    );
+    assert!(error.detail().is_none(), "absent detail is None");
+    let encoded = serde_json::to_string(&error).expect("test serialization must succeed");
+    let decoded: ErrorDto =
+        serde_json::from_str(&encoded).expect("round trip must decode identically");
+    assert_eq!(decoded, error);
+}
+
+#[test]
 fn malformed_error_wire_data_is_rejected() {
     for invalid_path in [
         "",

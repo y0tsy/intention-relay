@@ -18,6 +18,10 @@ use crate::provider_catalog::{
 
 /// The closed model capability taxonomy version.
 pub const MODEL_CAPABILITY_TAXONOMY_V1: &str = "model-capability-taxonomy-v1";
+/// The single canonicalization version written by every provider-selection
+/// producer (catalog and run-admission paths) so semantically identical
+/// selections share identical canonical bytes and digests.
+pub const PROVIDER_SELECTION_CANONICALIZATION_VERSION: &str = "1";
 
 /// The closed text-only model input capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

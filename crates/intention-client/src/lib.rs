@@ -631,14 +631,14 @@ impl IntentionClient {
 
     /// Sends one control-plane command and returns its typed accepted result.
     ///
-    /// A rejected command propagates the daemon's typed error; an acceptance
-    /// without an operation-specific result is an invalid response.
+    /// A rejected command propagates the daemon's typed error; every current
+    /// acceptance carries an operation-specific result.
     fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
         let response = self.request(ProtocolRequestPayloadDto::Command(command))?;
         match response {
             ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
                 accepted,
-            )) => accepted.result().cloned().ok_or_else(invalid_response),
+            )) => Ok(accepted.result().clone()),
             ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
                 error,
             )) => Err(error),
@@ -677,8 +677,12 @@ impl IntentionClient {
         );
         connection.connection.send_request(&request)?;
         let response = connection.connection.receive_response()?;
+        // The synchronous response path applies the same DTO schema-version
+        // equality as the stream clients, not only correlation and protocol
+        // version checks.
         if response.correlation_id() != correlation_id
             || response.protocol_version() != connection.daemon_version
+            || response.message().schema_version() != SCHEMA_VERSION
         {
             return Err(invalid_response());
         }

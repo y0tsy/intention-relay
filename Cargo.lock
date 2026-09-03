@@ -852,6 +852,7 @@ dependencies = [
 name = "intention-config"
 version = "0.0.0"
 dependencies = [
+ "intention-domain",
  "intention-types",
  "serde",
  "serde_json",
@@ -1016,6 +1017,7 @@ dependencies = [
  "intention-domain",
  "intention-types",
  "intention-workspace",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

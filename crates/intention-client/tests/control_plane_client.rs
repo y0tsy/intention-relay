@@ -219,7 +219,6 @@ fn transaction(committed: bool) -> ReloadTransactionDto {
         candidate_config_revision: "revision-2".to_owned(),
         validation_result:
             intention_protocol::contract_families::ConfigurationValidationOutcomeDto::Valid,
-        migration_result: "not-applicable".to_owned(),
         commit_outcome: if committed {
             intention_protocol::contract_families::ConfigurationCommitOutcomeDto::Committed
         } else {

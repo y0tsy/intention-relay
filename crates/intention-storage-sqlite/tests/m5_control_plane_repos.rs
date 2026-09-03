@@ -24,10 +24,11 @@ use intention_storage::{
     CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
-    LoadUnavailableQueuePageInputDto, PromoteUnavailableRunsInputDto, ProviderCatalogRepositoryDto,
-    ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
-    ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderUsageEventInputDto,
-    ProviderUsageRepositoryDto, ReconcileUnavailableQueueInputDto, RecordProviderUsageInputDto,
+    LoadUnavailableQueuePageInputDto, PromoteUnavailableRunsInputDto,
+    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
+    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+    ProviderRemovalRepositoryDto, ProviderUsageEventInputDto, ProviderUsageRepositoryDto,
+    ReconcileUnavailableQueueInputDto, RecordProviderUsageInputDto,
     RejectProviderCatalogCandidateInputDto, RejectProviderCatalogRemovalInputDto,
     StorageRepositoryDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
     UnavailableQueueStateDto,
@@ -781,12 +782,28 @@ fn catalog_accept_rejects_mismatched_revision_and_handle_without_writing() {
         ),
         0
     );
+    // The prepared candidate's durable projection rows survive untouched; the
+    // failed acceptance wrote no active rows (PR24-003).
     assert_eq!(
         query_count(
             &connection,
             "SELECT COUNT(*) FROM provider_catalog_profile_projection"
         ),
+        1
+    );
+    assert_eq!(
+        query_count(
+            &connection,
+            "SELECT COUNT(*) FROM provider_catalog_profile_projection WHERE projection_state='active'"
+        ),
         0
+    );
+    assert_eq!(
+        query_count(
+            &connection,
+            "SELECT COUNT(*) FROM provider_catalog_profile_projection WHERE projection_state='candidate'"
+        ),
+        1
     );
 }
 
@@ -1197,13 +1214,10 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
         .load_provider_catalog_status()
         .expect("catalog state reloads");
     assert_eq!(state.status, ProviderCatalogStatusDto::PendingRemoval);
-    // At most one pending candidate exists: the partial unique index rejects
-    // the second pending insert. The repository maps the constraint violation
-    // to `provider_catalog_removal_pending_exists` only when the driver error
-    // text names the index; the bundled SQLite names the column instead, so
-    // the durable conflict surfaces as a storage error while the invariant
-    // still holds.
-    store
+    // At most one pending candidate exists; conflicts are detected
+    // explicitly in the transaction and mapped to the typed pending-exists
+    // code (never to a SQLite constraint-text match or storage error).
+    let pending_error = store
         .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
             candidate_handle: "removal-2".to_owned(),
             candidate_catalog_revision_id: 3,
@@ -1214,6 +1228,27 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
             operation_id: "op-removal-2".to_owned(),
         })
         .expect_err("a second pending removal candidate is rejected");
+    assert_eq!(
+        pending_error.code(),
+        "provider_catalog_removal_pending_exists"
+    );
+    // Re-creating the same candidate handle is the same-identity typed
+    // conflict even while the original row is pending.
+    let handle_error = store
+        .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
+            candidate_handle: "removal-1".to_owned(),
+            candidate_catalog_revision_id: 2,
+            active_catalog_revision_id: 1,
+            created_at: 101,
+            source_recheck: "health-recheck".to_owned(),
+            candidate_json: "{\"safe\":true}".to_owned(),
+            operation_id: "op-removal-1b".to_owned(),
+        })
+        .expect_err("re-creating the same removal candidate identity is rejected");
+    assert_eq!(
+        handle_error.code(),
+        "provider_catalog_removal_candidate_conflict"
+    );
     let connection = raw_connection(&_directory);
     assert_eq!(
         query_count(
@@ -1281,6 +1316,108 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
         })
         .expect_err("rejecting an unknown candidate is not found");
     assert_eq!(unknown.code(), "provider_catalog_removal_not_found");
+}
+
+#[test]
+fn prepared_candidate_material_and_pending_loader_cover_restart_surfaces() {
+    // PR24-003/004: the prepared candidate's durable material and the pending
+    // removal loader (scoped to the state's candidate revision, carrying the
+    // real deadline and the removal status) back restart reconstruction and
+    // crash roll-forward.
+    let (_directory, store) = repository();
+    prepare_candidate(
+        &store,
+        1,
+        "op-prep-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    accept_candidate(
+        &store,
+        1,
+        "candidate-1",
+        "op-accept-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    prepare_candidate(
+        &store,
+        2,
+        "op-prep-2",
+        "kind-a",
+        "kd-1",
+        "profile-b",
+        "rev-b",
+        2,
+    );
+    store
+        .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
+            candidate_handle: "removal-1".to_owned(),
+            candidate_catalog_revision_id: 2,
+            active_catalog_revision_id: 1,
+            created_at: 200,
+            source_recheck: "health-recheck".to_owned(),
+            candidate_json:
+                "{\"catalog_revision_id\":2,\"removed_profiles\":[\"profile-a\"],\"removed_kinds\":[],\"default_profile_id\":\"default\"}"
+                    .to_owned(),
+            operation_id: "op-removal-1".to_owned(),
+        })
+        .expect("removal candidate creates");
+
+    let material = store
+        .load_prepared_catalog_material()
+        .expect("prepared candidate material loads");
+    assert_eq!(material.catalog_revision_id, 2);
+    assert_eq!(material.kind_descriptors.len(), 1);
+    assert_eq!(material.kind_descriptors[0].descriptor.kind_id, "kind-a");
+    assert_eq!(material.kind_descriptors[0].descriptor_revision_id, "kd-1");
+    assert_eq!(material.profiles.len(), 1);
+    assert_eq!(material.profiles[0].profile.profile_id, "profile-b");
+    assert_eq!(
+        material.profiles[0].profile.kind_descriptor_revision_id,
+        "kd-1"
+    );
+    assert!(material.profiles[0].enabled);
+
+    let pending = store
+        .load_pending_removal_candidate()
+        .expect("pending loader reads")
+        .expect("the pending removal candidate is durable");
+    assert_eq!(pending.candidate_handle, "removal-1");
+    assert_eq!(pending.candidate_catalog_revision_id, 2);
+    assert_eq!(pending.active_catalog_revision_id, 1);
+    assert_eq!(pending.expires_at, 200 + 30 * 60);
+    assert_eq!(
+        pending.removal_status,
+        ProviderCatalogRemovalStatusDto::Pending
+    );
+    assert_eq!(pending.removed_profile_ids, vec!["profile-a".to_owned()]);
+    assert!(pending.removed_kind_ids.is_empty());
+
+    // The crash window: the removal acceptance commits while the catalog
+    // acceptance never does; the loader keeps reporting the same candidate
+    // with the accepted status so startup can roll the acceptance forward.
+    store
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: "removal-1".to_owned(),
+            accepted_at: 300,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+    let accepted = store
+        .load_pending_removal_candidate()
+        .expect("pending loader reads")
+        .expect("the accepted removal row stays loadable under the pending state");
+    assert_eq!(
+        accepted.removal_status,
+        ProviderCatalogRemovalStatusDto::Accepted
+    );
 }
 
 #[test]

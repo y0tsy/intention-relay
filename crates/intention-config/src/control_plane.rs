@@ -4,8 +4,7 @@
 //! contract: it parses and validates a raw TOML candidate through the existing
 //! startup [`ResolvedConfigDto::parse_resolve`] path, projects a
 //! credential-free candidate snapshot, and exposes safe semantic comparison,
-//! change classification, catalog-affecting rejection, and a credential-free
-//! digest.
+//! change classification, and catalog-affecting rejection.
 //!
 //! Raw TOML content and credential material never appear in DTOs, errors,
 //! digests, or serialized output. The raw text exists only transiently inside
@@ -246,87 +245,6 @@ impl ConfigCandidateDto {
     }
 }
 
-/// The acceptance projection of a candidate for the reload orchestration zone.
-///
-/// `accepted` records whether the candidate may be applied; `changed_semantics`
-/// records whether the candidate changes any semantic field relative to the
-/// active snapshot; `changed_field_categories` carries the closed category
-/// list from [`classify_changed_fields`]; `failure_code` carries the typed
-/// rejection code when the candidate was not accepted.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct CandidateAcceptanceOutcomeDto {
-    accepted: bool,
-    changed_semantics: bool,
-    changed_field_categories: Vec<String>,
-    failure_code: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for CandidateAcceptanceOutcomeDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawCandidateAcceptanceOutcomeDto {
-            accepted: bool,
-            changed_semantics: bool,
-            changed_field_categories: Vec<String>,
-            failure_code: Option<String>,
-        }
-
-        let raw = RawCandidateAcceptanceOutcomeDto::deserialize(deserializer)?;
-        Ok(Self {
-            accepted: raw.accepted,
-            changed_semantics: raw.changed_semantics,
-            changed_field_categories: raw.changed_field_categories,
-            failure_code: raw.failure_code,
-        })
-    }
-}
-
-impl CandidateAcceptanceOutcomeDto {
-    /// Creates an acceptance projection from the reload decision inputs.
-    #[must_use]
-    pub const fn new(
-        accepted: bool,
-        changed_semantics: bool,
-        changed_field_categories: Vec<String>,
-        failure_code: Option<String>,
-    ) -> Self {
-        Self {
-            accepted,
-            changed_semantics,
-            changed_field_categories,
-            failure_code,
-        }
-    }
-
-    /// Returns whether the candidate may be applied.
-    #[must_use]
-    pub const fn accepted(&self) -> bool {
-        self.accepted
-    }
-
-    /// Returns whether the candidate changes any semantic field.
-    #[must_use]
-    pub const fn changed_semantics(&self) -> bool {
-        self.changed_semantics
-    }
-
-    /// Returns the closed categories of fields the candidate changes.
-    #[must_use]
-    pub fn changed_field_categories(&self) -> &[String] {
-        &self.changed_field_categories
-    }
-
-    /// Returns the typed rejection code, when the candidate was not accepted.
-    #[must_use]
-    pub fn failure_code(&self) -> Option<&str> {
-        self.failure_code.as_deref()
-    }
-}
-
 /// Parses and validates a raw TOML reload candidate.
 ///
 /// The candidate is validated through the existing startup
@@ -368,32 +286,64 @@ pub fn parse_candidate(
             None,
         )?);
     }
-    let issues = document.map_or_else(
-        || {
-            vec![CandidateIssueDto::new(
-                "invalid_config_toml",
-                None,
-                "configuration TOML could not be parsed",
-            )]
-        },
-        |parsed| collect_validation_issues(&parsed),
-    );
-    let validation = bounded_validation_summary(issues);
-    let candidate_revision_id = ConfigRevisionId::new();
-    let safe_snapshot = match ResolvedConfigDto::parse_resolve(raw) {
+    // One rule core: the typed startup resolver decides whether the candidate
+    // is valid. Candidate acceptance is exactly resolution success, so a
+    // parse failure can never yield an accepted candidate carrying the
+    // previous snapshot (PR24-036).
+    let parsed = ResolvedConfigDto::parse_resolve(raw);
+    let safe_snapshot = match &parsed {
         Ok(resolved) => {
             let captured_at = now_timestamp()?;
+            let candidate_revision_id = ConfigRevisionId::new();
             ConfigSnapshotDto::new(
                 resolved.schema_version(),
                 candidate_revision_id,
                 captured_at,
-                resolved,
+                resolved.clone(),
             )?
         }
         Err(_) => previous.clone(),
     };
+    let issues = match &parsed {
+        Ok(_) => document.as_ref().map_or_else(
+            || {
+                vec![CandidateIssueDto::new(
+                    "invalid_config_toml",
+                    None,
+                    "configuration TOML could not be parsed",
+                )]
+            },
+            collect_validation_issues,
+        ),
+        Err(error) => {
+            // Field-level diagnostics remain available when they fired; a
+            // typed rejection that the field-level scan did not anticipate is
+            // reported with the typed resolver's own code so candidate and
+            // startup error codes cannot diverge for identical input.
+            let mirrored = document.as_ref().map_or_else(
+                || {
+                    vec![CandidateIssueDto::new(
+                        "invalid_config_toml",
+                        None,
+                        "configuration TOML could not be parsed",
+                    )]
+                },
+                collect_validation_issues,
+            );
+            if mirrored.is_empty() {
+                vec![CandidateIssueDto::new(
+                    error.code(),
+                    None,
+                    "configuration could not be resolved",
+                )]
+            } else {
+                mirrored
+            }
+        }
+    };
+    let validation = bounded_validation_summary(issues);
     Ok(ConfigCandidateDto {
-        candidate_revision_id: candidate_revision_id.to_string(),
+        candidate_revision_id: safe_snapshot.revision_id().to_string(),
         source: ConfigCandidateSourceDto::RawToml { size_bytes },
         safe_snapshot,
         validation,
@@ -456,27 +406,30 @@ pub fn classify_changed_fields(left: &ConfigSnapshotDto, right: &ConfigSnapshotD
     changed
 }
 
-/// Rejects candidate changes that would alter provider-kind/catalog semantics.
+/// Rejects candidate changes that would alter provider-catalog semantics.
 ///
 /// The provider catalog is startup-only per the configuration/provider
 /// control-plane architecture (architecture 25, owned by architectures 22 and
 /// 29): Slice 2 reload must not silently change catalog or profile semantics.
-/// A candidate that changes the provider kind (the catalog-bound selection in
-/// this slice) is rejected with `catalog_change_requires_restart`; later
-/// slices add explicit catalog activation through the same reload contract.
-/// Non-catalog fields (model, endpoint, execution policy) pass.
+/// A candidate that changes the provider kind, the configured model, or the
+/// provider endpoint is rejected with `catalog_change_requires_restart`,
+/// because each of those fields participates in the active catalog profile's
+/// identity and selection: kind selects the kind descriptor, and model and
+/// endpoint hash into the profile revision and the resolved selection. Until
+/// catalog replacement can atomically advance both authorities, those changes
+/// require a daemon restart. Execution-policy changes remain reloadable.
 ///
 /// # Errors
 ///
 /// Returns `catalog_change_requires_restart` when the candidate changes the
-/// provider kind relative to the previous snapshot.
+/// provider kind, model, or endpoint relative to the previous snapshot.
 pub fn reject_catalog_affecting_edits(
     candidate: &ConfigCandidateDto,
     previous: &ConfigSnapshotDto,
 ) -> DtoResult<()> {
     let catalog_affected = classify_changed_fields(candidate.safe_snapshot(), previous)
         .iter()
-        .any(|category| category.as_str() == "provider_kind");
+        .any(|category| matches!(category.as_str(), "provider_kind" | "model" | "endpoint"));
     if catalog_affected {
         Err(ErrorDto::new(
             "catalog_change_requires_restart",
@@ -488,34 +441,6 @@ pub fn reject_catalog_affecting_edits(
     } else {
         Ok(())
     }
-}
-
-/// Computes the deterministic credential-free digest of a candidate.
-///
-/// The digest is SHA-256 over the candidate's safe semantic fields (schema
-/// version, provider kind, model, endpoint, execution policy, and source
-/// kind). Credential material, revision identity, capture time, and validation
-/// issues never participate, so credential-only differences produce identical
-/// digests and any semantic difference produces a different digest. The
-/// returned value is sixty-four lowercase hexadecimal characters.
-#[must_use]
-pub fn redacted_safe_digest(candidate: &ConfigCandidateDto) -> String {
-    let snapshot = candidate.safe_snapshot();
-    let canonical = format!(
-        "ir-config-candidate-v1|schema={}.{}|kind={}|model={}|endpoint={}|attempt_timeout_seconds={}|max_attempts={}|source_kind={}",
-        snapshot.resolved().schema_version().major(),
-        snapshot.resolved().schema_version().minor(),
-        snapshot.resolved().provider().kind().as_str(),
-        snapshot.resolved().provider().model(),
-        snapshot.resolved().provider().endpoint().unwrap_or(""),
-        snapshot
-            .resolved()
-            .provider_execution()
-            .attempt_timeout_seconds(),
-        snapshot.resolved().provider_execution().max_attempts(),
-        snapshot.resolved().source_kind().as_str(),
-    );
-    sha256::hex(&sha256::digest(canonical.as_bytes()))
 }
 
 /// Bounds a collected issue list at [`MAX_CANDIDATE_ISSUES`].
@@ -777,32 +702,23 @@ fn contains_forbidden_credential(value: &toml::Value, path: &str, legitimate: &s
 }
 
 /// Whether a configuration key name is credential-shaped.
+///
+/// Key-name role of the shared credential-shape policy owned by
+/// `intention-domain::canonical` (PR24-035).
 #[must_use]
 fn is_credential_shaped_key(key: &str) -> bool {
-    contains_credential_shape(key)
-        || matches!(
-            key.to_ascii_lowercase().as_str(),
-            "token" | "bearer" | "auth" | "authorization" | "access_token" | "auth_token"
-        )
+    intention_domain::canonical::credential_shaped_key_name(key)
 }
 
 /// Whether a value carries a credential-shaped pattern.
 ///
-/// Mirrors the repository-wide credential-shape convention (see the domain
-/// canonical layer): `sk-` prefixes, bearer tokens, `api_key`/`apikey`,
-/// `secret`, `password`, and `token=`/`key=`/`auth=` assignment patterns.
+/// Secret-value role of the shared credential-shape policy owned by
+/// `intention-domain::canonical` (PR24-035): `sk-` prefixes, bearer tokens,
+/// `api_key`/`apikey`, `secret`, `password`, and `token=`/`key=`/`auth=`
+/// assignment patterns.
 #[must_use]
 fn contains_credential_shape(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("sk-")
-        || lower.starts_with("bearer ")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("secret")
-        || lower.contains("password")
-        || lower.contains("token=")
-        || lower.contains("key=")
-        || lower.contains("auth=")
+    intention_domain::canonical::secret_value_credential_shaped(value)
 }
 
 /// Returns the current whole-second Unix timestamp.
@@ -822,151 +738,4 @@ fn now_timestamp() -> DtoResult<TimestampDto> {
         })?
         .as_secs() as i64;
     TimestampDto::from_unix_seconds(seconds)
-}
-
-/// Dependency-free SHA-256 used exclusively for the credential-free candidate
-/// digest. Verified against published known-answer vectors in the module tests.
-mod sha256 {
-    /// The sixty-four SHA-256 round constants: the first thirty-two bits of
-    /// the fractional parts of the cube roots of the first sixty-four primes.
-    const ROUND_CONSTANTS: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-        0xc67178f2,
-    ];
-
-    /// Computes the SHA-256 digest of `data` as thirty-two big-endian bytes.
-    #[must_use]
-    pub fn digest(data: &[u8]) -> [u8; 32] {
-        let bit_length = (data.len() as u64) << 3;
-        let pad_length = 55usize.wrapping_sub(data.len()) & 63;
-        let mut padded = Vec::with_capacity(data.len() + 1 + pad_length + 8);
-        padded.extend_from_slice(data);
-        padded.push(0x80);
-        padded.resize(padded.len() + pad_length, 0);
-        padded.extend_from_slice(&bit_length.to_be_bytes());
-
-        let mut state = [
-            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
-            0x5be0cd19,
-        ];
-        for block in padded.chunks_exact(64) {
-            compress(&mut state, block);
-        }
-        let mut out = [0u8; 32];
-        for (index, word) in state.iter().enumerate() {
-            out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
-        }
-        out
-    }
-
-    /// Encodes `bytes` as sixty-four lowercase hexadecimal characters.
-    #[must_use]
-    pub fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-    }
-
-    /// Compresses one sixty-four-byte block into the running state.
-    fn compress(state: &mut [u32; 8], block: &[u8]) {
-        let mut schedule = [0u32; 64];
-        for (index, word) in schedule.iter_mut().enumerate().take(16) {
-            *word = read_u32_be(block, index * 4);
-        }
-        for index in 16..64 {
-            let sigma0 = schedule[index - 15].rotate_right(7)
-                ^ schedule[index - 15].rotate_right(18)
-                ^ (schedule[index - 15] >> 3);
-            let sigma1 = schedule[index - 2].rotate_right(17)
-                ^ schedule[index - 2].rotate_right(19)
-                ^ (schedule[index - 2] >> 10);
-            schedule[index] = sigma1
-                .wrapping_add(schedule[index - 7])
-                .wrapping_add(sigma0)
-                .wrapping_add(schedule[index - 16]);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
-        for index in 0..64 {
-            let sum1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let choice = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(sum1)
-                .wrapping_add(choice)
-                .wrapping_add(ROUND_CONSTANTS[index])
-                .wrapping_add(schedule[index]);
-            let sum0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let majority = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = sum0.wrapping_add(majority);
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
-        }
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-        state[5] = state[5].wrapping_add(f);
-        state[6] = state[6].wrapping_add(g);
-        state[7] = state[7].wrapping_add(h);
-    }
-
-    /// Reads one big-endian thirty-two-bit word at `offset` within a block.
-    #[must_use]
-    fn read_u32_be(block: &[u8], offset: usize) -> u32 {
-        u32::from_be_bytes([
-            block[offset],
-            block[offset + 1],
-            block[offset + 2],
-            block[offset + 3],
-        ])
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #![allow(
-            clippy::expect_used,
-            reason = "Known-answer fixtures use expect to provide precise test failure messages."
-        )]
-
-        use super::{digest, hex};
-
-        /// Matches SHA-256 against the published FIPS 180-4 known-answer vectors.
-        #[test]
-        fn sha256_matches_published_known_answer_vectors() {
-            assert_eq!(
-                hex(&digest(b"")),
-                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                "empty vector"
-            );
-            assert_eq!(
-                hex(&digest(b"abc")),
-                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                "single-block vector"
-            );
-            assert_eq!(
-                hex(&digest(
-                    b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-                )),
-                "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
-                "multi-block vector"
-            );
-            assert_eq!(
-                hex(&digest(&[0x61; 1_000_000])),
-                "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
-                "million-a vector"
-            );
-        }
-    }
 }

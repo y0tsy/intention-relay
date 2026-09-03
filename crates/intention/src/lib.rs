@@ -31,8 +31,8 @@ use intention_config::{
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_domain::{
     CredentialTransportMode as DomainCredentialTransportMode, DomainEventDto,
-    GetSessionSnapshotQueryDto, ProviderSelectionV1, RunEventCursorDto, RunReplayDto, RunStatusDto,
-    ToolLifecycleStatusDto, canonical::Digest256,
+    GetSessionSnapshotQueryDto, ModelRunFactInputDto, ProviderSelectionV1, RunEventCursorDto,
+    RunFailureDto, RunReplayDto, RunStatusDto, ToolLifecycleStatusDto, canonical::Digest256,
 };
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
@@ -64,9 +64,9 @@ use intention_runtime::{
     fail_starting_run,
 };
 use intention_storage::{
-    EnqueueUnavailableRunInputDto, HeldRunRepositoryDto, MarkRecoveredRunHeldInputDto,
-    ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto, StorageRepositoryDto,
-    UnavailableQueueRepositoryDto,
+    AppendModelRunFactsInputDto, EnqueueUnavailableRunInputDto, HeldRunRepositoryDto,
+    MarkRecoveredRunHeldInputDto, ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto,
+    StorageRepositoryDto, UnavailableQueueRepositoryDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_tools::{CancellationSignal, ToolInput, ToolResult};
@@ -190,9 +190,22 @@ impl ProviderCatalogRepositoryDto for RepositoryHandle {
     ) -> DtoResult<intention_storage::ProviderCatalogMaterialDto> {
         self.0.load_provider_catalog_material()
     }
+    fn load_prepared_catalog_material(
+        &self,
+    ) -> DtoResult<intention_storage::ProviderCatalogMaterialDto> {
+        self.0.load_prepared_catalog_material()
+    }
 }
 
 impl ProviderRemovalRepositoryDto for RepositoryHandle {
+    fn load_highest_removal_candidate_revision(&self) -> DtoResult<u64> {
+        self.0.load_highest_removal_candidate_revision()
+    }
+    fn load_pending_removal_candidate(
+        &self,
+    ) -> DtoResult<Option<intention_storage::PendingRemovalCandidateDto>> {
+        self.0.load_pending_removal_candidate()
+    }
     fn create_provider_catalog_removal_candidate(
         &self,
         input: intention_storage::CreateProviderCatalogRemovalCandidateInputDto,
@@ -787,7 +800,6 @@ fn committed_reload_transaction(outcome: &ReloadCommitOutcomeDto) -> ReloadTrans
         previous_config_revision: outcome.previous_revision.clone(),
         candidate_config_revision: outcome.new_revision.clone(),
         validation_result: ConfigurationValidationOutcomeDto::Valid,
-        migration_result: "not-applicable".to_owned(),
         commit_outcome: ConfigurationCommitOutcomeDto::Committed,
         safe_failure_code: None,
         safe_failure_detail: None,
@@ -812,7 +824,6 @@ fn rejected_reload_transaction(
             .clone()
             .unwrap_or_else(|| "unavailable".to_owned()),
         validation_result: ConfigurationValidationOutcomeDto::Invalid,
-        migration_result: "not-applicable".to_owned(),
         commit_outcome: ConfigurationCommitOutcomeDto::Rejected,
         safe_failure_code: candidate.failure_code.clone(),
         safe_failure_detail: None,
@@ -1346,6 +1357,65 @@ impl DaemonApplicationFacade {
         Ok(())
     }
 
+    /// Terminalizes one still-active run as durably `Failed` for the daemon
+    /// task registry.
+    ///
+    /// An executor error must never leave a `Starting`/`Running`/`Completing`
+    /// run without an owner: this bridge appends the typed failure fact and
+    /// commits the terminal `Failed` transition. The failure code is the
+    /// executor error's stable code, so deterministic bound and semantic
+    /// failures (for example `reasoning_output_limit_exceeded`) become the
+    /// durable failed outcome (PR24-012). Runs already terminal are a no-op;
+    /// `Cancelling` runs terminalize as `Cancelled`, never here.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for a `Cancelling` run, or the
+    /// repository's typed error when the terminal append cannot commit.
+    #[doc(hidden)]
+    pub fn fail_active_run_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        failure_code: &str,
+    ) -> DtoResult<()> {
+        let _gate = self.inner.command_gate.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        let replay = self
+            .inner
+            .repository
+            .load_current_run_replay(session_id, run_id)?;
+        let status = replay.snapshot().run_projection().status();
+        if status.is_terminal() {
+            return Ok(());
+        }
+        if status == RunStatusDto::Cancelling {
+            return Err(ErrorDto::validation(
+                "invalid_failed_run_state",
+                "a cancelling run terminalizes as cancelled, not failed",
+            ));
+        }
+        let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
+        self.inner
+            .repository
+            .append_model_run_facts(AppendModelRunFactsInputDto::new(
+                session_id,
+                run_id,
+                replay.snapshot().cursor(),
+                vec![ModelRunFactInputDto::failed(failure)],
+                Some(RunStatusDto::Failed),
+                now()?,
+            )?)?;
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
+            registry.remove(&(session_id, run_id));
+        }
+        Ok(())
+    }
+
     /// Records a safe terminal scheduling failure for an exact unadmitted run.
     ///
     /// This private daemon-host bridge preserves the already accepted user turn
@@ -1419,7 +1489,7 @@ impl DaemonApplicationFacade {
         Ok(ApplicationService::new(self.inner.repository.as_ref())
             .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))?
             .projection()
-            .and_then(|projection| projection.active_run())
+            .active_run()
             .filter(|run| run.status() == RunStatusDto::Starting)
             .map(|run| run.run_id()))
     }
@@ -2452,7 +2522,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("fixture turn is accepted, got {accepted:?}")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("fixture turn has user-turn evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -2544,7 +2614,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted_result) = result else {
             unreachable!("direct turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn)) = accepted_result.result()
+        let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted_result.result()
         else {
             unreachable!("direct turn returns user-turn evidence")
         };
@@ -2660,7 +2730,7 @@ mod tests {
         assert_eq!(replay.result(), initial.result());
         assert!(matches!(
             initial.result(),
-            Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+            ProtocolAcceptedResultDto::SendUserTurn(turn)
                 if matches!(turn.outcome(), SendUserTurnOutcomeDto::Started { .. })
         ));
         assert_eq!(events_after_replay, events_after_initial);
@@ -2706,7 +2776,7 @@ mod tests {
             ProtocolCommandResultDto::Accepted(accepted)
                 if matches!(
                     accepted.result(),
-                    Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                    ProtocolAcceptedResultDto::SendUserTurn(turn)
                         if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
                 )
         ));
@@ -2758,7 +2828,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("fixture turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("fixture turn has started-run evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -3014,7 +3084,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(a) = accepted else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
@@ -3061,7 +3131,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(a) = started else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
@@ -3071,7 +3141,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(a) = queued else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let queued_turn_id = t.turn_id();
@@ -3262,7 +3332,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("turn evidence exists")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -3795,9 +3865,12 @@ mod tests {
 
     const ROTATION_FAKE_SECRET: &str = "sk-zone4-composition-fake-secret";
 
-    fn valid_edit(model: &str) -> String {
+    /// Builds a reloadable candidate that changes only the provider execution
+    /// policy. Model, endpoint, and kind changes are catalog-affecting under
+    /// PR24-008 and are rejected by live reload.
+    fn policy_edit(timeout_seconds: u64) -> String {
         format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-credential\"\n"
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n[provider.execution]\nattempt_timeout_seconds = {timeout_seconds}\nmax_attempts = 2\n"
         )
     }
 
@@ -3813,8 +3886,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = result else {
             unreachable!("control-plane command must be accepted");
         };
-        let Some(ProtocolAcceptedResultDto::ReloadConfiguration(transaction)) = accepted.result()
-        else {
+        let ProtocolAcceptedResultDto::ReloadConfiguration(transaction) = accepted.result() else {
             unreachable!("control-plane command must return a reload transaction");
         };
         transaction.clone()
@@ -3834,7 +3906,7 @@ mod tests {
         let transaction = reload_transaction(facade.command(raw_edit_command(
             "op-1",
             &startup_revision,
-            valid_edit("model-b"),
+            policy_edit(45),
         )));
         assert_eq!(
             transaction.commit_outcome,
@@ -3846,11 +3918,19 @@ mod tests {
             "a committed reload advances the configuration revision"
         );
 
-        // The fresh-run snapshot advanced only after the durable commit.
+        // The fresh-run snapshot advanced only after the durable commit; the
+        // model is unchanged because model edits are catalog-affecting.
         let active = facade
             .active_config_snapshot()
             .expect("active snapshot reads");
-        assert_eq!(active.resolved().provider().model(), "model-b");
+        assert_eq!(
+            active
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45
+        );
+        assert_eq!(active.resolved().provider().model(), "fixture");
         assert_eq!(
             active.revision_id().to_string(),
             transaction.candidate_config_revision
@@ -3864,7 +3944,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = result else {
             unreachable!("fresh turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(_)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(_) = accepted.result() else {
             unreachable!("fresh turn returns user-turn evidence")
         };
         let admitted = facade
@@ -3874,8 +3954,12 @@ mod tests {
             .expect("dispatch recorder remains available");
         assert_eq!(admitted.len(), 1);
         assert_eq!(
-            admitted[0].safe_config().resolved().provider().model(),
-            "model-b",
+            admitted[0]
+                .safe_config()
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45,
             "fresh runs must observe the committed reload snapshot"
         );
     }
@@ -3920,11 +4004,7 @@ mod tests {
         );
 
         // A stale expected revision fails closed before any write.
-        let stale = facade.command(raw_edit_command(
-            "op-3",
-            "revision-stale",
-            valid_edit("model-b"),
-        ));
+        let stale = facade.command(raw_edit_command("op-3", "revision-stale", policy_edit(45)));
         let ProtocolCommandResultDto::Rejected(error) = stale else {
             unreachable!("stale expected revision is rejected")
         };
@@ -3953,7 +4033,7 @@ mod tests {
         let first = reload_transaction(facade.command(raw_edit_command(
             "op-1",
             &startup_revision,
-            valid_edit("model-b"),
+            policy_edit(45),
         )));
         let committed_revision = first.candidate_config_revision;
 
@@ -4375,7 +4455,9 @@ mod tests {
     /// Builds one minimal valid immutable selection for queue fixtures.
     fn fixture_selection() -> ProviderSelectionV1 {
         ProviderSelectionV1 {
-            selection_canonicalization_version: "provider-selection-v1".to_owned(),
+            selection_canonicalization_version:
+                intention_domain::provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                    .to_owned(),
             profile_id: "default".to_owned(),
             provider_profile_revision_id: "rev-1".to_owned(),
             kind_id: "responses".to_owned(),
@@ -4507,8 +4589,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = set else {
             unreachable!("session profile set is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SetSessionProviderProfile(result)) = accepted.result()
-        else {
+        let ProtocolAcceptedResultDto::SetSessionProviderProfile(result) = accepted.result() else {
             unreachable!("session profile set returns typed evidence")
         };
         assert!(result.changed);
@@ -4700,9 +4781,7 @@ mod tests {
                     candidate,
                     previous,
                 },
-                now_seconds(
-                    TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
-                ),
+                now_seconds(now().expect("fixture clock reads")),
             )
             .expect("removal candidate prepares");
         assert!(outcome.pending_removal);
@@ -4794,7 +4873,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = result else {
             unreachable!("held run admission is accepted after exact verification")
         };
-        let Some(ProtocolAcceptedResultDto::AdmitRecoveredRun(_)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::AdmitRecoveredRun(_) = accepted.result() else {
             unreachable!("held run admission returns typed evidence")
         };
         let admitted_once = facade
@@ -5036,8 +5115,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(accepted) = reconcile else {
             unreachable!("reconciliation is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::ReconcileUnavailableQueue(result)) = accepted.result()
-        else {
+        let ProtocolAcceptedResultDto::ReconcileUnavailableQueue(result) = accepted.result() else {
             unreachable!("reconciliation returns typed evidence")
         };
         assert_eq!(result.promoted_count, 0);
@@ -5087,7 +5165,8 @@ mod tests {
         )
         .expect("durable facade opens");
         seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
-        let outcome = prepare_removal(&facade, "removal-reject", 10);
+        let reject_now = now_seconds(now().expect("fixture clock reads"));
+        let outcome = prepare_removal(&facade, "removal-reject", reject_now);
         assert!(outcome.pending_removal);
         let reject = facade.command(ProtocolCommandDto::RejectProviderCatalogCandidate(
             intention_protocol::contract_families::RejectProviderCatalogCandidateCommandDto {
@@ -5119,13 +5198,14 @@ mod tests {
         )
         .expect("durable facade opens");
         seed_catalog(&facade, "seed-2", &["fixture-model"]).expect("catalog seeds");
-        let outcome = prepare_removal(&facade, "removal-expire", 20);
+        let expire_now = now_seconds(now().expect("fixture clock reads"));
+        let outcome = prepare_removal(&facade, "removal-expire", expire_now);
         assert!(outcome.pending_removal);
         let expired = facade
             .inner
             .control_plane
             .controller
-            .expire_pending(20 + 30 * 60 + 1)
+            .expire_pending(expire_now + 30 * 60 + 1)
             .expect("expiry commits");
         assert_eq!(expired, 1);
         assert!(matches!(
@@ -5174,5 +5254,294 @@ mod tests {
         };
         assert_eq!(error.code(), "credentials_forbidden");
         assert!(!error.to_string().contains(FAKE_SECRET));
+    }
+
+    /// Prepares one removal candidate (kind-changing declaration) at a real
+    /// wall-clock instant so a later restart observes a still-valid deadline.
+    fn prepare_removal_at_now(
+        facade: &DaemonApplicationFacade,
+        operation: &str,
+        endpoint: &str,
+    ) -> intention_application::CatalogCandidateOutcomeDto {
+        let previous = fixture_config_snapshot();
+        let raw =
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"replacement\"\ncredential = \"fixture-credential\""
+                .to_owned();
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.clone(), fixture_source()),
+            &previous,
+        )
+        .expect("replacement candidate parses");
+        let now = now_seconds(now().expect("fixture clock reads"));
+        facade
+            .inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: operation.to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: "generic-chat-completion-api".to_owned(),
+                        model: "replacement".to_owned(),
+                        endpoint: Some(endpoint.to_owned()),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now,
+            )
+            .expect("removal candidate prepares")
+    }
+
+    #[test]
+    fn pending_removal_survives_restart_with_durable_material_and_accepts() {
+        // PR24-003: a pending removal candidate is durable. After a restart
+        // the controller rebuilds the prepared candidate and preserves the
+        // real deadline instead of degrading to an expiry-free ghost state, so
+        // accept/reject keep working without process memory.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("pending-removal-restart.sqlite");
+        let first = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("first facade opens");
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome =
+            prepare_removal_at_now(&first, "removal-restart", "https://api.example.invalid/v9");
+        assert!(outcome.pending_removal);
+        let candidate_handle = outcome
+            .candidate_handle
+            .expect("pending removal carries a handle");
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        let readiness = restarted.provider_control_readiness();
+        let intention_application::CatalogReadiness::PendingRemoval {
+            candidate_revision,
+            expires_at,
+        } = readiness
+        else {
+            panic!("restart preserves pending removal, got {readiness:?}");
+        };
+        assert_eq!(candidate_revision, "2");
+        assert!(expires_at > 0, "the durable deadline survives the restart");
+
+        let accept = restarted.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
+            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
+                candidate_handle,
+                expected_active_catalog_revision_id: "1".to_owned(),
+                expected_candidate_catalog_revision_id: "2".to_owned(),
+                operation_id: "accept-after-restart".to_owned(),
+                source_recheck: false,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = accept else {
+            unreachable!("acceptance after restart is accepted")
+        };
+        assert!(matches!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = restarted
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(projection.active_catalog_revision_id, Some(2));
+    }
+
+    #[test]
+    fn removal_acceptance_rolls_forward_after_a_crash_between_the_two_commits() {
+        // PR24-004: a crash between the removal acceptance commit and the
+        // catalog acceptance commit leaves a durable `accepted` removal row
+        // under a pending catalog state. Startup rolls the catalog acceptance
+        // forward from the durable prepared material exactly once.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("removal-roll-forward.sqlite");
+        let first = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("first facade opens");
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome = prepare_removal_at_now(
+            &first,
+            "removal-roll-forward",
+            "https://api.example.invalid/v9",
+        );
+        assert!(outcome.pending_removal);
+        let candidate_handle = outcome
+            .candidate_handle
+            .expect("pending removal carries a handle");
+        // Simulate the crash window: only the removal acceptance commits.
+        intention_storage::ProviderRemovalRepositoryDto::accept_provider_catalog_removal(
+            first.inner.repository.as_ref(),
+            intention_storage::AcceptProviderCatalogRemovalInputDto {
+                candidate_handle,
+                accepted_at: i64_time(now().expect("fixture clock reads")),
+                operation_id: "crash-window-removal-accept".to_owned(),
+            },
+        )
+        .expect("removal acceptance commits before the crash");
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        assert!(matches!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = restarted
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(
+            projection.active_catalog_revision_id,
+            Some(2),
+            "the catalog acceptance rolls forward to the accepted revision"
+        );
+        // The roll-forward is durable and idempotent: a second restart stays
+        // on the active catalog without re-accepting.
+        drop(restarted);
+        let again = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("second restart facade opens");
+        assert!(matches!(
+            again.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+    }
+
+    #[test]
+    fn corrected_removal_proposal_after_rejection_receives_a_fresh_revision() {
+        // PR24-006: closed removal rows stay in durable history, so a
+        // corrected or repeated proposal after rejection must never reuse the
+        // closed candidate's revision or handle.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("removal-retry-fresh-revision.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let rejected = prepare_removal_at_now(
+            &facade,
+            "removal-rejected",
+            "https://api.example.invalid/v9",
+        );
+        assert_eq!(
+            rejected.candidate_handle.as_deref(),
+            Some("catalog-2"),
+            "the first removal proposal is revision two"
+        );
+        let reject = facade.command(ProtocolCommandDto::RejectProviderCatalogCandidate(
+            intention_protocol::contract_families::RejectProviderCatalogCandidateCommandDto {
+                candidate_handle: rejected
+                    .candidate_handle
+                    .expect("pending removal carries a handle"),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                operation_id: "op-reject-retry".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = reject else {
+            unreachable!("candidate rejection is accepted")
+        };
+
+        // A corrected proposal (different endpoint, same removal intent)
+        // receives the next durable revision instead of colliding with the
+        // closed catalog-2 identity.
+        let corrected = prepare_removal_at_now(
+            &facade,
+            "removal-corrected",
+            "https://api.example.invalid/v10",
+        );
+        assert_eq!(
+            corrected.candidate_handle.as_deref(),
+            Some("catalog-3"),
+            "the corrected proposal receives a fresh durable revision"
+        );
+        let accept = facade.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
+            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
+                candidate_handle: corrected
+                    .candidate_handle
+                    .expect("corrected proposal carries a handle"),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                expected_candidate_catalog_revision_id: "3".to_owned(),
+                operation_id: "accept-corrected".to_owned(),
+                source_recheck: false,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = accept else {
+            unreachable!("corrected proposal acceptance is accepted")
+        };
+        assert!(matches!(
+            facade.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = facade
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(projection.active_catalog_revision_id, Some(3));
+    }
+
+    #[test]
+    fn reload_during_pending_removal_preserves_the_lifecycle_across_restart() {
+        // PR24-005: a configuration reload commit never rewrites a durable
+        // pending-removal state; after a restart the removal lifecycle (and
+        // its real deadline) survives with the reloaded configuration.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("reload-pending-restart.sqlite");
+        let startup = fixture_config_snapshot();
+        let first = DaemonApplicationFacade::open_for_test(&database, startup.clone())
+            .expect("first facade opens");
+        let startup_revision = startup.revision_id().to_string();
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome =
+            prepare_removal_at_now(&first, "removal-reload", "https://api.example.invalid/v9");
+        assert!(outcome.pending_removal);
+
+        // An execution-policy reload commits during the pending removal.
+        let transaction = reload_transaction(first.command(raw_edit_command(
+            "op-reload-pending",
+            &startup_revision,
+            policy_edit(45),
+        )));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert_eq!(
+            first
+                .active_config_snapshot()
+                .expect("active snapshot reads")
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45,
+            "the reloaded execution policy applies to the running daemon"
+        );
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        let intention_application::CatalogReadiness::PendingRemoval {
+            candidate_revision,
+            expires_at,
+        } = restarted.provider_control_readiness()
+        else {
+            panic!("reload must not exit the pending-removal lifecycle");
+        };
+        assert_eq!(candidate_revision, "2");
+        assert!(expires_at > 0);
     }
 }

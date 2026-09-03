@@ -286,6 +286,24 @@ impl ProviderSelectionDto {
                 "provider endpoint must not be empty when configured",
             ));
         }
+        if let Some(configured_endpoint) = endpoint.as_deref() {
+            // One endpoint policy across boundaries (PR24-055): HTTPS is
+            // required except for literal-loopback HTTP endpoints.
+            intention_domain::provider_catalog::validate_endpoint(configured_endpoint.trim())
+                .map_err(|error| {
+                    if error == intention_domain::canonical::CanonicalError::CredentialsForbidden {
+                        ErrorDto::validation(
+                            "credentials_forbidden",
+                            "provider endpoint must not carry credential material",
+                        )
+                    } else {
+                        ErrorDto::validation(
+                            "invalid_provider_endpoint",
+                            "provider endpoint must be HTTPS except for literal-loopback HTTP",
+                        )
+                    }
+                })?;
+        }
         Ok(Self {
             kind,
             model,
@@ -979,6 +997,46 @@ credential = \"{credential}\"
             ProviderKindDto::GenericChatCompletionApi
         );
         assert_eq!(resolved.provider().model(), "example-chat-model");
+    }
+
+    #[test]
+    fn provider_endpoint_policy_requires_https_except_literal_loopback() {
+        // HTTPS is always valid; plaintext HTTP is tolerated only for literal
+        // loopback endpoints (PR24-055).
+        for endpoint in [
+            Some("https://api.example.com/v1"),
+            Some("http://127.0.0.1:18080/v1"),
+            Some("http://localhost:18080/v1"),
+            Some("http://[::1]:18080/v1"),
+        ] {
+            ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+                v1(
+                    "generic-chat-completion-api",
+                    "fixture",
+                    CREDENTIAL,
+                    endpoint,
+                ),
+                explicit_source(),
+            ))
+            .expect("endpoint satisfies the HTTPS-or-literal-loopback policy");
+        }
+        for endpoint in [
+            Some("http://api.example.com/v1"),
+            Some("http://127.0.0.1.evil.example.com/v1"),
+            Some("http://localhost.evil.example.com/v1"),
+        ] {
+            let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+                v1(
+                    "generic-chat-completion-api",
+                    "fixture",
+                    CREDENTIAL,
+                    endpoint,
+                ),
+                explicit_source(),
+            ))
+            .expect_err("non-loopback HTTP is rejected at startup");
+            assert_eq!(error.code(), "invalid_provider_endpoint");
+        }
     }
 
     #[test]

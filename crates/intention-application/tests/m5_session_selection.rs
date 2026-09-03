@@ -296,7 +296,9 @@ fn safe_header_profile(profile_id: &str, revision: &str) -> ResolvedProfileDto {
 /// A valid persisted immutable provider selection for one run.
 fn selection(profile_id: &str, kind: &str) -> ProviderSelectionV1 {
     ProviderSelectionV1 {
-        selection_canonicalization_version: "provider-selection-v1".to_owned(),
+        selection_canonicalization_version:
+            intention_domain::provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                .to_owned(),
         profile_id: profile_id.to_owned(),
         provider_profile_revision_id: "rev-0001".to_owned(),
         kind_id: kind.to_owned(),

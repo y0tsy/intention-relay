@@ -44,8 +44,6 @@ use crate::provider_catalog::ProviderCatalogController;
 use crate::provider_gate::CatalogReadiness;
 use crate::{ModelRunDispatchPort, ScheduleModelRunDto};
 
-/// The deterministic selection canonicalization version of Slice 2 selections.
-const SELECTION_CANONICALIZATION_VERSION: &str = "provider-selection-v1";
 /// The closed value carried when a session has no provider profile intent.
 const PROFILE_UNSET: &str = "unset";
 /// The maximum provider catalog page size used by read services.
@@ -363,7 +361,9 @@ fn resolved_selection(
     source: &str,
 ) -> DtoResult<ResolvedRunProviderSelectionDto> {
     let selection = ResolvedRunProviderSelectionDto {
-        selection_canonicalization_version: SELECTION_CANONICALIZATION_VERSION.to_owned(),
+        selection_canonicalization_version:
+            intention_domain::provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                .to_owned(),
         profile_id: resolved.profile_id,
         provider_profile_revision_id: resolved.profile_revision_id,
         kind_id: resolved.kind_id,

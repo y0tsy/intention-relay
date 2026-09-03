@@ -71,7 +71,7 @@ public_resource_patterns = [
 [dependencies]
 "intention-types" = []
 "intention-domain" = ["intention-types"]
-"intention-config" = ["intention-types"]
+"intention-config" = ["intention-domain", "intention-types"]
 "intention-protocol" = ["intention-types", "intention-domain"]
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
@@ -107,7 +107,7 @@ public_resource_patterns = [
 "intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
 "intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
 "intention-provider-generic-chat" = ["async-openai", "futures-util", "http", "serde_json"]
-"intention-tools" = ["glob", "serde", "serde_json", "tempfile"]
+"intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
 "intention-workspace" = []
 "intention-hooks" = []
 
@@ -242,7 +242,7 @@ coverage_tier = "C"
 name = "intention-tools"
 responsibility = "Typed tool registry and core tool contracts."
 test_target = "tool invocation and policy tests"
-test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
+test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
 coverage_tier = "B"
 
 [[future_crates]]

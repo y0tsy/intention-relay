@@ -318,6 +318,7 @@ struct GenericStreamState<S> {
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
+    usage_reported: bool,
 }
 
 impl<S> GenericStreamState<S>
@@ -334,6 +335,7 @@ where
             tools: BTreeMap::new(),
             terminal: false,
             terminal_reason: None,
+            usage_reported: false,
         }
     }
 
@@ -348,29 +350,61 @@ where
             if self.terminal {
                 return None;
             }
-            if let Some(reason) = self.terminal_reason.take() {
-                self.finish(reason);
-                continue;
-            }
             match select(self.native.next(), self.cancellation.cancelled()).await {
                 Either::Left((Some(Ok(chunk)), _)) => self.accept_chunk(chunk),
                 Either::Left((Some(Err(error)), _)) => self.fail_error(map_openai_error(&error)),
-                Either::Left((None, _)) => self.fail("generic_chat_stream_incomplete"),
+                Either::Left((None, _)) => self.native_ended(),
                 Either::Right(((), _)) => return None,
             }
         }
     }
 
     fn accept_chunk(&mut self, chunk: CreateChatCompletionStreamResponse) {
+        let post_finish = self.terminal_reason.is_some();
+        if post_finish
+            && chunk.choices.iter().any(|choice| {
+                choice.finish_reason.is_some()
+                    || choice
+                        .delta
+                        .content
+                        .as_deref()
+                        .is_some_and(|content| !content.is_empty())
+                    || choice.delta.tool_calls.is_some()
+            })
+        {
+            // Chunks after the finish reason may carry at most the final
+            // usage summary; any further content, tool fragment, or finish is
+            // malformed and fails the stream.
+            if chunk
+                .choices
+                .iter()
+                .any(|choice| choice.finish_reason.is_some())
+            {
+                self.fail("generic_chat_duplicate_finish");
+            } else {
+                self.fail("generic_chat_post_finish_content");
+            }
+            return;
+        }
         if let Some(usage) = chunk.usage {
+            if self.usage_reported {
+                self.fail("generic_chat_duplicate_usage");
+                return;
+            }
             match UsageDto::reported(
                 u64::from(usage.prompt_tokens),
                 u64::from(usage.completion_tokens),
                 u64::from(usage.total_tokens),
             ) {
-                Ok(usage) => self.pending.push_back(Ok(ModelEventDto::usage(usage))),
+                Ok(usage) => {
+                    self.usage_reported = true;
+                    self.pending.push_back(Ok(ModelEventDto::usage(usage)));
+                }
                 Err(_) => self.fail("generic_chat_invalid_usage"),
             }
+        }
+        if post_finish {
+            return;
         }
         for choice in chunk.choices {
             if self.accept_delta(choice.index, choice.delta).is_err() {
@@ -411,6 +445,21 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Handles the native end-of-stream.
+    ///
+    /// A recorded finish reason is terminal only once the native stream ends:
+    /// standard streams deliver a trailing usage-only chunk after the
+    /// finish-reason chunk, and the driver requested usage inclusion.
+    /// Recording the reason and continuing to poll collects that usage
+    /// exactly once (PR24-009). An absent reason fails the incomplete stream.
+    fn native_ended(&mut self) {
+        if let Some(reason) = self.terminal_reason.take() {
+            self.finish(reason);
+        } else {
+            self.fail("generic_chat_stream_incomplete");
+        }
     }
 
     fn finish(&mut self, reason: FinishReasonDto) {
@@ -926,29 +975,40 @@ mod tests {
         deprecated,
         reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
     )]
-    fn usage_only_final_chunk_maps_before_finish() {
+    fn trailing_usage_after_finish_reason_is_drained_before_finished() {
+        // Standard stream order: finish-reason chunk, trailing usage-only
+        // chunk, then end. The finish reason must not terminalize the stream
+        // before the usage chunk is polled (PR24-009).
         let mut state = GenericStreamState::new(
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
             ),
             ModelCancellationSignal::new(),
         );
-        state.accept_chunk(CreateChatCompletionStreamResponse {
-            id: "fixture".to_owned(),
-            choices: Vec::new(),
-            created: 0,
-            model: "fixture".to_owned(),
-            service_tier: None,
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_owned(),
-            usage: Some(async_openai::types::chat::CompletionUsage {
+        state.accept_chunk(chunk(
+            vec![delta(None, None, Some(FinishReason::Stop))],
+            None,
+        ));
+        assert!(
+            state.terminal_reason.is_some(),
+            "the finish reason is recorded when its chunk arrives"
+        );
+        assert!(
+            !state.terminal,
+            "a recorded finish reason must not terminalize the stream"
+        );
+        state.accept_chunk(chunk(
+            Vec::new(),
+            Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 2,
                 completion_tokens: 3,
                 total_tokens: 5,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
-        });
-        state.finish(FinishReasonDto::Stop);
+        ));
+        // The native stream ends: the recorded reason becomes terminal and
+        // the collected usage is emitted before Finished.
+        state.native_ended();
         assert_eq!(
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::started()))
@@ -963,6 +1023,43 @@ mod tests {
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
         );
+        assert_eq!(state.pending.pop_front(), None);
+        assert!(state.terminal);
+    }
+
+    #[test]
+    #[allow(
+        deprecated,
+        reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
+    )]
+    fn usage_is_emitted_at_most_once_and_post_finish_content_fails() {
+        let mut duplicated =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        let usage = || async_openai::types::chat::CompletionUsage {
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        };
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        assert!(matches!(
+            duplicated.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_duplicate_usage"
+        ));
+
+        let mut post_finish =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        post_finish.accept_chunk(chunk(
+            vec![delta(None, None, Some(FinishReason::Stop))],
+            None,
+        ));
+        post_finish.accept_chunk(chunk(vec![delta(Some("late"), None, None)], None));
+        assert!(matches!(
+            post_finish.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
+        ));
     }
 
     #[allow(

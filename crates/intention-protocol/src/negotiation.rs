@@ -80,7 +80,14 @@ pub fn require_capability(
         ProtocolCapabilityDto::UserNotificationsV1 => "user_notifications_capability_required",
         ProtocolCapabilityDto::DaemonToolGatewayV1 => "daemon_tool_gateway_capability_required",
         ProtocolCapabilityDto::ModelToolLoopV1 => "model_tool_loop_required",
-        _ => "execution_meaning_capability_required",
+        // Baseline M3 capabilities have their own family-specific codes; the
+        // wildcard execution-meaning fallback is never used for them.
+        ProtocolCapabilityDto::SessionSubscriptions => "session_subscriptions_capability_required",
+        ProtocolCapabilityDto::CorrelatedRequests => "correlated_requests_capability_required",
+        ProtocolCapabilityDto::DaemonHealth => "daemon_health_capability_required",
+        ProtocolCapabilityDto::RunStreamSubscriptions => {
+            "run_stream_subscriptions_capability_required"
+        }
     };
     Err(ErrorDto::validation(
         code,
@@ -260,7 +267,19 @@ mod tests {
             ),
             (
                 ProtocolCapabilityDto::SessionSubscriptions,
-                "execution_meaning_capability_required",
+                "session_subscriptions_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::CorrelatedRequests,
+                "correlated_requests_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::DaemonHealth,
+                "daemon_health_capability_required",
+            ),
+            (
+                ProtocolCapabilityDto::RunStreamSubscriptions,
+                "run_stream_subscriptions_capability_required",
             ),
         ] {
             assert_eq!(

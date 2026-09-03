@@ -317,7 +317,7 @@ fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("fixture result is a turn")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -376,7 +376,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
     else {
         panic!("host accepts the turn")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("host response contains a run")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -486,7 +486,7 @@ async fn send_queued_turn_through_host(
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
             if matches!(
                 accepted.result(),
-                Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                ProtocolAcceptedResultDto::SendUserTurn(turn)
                     if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
             )
     ));
@@ -1280,8 +1280,9 @@ fn daemon_stop_seam_persists_cancelling_without_direct_terminalization() {
     assert!(matches!(
         facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
-            if snapshot.projection().is_some_and(|projection| {
-                projection.active_run().is_some_and(|run| run.status() == RunStatusDto::Cancelling)
-            })
+            if snapshot
+                .projection()
+                .active_run()
+                .is_some_and(|run| run.status() == RunStatusDto::Cancelling)
     ));
 }

@@ -545,6 +545,70 @@ fn every_terminal_transition_promotes_the_oldest_queued_turn() {
 }
 
 #[test]
+fn recovery_promoted_successors_are_held_skipped_by_later_recovery_and_cleaned_when_terminal() {
+    // PR24-007/019: a successor promoted by a recovery interruption is durably
+    // held in the same transaction (no daemon is running to schedule it),
+    // later restarts never re-interrupt held or admitted runs, and stale
+    // holds are cleaned once their run reaches a terminal status.
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let active_run = RunId::new();
+    accept(&store, session, TurnId::new(), active_run, "active");
+    let queued_run = RunId::new();
+    accept(&store, session, TurnId::new(), queued_run, "queued");
+
+    store
+        .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(5)))
+        .expect("recovery commits terminal interruption and promotion");
+    let held = store
+        .load_held_recovered_run(queued_run)
+        .expect("held record loads")
+        .expect("the recovery-promoted successor is held");
+    assert_eq!(held.session_id, session);
+    assert_eq!(held.admission_state, HeldRunAdmissionStateDto::Held);
+
+    // A later recovery skips the held Starting successor: it is neither
+    // re-interrupted nor auto-scheduled.
+    let second = store
+        .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(6)))
+        .expect("second recovery commits");
+    assert!(
+        second.is_empty(),
+        "held and admitted runs are never re-interrupted"
+    );
+    let projection = store
+        .load_session_snapshot(session)
+        .expect("snapshot loads");
+    assert_eq!(
+        projection
+            .active_run()
+            .expect("held successor remains active")
+            .status(),
+        RunStatusDto::Starting
+    );
+
+    // Stale holds are cleaned once their run is terminal.
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session,
+            queued_run,
+            RunStatusDto::Failed,
+            time(7),
+        ))
+        .expect("held successor reaches a terminal status");
+    store
+        .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(time(8)))
+        .expect("cleanup recovery commits");
+    assert!(
+        store
+            .load_held_recovered_run(queued_run)
+            .expect("held record loads")
+            .is_none(),
+        "stale holds are removed once their run is terminal"
+    );
+}
+
+#[test]
 fn terminal_promotion_retains_queued_run_identity_and_configuration_snapshot() {
     let (_directory, store) = repository();
     let session = create(&store);
@@ -1934,7 +1998,7 @@ fn held_recovered_run_rejected_and_malformed_states_are_typed() {
 }
 
 #[test]
-fn provider_selection_malformed_rows_fail_typed_and_digests_conflict() {
+fn provider_selection_is_run_scoped_and_malformed_rows_fail_typed() {
     #![allow(
         clippy::literal_string_with_formatting_args,
         reason = "Malformed JSON fixture strings intentionally resemble formatting placeholders."
@@ -1961,20 +2025,58 @@ fn provider_selection_malformed_rows_fail_typed_and_digests_conflict() {
             occurred_at: 4,
         })
         .expect("identical selection is idempotent");
-    // The same selection bytes for a different run hit the digest conflict.
+    // The identical selection bytes for a second, sequential run persist
+    // normally: the digest is a content fingerprint, not a global identity.
+    // The first run must first reach a terminal state so the second turn
+    // starts a fresh run instead of queuing behind it.
+    for status in [
+        RunStatusDto::Running,
+        RunStatusDto::Completing,
+        RunStatusDto::Completed,
+    ] {
+        store
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                run_id,
+                status,
+                time(4),
+            ))
+            .expect("first run transitions");
+    }
     let other_run = RunId::new();
     accept(&store, session_id, TurnId::new(), other_run, "other run");
+    store
+        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
+            session_id,
+            run_id: other_run,
+            selection: selection.clone(),
+            occurred_at: 4,
+        })
+        .expect("the identical selection persists for a second run");
+    assert_eq!(
+        store
+            .load_resolved_run_provider_selection(session_id, run_id)
+            .expect("first run selection loads")
+            .expect("first run has a selection"),
+        store
+            .load_resolved_run_provider_selection(session_id, other_run)
+            .expect("second run selection loads")
+            .expect("second run has a selection")
+    );
+    // Rebinding one run to different selection bytes is a typed conflict.
+    let mut different = selection;
+    different.model_id = "a-different-model".to_owned();
     assert_eq!(
         store
             .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
                 session_id,
-                run_id: other_run,
-                selection,
+                run_id,
+                selection: different,
                 occurred_at: 4,
             },)
-            .expect_err("selection digest is bound to the first run")
+            .expect_err("run rebinding to different bytes is rejected")
             .code(),
-        "provider_selection_digest_conflict"
+        "provider_selection_conflict"
     );
     // A malformed persisted selection row fails the typed decode.
     {
@@ -2022,6 +2124,190 @@ fn provider_selection_invalid_domain_record_fails_the_typed_load() {
             .expect_err("invalid selection fails the typed decode")
             .code(),
         "storage_decode_failed"
+    );
+}
+
+#[test]
+fn queued_turn_selection_transfers_on_promotion_and_survives_reopen() {
+    let (directory, store) = repository();
+    let session_id = create(&store);
+    // The first turn starts a run, so the second turn with the identical
+    // provider selection is queued and must retain that selection durably.
+    let run_one = RunId::new();
+    let turn_one = TurnId::new();
+    store
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session_id,
+                turn_one,
+                "first run",
+                run_one,
+                snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
+                time(2),
+            )
+            .expect("turn input is valid"),
+        )
+        .expect("first turn commits");
+    let run_two = RunId::new();
+    let turn_two = TurnId::new();
+    let input = AcceptUserTurnInputDto::new(
+        session_id,
+        turn_two,
+        "queued second run",
+        run_two,
+        snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
+        time(3),
+    )
+    .expect("turn input is valid")
+    .with_provider_selection(fixture_selection());
+    let change = store.accept_user_turn(input).expect("queued turn commits");
+    assert!(
+        matches!(
+            change.turn_outcome(),
+            Some(AcceptedTurnOutcomeDto::Queued(_))
+        ),
+        "the second turn is queued while the first run is active"
+    );
+    assert_eq!(
+        store
+            .load_resolved_run_provider_selection(session_id, run_two)
+            .expect("queued run selection lookup succeeds"),
+        None,
+        "a queued turn has no run selection until promotion"
+    );
+    // Terminalizing the first run promotes the queued turn and transfers its
+    // selection in the same transaction as run creation.
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session_id,
+            run_one,
+            RunStatusDto::Running,
+            time(4),
+        ))
+        .expect("first run transitions to running");
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session_id,
+            run_one,
+            RunStatusDto::Completing,
+            time(4),
+        ))
+        .expect("first run transitions to completing");
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session_id,
+            run_one,
+            RunStatusDto::Completed,
+            time(5),
+        ))
+        .expect("first run completes and promotes the queued turn");
+    let expected = fixture_selection();
+    assert_eq!(
+        store
+            .load_resolved_run_provider_selection(session_id, run_two)
+            .expect("promoted run selection lookup succeeds")
+            .expect("promoted run has its transferred selection"),
+        expected
+    );
+    // The transferred selection is durable across reopen.
+    drop(store);
+    let reopened = reopen(&directory);
+    assert_eq!(
+        reopened
+            .load_resolved_run_provider_selection(session_id, run_two)
+            .expect("reopened selection lookup succeeds")
+            .expect("reopened run still has its transferred selection"),
+        expected
+    );
+}
+
+#[test]
+fn idempotent_turn_replies_use_current_durable_state() {
+    let (directory, store) = repository();
+    let session_id = create(&store);
+    let run_one = RunId::new();
+    let turn_one = TurnId::new();
+    let input = AcceptUserTurnInputDto::new(
+        session_id,
+        turn_one,
+        "first run",
+        run_one,
+        snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
+        time(2),
+    )
+    .expect("turn input is valid");
+    store.accept_user_turn(input.clone()).expect("turn commits");
+    // A queued second turn is retried before and after removal.
+    let run_two = RunId::new();
+    let turn_two = TurnId::new();
+    let queued = AcceptUserTurnInputDto::new(
+        session_id,
+        turn_two,
+        "queued second run",
+        run_two,
+        snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-model"),
+        time(3),
+    )
+    .expect("turn input is valid");
+    store.accept_user_turn(queued.clone()).expect("turn queues");
+    // Retry while the membership still exists reports the real queue ticket.
+    assert!(
+        matches!(
+            store
+                .accept_user_turn(queued.clone())
+                .expect("queued retry is accepted")
+                .turn_outcome(),
+            Some(AcceptedTurnOutcomeDto::Queued(_))
+        ),
+        "an existing queued membership reports a real position"
+    );
+    // Remove the queued turn, then retry: the ghost queue position must not
+    // be returned; the retry reports the removal as a typed conflict.
+    store
+        .remove_queued_turn(RemoveQueuedTurnInputDto::new(
+            RemoveQueuedTurnCommandDto::new(session_id, turn_two),
+            time(4),
+        ))
+        .expect("queued turn removes");
+    assert_eq!(
+        store
+            .accept_user_turn(queued)
+            .expect_err("retry after removal is rejected")
+            .code(),
+        "accepted_turn_removed"
+    );
+    // Retry of a started turn reports the run's actual durable status, not a
+    // hardcoded Starting projection.
+    store
+        .transition_run(TransitionRunInputDto::new(
+            session_id,
+            run_one,
+            RunStatusDto::Running,
+            time(5),
+        ))
+        .expect("run transitions to running");
+    let retried = store
+        .accept_user_turn(input)
+        .expect("started turn retry is accepted");
+    assert!(
+        matches!(
+            retried.turn_outcome(),
+            Some(AcceptedTurnOutcomeDto::Started(run))
+                if run.status() == RunStatusDto::Running && run.run_id() == run_one
+        ),
+        "the idempotent reply reflects the current running status"
+    );
+    // The retried outcome projection is durable and coherent after reopen.
+    drop(store);
+    let reopened = reopen(&directory);
+    let snapshot = reopened
+        .load_session_snapshot(session_id)
+        .expect("session snapshot loads");
+    assert!(
+        snapshot
+            .active_run()
+            .is_some_and(|run| run.run_id() == run_one),
+        "the reopened projection still owns the running run"
     );
 }
 

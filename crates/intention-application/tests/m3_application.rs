@@ -1101,7 +1101,7 @@ fn stop_and_snapshot_workflows_map_durable_results() {
         .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))
         .expect("snapshot maps");
     assert_eq!(snapshot.session_id(), session_id);
-    assert_eq!(snapshot.projection(), Some(&state));
+    assert_eq!(snapshot.projection(), &state);
 }
 
 #[test]

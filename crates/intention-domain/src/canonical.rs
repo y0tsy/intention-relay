@@ -900,8 +900,22 @@ pub fn decode_optional_utf8(bytes: &[u8]) -> Result<Option<String>, CanonicalErr
 
 /// Whether `value` carries a credential-shaped token that must never enter a
 /// canonical record, digest, or durable identity.
+///
+/// This is the secret-value role of the shared credential-shape policy; every
+/// boundary delegates to the same role functions so verdicts cannot diverge
+/// (PR24-035).
 #[must_use]
 pub fn contains_credential_shape(value: &str) -> bool {
+    secret_value_credential_shaped(value)
+}
+
+/// Whether a secret-style value carries a credential pattern.
+///
+/// Secret-value role: `sk-` prefixes, `Bearer ` tokens, and the
+/// `api_key`/`apikey`/`secret`/`password`/`token=`/`key=`/`auth=` value
+/// patterns. Case-insensitive.
+#[must_use]
+pub fn secret_value_credential_shaped(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("sk-")
         || lower.starts_with("bearer ")
@@ -912,6 +926,71 @@ pub fn contains_credential_shape(value: &str) -> bool {
         || lower.contains("token=")
         || lower.contains("key=")
         || lower.contains("auth=")
+}
+
+/// Whether an identifier-like field value is credential-shaped.
+///
+/// Identifier role: any control character anywhere, or a trimmed,
+/// case-insensitive value carrying the `key`, `token`, or `sk-` substring, or
+/// a `bearer` word followed by a non-empty token. Intentionally
+/// over-inclusive: identifiers and provider-adjacent DTO fields fail closed.
+#[must_use]
+pub fn credential_shaped_identifier(value: &str) -> bool {
+    value.chars().any(char::is_control) || {
+        let lower = value.trim().to_ascii_lowercase();
+        lower.contains("key")
+            || lower.contains("token")
+            || lower.contains("sk-")
+            || bearer_token_shape(&lower)
+    }
+}
+
+/// Whether a configuration key name is credential-shaped.
+///
+/// Key-name role: the secret-value patterns or one of the reserved
+/// credential key names (`token`, `bearer`, `auth`, `authorization`,
+/// `access_token`, `auth_token`). Case-insensitive.
+#[must_use]
+pub fn credential_shaped_key_name(key: &str) -> bool {
+    secret_value_credential_shaped(key)
+        || matches!(
+            key.to_ascii_lowercase().as_str(),
+            "token" | "bearer" | "auth" | "authorization" | "access_token" | "auth_token"
+        )
+}
+
+/// Whether raw configuration text carries a credential shape.
+///
+/// Raw-content role: unlike the identifier role, the line breaks and tabs
+/// that are legitimate inside TOML text are ignored; only credential
+/// substrings and bearer tokens are detected, so multi-line configuration
+/// content is not rejected for its formatting alone.
+#[must_use]
+pub fn credential_shaped_raw_content(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("key")
+        || lower.contains("token")
+        || lower.contains("sk-")
+        || bearer_token_shape(&lower)
+}
+
+/// Whether `value` (already lowercased) carries a Bearer-token shape: the
+/// word `bearer` followed, possibly after whitespace or control characters,
+/// by a non-empty token.
+#[must_use]
+fn bearer_token_shape(lower: &str) -> bool {
+    lower.match_indices("bearer").any(|(index, _)| {
+        let after = &lower[index + "bearer".len()..];
+        let Some(first) = after.chars().next() else {
+            return false;
+        };
+        (first.is_whitespace() || first.is_control())
+            && after
+                .trim_start_matches(|c: char| c.is_whitespace() || c.is_control())
+                .chars()
+                .next()
+                .is_some()
+    })
 }
 
 /// Whether `value` contains a control character or a NUL byte.

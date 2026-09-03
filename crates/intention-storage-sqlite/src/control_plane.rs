@@ -4,9 +4,9 @@
 //! removal lifecycle, and held recovered runs.
 //!
 //! The control-plane DDL is part of the single current storage schema created
-//! directly on open (no migration chain and no version gate). All schema-4
-//! records are credential-free; credentials never enter any schema-4 text
-//! column.
+//! directly on open (no migration chain and no version gate). All
+//! control-plane records are credential-free; credentials never enter any
+//! current-schema text column.
 
 use intention_domain::{
     ContextPreservationCapability, CredentialTransportMode, ModelCapabilitySetV1,
@@ -22,9 +22,10 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, HeldRecoveredRunDto, HeldRunAdmissionStateDto,
     HeldRunRepositoryDto, LoadProviderCatalogPageInputDto, LoadUnavailableQueuePageInputDto,
-    MarkRecoveredRunHeldInputDto, PersistResolvedRunProviderSelectionInputDto,
-    PromoteUnavailableRunsInputDto, PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto,
-    ProviderCatalogPageDto, ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
+    MarkRecoveredRunHeldInputDto, PendingRemovalCandidateDto,
+    PersistResolvedRunProviderSelectionInputDto, PromoteUnavailableRunsInputDto,
+    PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
+    ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
     ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
     ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
@@ -96,21 +97,28 @@ CREATE TABLE IF NOT EXISTS provider_profile_revisions (
 );
 CREATE INDEX IF NOT EXISTS provider_profile_revisions_by_catalog ON provider_profile_revisions(catalog_revision_id);
 CREATE INDEX IF NOT EXISTS provider_profile_revisions_by_kind ON provider_profile_revisions(kind_id, kind_descriptor_revision_id);
+-- Tombstones are append-only removal-history events keyed by (id, removed
+-- catalog revision): an identifier may be removed, reintroduced by a later
+-- accepted catalog, and removed again, and every removal is preserved. Current
+-- admission authority is the live active projection, never the removal
+-- history.
 CREATE TABLE IF NOT EXISTS provider_profile_tombstones (
-  profile_id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
   removed_catalog_revision_id INTEGER NOT NULL,
   removed_at INTEGER NOT NULL CHECK(removed_at >= 0),
   provenance TEXT NOT NULL,
   tombstone_json TEXT NOT NULL,
-  tombstone_digest TEXT NOT NULL UNIQUE
+  tombstone_digest TEXT NOT NULL UNIQUE,
+  PRIMARY KEY(profile_id, removed_catalog_revision_id)
 );
 CREATE TABLE IF NOT EXISTS provider_kind_tombstones (
-  kind_id TEXT PRIMARY KEY,
+  kind_id TEXT NOT NULL,
   removed_catalog_revision_id INTEGER NOT NULL,
   removed_at INTEGER NOT NULL CHECK(removed_at >= 0),
   provenance TEXT NOT NULL,
   tombstone_json TEXT NOT NULL,
-  tombstone_digest TEXT NOT NULL UNIQUE
+  tombstone_digest TEXT NOT NULL UNIQUE,
+  PRIMARY KEY(kind_id, removed_catalog_revision_id)
 );
 CREATE TABLE IF NOT EXISTS provider_catalog_state (
   singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
@@ -179,7 +187,7 @@ CREATE TABLE IF NOT EXISTS resolved_run_provider_selections (
   provider_driver_contract_revision TEXT NOT NULL,
   selection_source TEXT,
   selection_json TEXT NOT NULL,
-  selection_digest TEXT NOT NULL UNIQUE,
+  selection_digest TEXT NOT NULL,
   CHECK(
     (credential_transport_mode = 'bearer' AND credential_transport_safe_header_name IS NULL)
     OR (credential_transport_mode = 'safe_header' AND credential_transport_safe_header_name IS NOT NULL)
@@ -268,12 +276,12 @@ CREATE INDEX IF NOT EXISTS held_recovered_runs_by_admission ON held_recovered_ru
 ";
 
 // ---------------------------------------------------------------------------
-// Typed JSON codecs for safe schema-4 records.
+// Typed JSON codecs for current-schema records.
 //
-// The schema-4 JSON columns are built and read through typed record structs
-// instead of untyped JSON values. Every key, value type, and null/omission
-// rule below mirrors the exact bytes the earlier Value-based builders
-// produced (keys emitted in sorted order, string values escaped by
+// The current-schema JSON columns are built and read through typed record
+// structs instead of untyped JSON values. Every key, value type, and
+// null/omission rule below mirrors the exact bytes the earlier Value-based
+// builders produced (keys emitted in sorted order, string values escaped by
 // serde_json itself), so stored records and their digests remain
 // byte-identical. Value spans extracted from persisted records are decoded
 // with `serde_json::from_str` against the concrete Rust type of each field.
@@ -1104,7 +1112,7 @@ impl CatalogTokenJson {
 }
 
 /// Computes the deterministic record digest over the canonical JSON encoding
-/// of one safe schema-4 record.
+/// of one safe current-schema record.
 fn record_digest(encoded: &str) -> String {
     intention_domain::canonical::Digest256::sha256(encoded.as_bytes()).to_string()
 }
@@ -1497,7 +1505,12 @@ pub fn insert_profile(
 }
 
 /// Persists the resolved provider selection of one fresh run in the supplied
-/// transaction. Idempotent for the identical record; conflicts on digest reuse.
+/// transaction. The run identity owns the row: re-persisting the identical
+/// selection bytes for the same run is idempotent, and binding an already
+/// selected run to different selection bytes returns a typed
+/// `provider_selection_conflict`. The digest is a content fingerprint, not a
+/// globally unique identity: identical content may be associated with
+/// multiple run identities.
 pub fn insert_selection(
     tx: &sqlite::Transaction<'_>,
     session_id: SessionId,
@@ -1506,21 +1519,21 @@ pub fn insert_selection(
 ) -> DtoResult<()> {
     let json = selection_json(selection).to_json();
     let digest = record_digest(&json);
-    let existing_by_digest = tx
+    let existing_digest = tx
         .query_row(
-            "SELECT run_id FROM resolved_run_provider_selections WHERE selection_digest=?1",
-            [&digest],
+            "SELECT selection_digest FROM resolved_run_provider_selections WHERE run_id=?1",
+            [run_id.to_string()],
             |row| row.get::<_, String>(0),
         )
         .optional()
         .map_err(storage_error)?;
-    if let Some(existing_run) = existing_by_digest {
-        if existing_run == run_id.to_string() {
+    if let Some(existing) = existing_digest {
+        if existing == digest {
             return Ok(());
         }
         return Err(conflict(
-            "provider_selection_digest_conflict",
-            "the provider selection digest is already bound to a different run",
+            "provider_selection_conflict",
+            "the run is already bound to a different provider selection",
         ));
     }
     tx.execute(
@@ -1623,6 +1636,42 @@ impl ProviderCatalogRepositoryDto for SqliteStorageRepository {
                 input.catalog_revision_id,
                 input.accepted_at,
             )?;
+            // Only one prepared candidate exists at a time: appending the
+            // first record of a fresh candidate clears stale candidate
+            // projection rows (for example rows left by a prepare that
+            // crashed before creating the removal row), so the durable
+            // candidate material at the current candidate revision is never
+            // ambiguous (PR24-003/004).
+            let state = load_catalog_state(&tx)?;
+            if state.candidate_catalog_revision_id != Some(input.catalog_revision_id) {
+                tx.execute(
+                    "DELETE FROM provider_catalog_profile_projection WHERE projection_state='candidate'",
+                    [],
+                )
+                .map_err(storage_error)?;
+            }
+            // The prepared candidate is durable: its projection rows are
+            // recorded with projection_state='candidate' so a restart can
+            // rebuild the controller's prepared candidate (including enabled,
+            // readiness, and display evidence) and roll forward an accepted
+            // removal whose catalog acceptance never committed (PR24-003/004).
+            tx.execute(
+                "INSERT OR REPLACE INTO provider_catalog_profile_projection(projection_state, catalog_revision_id, profile_id, profile_revision_id, kind_id, kind_descriptor_revision_id, display_name, enabled, credential_configured, readiness, safe_projection_json) VALUES ('candidate', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                sqlite::params![
+                    i64::try_from(input.catalog_revision_id)
+                        .map_err(|_| codec_error("catalog revision outside the SQLite range"))?,
+                    input.profile.profile.profile_id,
+                    input.profile.profile.revision_id,
+                    input.profile.profile.provider_kind_id,
+                    input.profile.profile.kind_descriptor_revision_id,
+                    input.profile.display_name,
+                    i64::from(input.profile.enabled),
+                    i64::from(input.profile.credential_configured),
+                    readiness_name(input.profile.readiness),
+                    safe_projection_json(&input.profile).to_json()
+                ],
+            )
+            .map_err(storage_error)?;
             tx.execute(
                 "UPDATE provider_catalog_state SET candidate_catalog_revision_id=?1, updated_at=?2 WHERE singleton_id=1",
                 sqlite::params![
@@ -2052,7 +2101,11 @@ impl ProviderCatalogRepositoryDto for SqliteStorageRepository {
         }
         let mut kind_descriptors = Vec::new();
         let mut profiles = Vec::new();
-        for (profile_id, profile_revision_id, _kind_id, kind_descriptor_revision_id) in &entries {
+        // The resolution key of one kind descriptor is the (kind id,
+        // descriptor revision) pair of the profile that references it; each
+        // key loads at most one descriptor into the material.
+        let mut loaded_descriptor_keys: Vec<(String, String)> = Vec::new();
+        for (profile_id, profile_revision_id, kind_id, kind_descriptor_revision_id) in &entries {
             let profile_row = connection
                 .query_row(
                     "SELECT profile_revision_json, declared_model_capability_subset_json, resolved_reasoning_policy, effective_execution_policy, effective_loopback_policy_or_not_applicable FROM provider_profile_revisions WHERE profile_id=?1 AND profile_revision_id=?2",
@@ -2090,33 +2143,57 @@ impl ProviderCatalogRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
             let (display_name, enabled, configured, readiness) = projection;
-            if !kind_descriptors
-                .iter()
-                .any(|existing: &ProviderKindDescriptorCandidateDto| {
-                    existing.descriptor_revision_id == *kind_descriptor_revision_id
-                })
-            {
-                let kind_row = connection
-                    .query_row(
-                        "SELECT kind_id, descriptor_json FROM provider_kind_descriptor_revisions WHERE descriptor_revision_id=?1",
-                        [kind_descriptor_revision_id],
-                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            // Kind descriptor identity is the (kind_id, descriptor revision)
+            // pair in the schema. A descriptor revision shared by several
+            // kinds resolves to the row of the profile's own kind; a revision
+            // with exactly one row stays unambiguous; a revision with rows of
+            // other kinds but none of the profile's kind is a typed decode
+            // failure instead of silently returning another kind's material.
+            let already_loaded = loaded_descriptor_keys
+                .contains(&(kind_id.clone(), kind_descriptor_revision_id.clone()));
+            if !already_loaded {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT kind_id, descriptor_json FROM provider_kind_descriptor_revisions WHERE descriptor_revision_id=?1 ORDER BY kind_id",
                     )
-                    .optional()
                     .map_err(storage_error)?;
-                let Some((kind_id, encoded_kind)) = kind_row else {
+                let rows = statement
+                    .query_map([kind_descriptor_revision_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(storage_error)?;
+                let mut candidates = Vec::new();
+                for row in rows {
+                    candidates.push(row.map_err(storage_error)?);
+                }
+                drop(statement);
+                let ambiguous = candidates.len() > 1;
+                let kind_row = match candidates.len() {
+                    0 => None,
+                    1 => Some(candidates.remove(0)),
+                    _ => candidates
+                        .into_iter()
+                        .find(|(candidate_kind, _)| candidate_kind == kind_id),
+                };
+                let Some((row_kind_id, encoded_kind)) = kind_row else {
+                    if ambiguous {
+                        return Err(codec_error(
+                            "active projection references an ambiguous kind descriptor revision",
+                        ));
+                    }
                     return Err(codec_error(
                         "active projection references an unknown kind descriptor revision",
                     ));
                 };
                 let descriptor = parse_kind_descriptor_json(&encoded_kind)?;
-                if descriptor.kind_id != kind_id {
+                if descriptor.kind_id != row_kind_id {
                     return Err(codec_error("kind descriptor identity mismatch"));
                 }
                 kind_descriptors.push(ProviderKindDescriptorCandidateDto {
                     descriptor_revision_id: kind_descriptor_revision_id.clone(),
                     descriptor,
                 });
+                loaded_descriptor_keys.push((kind_id.clone(), kind_descriptor_revision_id.clone()));
             }
             profiles.push(ProviderProfileCandidateDto {
                 profile,
@@ -2135,6 +2212,152 @@ impl ProviderCatalogRepositoryDto for SqliteStorageRepository {
         Ok(ProviderCatalogMaterialDto {
             catalog_revision_id: active_revision,
             default_profile_id: state.active_default_profile_id,
+            kind_descriptors,
+            profiles,
+        })
+    }
+
+    fn load_prepared_catalog_material(&self) -> DtoResult<ProviderCatalogMaterialDto> {
+        let connection = self.connection()?;
+        let state = load_catalog_state(&connection)?;
+        let candidate_revision = state.candidate_catalog_revision_id.ok_or_else(|| {
+            not_found(
+                "provider_catalog_not_active",
+                "no prepared provider catalog candidate is committed",
+            )
+        })?;
+        // The prepared candidate material resolves through the durable
+        // candidate projection rows the prepare path recorded at the exact
+        // candidate revision (PR24-003/004); append-only history rows alone
+        // cannot distinguish a prepared candidate from an accepted catalog.
+        let candidate_revision_i64 = i64::try_from(candidate_revision)
+            .map_err(|_| codec_error("catalog revision outside the SQLite range"))?;
+        let mut entries = Vec::new();
+        {
+            let mut statement = connection
+                .prepare(
+                    "SELECT profile_id, profile_revision_id, kind_id, kind_descriptor_revision_id FROM provider_catalog_profile_projection WHERE projection_state='candidate' AND catalog_revision_id=?1 ORDER BY profile_id",
+                )
+                .map_err(storage_error)?;
+            let rows = statement
+                .query_map([candidate_revision_i64], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(storage_error)?;
+            for row in rows {
+                entries.push(row.map_err(storage_error)?);
+            }
+            drop(statement);
+        }
+        let mut kind_descriptors = Vec::new();
+        let mut profiles = Vec::new();
+        let mut loaded_descriptor_keys: Vec<(String, String)> = Vec::new();
+        for (profile_id, profile_revision_id, kind_id, kind_descriptor_revision_id) in &entries {
+            let profile_row = connection
+                .query_row(
+                    "SELECT profile_revision_json, declared_model_capability_subset_json, resolved_reasoning_policy, effective_execution_policy, effective_loopback_policy_or_not_applicable FROM provider_profile_revisions WHERE profile_id=?1 AND profile_revision_id=?2",
+                    sqlite::params![profile_id, profile_revision_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(storage_error)?;
+            let Some((encoded, subset, reasoning, execution, loopback)) = profile_row else {
+                return Err(codec_error(
+                    "prepared candidate projection references an unknown profile revision",
+                ));
+            };
+            let profile = parse_profile_json(&encoded)?;
+            let projection = connection
+                .query_row(
+                    "SELECT display_name, enabled, credential_configured, readiness FROM provider_catalog_profile_projection WHERE projection_state='candidate' AND catalog_revision_id=?1 AND profile_id=?2",
+                    sqlite::params![candidate_revision_i64, profile_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .map_err(storage_error)?;
+            let (display_name, enabled, configured, readiness) = projection;
+            let already_loaded = loaded_descriptor_keys
+                .contains(&(kind_id.clone(), kind_descriptor_revision_id.clone()));
+            if !already_loaded {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT kind_id, descriptor_json FROM provider_kind_descriptor_revisions WHERE descriptor_revision_id=?1 ORDER BY kind_id",
+                    )
+                    .map_err(storage_error)?;
+                let rows = statement
+                    .query_map([kind_descriptor_revision_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(storage_error)?;
+                let mut candidates = Vec::new();
+                for row in rows {
+                    candidates.push(row.map_err(storage_error)?);
+                }
+                drop(statement);
+                let ambiguous = candidates.len() > 1;
+                let kind_row = match candidates.len() {
+                    0 => None,
+                    1 => Some(candidates.remove(0)),
+                    _ => candidates
+                        .into_iter()
+                        .find(|(candidate_kind, _)| candidate_kind == kind_id),
+                };
+                let Some((row_kind_id, encoded_kind)) = kind_row else {
+                    if ambiguous {
+                        return Err(codec_error(
+                            "prepared candidate references an ambiguous kind descriptor revision",
+                        ));
+                    }
+                    return Err(codec_error(
+                        "prepared candidate references an unknown kind descriptor revision",
+                    ));
+                };
+                let descriptor = parse_kind_descriptor_json(&encoded_kind)?;
+                if descriptor.kind_id != row_kind_id {
+                    return Err(codec_error("kind descriptor identity mismatch"));
+                }
+                kind_descriptors.push(ProviderKindDescriptorCandidateDto {
+                    descriptor_revision_id: kind_descriptor_revision_id.clone(),
+                    descriptor,
+                });
+                loaded_descriptor_keys.push((kind_id.clone(), kind_descriptor_revision_id.clone()));
+            }
+            profiles.push(ProviderProfileCandidateDto {
+                profile,
+                declared_model_capability_subset: serde_json::from_str(&subset)
+                    .map_err(codec_error)?,
+                resolved_reasoning_policy: reasoning,
+                effective_execution_policy: execution,
+                effective_loopback_policy_or_not_applicable: loopback,
+                display_name,
+                enabled: enabled != 0,
+                credential_configured: configured != 0,
+                readiness: parse_catalog_readiness(&readiness)?,
+            });
+        }
+        drop(connection);
+        Ok(ProviderCatalogMaterialDto {
+            catalog_revision_id: candidate_revision,
+            default_profile_id: None,
             kind_descriptors,
             profiles,
         })
@@ -2212,8 +2435,13 @@ fn parse_capability_envelope(record: CapabilityEnvelopeJson) -> DtoResult<ModelC
     Ok(envelope)
 }
 
+/// Encodes one resolved provider selection into its persisted JSON record.
+pub fn encode_selection_json(selection: &ProviderSelectionV1) -> String {
+    selection_json(selection).to_json()
+}
+
 /// Parses one persisted resolved provider selection record back into its domain record.
-fn parse_selection_json(encoded: &str) -> DtoResult<ProviderSelectionV1> {
+pub fn parse_selection_json(encoded: &str) -> DtoResult<ProviderSelectionV1> {
     let record = SelectionJson::from_json(encoded)?;
     let transport = match record.credential_transport_mode.as_str() {
         "bearer" => CredentialTransportMode::Bearer,
@@ -2271,7 +2499,10 @@ impl ConfigurationReloadRepositoryDto for SqliteStorageRepository {
             )?;
             self.fault(FaultPoint::ReloadAudit)?;
             tx.execute(
-                "UPDATE provider_catalog_state SET status=CASE WHEN active_catalog_revision_id IS NULL THEN status ELSE 'active' END, updated_at=?1 WHERE singleton_id=1",
+                // Configuration reload must never leave the closed
+                // pending-removal or activation-recovery lifecycle: only
+                // accept, reject, expiry, or recovery may exit those statuses.
+                "UPDATE provider_catalog_state SET status=CASE WHEN active_catalog_revision_id IS NULL OR status IN ('pending_removal','activation_recovery_required') THEN status ELSE 'active' END, updated_at=?1 WHERE singleton_id=1",
                 [input.reloaded_at],
             )
             .map_err(storage_error)?;
@@ -2822,7 +3053,120 @@ fn load_removal_candidate(
     })
 }
 
+/// Decodes the removed-identity evidence of one removal candidate row.
+///
+/// The candidate evidence is the credential-free JSON shape the controller
+/// writes at prepare time:
+/// `{"catalog_revision_id":N,"removed_profiles":[...],"removed_kinds":[...],
+/// "default_profile_id":"default"}`. Unknown or malformed shapes fail closed
+/// so restart handling never guesses removed identities.
+fn decode_removal_evidence(encoded: &str) -> DtoResult<(Vec<String>, Vec<String>)> {
+    let removed_profiles = decode_removed_identity_list(encoded, "removed_profiles")?;
+    let removed_kinds = decode_removed_identity_list(encoded, "removed_kinds")?;
+    Ok((removed_profiles, removed_kinds))
+}
+
+/// Decodes one `[...]` list of string identities from the removal evidence
+/// record through the span scanner (never through an untyped JSON value).
+fn decode_removed_identity_list(encoded: &str, key: &str) -> DtoResult<Vec<String>> {
+    let RawJsonField::Value(span) = json_object_field(encoded, key)? else {
+        return Err(codec_error("removal candidate evidence is malformed"));
+    };
+    let bytes = encoded.as_bytes();
+    let start = span.as_ptr() as usize - bytes.as_ptr() as usize;
+    if start >= bytes.len() || bytes[start] != b'[' {
+        return Err(codec_error("removal candidate evidence is malformed"));
+    }
+    let mut index = start + 1;
+    let mut identities = Vec::new();
+    loop {
+        index = skip_json_whitespace(bytes, index);
+        if index >= bytes.len() {
+            return Err(codec_error("removal candidate evidence is malformed"));
+        }
+        match bytes[index] {
+            b']' => return Ok(identities),
+            b'"' => {
+                let (item, after) = json_string_span(bytes, index)?;
+                identities.push(item[1..item.len() - 1].to_owned());
+                index = skip_json_whitespace(bytes, after);
+                match bytes.get(index) {
+                    Some(b',') => index += 1,
+                    Some(b']') => {}
+                    _ => return Err(codec_error("removal candidate evidence is malformed")),
+                }
+            }
+            _ => return Err(codec_error("removal candidate evidence is malformed")),
+        }
+    }
+}
+
 impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
+    fn load_highest_removal_candidate_revision(&self) -> DtoResult<u64> {
+        let connection = self.connection()?;
+        let highest: Option<i64> = connection
+            .query_row(
+                "SELECT MAX(candidate_catalog_revision_id) FROM provider_catalog_removal_candidates",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        drop(connection);
+        Ok(highest.map_or(0, |value| u64::try_from(value).unwrap_or(0)))
+    }
+
+    fn load_pending_removal_candidate(&self) -> DtoResult<Option<PendingRemovalCandidateDto>> {
+        let connection = self.connection()?;
+        // The pending-removal state owns exactly one candidate revision; the
+        // loader is scoped to it so closed removal rows from completed
+        // acceptances are never mistaken for a pending candidate. An
+        // `accepted` row under a still-pending catalog state is the
+        // crash-between-commits roll-forward case (PR24-004).
+        let candidate_revision: Option<i64> = connection
+            .query_row(
+                "SELECT candidate_catalog_revision_id FROM provider_catalog_state WHERE singleton_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(storage_error)?;
+        let Some(candidate_revision) = candidate_revision else {
+            return Ok(None);
+        };
+        let row = connection
+            .query_row(
+                "SELECT candidate_handle, candidate_catalog_revision_id, active_catalog_revision_id, expires_at, status, candidate_json FROM provider_catalog_removal_candidates WHERE candidate_catalog_revision_id=?1 AND status IN ('pending','accepted') LIMIT 1",
+                [candidate_revision],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(storage_error)?;
+        drop(connection);
+        let Some((handle, revision, active, expires_at, status, evidence_json)) = row else {
+            return Ok(None);
+        };
+        let (removed_profile_ids, removed_kind_ids) = decode_removal_evidence(&evidence_json)?;
+        Ok(Some(PendingRemovalCandidateDto {
+            candidate_handle: handle,
+            candidate_catalog_revision_id: u64::try_from(revision).unwrap_or(u64::MAX),
+            active_catalog_revision_id: u64::try_from(active).unwrap_or(u64::MAX),
+            expires_at,
+            removal_status: parse_removal_status(&status)?,
+            removed_profile_ids,
+            removed_kind_ids,
+        }))
+    }
+
     fn create_provider_catalog_removal_candidate(
         &self,
         input: CreateProviderCatalogRemovalCandidateInputDto,
@@ -2832,6 +3176,57 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                 .created_at
                 .checked_add(REMOVAL_CANDIDATE_LIFETIME_SECONDS)
                 .ok_or_else(|| codec_error("removal candidate expiry overflow"))?;
+            // Removal-candidate conflicts are detected explicitly and in a
+            // deterministic order instead of by matching SQLite error text:
+            // (1) the candidate identity (handle), (2) another pending
+            // candidate, (3) the candidate revision identity.
+            let same_handle = tx
+                .query_row(
+                    "SELECT 1 FROM provider_catalog_removal_candidates WHERE candidate_handle=?1",
+                    [&input.candidate_handle],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if same_handle {
+                return Err(conflict(
+                    "provider_catalog_removal_candidate_conflict",
+                    "the provider catalog removal candidate already exists",
+                ));
+            }
+            let pending_exists = tx
+                .query_row(
+                    "SELECT 1 FROM provider_catalog_removal_candidates WHERE status='pending' LIMIT 1",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if pending_exists {
+                return Err(conflict(
+                    "provider_catalog_removal_pending_exists",
+                    "a pending provider catalog removal candidate already exists",
+                ));
+            }
+            let revision_used = tx
+                .query_row(
+                    "SELECT 1 FROM provider_catalog_removal_candidates WHERE candidate_catalog_revision_id=?1",
+                    [i64::try_from(input.candidate_catalog_revision_id).map_err(|_| {
+                        codec_error("catalog revision outside the SQLite range")
+                    })?],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if revision_used {
+                return Err(conflict(
+                    "provider_catalog_removal_candidate_conflict",
+                    "the provider catalog removal candidate revision is already used",
+                ));
+            }
             let inserted = tx
                 .execute(
                     "INSERT INTO provider_catalog_removal_candidates(candidate_handle, candidate_catalog_revision_id, active_catalog_revision_id, created_at, expires_at, source_recheck, status, candidate_json, operation_id, completed_at) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7,?8,NULL)",
@@ -2848,19 +3243,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                         input.operation_id
                     ],
                 )
-                .map_err(|error| {
-                    if error
-                        .to_string()
-                        .contains("one_pending_provider_catalog_candidate")
-                    {
-                        conflict(
-                            "provider_catalog_removal_pending_exists",
-                            "a pending provider catalog removal candidate already exists",
-                        )
-                    } else {
-                        storage_error(error)
-                    }
-                })?;
+                .map_err(storage_error)?;
             if inserted != 1 {
                 return Err(conflict(
                     "provider_catalog_removal_candidate_conflict",

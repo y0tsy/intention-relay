@@ -55,3 +55,4 @@ provenance.
 | [0035](0035-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, pre-approved four-slice activation sequence |
 | [0036](0036-m5plus-slice1-contract-ledger.md) | Accepted | M5+ Slice 1 contract ledger and activating specification |
 | [0037](0037-m5plus-slice2-control-plane.md) | Accepted | M5+ Slice 2 control-plane activation and activating specification |
+| [0038](0038-no-backward-compatibility-and-legacy-removal.md) | Accepted | No backward compatibility and legacy removal (single-version policy) |

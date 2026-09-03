@@ -229,6 +229,28 @@ pub struct RunExecutionMeaningEnvelopeV1 {
     pub canonical_meaning_digest: Digest256,
 }
 
+/// Computes the authenticated meaning digest over the value bytes of the
+/// metadata fields 1-4 (execution kind, meaning tag, meaning record version,
+/// canonicalization version) followed by the canonical meaning bytes of
+/// field 5. The digest field itself (6) is excluded by construction, so the
+/// advisory metadata cannot be altered without producing
+/// `CanonicalError::DigestMismatch` on decode.
+fn authenticated_meaning_digest(
+    execution_kind: &ExecutionKind,
+    meaning_record_tag: u32,
+    meaning_record_version: u32,
+    canonicalization_version: u32,
+    canonical_meaning_bytes: &[u8],
+) -> Digest256 {
+    let mut input = Vec::with_capacity(1 + 24 + canonical_meaning_bytes.len());
+    input.extend_from_slice(&execution_kind.enc());
+    input.extend_from_slice(&encode_u64(u64::from(meaning_record_tag)));
+    input.extend_from_slice(&encode_u64(u64::from(meaning_record_version)));
+    input.extend_from_slice(&encode_u64(u64::from(canonicalization_version)));
+    input.extend_from_slice(canonical_meaning_bytes);
+    Digest256::sha256(&input)
+}
+
 /// Encodes one canonical record from a strictly increasing field stream.
 ///
 /// # Errors
@@ -497,12 +519,13 @@ impl ProgrammaticCallerPolicySelectionV1 {
     ///
     /// # Errors
     ///
-    /// Returns `CanonicalError::InvalidTag` when the tag is not the
-    /// programmatic-caller policy selection table, and other `CanonicalError`
-    /// values for malformed or noncanonical framing.
+    /// Returns `CanonicalError::InvalidTag` when the tag or version is not
+    /// the programmatic-caller policy selection v1 table, and other
+    /// `CanonicalError` values for malformed or noncanonical framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 5)?;
-        if reader.tag != TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1 {
+        if reader.tag != TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1 || reader.version != 1
+        {
             return Err(CanonicalError::InvalidTag);
         }
         let root_origin = ExecutionKind::dec(
@@ -691,8 +714,8 @@ impl RunExecutionMeaningEnvelopeV1 {
     /// Returns `CanonicalError::InvalidTag` when the record is not the
     /// run-execution-meaning envelope frame (tag `0x0102`, version 1),
     /// `CanonicalError::DigestMismatch` when the stored digest does not match
-    /// the canonical meaning bytes, and other `CanonicalError` values for
-    /// malformed or noncanonical framing.
+    /// the authenticated metadata and canonical meaning bytes, and other
+    /// `CanonicalError` values for malformed or noncanonical framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
         let reader = CanonicalRecordReader::new(bytes, 6)?;
         // The envelope is a closed fixed frame: tag 0x0102, version 1, per
@@ -700,6 +723,29 @@ impl RunExecutionMeaningEnvelopeV1 {
         if reader.tag != 0x0102 || reader.version != 1 {
             return Err(CanonicalError::InvalidTag);
         }
+        let execution_kind = ExecutionKind::dec(
+            reader
+                .field(1, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let meaning_record_tag = u32::try_from(decode_u64(
+            reader
+                .field(2, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?)
+        .map_err(|_| CanonicalError::InvalidField)?;
+        let meaning_record_version = u32::try_from(decode_u64(
+            reader
+                .field(3, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?)
+        .map_err(|_| CanonicalError::InvalidField)?;
+        let canonicalization_version = u32::try_from(decode_u64(
+            reader
+                .field(4, WireType::U64)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?)
+        .map_err(|_| CanonicalError::InvalidField)?;
         let canonical_meaning_bytes = reader
             .field(5, WireType::Bytes)?
             .ok_or(CanonicalError::InvalidField)?
@@ -709,30 +755,21 @@ impl RunExecutionMeaningEnvelopeV1 {
                 .field(6, WireType::Digest)?
                 .ok_or(CanonicalError::InvalidField)?,
         )?;
-        if Digest256::sha256(&canonical_meaning_bytes) != canonical_meaning_digest {
+        let expected = authenticated_meaning_digest(
+            &execution_kind,
+            meaning_record_tag,
+            meaning_record_version,
+            canonicalization_version,
+            &canonical_meaning_bytes,
+        );
+        if expected != canonical_meaning_digest {
             return Err(CanonicalError::DigestMismatch);
         }
         Ok(Self {
-            execution_kind: ExecutionKind::dec(
-                reader
-                    .field(1, WireType::U64)?
-                    .ok_or(CanonicalError::InvalidField)?,
-            )?,
-            meaning_record_tag: decode_u64(
-                reader
-                    .field(2, WireType::U64)?
-                    .ok_or(CanonicalError::InvalidField)?,
-            )? as u32,
-            meaning_record_version: decode_u64(
-                reader
-                    .field(3, WireType::U64)?
-                    .ok_or(CanonicalError::InvalidField)?,
-            )? as u32,
-            canonicalization_version: decode_u64(
-                reader
-                    .field(4, WireType::U64)?
-                    .ok_or(CanonicalError::InvalidField)?,
-            )? as u32,
+            execution_kind,
+            meaning_record_tag,
+            meaning_record_version,
+            canonicalization_version,
             canonical_meaning_bytes,
             canonical_meaning_digest,
         })
@@ -777,13 +814,15 @@ mod tests {
         let meaning = fixture_v4_record()
             .encode()
             .expect("fixture meaning encodes");
+        let digest =
+            authenticated_meaning_digest(&kind, TagRegistry::RUN_EXECUTION_MEANING, 4, 1, &meaning);
         RunExecutionMeaningEnvelopeV1 {
             execution_kind: kind,
             meaning_record_tag: TagRegistry::RUN_EXECUTION_MEANING,
             meaning_record_version: 4,
             canonicalization_version: 1,
-            canonical_meaning_bytes: meaning.clone(),
-            canonical_meaning_digest: Digest256::sha256(&meaning),
+            canonical_meaning_bytes: meaning,
+            canonical_meaning_digest: digest,
         }
     }
 
@@ -1163,7 +1202,7 @@ mod tests {
         );
 
         // Mutating canonical bytes under a stored digest is rejected.
-        let mut changed_bytes = envelope;
+        let mut changed_bytes = envelope.clone();
         let mut altered_meaning = fixture_v4_record();
         altered_meaning.fields[0] = vec![0xFF; 4];
         changed_bytes.canonical_meaning_bytes =
@@ -1174,6 +1213,78 @@ mod tests {
             )
             .expect_err("altered meaning bytes are rejected"),
             CanonicalError::DigestMismatch
+        );
+
+        // Mutating advisory metadata (fields 1-4) under a stored digest is
+        // rejected too: the digest authenticates tag, version, and kind.
+        let mut changed_metadata = envelope;
+        changed_metadata.meaning_record_version = 3;
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(
+                &changed_metadata.encode().expect("envelope encodes")
+            )
+            .expect_err("altered metadata is rejected"),
+            CanonicalError::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn envelope_metadata_fields_reject_values_outside_u32() {
+        // Envelope metadata is carried as u64 wire values but stored as u32;
+        // values above `u32::MAX` must fail closed instead of truncating.
+        let tag_over = encode_u64(u64::from(u32::MAX) + 1);
+        let version_over = encode_u64(u64::from(u32::MAX) + 1);
+        let canonicalization_over = encode_u64(u64::from(u32::MAX) + 1);
+        let over_tag = raw_record(
+            0x0102,
+            1,
+            &[
+                (1, 1, &[0u8]),
+                (2, 1, &tag_over),
+                (3, 1, &encode_u64(4)),
+                (4, 1, &encode_u64(1)),
+                (5, 6, &[0u8]),
+                (6, 5, &[0u8; 32]),
+            ],
+        );
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&over_tag)
+                .expect_err("over-range meaning tag is rejected"),
+            CanonicalError::InvalidField
+        );
+        let over_version = raw_record(
+            0x0102,
+            1,
+            &[
+                (1, 1, &[0u8]),
+                (2, 1, &encode_u64(0x0101)),
+                (3, 1, &version_over),
+                (4, 1, &encode_u64(1)),
+                (5, 6, &[0u8]),
+                (6, 5, &[0u8; 32]),
+            ],
+        );
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&over_version)
+                .expect_err("over-range meaning version is rejected"),
+            CanonicalError::InvalidField
+        );
+        let over_canonicalization = raw_record(
+            0x0102,
+            1,
+            &[
+                (1, 1, &[0u8]),
+                (2, 1, &encode_u64(0x0101)),
+                (3, 1, &encode_u64(4)),
+                (4, 1, &canonicalization_over),
+                (5, 6, &[0u8]),
+                (6, 5, &[0u8; 32]),
+            ],
+        );
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&over_canonicalization)
+                .expect_err("over-range canonicalization version is rejected"),
+            CanonicalError::InvalidField
         );
     }
 
@@ -1360,6 +1471,17 @@ mod tests {
                 &[],
             ))
             .expect_err("unknown record version is rejected"),
+            CanonicalError::InvalidTag
+        );
+        // The programmatic-caller policy selection frame is closed to record
+        // version 1: a future version must not decode and re-encode as v1.
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&raw_record(
+                TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+                3,
+                &[],
+            ))
+            .expect_err("unknown selection record version is rejected"),
             CanonicalError::InvalidTag
         );
     }
@@ -2437,13 +2559,15 @@ mod tests {
         let meaning = golden_v4_record()
             .encode()
             .expect("golden v4 meaning encodes");
+        let digest =
+            authenticated_meaning_digest(&kind, TagRegistry::RUN_EXECUTION_MEANING, 4, 1, &meaning);
         RunExecutionMeaningEnvelopeV1 {
             execution_kind: kind,
             meaning_record_tag: TagRegistry::RUN_EXECUTION_MEANING,
             meaning_record_version: 4,
             canonicalization_version: 1,
-            canonical_meaning_bytes: meaning.clone(),
-            canonical_meaning_digest: Digest256::sha256(&meaning),
+            canonical_meaning_bytes: meaning,
+            canonical_meaning_digest: digest,
         }
     }
 

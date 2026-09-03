@@ -13,10 +13,10 @@ extends ADR 0035 Slice 1 and does not activate slices 2–4, M6, M7, M8, or M9.
 
 | Contract | Version/status |
 | --- | --- |
-| Local protocol | 1.1 |
-| Public DTO schema | 1.1, additive |
-| TOML configuration schema | 1, unchanged |
-| SQLite storage schema | 3, unchanged; no Slice 1 migration |
+| Local protocol | 1.1, exact equality on negotiation (single live minor; no minor tolerance, ADR 0038) |
+| Public DTO schema | 1.1; additive fields are required fields (ADR 0038) |
+| TOML configuration schema | 1, single shape; unversioned documents fail closed (ADR 0038) |
+| SQLite storage schema | Logical version 1: single live schema created directly on open; no migration chain and no version gate (ADR 0038) |
 
 ## Negotiated capabilities and failure semantics
 
@@ -46,7 +46,7 @@ credentials, paths, display data, readiness, and current state.
 
 | Tag | Value |
 | --- | --- |
-| `run-execution-meaning` (records v3, v4) | `0x0101` |
+| `run-execution-meaning` (record v4 only) | `0x0101` |
 | `programmatic-caller-policy-selection-v1` | `0x0201` |
 | `agent-activity-selection-v1` | `0x0202` |
 | `goal-run-selection-v1` | `0x0203` |
@@ -58,7 +58,6 @@ credentials, paths, display data, readiness, and current state.
 | `reasoning-history-manifest-v1` | `0x0209` |
 | `context-source-manifest-v1` | `0x020A` |
 | `model-context-projection-v1` | `0x020B` |
-| `legacy-m4-selection-binding` | `0x020C` |
 | `tool-descriptor-revision` | `0x0301` |
 | `tool-registry-revision` | `0x0302` |
 | `model-tool-loop-v1` | `0x0303` |
@@ -71,6 +70,10 @@ credentials, paths, display data, readiness, and current state.
 | `agent-message-v1` | `0x0503` |
 | `agent-activity-journal-record-v1` | `0x0504` |
 | `agent-notification-record-v1` | `0x0505` |
+
+The former `legacy-m4-selection-binding` tag `0x020C` is removed from the
+ledger and is unallocated (ADR 0038); no future activation reuses it without a
+new activating record.
 
 ## Execution-meaning records
 
@@ -114,10 +117,13 @@ binding is ever materialized for historical runs.
 ## Evidence and non-goals
 
 Required evidence covers DTO round trips; canonical golden bytes/digests;
-compatible-minor, incompatible-major, and unnegotiated fail-closed negotiation
-fixtures; current-schema creation and round trips; fake-secret absence;
-and cross-platform determinism. Required gates are `make quick`, `make verify`,
-`docs-check`, and Linux/Windows CI.
+exact current-version (1.1) negotiation fixtures, incompatible-major and
+unnegotiated fail-closed negotiation fixtures, and wrong-schema response
+rejection; current-schema creation and round trips; fake-secret absence;
+and cross-platform determinism. Compatible-minor (1.0-to-1.1) fixtures and
+1.0 wire fixtures are removed with the same-major compatibility machinery
+(ADR 0038). Required gates are `make quick`, `make verify`, `docs-check`,
+and Linux/Windows CI.
 
 This ledger does not implement M6–M9 behavior and does not introduce a second
 runtime, registry, scheduler, persistence authority, or sandbox.
@@ -130,50 +136,55 @@ Protocol 1.1 and public DTO schema 1.1 are now the active advertised versions.
 `intention-protocol` defines `CURRENT_PROTOCOL_VERSION` and
 `CURRENT_DTO_SCHEMA_VERSION`, and the runtime crates `intention`,
 `intention-client`, `intention-transport`, and `intention-daemon` reference
-them. TOML configuration schema remains 1 and SQLite storage schema remains 3.
-Historical M3/M4 fixtures and committed v1 protocol fixtures remain 1.0 and are
-not rewritten. [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)
+them. TOML configuration schema remains 1 and SQLite storage is the single
+live schema (logical version 1) created directly on open; no migration chain
+and no `user_version` gate remain.
+[ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)
 removes the same-major compatibility (1.0 ↔ 1.1) `ensure_compatible_with`
 logic: negotiation accepts only the exact current version 1.1 and rejects any
-other version with `incompatible_protocol_version`.
+other version with `incompatible_protocol_version`. Historical 1.0 wire
+fixtures are removed; current-version fixtures only are maintained.
 
 ### Registry tag activation status
 
 The numeric tag registry is owned by `intention-domain`
 (`crates/intention-domain/src/canonical.rs`). Every ledger tag is classified in
-the `TagRegistry::LEDGER` table by `TagStatus` as `Wired` or
-`ReservedForSlice2`. Exactly three tags are `Wired`; every other tag is
-`ReservedForSlice2` and carries no production codec in this slice.
+the `TagRegistry::LEDGER` table by `TagStatus` as `Wired`, `ReservedForSlice3`,
+or `ReservedForSlice4`. Nine tags are `Wired` (three from Slice 1 plus the six
+Slice 2 control-plane additions 0x0206-0x020B activated by
+[ADR 0037](0037-m5plus-slice2-control-plane.md)); every other tag is reserved
+and carries no production codec in this ledger.
 
 | Tag | Value | Status |
 | --- | --- | --- |
 | `run-execution-meaning` | `0x0101` | Wired |
 | `programmatic-caller-policy-selection-v1` | `0x0201` | Wired |
 | `agent-activity-selection-v1` | `0x0202` | Wired |
-| `goal-run-selection-v1` | `0x0203` | ReservedForSlice2 |
-| `continual-harness-selection-v1` | `0x0204` | ReservedForSlice2 |
-| `mcp-method-catalog-selection-v1` | `0x0205` | ReservedForSlice2 |
-| `model-capability-taxonomy-v1` | `0x0206` | ReservedForSlice2 |
-| `provider-profile-revision-v1` | `0x0207` | ReservedForSlice2 |
-| `provider-selection-v1` | `0x0208` | ReservedForSlice2 |
-| `reasoning-history-manifest-v1` | `0x0209` | ReservedForSlice2 |
-| `context-source-manifest-v1` | `0x020A` | ReservedForSlice2 |
-| `model-context-projection-v1` | `0x020B` | ReservedForSlice2 |
-| `legacy-m4-selection-binding` | `0x020C` | ReservedForSlice2 |
-| `tool-descriptor-revision` | `0x0301` | ReservedForSlice2 |
-| `tool-registry-revision` | `0x0302` | ReservedForSlice2 |
-| `model-tool-loop-v1` | `0x0303` | ReservedForSlice2 |
-| `bridge-invocation-v1` | `0x0304` | ReservedForSlice2 |
-| `fork-base-snapshot-v1/v2` | `0x0401` | ReservedForSlice2 |
-| `fork-preview-v1/v2` | `0x0402` | ReservedForSlice2 |
-| `fork-command-v1` | `0x0403` | ReservedForSlice2 |
-| `agent-activity-tree-v1` | `0x0501` | ReservedForSlice2 |
-| `agent-activity-pair-v1` | `0x0502` | ReservedForSlice2 |
-| `agent-message-v1` | `0x0503` | ReservedForSlice2 |
-| `agent-activity-journal-record-v1` | `0x0504` | ReservedForSlice2 |
-| `agent-notification-record-v1` | `0x0505` | ReservedForSlice2 |
+| `model-capability-taxonomy-v1` | `0x0206` | Wired (Slice 2) |
+| `provider-profile-revision-v1` | `0x0207` | Wired (Slice 2) |
+| `provider-selection-v1` | `0x0208` | Wired (Slice 2) |
+| `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |
+| `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |
+| `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |
+| `goal-run-selection-v1` | `0x0203` | ReservedForSlice3 |
+| `continual-harness-selection-v1` | `0x0204` | ReservedForSlice3 |
+| `mcp-method-catalog-selection-v1` | `0x0205` | ReservedForSlice3 |
+| `tool-descriptor-revision` | `0x0301` | ReservedForSlice3 |
+| `tool-registry-revision` | `0x0302` | ReservedForSlice3 |
+| `model-tool-loop-v1` | `0x0303` | ReservedForSlice3 |
+| `bridge-invocation-v1` | `0x0304` | ReservedForSlice3 |
+| `fork-base-snapshot-v1/v2` | `0x0401` | ReservedForSlice4 |
+| `fork-preview-v1/v2` | `0x0402` | ReservedForSlice4 |
+| `fork-command-v1` | `0x0403` | ReservedForSlice4 |
+| `agent-activity-tree-v1` | `0x0501` | ReservedForSlice4 |
+| `agent-activity-pair-v1` | `0x0502` | ReservedForSlice4 |
+| `agent-message-v1` | `0x0503` | ReservedForSlice4 |
+| `agent-activity-journal-record-v1` | `0x0504` | ReservedForSlice4 |
+| `agent-notification-record-v1` | `0x0505` | ReservedForSlice4 |
 
-Reserved tags are not active capabilities and are not model-visible.
+Reserved tags are not active capabilities and are not model-visible. The
+former `legacy-m4-selection-binding` tag `0x020C` is removed from the registry
+ledger (ADR 0038) and carries no `TagStatus`.
 
 ## Appendix A: Public wire-family field tables
 
@@ -187,35 +198,28 @@ unless the Required column says otherwise. No table cell spans multiple lines.
 
 ### run-execution-meaning (0x0101)
 
+The historical v3 record (fields 1-10, no activity selection) is removed by
+ADR 0038; the single live record version is 4.
+
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `run-execution-meaning` (0x0101) | 3 | 1 | selection record 1 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 2 | selection record 2 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 3 | selection record 3 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 4 | selection record 4 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 5 | selection record 5 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 6 | selection record 6 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 7 | selection record 7 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 8 | selection record 8 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 9 | selection record 9 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 3 | 10 | selection record 10 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 1 | selection record 1 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 2 | selection record 2 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 3 | selection record 3 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 4 | selection record 4 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 5 | selection record 5 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 6 | selection record 6 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 7 | selection record 7 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 8 | selection record 8 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 9 | selection record 9 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
-| `run-execution-meaning` (0x0101) | 4 | 10 | selection record 10 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the Slice 1 codec |
+| `run-execution-meaning` (0x0101) | 4 | 1 | selection record 1 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 2 | selection record 2 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 3 | selection record 3 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 4 | selection record 4 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 5 | selection record 5 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 6 | selection record 6 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 7 | selection record 7 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 8 | selection record 8 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 9 | selection record 9 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
+| `run-execution-meaning` (0x0101) | 4 | 10 | selection record 10 | Record | Yes | Mandatory nested M3/M4 selection record; owner-defined semantics; opaque to the ledger codec |
 | `run-execution-meaning` (0x0101) | 4 | 11 | agent_activity_selection | Record | Yes | v4-only addition; nested `AgentActivitySelectionV1` canonical record (0x0202) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 1 | execution_kind | U64 | Yes | Closed `ExecutionKind`: Ordinary (0), Mandate (1), VerifierMandate (2) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 2 | meaning_record_tag | U64 | Yes | Canonical record tag, `0x0101` |
 | `run-execution-meaning envelope` (0x0102) | 1 | 3 | meaning_record_version | U64 | Yes | Single live record version 4 (v3 removed by ADR 0038) |
 | `run-execution-meaning envelope` (0x0102) | 1 | 4 | canonicalization_version | U64 | Yes | 1 |
 | `run-execution-meaning envelope` (0x0102) | 1 | 5 | canonical_meaning_bytes | Bytes | Yes | Exact canonical meaning record bytes |
-| `run-execution-meaning envelope` (0x0102) | 1 | 6 | canonical_meaning_digest | Digest | Yes | SHA-256 of field 5; mismatch rejects with `DigestMismatch` |
+| `run-execution-meaning envelope` (0x0102) | 1 | 6 | canonical_meaning_digest | Digest | Yes | SHA-256 of the authenticated input (fields 1-4 metadata plus field 5 meaning bytes); mismatch rejects with `DigestMismatch` |
 
 ### programmatic-caller-policy-selection-v1 (0x0201)
 
@@ -262,25 +266,25 @@ unless the Required column says otherwise. No table cell spans multiple lines.
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `goal-run-selection-v1` (0x0203) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in Slice 1; ledger status ReservedForSlice2; no field table in this slice |
+| `goal-run-selection-v1` (0x0203) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in this ledger; ledger status ReservedForSlice3 or Wired (Slice 2); no field table in this ledger |
 
 ### continual-harness-selection-v1 (0x0204)
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `continual-harness-selection-v1` (0x0204) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in Slice 1; ledger status ReservedForSlice2; no field table in this slice |
+| `continual-harness-selection-v1` (0x0204) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in this ledger; ledger status ReservedForSlice3 or Wired (Slice 2); no field table in this ledger |
 
 ### mcp-method-catalog-selection-v1 (0x0205)
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `mcp-method-catalog-selection-v1` (0x0205) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in Slice 1; ledger status ReservedForSlice2; no field table in this slice |
+| `mcp-method-catalog-selection-v1` (0x0205) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in this ledger; ledger status ReservedForSlice3 or Wired (Slice 2); no field table in this ledger |
 
 ### model-capability-taxonomy-v1 (0x0206)
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `model-capability-taxonomy-v1` (0x0206) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in Slice 1; ledger status ReservedForSlice2; no field table in this slice |
+| `model-capability-taxonomy-v1` (0x0206) | — | — | — | — | — | Domain-owned canonical family; wire linkage via `PUBLIC_WIRE_CONTRACT_FAMILIES`; no separate protocol DTO in this ledger; ledger status ReservedForSlice3 or Wired (Slice 2); no field table in this ledger |
 
 ### provider-profile-revision-v1 (0x0207)
 
@@ -345,20 +349,6 @@ unless the Required column says otherwise. No table cell spans multiple lines.
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.source_manifest_digest | String | Yes | 64 lowercase hex |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.ordered_messages | Vec<String> | Yes | 1..=1024 nonblank entries; ≤ 1 MiB aggregate; `model_context_projection_invalid`/`_too_large` |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.model_context_digest | String | Yes | 64 lowercase hex |
-
-### legacy-m4-selection-binding (0x020C)
-
-| Family | Version | Field tag | Field | Type | Required | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_config_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_snapshot_schema | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.legacy_safe_selection | String | Yes | Normative invariant: must be `legacy-uuid:<canonical UUID>`; legacy bytes are never rewritten; `legacy_selection_reference_invalid` otherwise |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.default_profile_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.default_profile_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.kind_descriptor_revision_id | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.capability_subset | Vec<String> | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.execution_policy | String | Yes |  |
-| `legacy-m4-selection-binding` (0x020C) | 1 | — | LegacyM4SelectionBindingDto.driver_contract_revision | String | Yes |  |
 
 ### tool-descriptor-revision (0x0301)
 

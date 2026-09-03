@@ -34,8 +34,9 @@ The following cross-direction historical-version rules are adopted as future
 detail owned by [architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md):
 
 - `intention-domain` owns versions for domain facts, semantic snapshots, and
-  canonical record tags; `intention-storage` owns storage migrations and their
-  ordering; `intention-protocol` owns public command, query, and frame schemas;
+  canonical record tags; `intention-storage` owns the single current-schema
+  DDL and its projections (migrations are removed by ADR 0038);
+  `intention-protocol` owns public command, query, and frame schemas;
   an owning provider driver owns its driver-contract compatibility; a future
   direction owns the values of its own records but cannot change a
   cross-direction semantic record without an explicit new version;

@@ -85,7 +85,7 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
     );
     assert!(matches!(
         accepted.result(),
-        Some(ProtocolAcceptedResultDto::CreateSession(_))
+        ProtocolAcceptedResultDto::CreateSession(_)
     ));
     let encoded = serde_json::to_string(&accepted).expect("accepted result serializes");
     assert!(
@@ -104,7 +104,11 @@ fn snapshots_validate_the_required_m3_projection() {
         fixture_projection(session_id, SessionEventSequenceDto::new(4)),
     )
     .expect("matching projection is valid");
-    assert!(snapshot.projection().is_some());
+    assert_eq!(snapshot.projection().session_id(), session_id);
+    assert_eq!(
+        snapshot.projection().at_sequence(),
+        SessionEventSequenceDto::new(4)
+    );
     assert!(
         serde_json::from_str::<SessionSnapshotDto>(
             r#"{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":4}"#

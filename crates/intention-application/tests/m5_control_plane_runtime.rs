@@ -57,6 +57,15 @@ fn raw_config(kind: &str, model: &str) -> String {
     )
 }
 
+/// Builds a reloadable candidate: only the provider execution policy differs
+/// from the base raw config (model, endpoint, and kind are catalog-affecting
+/// under PR24-008 and require a restart).
+fn policy_only_config(kind: &str, model: &str) -> String {
+    format!(
+        "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"{model}\"\ncredential = \"fake-plain\"\nendpoint = \"{ENDPOINT}\"\n[provider.execution]\nattempt_timeout_seconds = 45\nmax_attempts = 2\n"
+    )
+}
+
 fn snapshot(kind: &str, model: &str) -> ConfigSnapshotDto {
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
         raw_config(kind, model),
@@ -307,7 +316,10 @@ fn reload_prepare_commit_round_trip_persists_the_safe_snapshot() {
 
     let candidate: ReloadCandidateDto = service
         .prepare(
-            RawConfigInputDto::new(raw_config("openrouter", "model-b"), explicit_source()),
+            RawConfigInputDto::new(
+                policy_only_config("openrouter", "model-a"),
+                explicit_source(),
+            ),
             &previous,
             "operation-1".to_owned(),
         )
@@ -330,8 +342,12 @@ fn reload_prepare_commit_round_trip_persists_the_safe_snapshot() {
     let committed = repository.committed.borrow();
     assert_eq!(committed.len(), 1);
     assert_eq!(
-        committed[0].snapshot.resolved().provider().model(),
-        "model-b"
+        committed[0]
+            .snapshot
+            .resolved()
+            .provider_execution()
+            .attempt_timeout_seconds(),
+        45
     );
     assert!(!format!("{outcome:?}").contains(FAKE_SECRET));
     assert!(!format!("{candidate:?}").contains(FAKE_SECRET));
@@ -345,7 +361,10 @@ fn reload_stale_revision_and_storage_failure_leave_the_recorded_snapshot() {
     let service = ConfigurationReloadService::new(&repository, &binding);
     let candidate = service
         .prepare(
-            RawConfigInputDto::new(raw_config("openrouter", "model-b"), explicit_source()),
+            RawConfigInputDto::new(
+                policy_only_config("openrouter", "model-a"),
+                explicit_source(),
+            ),
             &previous,
             "operation-1".to_owned(),
         )
@@ -571,7 +590,10 @@ fn fake_secret_never_appears_in_any_service_dto_or_error() {
     let reload = ConfigurationReloadService::new(&repository, &binding);
     let candidate = reload
         .prepare(
-            RawConfigInputDto::new(raw_config("openrouter", "model-b"), explicit_source()),
+            RawConfigInputDto::new(
+                policy_only_config("openrouter", "model-a"),
+                explicit_source(),
+            ),
             &previous,
             "operation-1".to_owned(),
         )

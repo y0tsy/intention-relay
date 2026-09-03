@@ -61,13 +61,15 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
   turn_id TEXT NOT NULL, status TEXT NOT NULL, config_revision_id TEXT NOT NULL,
+  reasoning_aggregate_bytes INTEGER NOT NULL DEFAULT 0 CHECK(reasoning_aggregate_bytes >= 0),
   UNIQUE(session_id, turn_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','cancelled','failed','interrupted');
 CREATE TABLE IF NOT EXISTS queued_turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
-  queue_ticket INTEGER NOT NULL, PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
+  queue_ticket INTEGER NOT NULL, resolved_selection_json TEXT,
+  PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
 );
 CREATE TABLE IF NOT EXISTS configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS domain_events (
@@ -459,19 +461,21 @@ impl SqliteStorageRepository {
     }
 
     fn promote_oldest_queued_turn(
+        &self,
         tx: &sqlite::Transaction<'_>,
         session_id: SessionId,
         occurred_at: TimestampDto,
+        hold_for_recovery: bool,
     ) -> DtoResult<Vec<EventDraft>> {
         let queued_selection = tx
             .query_row(
-                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
+                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id, queued_turns.resolved_selection_json FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
                 [session_id.to_string()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
             )
             .optional()
             .map_err(storage_error)?;
-        let Some((turn_id, run_id, revision_id)) = queued_selection else {
+        let Some((turn_id, run_id, revision_id, resolved_selection_json)) = queued_selection else {
             return Ok(Vec::new());
         };
         let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
@@ -484,6 +488,30 @@ impl SqliteStorageRepository {
         .map_err(storage_error)?;
         tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
         tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
+        // The queued turn's durable selection transfers to its fresh run in
+        // the same transaction as run creation; the provider-selection fault
+        // point proves the whole promotion transaction is atomic.
+        if let Some(encoded) = resolved_selection_json {
+            let selection = control_plane::parse_selection_json(&encoded)?;
+            control_plane::insert_selection(tx, session_id, promoted_run_id, &selection)?;
+            self.fault(FaultPoint::ProviderSelection)?;
+        }
+        // A successor promoted by recovery (the interrupted run's terminal
+        // transition) is durably held in the same transaction: no daemon is
+        // running to schedule it, so it waits for the explicit
+        // AdmitRecoveredRun admission instead of being auto-scheduled or
+        // re-interrupted by a later restart (PR24-007/019).
+        if hold_for_recovery {
+            tx.execute(
+                "INSERT INTO held_recovered_runs(run_id, session_id, held_at, reason, admission_state, admission_operation_id, admitted_at) VALUES (?1,?2,?3,'recovered_run_requires_explicit_admission','held',NULL,NULL)",
+                sqlite::params![
+                    promoted_run_id.to_string(),
+                    session_id.to_string(),
+                    occurred_at.unix_seconds()
+                ],
+            )
+            .map_err(storage_error)?;
+        }
         Ok(vec![EventDraft::new(
             Some(promoted_run_id),
             Some(promoted_turn_id),
@@ -684,7 +712,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             sqlite::params![session_id.to_string(), input.turn_id().to_string()],
             |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, Option<i64>>(2)?,row.get::<_, String>(3)?,row.get::<_, String>(4)?)),
         ).optional().map_err(storage_error)?;
-            if let Some((content, outcome, ticket, run, revision)) = existing {
+            if let Some((content, outcome, _ticket, run, revision)) = existing {
                 if content != input.content()
                     || run != input.proposed_run_id().to_string()
                     || revision != input.config_revision_id().to_string()
@@ -695,18 +723,46 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ));
                 }
                 let projection = Self::project(&tx, session_id)?;
+                // The idempotent reply is recomputed from the current durable
+                // state, never from the immutable acceptance marker: a started
+                // turn reports the run's actual status, and a queued turn
+                // requires a current queue membership with its real ticket.
                 let outcome = if outcome == "started" {
+                    let actual_status: Option<String> = tx
+                        .query_row(
+                            "SELECT status FROM runs WHERE session_id=?1 AND run_id=?2",
+                            sqlite::params![session_id.to_string(), &run],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .map_err(storage_error)?;
+                    let Some(actual_status) = actual_status else {
+                        return Err(codec_error("accepted started turn has no durable run row"));
+                    };
                     Some(AcceptedTurnOutcomeDto::Started(run_projection(
                         session_id,
                         &run,
                         &input.turn_id().to_string(),
-                        "starting",
+                        &actual_status,
                         &revision,
                     )?))
                 } else {
+                    let membership = tx
+                        .query_row(
+                            "SELECT queue_ticket FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
+                            sqlite::params![session_id.to_string(), input.turn_id().to_string()],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()
+                        .map_err(storage_error)?;
+                    let Some(ticket) = membership else {
+                        return Err(conflict(
+                            "accepted_turn_removed",
+                            "the accepted queued turn was removed before it could start",
+                        ));
+                    };
                     Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(
-                        u64::try_from(ticket.ok_or_else(|| codec_error("missing queue ticket"))?)
-                            .map_err(|_| codec_error("invalid queue ticket"))?,
+                        u64::try_from(ticket).map_err(|_| codec_error("invalid queue ticket"))?,
                     )))
                 };
                 let result = CommittedChangeDto::new(
@@ -807,9 +863,19 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
                 tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'queued',?6)", sqlite::params![session_id.to_string(), input.turn_id().to_string(),input.content(),input.proposed_run_id().to_string(),input.config_revision_id().to_string(),ticket]).map_err(storage_error)?;
+                // A queued turn keeps its resolved provider selection durably
+                // until promotion transfers it to the run it later starts.
+                let resolved_selection_json = input
+                    .provider_selection()
+                    .map(control_plane::encode_selection_json);
                 tx.execute(
-                    "INSERT INTO queued_turns(session_id,turn_id,queue_ticket) VALUES (?1,?2,?3)",
-                    sqlite::params![session_id.to_string(), input.turn_id().to_string(), ticket],
+                    "INSERT INTO queued_turns(session_id,turn_id,queue_ticket,resolved_selection_json) VALUES (?1,?2,?3,?4)",
+                    sqlite::params![
+                        session_id.to_string(),
+                        input.turn_id().to_string(),
+                        ticket,
+                        resolved_selection_json
+                    ],
                 )
                 .map_err(storage_error)?;
                 let position = QueuePositionDto::new(
@@ -919,10 +985,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )),
             )];
             if input.status().is_terminal() {
-                drafts.extend(Self::promote_oldest_queued_turn(
+                // A successor promoted by a recovery interruption is held for
+                // explicit admission; every other terminal transition promotes
+                // for immediate daemon scheduling (PR24-007).
+                drafts.extend(self.promote_oldest_queued_turn(
                     &tx,
                     session_id,
                     input.occurred_at(),
+                    input.status() == RunStatusDto::Interrupted,
                 )?);
             }
             let events = Self::append(&tx, session_id, position, drafts)?;
@@ -945,6 +1015,31 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             let cursor = current_run_cursor(&tx, run_id)?;
             if cursor != input.expected_cursor() {
                 return Err(cursor_conflict());
+            }
+            // The combined per-run reasoning bound is enforced at the durable
+            // append authority: the whole batch is pre-scanned against the
+            // durable aggregate before any write, and a batch that would
+            // cross the 4 MiB bound is rejected wholesale (PR24-024).
+            let aggregate: i64 = tx
+                .query_row(
+                    "SELECT reasoning_aggregate_bytes FROM runs WHERE session_id=?1 AND run_id=?2",
+                    sqlite::params![session_id.to_string(), run_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let mut reasoning_aggregate: u64 =
+                u64::try_from(aggregate).map_err(|_| reasoning_accounting_error())?;
+            let mut batch_has_reasoning = false;
+            for input_fact in input.facts() {
+                let Some(bytes) = reasoning_fact_content_bytes(input_fact) else {
+                    continue;
+                };
+                batch_has_reasoning = true;
+                let bytes = u64::try_from(bytes).map_err(|_| reasoning_accounting_error())?;
+                intention_domain::validate_reasoning_fact_output_bound(reasoning_aggregate, bytes)?;
+                reasoning_aggregate = reasoning_aggregate
+                    .checked_add(bytes)
+                    .ok_or_else(reasoning_accounting_error)?;
             }
             let mut next_cursor = cursor.value();
             let mut drafts = Vec::with_capacity(input.facts().len());
@@ -990,10 +1085,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )),
                 ));
                 if status.is_terminal() {
-                    drafts.extend(Self::promote_oldest_queued_turn(
+                    // A terminal append's promotion targets immediate daemon
+                    // scheduling; recovery-interrupted promotions are the only
+                    // held case and happen through `transition_run`.
+                    drafts.extend(self.promote_oldest_queued_turn(
                         &tx,
                         session_id,
                         input.occurred_at(),
+                        false,
                     )?);
                 }
             }
@@ -1023,6 +1122,20 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
+            if batch_has_reasoning {
+                tx.execute(
+                    "UPDATE runs SET reasoning_aggregate_bytes=?3 WHERE session_id=?1 AND run_id=?2",
+                    sqlite::params![
+                        session_id.to_string(),
+                        run_id.to_string(),
+                        sqlite_integer(
+                            reasoning_aggregate,
+                            "reasoning aggregate is outside the SQLite range"
+                        )?,
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
             self.fault(FaultPoint::ModelFacts)?;
             let projection = Self::project(&tx, session_id)?;
             self.fault(FaultPoint::Projection)?;
@@ -1275,9 +1388,22 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     ) -> DtoResult<Vec<CommittedChangeDto>> {
         let unfinished = {
             let connection = self.connection()?;
+            // Stale holds (held rows whose run already reached a terminal
+            // status) are cleaned before the interrupt pass; held and already
+            // admitted Starting runs are never re-interrupted by a later
+            // restart, because they await (or already completed) explicit
+            // admission (PR24-007/019).
+            connection
+                .execute(
+                    &format!(
+                        "DELETE FROM held_recovered_runs WHERE run_id IN (SELECT run_id FROM runs WHERE status IN ({TERMINAL_STATUSES}))"
+                    ),
+                    [],
+                )
+                .map_err(storage_error)?;
             let mut statement = connection
                 .prepare(&format!(
-                    "SELECT session_id,run_id FROM runs WHERE status NOT IN ({TERMINAL_STATUSES}) ORDER BY session_id,run_id"
+                    "SELECT session_id,run_id FROM runs WHERE status NOT IN ({TERMINAL_STATUSES}) AND run_id NOT IN (SELECT run_id FROM held_recovered_runs WHERE admission_state IN ('held','admitted')) ORDER BY session_id,run_id"
                 ))
                 .map_err(storage_error)?;
             let unfinished = statement
@@ -1758,6 +1884,27 @@ fn sequence(tx: &sqlite::Transaction<'_>, session: SessionId) -> DtoResult<u64> 
 }
 fn sqlite_integer(value: u64, message: &'static str) -> DtoResult<i64> {
     i64::try_from(value).map_err(|_| codec_error(message))
+}
+
+/// Returns the byte length a reasoning fact contributes to the per-run
+/// reasoning aggregate, or `None` for non-reasoning facts (PR24-024).
+const fn reasoning_fact_content_bytes(fact: &ModelRunFactInputDto) -> Option<usize> {
+    match fact {
+        ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }
+        | ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content } => Some(content.len()),
+        _ => None,
+    }
+}
+
+fn reasoning_accounting_error() -> ErrorDto {
+    ErrorDto::new(
+        "storage_decode_failed",
+        ErrorCategoryDto::Internal,
+        "the durable reasoning aggregate cannot be represented",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
 }
 
 fn run_projection(
@@ -3049,6 +3196,98 @@ mod tests {
                 &format!("SELECT COUNT(*) FROM runs WHERE run_id='{run_id}'")
             ),
             0
+        );
+    }
+
+    #[test]
+    fn provider_selection_fault_rolls_back_promotion_transfer_atomically() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let first_run = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            first_run,
+            "first run",
+        );
+        let promoted_run = RunId::new();
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "queued run with selection",
+                    promoted_run,
+                    fixture_snapshot(),
+                    fixture_time(3),
+                )
+                .expect("fixture turn input is valid")
+                .with_provider_selection(fixture_selection()),
+            )
+            .expect("queued turn commits");
+        repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Running,
+                fixture_time(3),
+            ))
+            .expect("first run transitions to running");
+        repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Completing,
+                fixture_time(3),
+            ))
+            .expect("first run transitions to completing");
+        let baseline_tail = repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
+            .expect("baseline tail loads");
+        repository.arm_fault(FaultPoint::ProviderSelection);
+        let error = repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Completed,
+                fixture_time(4),
+            ))
+            .expect_err("injected provider selection fault aborts the promotion");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location.clone()).expect("database reopens");
+        // The whole promotion transaction rolled back: the queued turn stays
+        // queued, no promoted run exists, and no selection row was transferred.
+        assert_eq!(
+            reopened
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("tail reloads"),
+            baseline_tail
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!("SELECT COUNT(*) FROM runs WHERE run_id='{promoted_run}'")
+            ),
+            0
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!(
+                    "SELECT COUNT(*) FROM resolved_run_provider_selections WHERE run_id='{promoted_run}'"
+                )
+            ),
+            0
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!("SELECT COUNT(*) FROM queued_turns WHERE session_id='{session_id}'")
+            ),
+            1
         );
     }
 

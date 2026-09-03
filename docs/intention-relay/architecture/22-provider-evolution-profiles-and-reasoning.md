@@ -542,12 +542,16 @@ The first-scope fixed code-owned catalog limits are:
 closed stream/reasoning/activation/budget-effort/credential-transport parts
 fails with `provider_kind_immutable_mismatch`; the valid path is a new kind ID
 plus reassignment. Credential-free catalog/profile-revision rows are immutable
-append-only SQLite history. Removal writes a permanent `ProviderProfileTombstoneDto`
-(safe identity, removed catalog revision/time, provenance); a tombstoned ID
-cannot be reintroduced. Kind removal while referenced fails
-`provider_kind_has_dependents`; after removing or reassigning all dependents in
-the same candidate, accepted kind removal writes a permanent
-`ProviderKindTombstoneDto`. The audit taxonomy is:
+append-only SQLite history. Removal writes a removal-history
+`ProviderProfileTombstoneDto` (safe identity, removed catalog revision/time,
+provenance). Durable tombstones are append-only removal events keyed by (id,
+removed catalog revision); admission authority is the current active
+projection, so an identifier reintroduced by a later accepted catalog is
+admitted again and its next removal records a fresh history row (PR24-017).
+Kind removal while referenced fails `provider_kind_has_dependents`; after
+removing or reassigning all dependents in the same candidate, accepted kind
+removal writes a removal-history `ProviderKindTombstoneDto`. The audit
+taxonomy is:
 
 ```text
 ProviderCatalogCandidatePrepared

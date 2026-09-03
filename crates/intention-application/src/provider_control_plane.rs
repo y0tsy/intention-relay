@@ -954,13 +954,21 @@ mod tests {
         let repository = FakeReloadRepository::new();
         let binding = FakeBindingSource::new("revision-1", previous.clone());
         let service = ConfigurationReloadService::new(&repository, &binding);
+        // Execution-policy-only changes remain reloadable (PR24-008); model,
+        // endpoint, and kind changes are catalog-affecting and require a
+        // restart.
+        let policy_only = raw("openrouter", "model-a")
+            .replace(
+                "endpoint = \"https://api.example.invalid/v1\"",
+                "endpoint = \"https://api.example.invalid/v1\"\n[provider.execution]\nattempt_timeout_seconds = 45\nmax_attempts = 2\n",
+            );
         let candidate = service
             .prepare(
-                RawConfigInputDto::new(raw("openrouter", "model-b"), explicit_source()),
+                RawConfigInputDto::new(policy_only, explicit_source()),
                 &previous,
                 "operation-1".to_owned(),
             )
-            .expect("valid candidate prepares");
+            .expect("execution-policy candidate prepares");
         assert!(candidate.accepted);
         assert!(candidate.changed_semantics);
         assert!(candidate.failure_code.is_none());
@@ -969,24 +977,29 @@ mod tests {
             candidate
                 .changed_field_categories
                 .iter()
-                .any(|category| category == "model")
+                .any(|category| category == "execution_policy")
         );
 
-        let catalog_change = service
-            .prepare(
-                RawConfigInputDto::new(
-                    raw("generic-chat-completion-api", "model-b"),
-                    explicit_source(),
-                ),
-                &previous,
-                "operation-2".to_owned(),
-            )
-            .expect("candidate parses");
-        assert!(!catalog_change.accepted);
-        assert_eq!(
-            catalog_change.failure_code.as_deref(),
-            Some("catalog_change_requires_restart")
-        );
+        for (kind, model) in [
+            ("openrouter", "model-b"),
+            ("generic-chat-completion-api", "model-b"),
+        ] {
+            let catalog_change = service
+                .prepare(
+                    RawConfigInputDto::new(raw(kind, model), explicit_source()),
+                    &previous,
+                    "operation-2".to_owned(),
+                )
+                .expect("candidate parses");
+            assert!(
+                !catalog_change.accepted,
+                "model/kind changes are catalog-affecting ({kind}, {model})"
+            );
+            assert_eq!(
+                catalog_change.failure_code.as_deref(),
+                Some("catalog_change_requires_restart")
+            );
+        }
     }
 
     #[test]
@@ -1440,7 +1453,6 @@ mod tests {
             candidate_config_revision: "revision-2".to_owned(),
             validation_result:
                 intention_protocol::contract_families::ConfigurationValidationOutcomeDto::Valid,
-            migration_result: "not-applicable".to_owned(),
             commit_outcome:
                 intention_protocol::contract_families::ConfigurationCommitOutcomeDto::Committed,
             safe_failure_code: None,

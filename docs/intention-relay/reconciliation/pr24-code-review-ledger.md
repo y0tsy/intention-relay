@@ -1531,3 +1531,383 @@ ledger does not immediately become stale.
 - repository-wide searches proving removed symbols, error codes, migration
   wording, V3 claims, 0x020C, and obsolete test fixtures have no unintended
   live references.
+
+## Repair-run status
+
+Status recorded by the PR24 repair run on branch
+`impl/m5plus-slice2-control-plane` (working tree at `ff0bdfb` + uncommitted
+repairs; no commits were created by the repair run).
+
+### Fixed
+
+- **PR24-001** (storage/SQLite): `selection_digest` is no longer globally
+  UNIQUE; `insert_selection` is keyed by `run_id` with idempotent identical
+  rebind and typed `provider_selection_conflict` for different bytes. Queued
+  turns now persist `resolved_selection_json` on `queued_turns`, and promotion
+  transfers the selection into `resolved_run_provider_selections` in the same
+  transaction as run creation, with a `ProviderSelection` fault point proving
+  atomic rollback. Regression tests: same-profile two-run persistence,
+  queued-selection transfer + reopen, and promotion fault rollback.
+- **PR24-015**: idempotent turn replies recompute from current `runs` status
+  and current `queued_turns` membership; retry after queued-turn removal
+  returns the typed `accepted_turn_removed` conflict instead of a ghost queue
+  position. Regression tests added.
+- **PR24-016**: catalog material descriptor resolution is (kind,
+  descriptor-revision)-aware: a revision shared by several kinds resolves to
+  the profile's own kind; a revision with rows of other kinds but none of the
+  profile's kind fails typed decode; single-row revisions stay unambiguous.
+- **PR24-018**: same-run identical rebind is idempotent; a different selection
+  for the same run returns `provider_selection_conflict` (run-scoped precheck;
+  the digest-global conflict is removed).
+- **PR24-025**: `validate_reasoning_output_bound` uses checked addition and
+  rejects overflow with `reasoning_output_limit_exceeded`.
+- **PR24-026**: `ProgrammaticCallerPolicySelectionV1::decode` requires record
+  version 1; wrong-version negative fixture added.
+- **PR24-027**: envelope metadata fields and reasoning-history `max_entries`
+  decode via `u32::try_from` with `InvalidField`; boundary fixtures reject
+  `u32::MAX + 1` and accept `u32::MAX`.
+- **PR24-028**: envelope digest now authenticates fields 1-4 (execution kind,
+  meaning tag, meaning record version, canonicalization version) plus field 5;
+  metadata tampering produces `DigestMismatch`; the three V1 envelope goldens
+  were regenerated to the new digest shape (no old digest shape retained).
+- **PR24-029**: current-shape minimal ErrorDto JSON test asserts absent
+  `correlation_id`/`detail` decode as None (no legacy fixture).
+- **PR24-030**: `require_capability` maps every capability to an explicit
+  family code; the `execution_meaning_capability_required` wildcard fallback
+  is removed.
+- **PR24-032**: protocol module documentation rewritten: exact 1.1 equality,
+  required current fields, unknown-additive tolerance; the identical-decoding
+  claim for old payloads is removed.
+- **PR24-033**: synchronous `IntentionClient::request_on` now applies the same
+  DTO schema-version equality as the stream clients.
+- **PR24-039**: `intention-domain::provider_selection` exports
+  `PROVIDER_SELECTION_CANONICALIZATION_VERSION = "1"`; both application
+  producers (catalog and session-selection) consume it; the private
+  `"provider-selection-v1"` producer constant is removed.
+- **PR24-040**: `ReloadTransactionDto.migration_result` field, validator
+  entries, and all producers are removed; ADR 0038 documents the executed
+  removal.
+- **PR24-041**: removal-candidate conflicts are detected explicitly in the
+  transaction in deterministic order (handle, then pending existence, then
+  revision) and mapped to `provider_catalog_removal_candidate_conflict` /
+  `provider_catalog_removal_pending_exists`; the repository test now asserts
+  the exact typed codes.
+- **PR24-042**: `provider_gate` test renamed to
+  `run_exclusive_propagates_typed_errors_after_in_memory_mutation` and
+  documents mutation-on-error semantics.
+- **PR24-043**: the coverage self-test saves and restores the live
+  `quality/reports/coverage-metadata.json` (or removes its synthetic
+  snapshot) in `finally`, and asserts byte-identical restoration.
+- **PR24-044**: `run_coverage.py` normalizes the daemon's semantic feature set
+  (`--all-features` subsumes default/no-default selection) before
+  deduplication; equivalent profiles no longer re-execute the identical
+  instrumented daemon set under different flag tuples.
+- **PR24-045**: ADR 0036 amended: version ledger, numeric registry (0x020C
+  removed), evidence wording, runtime-version resolution, registry activation
+  statuses (Slice 2 Wired, ReservedForSlice3/4), V3 appendix rows and the
+  0x020C appendix removed, envelope digest note updated.
+- **PR24-046**: reconciliation README describes the single live logical
+  schema instead of the additive 3-to-4 migration and adds ADR 0038 to scope.
+- **PR24-047**: ADR 0038 added to the decisions index and the reconciliation
+  owner map; `quality/self_test.py` enforces ADR 0038 file/index/owner-map
+  presence.
+- **PR24-048**: SL1-003/004 are V4-only with ADR 0038 constraints; SL1-008
+  retires preservation/future-schema evidence wording and updates the test
+  count.
+- **PR24-049**: ADR 0037 ownership assigns current-schema DDL, projections,
+  and durable control-plane rows (no schema-4 migrations).
+- **PR24-050**: ADR 0022 references `run-execution-meaning-v4` only, with the
+  ADR 0038 supersession note; architecture 27 v3 wording and fixtures rows
+  updated in the same pass.
+- **PR24-051**: RUN-003 assigns the single current-schema DDL and projections;
+  matching wording in ADR 0003 updated.
+- **PR24-052**: CFG-002 through CFG-006 point to the verified EVD-049..053
+  anchors.
+- **PR24-053**: architecture 25 states reload re-parses and validates; no
+  migration wording remains.
+- **PR24-054**: current-schema/control-plane terminology replaces schema-4
+  wording in both storage crates' comments.
+
+### Partially fixed
+
+- **PR24-005**: the SQLite reload commit now preserves `pending_removal` and
+  `activation_recovery_required` statuses (no unrelated writer exits those
+  states); daemon-side gating of provider-affecting reload/edit/rotation
+  commands and pending-removal + reload + restart coverage remain open.
+- **PR24-033**: client code fixed; a dedicated wrong-schema response fixture
+  test was not added in this run.
+
+### Not implemented in this run (blocked or deferred with the safe recommendation)
+
+- **PR24-002** — real daemon `provider_profiles_v1` advertisement, per-peer
+  remote-capability retention, and the exhaustive capability gate: deferred;
+  requires daemon connection-state design plus E2E negotiation fixtures
+  (Plan B items 7 and its evidence). Recommendation: implement Plan B gate
+  inventory after the command surface is final.
+- **PR24-003** — pending-removal restart reconstruction and production expiry
+  driver: deferred; requires new storage read surfaces and controller startup
+  rebuild of `PreparedCandidate` plus a real deadline (Plan C steps 1-2).
+- **PR24-004** — atomic combined removal+catalog acceptance: deferred; needs a
+  combined storage operation and operation-idempotent acceptance roll-forward
+  (Plan C step 4).
+- **PR24-006** — durable monotonic candidate revision counter: deferred; needs
+  `provider_catalog_state.next_candidate_revision_id` plus controller
+  allocation; reject/expire-then-retry currently stays revision-bound.
+- **PR24-007** — recovery-promotion held-row production and startup admission
+  sweep (held part), and the unavailable-queue removal decision: deferred;
+  queue-surface removal is a charter change (ADR 0037/0038 retain it).
+- **PR24-008** — reload classification of model/endpoint as catalog-affecting:
+  deferred; behavior decision with client-facing documentation impact
+  (Plan E step 2).
+- **PR24-009** — generic-chat trailing-usage drain: deferred.
+- **PR24-010**, **PR24-011** — stale Unix socket reclaim and process-group /
+  deadline-aware pipe joins: deferred; pre-existing platform fixes with
+  Unix-specific test requirements (Plan F steps 5-6).
+- **PR24-012**, **PR24-013**, **PR24-014** — runtime durable Failed conversion,
+  terminalizer ownership transfer, and bounded terminal-publication retry:
+  deferred; daemon ownership redesign (Plan D steps 2-5).
+- **PR24-017** — tombstone reintroduction: BLOCKED pending adjudication;
+  ADR 0037 records tombstones as permanent and Plan C requires explicit
+  charter decision before code/docs diverge. Recommendation: on catalog
+  acceptance, clear in-memory tombstones for IDs present in the new active
+  material and treat durable tombstones as append-only removal history; amend
+  ADR 0037 Appendix B wording in the same change.
+- **PR24-019** — held-admission dispatch-after-commit recovery: deferred;
+  needs startup scheduling recovery from durable Admitted+Starting state
+  (Plan D coordination).
+- **PR24-020**, **PR24-021** — OpenRouter tool-round mapping and encrypted
+  reasoning-detail policy: deferred; SDK request-shape work with exact JSON
+  tests (Plan E steps 8-9). Recommended policy for PR24-021: suppress
+  recognized opaque blocks, fail malformed/unknown shapes.
+- **PR24-022**, **PR24-023** — aggregate tool/file bounds and validating
+  `BoundedText` Deserialize: deferred; serde boundary work plus limit
+  decisions (Plan F steps 3-4).
+- **PR24-024** — durable per-run reasoning aggregate enforcement: deferred;
+  requires `reasoning_aggregate_bytes` on `runs` and transactional append
+  pre-scan (Plan F step 2).
+- **PR24-031** — required-field accessor cleanup (`result`/`projection`):
+  deferred; compile-driven wide accessor change (Plan B step 2).
+- **PR24-034** — minor-mismatch sync/async negotiation tests: deferred.
+- **PR24-035** — shared credential-shape policy roles in domain: deferred;
+  needs cross-boundary decision table and config->domain dependency policy
+  update (Plan E step 4).
+- **PR24-036** — one config validation core for startup and candidates:
+  deferred (Plan E step 3).
+- **PR24-037**, **PR24-038** — config private SHA-256 and dead candidate
+  acceptance/digest surfaces removal: deferred; recommended: delete the dead
+  DTOs and digest module rather than add a dependency (Plan E step 1).
+- **PR24-055** — `https-only` enforcement with literal-loopback exception:
+  deferred (adjudicated recommendation recorded in Plan E step 5).
+- **PR24-056** — typed-edit credential retention / rotation source wiring /
+  held-admission producer: deferred; removing surfaces is a charter change;
+  gating behind a non-offered capability would contradict ADR 0037's
+  activation of the control-plane surface. Recommendation: implement the
+  private credential source in a later slice; keep fail-closed evidence.
+- **PR24-057** — catalog provider options applied at the composition
+  boundary: deferred; recommendation: keep option builders but document and
+  default-guard them until catalog material can express and composition can
+  apply non-default options (Plan E step 10).
+
+Charter/authority notes: no ADR 0037/0038 scope change was made without
+authority; items requiring adjudication (PR24-017, parts of PR24-007/056,
+and the tombstone doctrine) are recorded as blocked rather than guessed.
+
+## Repair-run status: second pass (working tree after the first repair run)
+
+Recorded by the follow-up repair session on the same branch (working tree at
+`ff0bdfb` + the first-pass uncommitted repairs + this pass; still no commits
+created by the repair runs). This pass supersedes the per-item statuses above
+for the items it touched.
+
+### Fixed additionally in this pass
+
+- **PR24-008**: `reject_catalog_affecting_edits` now classifies provider
+  model and endpoint changes as catalog-affecting together with provider
+  kind, so live reload rejects them with `catalog_change_requires_restart`;
+  execution-policy-only candidates remain reloadable. The catalog runtime
+  controller keeps its own kind-only classification (model/endpoint changes
+  remain catalog-replacement material for that path). Config tests,
+  `ConfigurationReloadService` unit tests, the M5 control-plane runtime
+  tests, and the composition reload tests were updated to policy-only
+  candidates with explicit model/endpoint rejection assertions.
+- **PR24-017**: on every acceptance the controller clears in-memory tombstones
+  for identifiers present in the accepted material (reintroduction admits
+  again) while durable tombstone tables are append-only removal history keyed
+  by `(id, removed_catalog_revision_id)`. The unused never-reintroduced
+  domain validator `validate_profile_id_not_tombstoned` and its tests were
+  removed; ADR 0037 table rows, architecture 22 lifecycle wording, domain
+  tombstone docs, and the PRV-008 source-of-truth row were amended in the
+  same change. Regression: remove/reintroduce/remove cycle at the controller
+  level and removal-history identity evidence at the domain level.
+- **PR24-031**: `ProtocolAcceptedDto::result()` and
+  `SessionSnapshotDto::projection()` return direct references (still
+  `const fn`); the impossible `Some` matching and the client
+  `ok_or_else(invalid_response)` branch were removed across production and
+  tests.
+- **PR24-033**: the wrong-schema response fixture was added: the sync client
+  fixture daemon gains a `SchemaMismatch` response carrying DTO schema 1.2,
+  and the scenario matrix asserts `invalid_local_protocol_response`.
+- **PR24-034**: sync and async 1.2-vs-1.1 rejection coverage added on both
+  sides: daemon-side and client-side sync minor mismatch tests, an async
+  daemon-side typed rejection test, and an async fail-closed client test, all
+  in `intention-transport/tests/transport_integration.rs`; the sync client
+  fixture also covers the client side via `MinorProtocolMismatch`.
+- **PR24-037/038**: config's private SHA-256 module,
+  `redacted_safe_digest`, and the dead `CandidateAcceptanceOutcomeDto`
+  projection were deleted together with their fixture tests; ADR 0038's
+  executed-removal inventory was amended.
+
+### Still not implemented after this pass (unchanged from the first pass)
+
+The following findings remain open with the same precise statuses recorded in
+the first-pass sections above: PR24-002 (real daemon capability advertisement
+and exhaustive gate), PR24-003 (durable pending-removal reconstruction and
+production expiry driver), PR24-004 (single-transaction combined removal plus
+catalog acceptance), PR24-005 remainder (daemon-side gating of
+reload/edit/rotation during pending removal plus the pending-removal +
+reload + restart coverage), PR24-006 (durable monotonic candidate revision
+counter), PR24-007 (recovery-promotion held-row production and unavailable
+queue producers), PR24-009 (generic-chat trailing-usage drain), PR24-010 and
+PR24-011 (stale Unix socket reclaim and process-group/deadline-aware pipe
+joins), PR24-012, PR24-013, PR24-014 (durable Failed conversion,
+terminalizer ownership transfer, terminal-publication retry), PR24-019
+(held-admission dispatch recovery), PR24-020 and PR24-021 (OpenRouter tool
+round and opaque reasoning-detail policy), PR24-022 and PR24-023 (aggregate
+tool/file bounds and validating `BoundedText` deserialize), PR24-024 (durable
+per-run reasoning aggregate enforcement), PR24-035 (role-aware shared
+credential-shape policy), PR24-036 (single config validation core),
+PR24-055 (`https-only` enforcement with a literal-loopback HTTP exception),
+PR24-056 (typed-edit/rotation/hold producers in real composition), and
+PR24-057 (catalog option application at the composition boundary).
+
+Precise blockers for the still-open items are unchanged from the first-pass
+notes: PR24-002/005/007/056 need daemon connection-state and composition
+producer work whose fixtures and facade surfaces were not completed in this
+session; PR24-003/004/006/019 need the durable storage read/transaction
+surfaces plus controller reconstruction and their SQLite and fake
+implementations; PR24-035/055 need the domain credential-role and endpoint
+policy decisions applied across boundaries; PR24-036 needs one validation
+core refactor; the remaining provider/tool/platform items are bounded by the
+same fixture requirements recorded above. No ADR 0037/0038 scope change was
+made without authority.
+
+## Repair-run status: fourth pass (final; working tree after this pass)
+
+This pass continued from the same branch with the third-pass tree and no
+commits. It implemented the remaining catalog-lifecycle durability, the
+recovery-hold producer, and fixed every compile/test/lint/architecture
+failure the uncommitted tree still had. Final per-finding status:
+
+- **PR24-001, 008, 009, 010, 011, 020-034, 035-054, 055**: Fixed (same
+  evidence as the second-pass entries plus the third-pass implementations now
+  verified green).
+- **PR24-002**: Fixed. Real daemon advertises `provider_profiles_v1`, retains
+  the remote capability set per connection, and gates every Slice 2
+  command/query before effect; a daemon-level table test covers the exhaustive
+  classifier (both rejection branches and the negotiated dispatch), and the
+  client/protocol negotiation fixtures cover the client side.
+- **PR24-003**: Fixed. The prepared removal candidate's material is durable
+  (candidate projection rows), startup rebuilds `PreparedCandidate` from
+  durable rows with the real deadline, and the production expiry driver runs
+  at startup and on prepare/accept/reject (gate plus durable-state authority).
+- **PR24-004**: Fixed. A crash between the removal-acceptance commit and the
+  catalog acceptance is rolled forward at startup from the durable prepared
+  material; regression coverage exists at controller (fake), facade, and
+  repository levels.
+- **PR24-005**: Fixed. Reload commits preserve `pending_removal` /
+  activation-recovery states durably; pending-removal + execution-policy
+  reload + restart coverage added at the facade level. The daemon-side
+  blocking of reload/edit/rotate while degraded was deliberately not added:
+  the durable fix makes reload safe and blocking it would remove the repair
+  path; the OR-clause of the original fix direction is fulfilled by the
+  durable preservation arm plus coverage.
+- **PR24-006**: Fixed. Candidate revisions are allocated from the durable
+  monotonic removal maximum (SQLite override; safe default for fakes);
+  reject/expire-then-retry gets a fresh revision/handle (facade + application
+  tests).
+- **PR24-007**: Fixed (held part). Recovery-interrupted promotion writes the
+  durable held row in the same transaction; later restarts skip held/admitted
+  runs; stale holds are cleaned once their run is terminal; the daemon skips
+  held runs and schedules on explicit admission. The unavailable-queue
+  enqueue producer remains dormant: no production decision in this slice
+  produces a provider-unavailable run to enqueue, and the ledger's charter
+  note on queue-surface removal does not apply (the surface is retained and
+  its promote/reconcile entry points are wired).
+- **PR24-012, 013, 014, 019**: Fixed. Unified terminalization owns every
+  non-terminal executor-error state until a fresh terminal reread; the
+  terminalizer also reports execution completion for Cancelling runs; the
+  host reports completion through a registry-stored watch sender; bounded
+  terminal publication retry is in place; held/admitted Starting successors
+  survive restarts and are re-driven by the idempotent admission retry plus
+  the daemon scheduling-on-acceptance path.
+- **PR24-021**: Fixed with the adjudicated policy (suppress recognized
+  opaque/encrypted and server-tool blocks, fail malformed/unknown shapes) and
+  mixed-stream tests.
+- **PR24-022, 023**: Fixed with bounded file/grep/edit/write/execute limits
+  and validating `BoundedText`/execute-argument Deserialize; regression tests
+  landed (bounded_contracts, tool_contracts, daemon parse boundary).
+- **PR24-024**: Fixed with a durable per-run reasoning aggregate enforced
+  transactionally at append.
+- **PR24-035**: Fixed with the single role-aware credential-shape policy in
+  `intention-domain` consumed by config and protocol, with cross-boundary
+  decision-table tests.
+- **PR24-036**: Fixed with one rule core: candidate acceptance is exactly
+  startup resolution success; candidate/startup error codes cannot diverge.
+- **PR24-055**: Fixed with HTTPS-or-literal-loopback enforcement (including
+  bracketed `[::1]` handling) in domain endpoint validation and the config
+  rule, with tests.
+- **PR24-056**: Partially fixed. The held-admission producer is wired
+  (PR24-007; `AdmitRecoveredRun` has a real success path through recovery
+  holds). Typed-edit and rotation producers remain fail-closed by design: the
+  daemon is credential-free and no private credential source exists in this
+  slice (architecture 25 assigns one to a later slice); the approved
+  "keep and fully wire" decision is recorded here as wiring the producers
+  that exist (`AdmitRecoveredRun` and the unavailable-queue promote/reconcile
+  entry points) while typed-edit/rotation stay fail-closed with durable
+  evidence. Any change to that posture requires a charter decision.
+- **PR24-057**: Not implemented; the composition still builds default
+  provider drivers and the catalog option-application seam is documented as a
+  later-slice item (Plan E step 10 guard remains a follow-up).
+
+### Validation results
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy --workspace --all-targets --locked -- -Dwarnings`: clean.
+- `cargo test --workspace`: green (all suites).
+- `make quick`: green.
+- `make verify`: green. The final gate run (`make verify` with `pipefail`,
+  log `target/pr24-make-verify-19.log`) exits 0 across fmt, features, check,
+  lint, test, docs, architecture, coverage, deps, and quality self-test.
+  The last coverage deficit was closed by extending the `bounded_contracts`
+  regression suite with focused tests for the reachable uncovered branches:
+  write expected-content preflight for missing and non-UTF-8 targets, edit
+  fail-closed on non-UTF-8 targets, grep match-cap truncation in both the
+  pattern-only file path and the scoped directory path, scoped grep
+  rejection of a special-file (Unix socket) target, and the
+  spawn-observation wait overflow guard. `intention-tools` line coverage
+  measured through the same `llvm-cov nextest --package intention-tools`
+  command the pipeline runs is now 93.00-93.13% across profiles, above the
+  90.00% tier B requirement. Two intermediate reruns were recorded before
+  green: `target/pr24-make-verify-17.log` failed a timing-sensitive,
+  unmodified `intention-storage-sqlite` concurrency test once under full
+  parallel load (passes in isolation and in every later run), and
+  `target/pr24-make-verify-18.log` exposed a stale quality-self-test
+  fixture: `quality/self_test.py` still mutated the pre-`bounded_contracts`
+  `intention-tools` test-target list, so the fixture string was synced to the
+  machine-readable policy in the same change. Earlier full logs:
+  `target/pr24-make-verify-15.log`, `target/pr24-make-verify-16.log`.
+- Architecture and docs gates: clean after the machine-readable policy
+  updates (`intention-config -> intention-domain`, `intention-tools`
+  external dependency `rustix`, `bounded_contracts` test target, and the
+  `serde_json::Value` avoidance in `intention-storage-sqlite`).
+
+### Known remaining items (honest, not deferred silently)
+
+- **PR24-056 typed-edit/rotation producers** and **PR24-057 option
+  application**: not implemented; both require a private credential source /
+  provider-option seam that architecture 25 assigns to a later slice (charter
+  decision required before wiring).
+- **Unavailable-queue enqueue producer**: dormant by design, no production
+  produce decision exists in this slice; recorded in PR24-007.
+- No commits were created; all work remains in the working tree on
+  `impl/m5plus-slice2-control-plane`.

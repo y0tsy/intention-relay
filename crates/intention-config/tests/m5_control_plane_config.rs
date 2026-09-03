@@ -6,9 +6,8 @@
 //! Slice 2 configuration control-plane candidate contract evidence.
 
 use intention_config::control_plane::{
-    CandidateAcceptanceOutcomeDto, CandidateIssueDto, ConfigCandidateDto, ConfigCandidateSourceDto,
-    MAX_CANDIDATE_ISSUES, classify_changed_fields, parse_candidate, redacted_safe_digest,
-    reject_catalog_affecting_edits, semantic_equivalence,
+    CandidateIssueDto, ConfigCandidateDto, ConfigCandidateSourceDto, MAX_CANDIDATE_ISSUES,
+    classify_changed_fields, parse_candidate, reject_catalog_affecting_edits, semantic_equivalence,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -351,7 +350,27 @@ fn catalog_affecting_edits_are_rejected_and_benign_edits_pass() {
         "an unchanged candidate is benign"
     );
 
-    let model_only = candidate(
+    // Execution-policy-only changes remain reloadable.
+    let policy_only = candidate(
+        &v1(
+            "openrouter",
+            "fixture-model",
+            FAKE_CREDENTIAL,
+            Some("https://example.invalid/v1"),
+            "[provider.execution]\nattempt_timeout_seconds = 45\nmax_attempts = 2\n",
+        ),
+        &previous,
+    );
+    assert!(
+        reject_catalog_affecting_edits(&policy_only, &previous).is_ok(),
+        "execution-policy changes are reloadable"
+    );
+
+    // Model and endpoint changes are catalog-affecting because both fields
+    // hash into the profile revision and the resolved selection of the active
+    // catalog profile; they require a restart until catalog replacement can
+    // atomically advance both authorities (PR24-008).
+    let model_change = candidate(
         &v1(
             "openrouter",
             "other-model",
@@ -361,10 +380,25 @@ fn catalog_affecting_edits_are_rejected_and_benign_edits_pass() {
         ),
         &previous,
     );
-    assert!(
-        reject_catalog_affecting_edits(&model_only, &previous).is_ok(),
-        "model changes are reloadable"
+    let model_error = reject_catalog_affecting_edits(&model_change, &previous)
+        .expect_err("model changes are catalog-affecting");
+    assert_eq!(model_error.code(), "catalog_change_requires_restart");
+    assert_eq!(model_error.category().as_str(), "policy");
+
+    let endpoint_change = candidate(
+        &v1(
+            "openrouter",
+            "fixture-model",
+            FAKE_CREDENTIAL,
+            Some("https://other.invalid/v1"),
+            "",
+        ),
+        &previous,
     );
+    let endpoint_error = reject_catalog_affecting_edits(&endpoint_change, &previous)
+        .expect_err("endpoint changes are catalog-affecting");
+    assert_eq!(endpoint_error.code(), "catalog_change_requires_restart");
+    assert_eq!(endpoint_error.category().as_str(), "policy");
 
     let kind_change = candidate(
         &v1(
@@ -383,83 +417,28 @@ fn catalog_affecting_edits_are_rejected_and_benign_edits_pass() {
 }
 
 #[test]
-fn redacted_safe_digest_is_credential_free_and_semantic() {
-    let previous = snapshot(
-        &v1(
-            "openrouter",
-            "fixture-model",
-            "credential-alpha-0001",
-            None,
-            "",
-        ),
-        "99999999-9999-4999-8999-999999999999",
+fn removed_digest_and_acceptance_outcome_surfaces_have_no_live_consumers() {
+    // PR24-037/038: the private SHA-256 module and the dead
+    // CandidateAcceptanceOutcomeDto/redacted_safe_digest surfaces were removed
+    // because no production surface consumes them. Semantic comparison and
+    // classification functions that production does consume remain available.
+    let text = v1("openrouter", "fixture", FAKE_CREDENTIAL, None, "");
+    let previous = snapshot(&text, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab");
+    let parsed = candidate(&text, &previous);
+    assert!(
+        semantic_equivalence(parsed.safe_snapshot(), &previous),
+        "semantic comparison remains available"
     );
-    let credential_a = candidate(
-        &v1(
-            "openrouter",
-            "fixture-model",
-            "credential-alpha-0001",
-            None,
-            "",
-        ),
-        &previous,
+    assert!(
+        classify_changed_fields(parsed.safe_snapshot(), &previous)
+            .iter()
+            .all(|category| category == "display"),
+        "field classification remains available"
     );
-    let credential_b = candidate(
-        &v1(
-            "openrouter",
-            "fixture-model",
-            "credential-beta-0002",
-            None,
-            "",
-        ),
-        &previous,
-    );
-    assert_eq!(
-        redacted_safe_digest(&credential_a),
-        redacted_safe_digest(&credential_b),
-        "credential material never participates in the digest"
-    );
-
-    let model_change = candidate(
-        &v1(
-            "openrouter",
-            "other-model",
-            "credential-alpha-0001",
-            None,
-            "",
-        ),
-        &previous,
-    );
-    assert_ne!(
-        redacted_safe_digest(&credential_a),
-        redacted_safe_digest(&model_change),
-        "semantic changes alter the digest"
-    );
-
-    for digest in [
-        redacted_safe_digest(&credential_a),
-        redacted_safe_digest(&model_change),
-    ] {
-        assert_eq!(digest.len(), 64, "the digest is SHA-256 hex");
-        assert!(
-            digest
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
-            "the digest is lowercase hex"
-        );
-        assert!(
-            !digest.contains("credential-alpha-0001"),
-            "the digest never contains credential material"
-        );
-        assert!(
-            !digest.contains("credential-beta-0002"),
-            "the digest never contains credential material"
-        );
-    }
 }
 
 #[test]
-fn fake_secret_sweep_covers_candidate_serialization_validation_and_digests() {
+fn fake_secret_sweep_covers_candidate_serialization_and_validation() {
     const FAKE_SECRETS: [&str; 5] = ["sk-test", "Bearer secret", "api_key", "token=", "password="];
     let text = v1(
         "openrouter",
@@ -474,15 +453,7 @@ fn fake_secret_sweep_covers_candidate_serialization_validation_and_digests() {
     let payloads = [
         serde_json::to_string(&parsed).expect("candidate serializes"),
         serde_json::to_string(parsed.validation()).expect("validation summary serializes"),
-        serde_json::to_string(&CandidateAcceptanceOutcomeDto::new(
-            true,
-            false,
-            vec!["model".to_owned()],
-            None,
-        ))
-        .expect("acceptance outcome serializes"),
         format!("{parsed:?}"),
-        redacted_safe_digest(&parsed),
     ];
     for payload in payloads {
         assert!(
@@ -524,27 +495,6 @@ fn candidate_wire_shapes_round_trip_without_unknown_fields() {
         r#"{"candidate_revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","source":{"raw_toml":{"size_bytes":0}},"safe_snapshot":{"schema_version":{"major":1,"minor":0},"revision_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","captured_at":1700000000,"resolved":{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}},"validation":{"issues":[],"truncated":false,"total_issue_count":0},"unexpected":true}"#
     )
     .is_err());
-}
-
-#[test]
-fn acceptance_outcome_wire_shape_round_trips_and_rejects_unknown_fields() {
-    let outcome = CandidateAcceptanceOutcomeDto::new(
-        false,
-        true,
-        vec!["provider_kind".to_owned()],
-        Some("catalog_change_requires_restart".to_owned()),
-    );
-    let encoded = serde_json::to_string(&outcome).expect("outcome serializes");
-    let decoded: CandidateAcceptanceOutcomeDto =
-        serde_json::from_str(&encoded).expect("outcome decodes");
-    assert_eq!(decoded, outcome);
-    assert!(
-        serde_json::from_str::<CandidateAcceptanceOutcomeDto>(
-            r#"{"accepted":true,"changed_semantics":false,"changed_field_categories":[],"failure_code":null,"unexpected":true}"#
-        )
-        .is_err(),
-        "unknown outcome fields are rejected"
-    );
 }
 
 #[test]
@@ -834,34 +784,7 @@ fn credential_shaped_keys_values_and_arrays_are_rejected() {
 }
 
 #[test]
-fn acceptance_outcome_and_source_accessors_are_exposed() {
-    let outcome = CandidateAcceptanceOutcomeDto::new(true, false, vec!["model".to_owned()], None);
-    assert!(outcome.accepted(), "accepted projection");
-    assert!(!outcome.changed_semantics(), "no semantic change");
-    assert_eq!(
-        outcome.changed_field_categories(),
-        &["model".to_owned()],
-        "closed category list"
-    );
-    assert_eq!(outcome.failure_code(), None, "no failure code");
-
-    let rejected = CandidateAcceptanceOutcomeDto::new(
-        false,
-        true,
-        vec!["provider_kind".to_owned()],
-        Some("catalog_change_requires_restart".to_owned()),
-    );
-    assert!(!rejected.accepted(), "rejected projection");
-    assert!(rejected.changed_semantics(), "semantic change present");
-    assert_eq!(
-        rejected.changed_field_categories(),
-        &["provider_kind".to_owned()]
-    );
-    assert_eq!(
-        rejected.failure_code(),
-        Some("catalog_change_requires_restart")
-    );
-
+fn candidate_source_accessors_are_exposed() {
     assert_eq!(
         ConfigCandidateSourceDto::StructuredEdits.as_str(),
         "structured_edits"

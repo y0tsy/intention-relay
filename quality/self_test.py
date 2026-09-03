@@ -609,7 +609,7 @@ def test_m5_activation_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
+            'test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
             'test_targets = []',
         )
         run(
@@ -1407,18 +1407,34 @@ def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
         return FakeCompleted(0)
 
     namespace["run_command"] = fake_run_command
+    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
+    # The fixture run writes the synthetic snapshot into the real reports
+    # root; the live metadata report must be saved and restored so this
+    # self-test never leaves fabricated metadata for later direct checks.
+    prior_bytes = snapshot.read_bytes() if snapshot.is_file() else None
     previous_argv = sys.argv
     sys.argv = ["quality/run_coverage.py", "--profile", "default"]
+    saved_correctly = False
     try:
         namespace["main"]()
+        saved_correctly = snapshot.is_file() and snapshot.read_text(encoding="utf-8") == payload
     finally:
+        if prior_bytes is None:
+            snapshot.unlink(missing_ok=True)
+        else:
+            snapshot.write_bytes(prior_bytes)
         sys.argv = previous_argv
+    if not saved_correctly:
+        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
+    if prior_bytes is None:
+        if snapshot.exists():
+            raise RuntimeError("self-test must not leave a synthetic metadata snapshot behind")
+    else:
+        if not snapshot.is_file() or snapshot.read_bytes() != prior_bytes:
+            raise RuntimeError("self-test must restore the live metadata snapshot byte-identically")
     metadata_calls = [command for command in captured if command[:2] == ["cargo", "metadata"]]
     if metadata_calls != [["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]]:
         raise RuntimeError(f"coverage metadata must be collected exactly once per run: {metadata_calls!r}")
-    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
-    if not snapshot.is_file() or snapshot.read_text(encoding="utf-8") != payload:
-        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
     checker_calls = [
         command
         for command in captured
@@ -1527,6 +1543,20 @@ def test_adr_0037_slice2_ledger_exists_and_is_indexed(root: Path) -> None:
     text = readme.read_text(encoding="utf-8")
     if "[0037](0037-m5plus-slice2-control-plane.md)" not in text:
         raise RuntimeError("decisions/README.md must index ADR 0037")
+
+
+def test_adr_0038_no_compatibility_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0038-no-backward-compatibility-and-legacy-removal.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0038 must exist as the no-compatibility activating specification")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0038](0038-no-backward-compatibility-and-legacy-removal.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0038")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0038" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0038")
 
 
 def test_slice2_tag_registry_parity(root: Path) -> None:

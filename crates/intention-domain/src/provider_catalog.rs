@@ -154,6 +154,12 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), CanonicalError> {
         if rest.is_empty() {
             return Err(CanonicalError::InvalidEndpoint);
         }
+        // Plaintext HTTP is tolerated only for literal loopback endpoints
+        // (PR24-055): credentials must never traverse plaintext to a remote
+        // host. Anything that is not a literal loopback host is rejected.
+        if !literal_loopback_http_host(rest) {
+            return Err(CanonicalError::InvalidEndpoint);
+        }
         "http://".len()
     } else {
         return Err(CanonicalError::InvalidEndpoint);
@@ -171,6 +177,36 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), CanonicalError> {
         return Err(CanonicalError::CredentialsForbidden);
     }
     Ok(())
+}
+
+/// Whether the authority of an `http://` endpoint is a literal loopback host.
+///
+/// Literal loopback covers `localhost`, any `127.0.0.0/8` IPv4 address, and
+/// the IPv6 loopback `::1` (with or without brackets and an optional port).
+/// DNS names that merely resolve to loopback are not literal and stay
+/// HTTPS-only.
+#[must_use]
+fn literal_loopback_http_host(authority: &str) -> bool {
+    let authority = authority.split('/').next().unwrap_or_default();
+    // A bracketed IPv6 literal `[::1]` with an optional `:port` suffix keeps
+    // its brackets until the closing `]`, so it is parsed before the
+    // colon-based host/port split. An unclosed bracket is not loopback.
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, rest)) = bracketed.split_once(']') else {
+            return false;
+        };
+        return host == "::1" && (rest.is_empty() || rest.starts_with(':'));
+    }
+    let host = authority.split(':').next().unwrap_or_default();
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let octets = host.split('.').collect::<Vec<_>>();
+    octets.len() == 4
+        && octets.iter().all(|octet| {
+            !octet.is_empty() && octet.len() <= 3 && octet.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && octets[0].parse::<u8>().is_ok_and(|value| value == 127)
 }
 
 /// Whether every `%` in `value` begins a valid two-digit hex escape.
@@ -648,7 +684,11 @@ impl ProviderProfileRevisionV1 {
 
 /// A permanent safe identity record for one removed provider profile.
 ///
-/// A tombstoned profile id can never be reintroduced.
+/// One append-only profile removal-history event.
+///
+/// Removal history is durable evidence, not admission authority: the current
+/// active catalog membership decides admission, and an identifier removed by
+/// one catalog may be reintroduced by a later accepted catalog (PR24-017).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderProfileTombstoneDto {
     pub profile_id: String,
@@ -659,7 +699,7 @@ pub struct ProviderProfileTombstoneDto {
 }
 
 impl ProviderProfileTombstoneDto {
-    /// Creates a permanent profile tombstone with its identity digest.
+    /// Creates a profile removal-history event with its identity digest.
     ///
     /// # Errors
     ///
@@ -788,7 +828,7 @@ pub struct ProviderKindTombstoneDto {
 }
 
 impl ProviderKindTombstoneDto {
-    /// Creates a permanent kind tombstone with its identity digest.
+    /// Creates a kind removal-history event with its identity digest.
     ///
     /// # Errors
     ///
@@ -944,25 +984,6 @@ pub fn validate_provider_kind_removal(
         .any(|profile| profile.provider_kind_id == kind_id)
     {
         return Err(CanonicalError::ProviderKindHasDependents);
-    }
-    Ok(())
-}
-
-/// Validates that a tombstoned profile id is never reintroduced.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::ProviderProfileRevisionInvalid` when `profile_id`
-/// appears in `tombstones`.
-pub fn validate_profile_id_not_tombstoned(
-    profile_id: &str,
-    tombstones: &[ProviderProfileTombstoneDto],
-) -> Result<(), CanonicalError> {
-    if tombstones
-        .iter()
-        .any(|tombstone| tombstone.profile_id == profile_id)
-    {
-        return Err(CanonicalError::ProviderProfileRevisionInvalid);
     }
     Ok(())
 }
@@ -1234,15 +1255,17 @@ mod tests {
             ProviderProfileTombstoneDto::decode(&bytes).expect("tombstone decodes"),
             tombstone
         );
+        // Tombstones are removal-history events, not a permanent admission
+        // veto: an identifier may be removed, reintroduced by a later accepted
+        // catalog, and removed again (PR24-017). Each removal carries its own
+        // removed catalog revision in its identity.
+        let reintroduced =
+            ProviderProfileTombstoneDto::new("profile-default", 4, 200, "removal-accepted")
+                .expect("second removal history event is valid");
+        assert_ne!(tombstone, reintroduced);
         assert_eq!(
-            validate_profile_id_not_tombstoned("profile-default", std::slice::from_ref(&tombstone))
-                .expect_err("tombstoned id cannot be reintroduced")
-                .code(),
-            "provider_profile_revision_invalid"
-        );
-        assert!(
-            validate_profile_id_not_tombstoned("profile-other", std::slice::from_ref(&tombstone))
-                .is_ok()
+            reintroduced.removed_catalog_revision, 4,
+            "a reintroduced and re-removed id records a fresh removal revision"
         );
         let kind_tombstone = ProviderKindTombstoneDto::new(
             "generic-chat-completion-api",
@@ -1289,12 +1312,18 @@ mod tests {
     #[test]
     fn endpoint_validation_rejects_userinfo_query_fragment_and_controls() {
         for (endpoint, expected) in [
-            ("https://user:pass@api.example.com/v1", "invalid_endpoint"),
+            ("*********************************/v1", "invalid_endpoint"),
             ("https://api.example.com/v1?key=value", "invalid_endpoint"),
             ("https://api.example.com/v1#frag", "invalid_endpoint"),
             ("https://api.example.com/v1 ", "invalid_endpoint"),
             ("ftp://api.example.com/v1", "invalid_endpoint"),
             ("https://api.example.com/%zz", "invalid_endpoint"),
+            // HTTPS is required; plaintext HTTP is only tolerated for
+            // literal-loopback endpoints (PR24-055).
+            ("http://api.example.com/v1", "invalid_endpoint"),
+            ("http://127.0.0.1.evil.example.com/v1", "invalid_endpoint"),
+            ("http://localhost.evil.example.com/v1", "invalid_endpoint"),
+            ("http://[::1", "invalid_endpoint"),
         ] {
             assert_eq!(
                 validate_endpoint(endpoint)
@@ -1305,13 +1334,99 @@ mod tests {
             );
         }
         assert!(validate_endpoint("https://api.example.com/v1").is_ok());
-        assert!(validate_endpoint("http://127.0.0.1:8080/v1").is_ok());
+        for loopback in [
+            "http://127.0.0.1:8080/v1",
+            "http://127.0.0.2/v1",
+            "http://localhost:8080/v1",
+            "http://LOCALHOST:8080/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            assert!(
+                validate_endpoint(loopback).is_ok(),
+                "literal-loopback HTTP is the only plaintext exception: {loopback}"
+            );
+        }
         assert_eq!(
             validate_endpoint("https://sk-test@api.example.com/v1")
                 .expect_err("credential-bearing endpoint is rejected")
                 .code(),
             "invalid_endpoint"
         );
+    }
+
+    #[test]
+    fn credential_shape_roles_share_one_policy_with_role_specific_verdicts() {
+        // Identifier role is over-inclusive: key/token/sk- substrings,
+        // bearer tokens, and control characters all fail closed.
+        for shaped in [
+            "my_key_name",
+            "token-holder",
+            "sk-live-secret",
+            "Bearer abc",
+            "control\tcharacter",
+        ] {
+            assert!(
+                crate::canonical::credential_shaped_identifier(shaped),
+                "identifier role flags {shaped}"
+            );
+        }
+        for clean in ["ordinary-id", "schema-version", "revision-0001"] {
+            assert!(
+                !crate::canonical::credential_shaped_identifier(clean),
+                "identifier role accepts {clean}"
+            );
+        }
+
+        // Secret-value role targets secret patterns, not bare words.
+        for shaped in [
+            "sk-live",
+            "Bearer abc",
+            "x-api_key-y",
+            "secret",
+            "password",
+            "token=",
+        ] {
+            assert!(
+                crate::canonical::secret_value_credential_shaped(shaped),
+                "secret-value role flags {shaped}"
+            );
+        }
+        assert!(!crate::canonical::secret_value_credential_shaped(
+            "keyboard"
+        ));
+
+        // Key-name role flags reserved credential key names and patterns.
+        for shaped in [
+            "token",
+            "bearer",
+            "auth",
+            "authorization",
+            "access_token",
+            "auth_token",
+            "api_key",
+        ] {
+            assert!(
+                crate::canonical::credential_shaped_key_name(shaped),
+                "key-name role flags {shaped}"
+            );
+        }
+        for clean in ["model", "endpoint", "execution", "kind"] {
+            assert!(
+                !crate::canonical::credential_shaped_key_name(clean),
+                "key-name role accepts {clean}"
+            );
+        }
+
+        // Raw-content role ignores formatting whitespace but detects secrets.
+        assert!(crate::canonical::credential_shaped_raw_content(
+            "multi\nline\tkey material"
+        ));
+        assert!(crate::canonical::credential_shaped_raw_content(
+            "model.api_key = \"sk-x\""
+        ));
+        assert!(!crate::canonical::credential_shaped_raw_content(
+            "schema_version = 1\nprovider kind = openrouter"
+        ));
     }
 
     #[test]

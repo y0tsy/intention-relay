@@ -47,7 +47,7 @@ Rationale (binding, from AGENTS.md):
 | M3-era dual paths in the composition and client (synchronous `StopRun` dispatch, selection-less turn acceptance, no-tool-port denial, no-op post-commit publisher seam, unused `SessionSubscriptionRecovery` wrapper) | ADR 0019 compatibility section; architecture 03/15; m4.md; closeout m2/m5 | Single current path per operation; no fallback branches |
 | Historical domain record/wire compatibility (execution-meaning V3 codec and golden, M1/M2 workspace-identity option on `SessionCreatedEventDto`, legacy tool-call and session-selection wire tests, M3/M4 byte-stability test framing) | ADR 0003; ADR 0036 execution-meaning records; architecture 14 | Current record version only (V4); mandatory fields; current-record golden evidence |
 | Tooling compatibility surfaces (`dispatch`/`invoke`/`invoke_with_context` bare-result APIs, legacy `exit_code:` rendering, `resolve_path_for_tool` alias) | architecture 05 | Envelope APIs and typed statuses only |
-| Migration-result wording in the protocol (`no_migrations_required`) | protocol source | Removed/replaced with current wording in the same change |
+| Migration-result wording in the protocol (`no_migrations_required`, later the constant `migration_result` wire field on `ReloadTransactionDto`) | protocol source | Removed in the same change: the constant wire field is deleted from the current DTO shape; a wire object carrying the removed member may still decode by ignoring it, but no current producer emits it |
 
 ### Binding decisions (resolving previously conditional items)
 
@@ -387,8 +387,11 @@ leave).
   unit test `parse_and_migration_helpers_reject_schema_and_legacy_shape_mismatches`
   (`lib.rs:971-993`).
 - Keep `parse_candidate`, `semantic_equivalence`, `classify_changed_fields`,
-  `reject_catalog_affecting_edits`, `redacted_safe_digest`, and the candidate
-  DTOs (current Slice 2 behavior).
+  `reject_catalog_affecting_edits`, and the candidate DTOs (current Slice 2
+  behavior). The credential-free `redacted_safe_digest` and the dead
+  `CandidateAcceptanceOutcomeDto` projection, together with config's private
+  SHA-256 module, were removed in the PR 24 repair run because no production
+  surface consumed them (PR24-037/038).
 
 Docs: architecture 09 (lines 14-16, 64, 148-159), roadmap 11 (lines 130-131),
 ADR 0037 M3/M4 preservation wording where it references snapshots.

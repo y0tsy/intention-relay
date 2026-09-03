@@ -34,55 +34,17 @@ fn bounded<T>(items: Vec<T>, max: usize, code: &'static str) -> DtoResult<Vec<T>
 }
 /// Whether `value` looks like a credential.
 ///
-/// A value is credential-shaped when it carries any control character
-/// anywhere, contains the case-insensitive `key` or `token` substring, starts
-/// an `sk-` secret anywhere in the string, or holds a case-insensitive
-/// `bearer` token followed by a non-empty token. Trimmed and whitespace-padded
-/// variants are detected too. Detection is intentionally over-inclusive: it is
-/// used to fail closed on provider-adjacent fields.
+/// Identifier role of the shared credential-shape policy owned by
+/// `intention-domain::canonical` (PR24-035): a value is credential-shaped
+/// when it carries any control character anywhere, contains the
+/// case-insensitive `key` or `token` substring, starts an `sk-` secret
+/// anywhere in the string, or holds a case-insensitive `bearer` token
+/// followed by a non-empty token. Trimmed and whitespace-padded variants are
+/// detected too. Detection is intentionally over-inclusive: it is used to
+/// fail closed on provider-adjacent fields.
 #[must_use]
 fn credential_shaped(value: &str) -> bool {
-    value.chars().any(char::is_control) || {
-        let lower = value.trim().to_ascii_lowercase();
-        lower.contains("key")
-            || lower.contains("token")
-            || lower.contains("sk-")
-            || bearer_credential(&lower)
-    }
-}
-
-/// Whether `value` (already lowercased) carries a Bearer-token shape: the
-/// word `bearer` followed, possibly after whitespace or control characters,
-/// by a non-empty token.
-#[must_use]
-fn bearer_credential(lower: &str) -> bool {
-    lower.match_indices("bearer").any(|(index, _)| {
-        let after = &lower[index + "bearer".len()..];
-        let Some(first) = after.chars().next() else {
-            return false;
-        };
-        (first.is_whitespace() || first.is_control())
-            && after
-                .trim_start_matches(|c: char| c.is_whitespace() || c.is_control())
-                .chars()
-                .next()
-                .is_some()
-    })
-}
-
-/// Whether TOML candidate content looks like a credential.
-///
-/// Unlike [`credential_shaped`], this check ignores the line breaks and tabs
-/// that are legitimate inside TOML text and detects only credential
-/// substrings, so multi-line configuration content is not rejected for its
-/// formatting alone.
-#[must_use]
-fn toml_content_credential_shaped(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("key")
-        || lower.contains("token")
-        || lower.contains("sk-")
-        || bearer_credential(&lower)
+    intention_domain::canonical::credential_shaped_identifier(value)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2916,13 +2878,15 @@ pub enum ConfigurationCommitOutcomeDto {
 }
 
 /// The durable outcome of one configuration reload transaction.
+///
+/// Configuration has no migration path under ADR 0038; the former constant
+/// `migration_result` wire field was removed with the migration wording.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReloadTransactionDto {
     pub transaction_id: String,
     pub previous_config_revision: String,
     pub candidate_config_revision: String,
     pub validation_result: ConfigurationValidationOutcomeDto,
-    pub migration_result: String,
     pub commit_outcome: ConfigurationCommitOutcomeDto,
     pub safe_failure_code: Option<String>,
     pub safe_failure_detail: Option<String>,
@@ -2941,7 +2905,6 @@ impl ReloadTransactionDto {
             &self.transaction_id,
             &self.previous_config_revision,
             &self.candidate_config_revision,
-            &self.migration_result,
         ] {
             valid_text(field, 256, "configuration_reload_invalid")?;
         }
@@ -2969,7 +2932,6 @@ impl ReloadTransactionDto {
             &self.transaction_id,
             &self.previous_config_revision,
             &self.candidate_config_revision,
-            &self.migration_result,
         ];
         if let Some(code) = &self.safe_failure_code {
             fields.push(code);
@@ -3706,7 +3668,7 @@ impl RawTomlEditCommandDto {
                 "candidate content carries invalid control characters",
             ));
         }
-        if toml_content_credential_shaped(&self.candidate_content)
+        if intention_domain::canonical::credential_shaped_raw_content(&self.candidate_content)
             || credential_shaped(&self.operation_id)
             || credential_shaped(&self.expected_config_revision)
         {
@@ -6514,7 +6476,6 @@ mod tests {
             previous_config_revision: "config-rev-1".to_owned(),
             candidate_config_revision: "config-rev-2".to_owned(),
             validation_result: ConfigurationValidationOutcomeDto::Valid,
-            migration_result: "not-applicable".to_owned(),
             commit_outcome: if committed {
                 ConfigurationCommitOutcomeDto::Committed
             } else {

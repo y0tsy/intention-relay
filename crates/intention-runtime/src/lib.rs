@@ -915,12 +915,13 @@ where
                     )?;
                     *durable_output = true;
                 }
-                // Slice 2: the per-fact 512 KiB reasoning bound is enforced by
-                // the domain constructors above; the combined per-run 4 MiB
-                // bound (`intention_domain::validate_reasoning_fact_output_bound`)
-                // needs per-run reasoning accounting and lands with the
-                // control-plane/session-selection zones (the controller
-                // decides on the 4 MiB follow-up).
+                // The per-fact 512 KiB reasoning bound is enforced by the
+                // domain constructors above; the combined per-run 4 MiB bound
+                // (`intention_domain::validate_reasoning_fact_output_bound`)
+                // is enforced at the durable append authority against the
+                // per-run `reasoning_aggregate_bytes` accounting, which
+                // rejects the whole crossing batch before any write
+                // (PR24-024).
                 ModelEventDto::Usage { usage } => {
                     cursor = self.append(
                         input.session_id,

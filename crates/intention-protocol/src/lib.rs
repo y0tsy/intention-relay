@@ -79,11 +79,13 @@ pub enum ProtocolCapabilityDto {
 
 /// The currently activated local protocol version.
 ///
-/// Slice 2 deliberately stays on protocol 1.1 and DTO schema 1.1: every Slice
-/// 2 addition is additive (new capability-gated DTOs and new enum variants)
-/// and never changes the semantics of an existing field, so old wire payloads
-/// keep decoding identically. A future slice that changes field semantics must
-/// bump the minor component of both versions.
+/// Slice 2 stays on protocol 1.1 and DTO schema 1.1 under the ADR 0038
+/// single-version policy: negotiation accepts only the exact current 1.1
+/// versions, previously required fields stay required, and fields that became
+/// mandatory are mandatory on the wire. Decoding tolerates unknown additive
+/// fields (forward compatibility) but no longer accepts older shapes as if
+/// they were current; prior same-major (1.0-to-1.1) compatibility and 1.0
+/// fixtures were removed with that machinery.
 pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(1, 1);
 /// The currently activated public DTO schema version.
 pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
@@ -755,9 +757,12 @@ impl ProtocolAcceptedDto {
     }
 
     /// Returns operation-specific acceptance evidence.
+    ///
+    /// `result` is a required field of the current DTO shape, so the accessor
+    /// returns a direct reference; there is no absent-result state to model.
     #[must_use]
-    pub const fn result(&self) -> Option<&ProtocolAcceptedResultDto> {
-        Some(&self.result)
+    pub const fn result(&self) -> &ProtocolAcceptedResultDto {
+        &self.result
     }
 }
 
@@ -1045,9 +1050,13 @@ impl SessionSnapshotDto {
         self.at_sequence
     }
     /// Returns the public state projection carried by the snapshot.
+    ///
+    /// `projection` is a required field of the current DTO shape, so the
+    /// accessor returns a direct reference; there is no absent-projection
+    /// state to model.
     #[must_use]
-    pub const fn projection(&self) -> Option<&SessionProjectionDto> {
-        Some(&self.projection)
+    pub const fn projection(&self) -> &SessionProjectionDto {
+        &self.projection
     }
 }
 
@@ -1819,7 +1828,7 @@ mod tests {
         assert_eq!(accepted.correlation_id(), correlation);
         assert!(matches!(
             accepted.result(),
-            Some(ProtocolAcceptedResultDto::CreateSession(_))
+            ProtocolAcceptedResultDto::CreateSession(_)
         ));
     }
 
@@ -2119,7 +2128,6 @@ mod tests {
                 candidate_config_revision: "config-rev-2".to_owned(),
                 validation_result:
                     crate::contract_families::ConfigurationValidationOutcomeDto::Valid,
-                migration_result: "not-applicable".to_owned(),
                 commit_outcome: crate::contract_families::ConfigurationCommitOutcomeDto::Committed,
                 safe_failure_code: None,
                 safe_failure_detail: None,

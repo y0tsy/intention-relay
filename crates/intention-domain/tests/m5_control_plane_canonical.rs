@@ -20,9 +20,8 @@ use intention_domain::{
     ReasoningCapability, ReasoningHistoryBound, ReasoningHistoryManifestDto,
     StructuredOutputCapability, context_source_manifest_digest, model_context_projection_digest,
     provider_profile_revision_digest, provider_selection_digest, reasoning_history_manifest_digest,
-    validate_endpoint, validate_profile_id_not_tombstoned, validate_provider_kind_id,
-    validate_provider_kind_removal, validate_provider_kind_revision_immutability,
-    validate_safe_header_name,
+    validate_endpoint, validate_provider_kind_id, validate_provider_kind_removal,
+    validate_provider_kind_revision_immutability, validate_safe_header_name,
 };
 use sha2::{Digest, Sha256};
 
@@ -1041,7 +1040,7 @@ fn reasoning_history_bounds_are_enforced() {
 }
 
 #[test]
-fn provider_profile_tombstone_ids_cannot_be_reintroduced() {
+fn provider_profile_tombstones_are_append_only_removal_history() {
     let tombstone = ProviderProfileTombstoneDto::new("profile-default", 2, 100, "removal-accepted")
         .expect("tombstone is valid");
     let bytes = tombstone.encode().expect("tombstone encodes");
@@ -1049,13 +1048,18 @@ fn provider_profile_tombstone_ids_cannot_be_reintroduced() {
         ProviderProfileTombstoneDto::decode(&bytes).expect("tombstone decodes"),
         tombstone
     );
+    // PR24-017: tombstones are removal-history events keyed by the removed
+    // catalog revision, not a permanent admission veto. An identifier removed,
+    // reintroduced, and removed again records a fresh event with its own
+    // revision, and the encode/decode identity differs per removal revision.
+    let reintroduced =
+        ProviderProfileTombstoneDto::new("profile-default", 4, 200, "removal-accepted")
+            .expect("second removal event is valid");
+    assert_ne!(tombstone, reintroduced);
     assert_eq!(
-        validate_profile_id_not_tombstoned("profile-default", &[tombstone])
-            .expect_err("tombstoned id is rejected")
-            .code(),
-        "provider_profile_revision_invalid"
+        reintroduced.removed_catalog_revision, 4,
+        "reintroduction then removal records the new removal revision"
     );
-    assert!(validate_profile_id_not_tombstoned("profile-other", &[]).is_ok());
     let kind_tombstone =
         ProviderKindTombstoneDto::new("generic-chat-completion-api", 2, 101, "removal-accepted")
             .expect("kind tombstone is valid");

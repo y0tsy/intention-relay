@@ -38,7 +38,7 @@ pub use provider_catalog::{
     CredentialTransportMode, ProviderCatalogLimits, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto, ProviderProfileRevisionV1,
     ProviderProfileTombstoneDto, provider_profile_revision_digest, validate_endpoint,
-    validate_profile_id_not_tombstoned, validate_provider_kind_id, validate_provider_kind_removal,
+    validate_provider_kind_id, validate_provider_kind_removal,
     validate_provider_kind_revision_immutability, validate_safe_header_name,
 };
 pub use provider_selection::{

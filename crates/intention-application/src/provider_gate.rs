@@ -189,7 +189,11 @@ mod tests {
     }
 
     #[test]
-    fn run_exclusive_propagates_typed_errors_without_mutation() {
+    fn run_exclusive_propagates_typed_errors_after_in_memory_mutation() {
+        // `run_exclusive` never rolls back in-memory mutations: an error
+        // propagates with the mutations already applied, so callers must
+        // perform fallible durable work before mutating gate state and leave
+        // gate mutation as the last step.
         let gate = ControlPlaneGate::new();
         let error = gate
             .run_exclusive(|state| -> DtoResult<()> {

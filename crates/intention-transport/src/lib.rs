@@ -229,6 +229,11 @@ pub struct LocalListener {
 impl LocalListener {
     /// Binds a user-private local endpoint.
     ///
+    /// On Unix, a bind conflict from an unclean previous daemon exit is
+    /// recovered: when the endpoint path is a socket with no live listener,
+    /// the stale socket is removed and the bind is retried once. A live
+    /// listener or a non-socket path is never removed.
+    ///
     /// # Errors
     ///
     /// Returns a safe typed error when the parent directory cannot be prepared,
@@ -236,16 +241,13 @@ impl LocalListener {
     /// unavailable. It never removes a path that was not created by this host.
     pub fn bind(endpoint: LocalEndpoint) -> DtoResult<Self> {
         prepare_parent_directory(&endpoint)?;
-        let listener = listener_options(&endpoint)?.create_sync().map_err(|_| {
-            ErrorDto::new(
-                "local_daemon_endpoint_in_use",
-                ErrorCategoryDto::Conflict,
-                "the local daemon endpoint is already in use",
-                ErrorRetryDto::Immediate,
-                None,
-            )
-            .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
-        })?;
+        let listener = match listener_options(&endpoint)?.create_sync() {
+            Ok(listener) => listener,
+            Err(_) if reclaim_stale_socket(&endpoint) => listener_options(&endpoint)?
+                .create_sync()
+                .map_err(|_| endpoint_in_use())?,
+            Err(_) => return Err(endpoint_in_use()),
+        };
         Ok(Self {
             listener,
             #[cfg(unix)]
@@ -290,22 +292,23 @@ pub struct AsyncLocalListener {
 impl AsyncLocalListener {
     /// Binds a user-private local endpoint for asynchronous connections.
     ///
+    /// On Unix, a bind conflict from an unclean previous daemon exit is
+    /// recovered exactly like [`LocalListener::bind`]: a stale socket with no
+    /// live listener is removed and the bind is retried once.
+    ///
     /// # Errors
     ///
     /// Returns a safe typed error when the parent cannot be prepared, another
     /// listener owns the endpoint, or the local IPC implementation is unavailable.
     pub fn bind(endpoint: LocalEndpoint) -> DtoResult<Self> {
         prepare_parent_directory(&endpoint)?;
-        let listener = listener_options(&endpoint)?.create_tokio().map_err(|_| {
-            ErrorDto::new(
-                "local_daemon_endpoint_in_use",
-                ErrorCategoryDto::Conflict,
-                "the local daemon endpoint is already in use",
-                ErrorRetryDto::Immediate,
-                None,
-            )
-            .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
-        })?;
+        let listener = match listener_options(&endpoint)?.create_tokio() {
+            Ok(listener) => listener,
+            Err(_) if reclaim_stale_socket(&endpoint) => listener_options(&endpoint)?
+                .create_tokio()
+                .map_err(|_| endpoint_in_use())?,
+            Err(_) => return Err(endpoint_in_use()),
+        };
         Ok(Self {
             listener,
             #[cfg(unix)]
@@ -840,6 +843,51 @@ fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
 }
 
+fn endpoint_in_use() -> ErrorDto {
+    ErrorDto::new(
+        "local_daemon_endpoint_in_use",
+        ErrorCategoryDto::Conflict,
+        "the local daemon endpoint is already in use",
+        ErrorRetryDto::Immediate,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
+}
+
+/// Reclaims a stale Unix endpoint left behind by an unclean daemon exit.
+///
+/// A bind failure means the endpoint is in use only when a live listener
+/// answers a probe connect. When the path is a socket with no live listener,
+/// it is stale and is removed exactly once before the caller retries the
+/// bind. Live endpoints and non-socket paths are never removed.
+#[cfg(unix)]
+fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    let metadata = match fs::symlink_metadata(&endpoint.path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+    if !metadata.file_type().is_socket() {
+        return false;
+    }
+    let Ok(name) = endpoint.socket_name() else {
+        return false;
+    };
+    // A live listener completes an immediate connect; a stale socket refuses
+    // it. A short timeout bounds the probe without ever waiting on a socket
+    // that is gone.
+    let live = ConnectOptions::new()
+        .name(name)
+        .wait_mode(ConnectWaitMode::Timeout(Duration::from_millis(50)))
+        .connect_sync()
+        .is_ok();
+    if live {
+        return false;
+    }
+    fs::remove_file(&endpoint.path).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -905,6 +953,78 @@ mod tests {
             !socket_path.exists(),
             "listener removes only its owned socket"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_socket_is_reclaimed_but_live_endpoints_and_files_are_never_removed() {
+        // An abandoned socket file (unclean daemon exit) must be reclaimed by
+        // a later bind (PR24-010).
+        let stale = endpoint();
+        let stale_path = stale.path.clone();
+        let abandoned =
+            std::os::unix::net::UnixListener::bind(&stale_path).expect("stale socket seeds");
+        drop(abandoned); // UnixListener drop does not unlink the path
+        assert!(
+            stale_path.exists(),
+            "the abandoned socket file must survive its listener"
+        );
+        let listener = LocalListener::bind(stale).expect("stale socket is reclaimed");
+        drop(listener);
+        assert!(
+            !stale_path.exists(),
+            "the reclaimed listener owns the socket"
+        );
+
+        // A live listener on the same path must never be unlinked.
+        let live = endpoint();
+        let live_path = live.path.clone();
+        let _listener = LocalListener::bind(live.clone()).expect("first listener binds");
+        let error = match LocalListener::bind(live) {
+            Err(error) => error,
+            Ok(_) => panic!("second bind conflicts"),
+        };
+        assert_eq!(error.code(), "local_daemon_endpoint_in_use");
+        assert!(
+            live_path.exists(),
+            "a live listener's socket is never removed"
+        );
+
+        // A non-socket path at the endpoint must never be removed.
+        let regular = endpoint();
+        let regular_path = regular.path.clone();
+        fs::write(&regular_path, b"not a socket").expect("regular file seeds");
+        let error = match LocalListener::bind(regular) {
+            Err(error) => error,
+            Ok(_) => panic!("non-socket path conflicts"),
+        };
+        assert_eq!(error.code(), "local_daemon_endpoint_in_use");
+        assert_eq!(
+            fs::read(&regular_path).expect("regular file remains"),
+            b"not a socket"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn async_listener_reclaims_a_stale_socket_and_keeps_live_endpoints() {
+        let stale = endpoint();
+        let stale_path = stale.path.clone();
+        let abandoned =
+            std::os::unix::net::UnixListener::bind(&stale_path).expect("stale socket seeds");
+        drop(abandoned);
+        let listener = AsyncLocalListener::bind(stale).expect("stale socket is reclaimed");
+        drop(listener);
+
+        let live = endpoint();
+        let live_path = live.path.clone();
+        let _listener = AsyncLocalListener::bind(live.clone()).expect("first listener binds");
+        let error = match AsyncLocalListener::bind(live) {
+            Err(error) => error,
+            Ok(_) => panic!("second async bind conflicts"),
+        };
+        assert_eq!(error.code(), "local_daemon_endpoint_in_use");
+        assert!(live_path.exists());
     }
 
     #[cfg(unix)]

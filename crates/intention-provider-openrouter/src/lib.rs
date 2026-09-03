@@ -359,25 +359,8 @@ where
             },
             StreamEvent::ReasoningDetailsDelta(details) => {
                 for detail in details {
-                    match detail.text.filter(|text| !text.is_empty()) {
-                        Some(text) => {
-                            match ModelEventDto::reasoning_delta_categorized(
-                                intention_model::ReasoningFragmentCategoryDto::Detail,
-                                text,
-                            ) {
-                                Ok(event) => self.pending.push_back(Ok(event)),
-                                Err(_) => {
-                                    self.fail("provider_reasoning_stream_invalid");
-                                    return;
-                                }
-                            }
-                        }
-                        // Encrypted or otherwise non-textual reasoning blocks
-                        // cannot be normalized and are never published raw.
-                        None => {
-                            self.fail("provider_reasoning_stream_invalid");
-                            return;
-                        }
+                    if !self.accept_reasoning_detail(&detail) {
+                        return;
                     }
                 }
             }
@@ -436,6 +419,48 @@ where
     fn fail_error(&mut self, error: ProviderErrorDto) {
         self.pending.push_back(Err(error));
         self.terminal = true;
+    }
+
+    /// Classifies one structured reasoning-detail block.
+    ///
+    /// Textual blocks (`reasoning.text`) publish their text or data content as
+    /// a Detail delta. Recognized opaque blocks (encrypted payloads and
+    /// server-tool activity) are suppressed: they cannot be normalized into
+    /// publishable reasoning and must never leak their raw payloads. Any
+    /// other shape — an empty or unknown block type, or a textual block
+    /// without content — is malformed and fails the stream.
+    fn accept_reasoning_detail(&mut self, detail: &openrouter_rs::types::ReasoningDetail) -> bool {
+        let local_type = detail
+            .block_type
+            .strip_prefix("reasoning.")
+            .unwrap_or(&detail.block_type);
+        if local_type == "text" {
+            let Some(text) = detail.content().filter(|text| !text.is_empty()) else {
+                self.fail("provider_reasoning_stream_invalid");
+                return false;
+            };
+            match ModelEventDto::reasoning_delta_categorized(
+                intention_model::ReasoningFragmentCategoryDto::Detail,
+                text,
+            ) {
+                Ok(event) => self.pending.push_back(Ok(event)),
+                Err(_) => {
+                    self.fail("provider_reasoning_stream_invalid");
+                    return false;
+                }
+            }
+            return true;
+        }
+        if detail.block_type.is_empty() {
+            self.fail("provider_reasoning_stream_invalid");
+            return false;
+        }
+        let opaque = local_type.contains("encrypted") || local_type.starts_with("server_tool");
+        if !opaque {
+            self.fail("provider_reasoning_stream_invalid");
+            return false;
+        }
+        true
     }
 
     fn fail(&mut self, code: &'static str) {
@@ -538,19 +563,53 @@ const fn map_effort(effort: ReasoningEffortLevel) -> Effort {
 }
 
 fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
-    let role = match message.role() {
-        ModelRoleDto::System => Role::System,
-        ModelRoleDto::User => Role::User,
-        ModelRoleDto::Assistant => Role::Assistant,
-        // Tool-role mapping lands with the model-tool loop layer.
+    match message.role() {
+        ModelRoleDto::System => Ok(Message::new(Role::System, message.content())),
+        ModelRoleDto::User => Ok(Message::new(Role::User, message.content())),
+        ModelRoleDto::Assistant => translate_assistant_message(message),
         ModelRoleDto::Tool => {
-            return Err(ErrorDto::validation(
-                "invalid_openrouter_request",
-                "tool-role messages are not yet mapped to OpenRouter messages",
-            ));
+            let tool_call_id = message.tool_call_id().ok_or_else(|| {
+                ErrorDto::validation(
+                    "invalid_openrouter_request",
+                    "tool-role messages must carry one tool call identity",
+                )
+            })?;
+            Ok(Message::tool_response(
+                &tool_call_id.to_string(),
+                message.content(),
+            ))
         }
+    }
+}
+
+/// Translates an assistant message, mapping locally executed tool calls back
+/// onto the OpenRouter assistant shape so the tool-result round can continue.
+///
+/// # Errors
+///
+/// Returns a validation error when a tool-call message cannot be mapped.
+fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> {
+    let content = message.content();
+    let Some(tool_calls) = message.tool_calls() else {
+        return Ok(Message::new(Role::Assistant, content));
     };
-    Ok(Message::new(role, message.content()))
+    if tool_calls.is_empty() {
+        return Ok(Message::new(Role::Assistant, content));
+    }
+    let native_calls = tool_calls
+        .iter()
+        .map(|call| {
+            openrouter_rs::types::ToolCall::new(
+                call.call_id().to_string(),
+                call.name(),
+                call.arguments_json(),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(Message::assistant_with_tool_calls(
+        content.to_owned(),
+        native_calls,
+    ))
 }
 
 #[cfg(test)]
@@ -574,12 +633,26 @@ mod tests {
         }))
     }
 
-    fn reasoning_detail(text: Option<&str>) -> openrouter_rs::types::ReasoningDetail {
+    fn reasoning_detail(
+        block_type: &str,
+        text: Option<&str>,
+    ) -> openrouter_rs::types::ReasoningDetail {
         serde_json::from_value(serde_json::json!({
-            "type": "reasoning.text",
+            "type": block_type,
             "text": text,
         }))
         .expect("private SDK reasoning detail fixture decodes")
+    }
+
+    fn opaque_reasoning_detail(
+        block_type: &str,
+        data: &str,
+    ) -> openrouter_rs::types::ReasoningDetail {
+        serde_json::from_value(serde_json::json!({
+            "type": block_type,
+            "data": data,
+        }))
+        .expect("private SDK opaque reasoning detail fixture decodes")
     }
 
     fn startup_material(credential: &str) -> StartupProviderMaterial {
@@ -738,9 +811,11 @@ mod tests {
         assert_eq!(empty_details.pending.len(), 1);
         assert!(!empty_details.terminal);
 
-        // A reasoning detail without decodable text is malformed reasoning.
+        // A reasoning.text detail without decodable content is malformed
+        // reasoning.
         let mut encrypted_detail = state();
         encrypted_detail.accept(StreamEvent::ReasoningDetailsDelta(vec![reasoning_detail(
+            "reasoning.text",
             None,
         )]));
         assert!(matches!(
@@ -760,8 +835,8 @@ mod tests {
     fn reasoning_details_normalize_to_detail_deltas_in_array_order() {
         let mut state = state();
         state.accept(StreamEvent::ReasoningDetailsDelta(vec![
-            reasoning_detail(Some("detail one")),
-            reasoning_detail(Some("detail two")),
+            reasoning_detail("reasoning.text", Some("detail one")),
+            reasoning_detail("reasoning.text", Some("detail two")),
         ]));
         assert_eq!(
             state.pending.pop_front(),
@@ -908,5 +983,115 @@ mod tests {
         let mut cancelled = OpenRouterStreamState::new(stream::empty(), cancellation);
         assert!(cancelled.cancellation.is_cancelled());
         assert_eq!(cancelled.next().now_or_never(), Some(None));
+    }
+
+    #[test]
+    fn opaque_reasoning_blocks_are_suppressed_while_malformed_shapes_fail() {
+        // Recognized opaque blocks (encrypted payloads, server-tool activity)
+        // are suppressed: the stream survives and their raw payloads are
+        // never published (PR24-021).
+        let mut mixed = state();
+        mixed.accept(StreamEvent::ReasoningDetailsDelta(vec![
+            opaque_reasoning_detail("reasoning.encrypted", "cipher-secret"),
+            opaque_reasoning_detail("encrypted", "cipher-secret"),
+            opaque_reasoning_detail("reasoning.server_tool_call", r#"{"tool":"search"}"#),
+        ]));
+        assert_eq!(
+            mixed.pending.pop_front(),
+            Some(Ok(ModelEventDto::started()))
+        );
+        assert!(
+            mixed.pending.is_empty() && !mixed.terminal,
+            "suppressed opaque blocks emit nothing and do not fail the stream"
+        );
+        mixed.accept(StreamEvent::ReasoningDetailsDelta(vec![reasoning_detail(
+            "reasoning.text",
+            Some("visible"),
+        )]));
+        mixed.accept(StreamEvent::ContentDelta("answer".to_owned()));
+        let visible = ModelEventDto::reasoning_delta_categorized(
+            intention_model::ReasoningFragmentCategoryDto::Detail,
+            "visible",
+        )
+        .expect("valid detail delta");
+        assert_eq!(mixed.pending.pop_front(), Some(Ok(visible)));
+        assert_eq!(
+            mixed.pending.pop_front(),
+            Some(Ok(ModelEventDto::text_delta("answer").expect("valid text")))
+        );
+        let leaked = format!("{:?}", mixed.pending);
+        assert!(!leaked.contains("cipher-secret"));
+
+        // Unknown block families are malformed, not silently suppressible.
+        let mut unknown = state();
+        unknown.accept(StreamEvent::ReasoningDetailsDelta(vec![reasoning_detail(
+            "reasoning.custom_opaque_kind",
+            Some("visible but unknown"),
+        )]));
+        assert!(matches!(
+            unknown.pending.back(),
+            Some(Err(error)) if error.code() == "provider_reasoning_stream_invalid"
+        ));
+
+        // A block without any type is malformed.
+        let mut typeless = state();
+        typeless.accept(StreamEvent::ReasoningDetailsDelta(vec![
+            serde_json::from_value(serde_json::json!({"type": ""}))
+                .expect("typeless SDK fixture decodes"),
+        ]));
+        assert!(matches!(
+            typeless.pending.back(),
+            Some(Err(error)) if error.code() == "provider_reasoning_stream_invalid"
+        ));
+    }
+
+    #[test]
+    fn tool_round_two_translates_assistant_calls_and_tool_results() {
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture-model",
+            vec![
+                ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+                ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+                    .expect("message is valid"),
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire["messages"],
+            serde_json::json!([
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": call.call_id().to_string(),
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": r#"{"path":"hello.txt"}"#,
+                        },
+                        "index": null,
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "content": "hello world",
+                    "tool_call_id": call.call_id().to_string(),
+                },
+            ])
+        );
     }
 }

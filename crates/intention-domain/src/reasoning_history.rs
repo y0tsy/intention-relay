@@ -129,7 +129,8 @@ impl ReasoningHistoryBound {
             return Err(CanonicalError::InvalidTag);
         }
         let bound = Self {
-            max_entries: decode_u64_field(&reader, 1)? as u32,
+            max_entries: u32::try_from(decode_u64_field(&reader, 1)?)
+                .map_err(|_| CanonicalError::InvalidField)?,
             max_aggregate_bytes: decode_u64_field(&reader, 2)?,
         };
         bound.validate()?;
@@ -301,17 +302,17 @@ pub fn validate_reasoning_history_compatibility(
 ///
 /// # Errors
 ///
-/// Returns `CanonicalError::ReasoningOutputLimitExceeded` when
-/// `current_aggregate_bytes + fragment_len` exceeds
-/// `MAX_REASONING_AGGREGATE_BYTES`.
+/// Returns `CanonicalError::ReasoningOutputLimitExceeded` when the fragment
+/// would push the aggregate over `MAX_REASONING_AGGREGATE_BYTES` or when the
+/// aggregate addition itself overflows `u64`.
 pub const fn validate_reasoning_output_bound(
     current_aggregate_bytes: u64,
     fragment_len: u64,
 ) -> Result<(), CanonicalError> {
-    if current_aggregate_bytes + fragment_len > MAX_REASONING_AGGREGATE_BYTES {
-        return Err(CanonicalError::ReasoningOutputLimitExceeded);
+    match current_aggregate_bytes.checked_add(fragment_len) {
+        Some(total) if total <= MAX_REASONING_AGGREGATE_BYTES => Ok(()),
+        _ => Err(CanonicalError::ReasoningOutputLimitExceeded),
     }
-    Ok(())
 }
 
 /// Computes the namespaced reasoning-history-manifest digest over the
@@ -549,7 +550,63 @@ mod tests {
                 .code(),
             "reasoning_output_limit_exceeded"
         );
+        assert_eq!(
+            validate_reasoning_output_bound(u64::MAX, 1)
+                .expect_err("overflowing aggregate is rejected")
+                .code(),
+            "reasoning_output_limit_exceeded"
+        );
         assert!(validate_reasoning_output_bound(0, 1).is_ok());
+        assert!(
+            validate_reasoning_output_bound(MAX_REASONING_AGGREGATE_BYTES - 1, 1).is_ok(),
+            "an exact-bound aggregate must be accepted"
+        );
+    }
+
+    #[test]
+    fn reasoning_bound_decode_rejects_entries_outside_u32() {
+        // A raw `max_entries` value above `u32::MAX` must fail closed instead
+        // of silently truncating to a different bound on decode.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"IRCR");
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        for (number, value) in [
+            (1u32, encode_u64(u64::from(u32::MAX) + 1)),
+            (2u32, encode_u64(1)),
+        ] {
+            bytes.extend_from_slice(&number.to_be_bytes());
+            bytes.push(WireType::U64 as u8);
+            bytes.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&value);
+        }
+        assert_eq!(
+            ReasoningHistoryBound::decode(&bytes).expect_err("out-of-range bound is rejected"),
+            CanonicalError::InvalidField
+        );
+        // The maximum representable value still decodes.
+        let mut maximum = Vec::new();
+        maximum.extend_from_slice(b"IRCR");
+        maximum.extend_from_slice(&1u32.to_be_bytes());
+        maximum.extend_from_slice(&0u32.to_be_bytes());
+        maximum.extend_from_slice(&1u32.to_be_bytes());
+        for (number, value) in [
+            (1u32, encode_u64(u64::from(u32::MAX))),
+            (2u32, encode_u64(1)),
+        ] {
+            maximum.extend_from_slice(&number.to_be_bytes());
+            maximum.push(WireType::U64 as u8);
+            maximum.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            maximum.extend_from_slice(&value);
+        }
+        assert_eq!(
+            ReasoningHistoryBound::decode(&maximum).expect("boundary bound decodes"),
+            ReasoningHistoryBound {
+                max_entries: u32::MAX,
+                max_aggregate_bytes: 1,
+            }
+        );
     }
 
     #[test]

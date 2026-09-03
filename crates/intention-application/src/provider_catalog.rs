@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use intention_config::control_plane::{
-    CandidateIssueDto, ConfigCandidateDto, MAX_CANDIDATE_RAW_BYTES, reject_catalog_affecting_edits,
+    CandidateIssueDto, ConfigCandidateDto, MAX_CANDIDATE_RAW_BYTES, classify_changed_fields,
     semantic_equivalence,
 };
 use intention_domain::{
@@ -20,16 +20,18 @@ use intention_domain::{
     ReasoningCapability, StructuredOutputCapability, canonical::CanonicalError,
     canonical::Digest256, provider_catalog::MAX_CATALOG_ISSUES,
     provider_catalog::MAX_PROVIDER_KINDS, provider_catalog::MAX_PROVIDER_PROFILES,
-    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1, validate_provider_kind_id,
+    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
+    provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION, validate_provider_kind_id,
     validate_provider_kind_removal, validate_provider_kind_revision_immutability,
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
     AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
     CreateProviderCatalogRemovalCandidateInputDto, ExpireProviderCatalogRemovalCandidateInputDto,
-    ProviderCatalogMaterialDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
-    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
-    ProviderRemovalRepositoryDto, RejectProviderCatalogRemovalInputDto,
+    PendingRemovalCandidateDto, ProviderCatalogMaterialDto, ProviderCatalogRemovalStatusDto,
+    ProviderCatalogRepositoryDto, ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto,
+    ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
+    RejectProviderCatalogRemovalInputDto,
 };
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 
@@ -45,8 +47,6 @@ const REMOVAL_CANDIDATE_LIFETIME_SECONDS: u64 = 30 * 60;
 const RESOLVED_REASONING_POLICY: &str = "textual-reasoning-v1";
 /// The deterministic loopback policy of Slice 2 catalog profiles.
 const LOOPBACK_POLICY_NOT_APPLICABLE: &str = "not-applicable";
-/// The deterministic selection canonicalization version of Slice 2 profiles.
-const SELECTION_CANONICALIZATION_VERSION: &str = "1";
 /// The deterministic first-party default profile id.
 const DEFAULT_PROFILE_ID: &str = "default";
 
@@ -247,23 +247,58 @@ where
     /// controller in `ActivationRecoveryRequired` or `Blocked` with no partial
     /// registry. Any corruption or unsupported version degrades to `Blocked`.
     ///
+    /// Pending removal is durable: startup drives expiry from the durable
+    /// deadline, rolls forward an already-accepted removal whose catalog
+    /// acceptance never committed (PR24-004), and otherwise rebuilds the
+    /// prepared candidate and its real deadline from durable rows so
+    /// accept/reject never depend on process memory (PR24-003).
+    ///
     /// # Errors
     ///
     /// Returns an unavailable error only when the control-plane gate is
     /// poisoned; all catalog failures degrade to a typed readiness state.
     pub fn startup(&self, now: u64) -> DtoResult<CatalogStartupOutcomeDto> {
-        let state = match self.catalog.load_provider_catalog_status() {
+        let mut state = match self.catalog.load_provider_catalog_status() {
             Ok(state) => state,
             Err(error) => {
                 return self.blocked(error.code());
             }
         };
+        // One prepared candidate may exist per pending-removal state; a row
+        // missing under a pending state is inconsistent.
+        let mut pending_rebuild: Option<PendingRemovalCandidateDto> = None;
+        if state.status == ProviderCatalogStatusDto::PendingRemoval {
+            let Some(pending) = self.removal.load_pending_removal_candidate()? else {
+                return self.blocked("catalog_state_inconsistent_missing_removal_row");
+            };
+            if pending.removal_status == ProviderCatalogRemovalStatusDto::Accepted {
+                // The removal acceptance committed but the catalog acceptance
+                // did not: roll the acceptance forward from the durable
+                // prepared material (PR24-004).
+                return self.roll_forward_acceptance(&pending, now);
+            }
+            if pending.expires_at <= i64_time(now) {
+                self.expire_pending(now)?;
+                state = match self.catalog.load_provider_catalog_status() {
+                    Ok(state) => state,
+                    Err(error) => {
+                        return self.blocked(error.code());
+                    }
+                };
+            } else {
+                pending_rebuild = Some(pending);
+            }
+        }
         let status = state.status;
         let active_revision = state.active_catalog_revision_id;
         if status == ProviderCatalogStatusDto::ActivationRecoveryRequired {
             return self.startup_recovery(active_revision, now);
         }
         let Some(active) = active_revision else {
+            // A pending removal requires an active baseline catalog.
+            if pending_rebuild.is_some() {
+                return self.blocked("catalog_state_inconsistent_pending_without_active");
+            }
             // No active catalog: the empty registry is ready.
             self.gate.run_exclusive(|gate| {
                 gate.readiness = CatalogReadiness::Ready;
@@ -285,15 +320,40 @@ where
             Ok(built) => built,
             Err(error) => return self.blocked(error.code()),
         };
-        let readiness = if status == ProviderCatalogStatusDto::PendingRemoval {
-            CatalogReadiness::PendingRemoval {
-                candidate_revision: state
-                    .candidate_catalog_revision_id
-                    .map_or_else(String::new, |revision| revision.to_string()),
-                expires_at: 0,
-            }
+        // Rebuild the prepared candidate (when one is still pending) from the
+        // durable candidate material so a later accept/reject works after a
+        // restart, and preserve the real durable deadline in readiness.
+        let (readiness, prepared) = if let Some(pending) = &pending_rebuild {
+            let candidate_material = match self.catalog.load_prepared_catalog_material() {
+                Ok(candidate_material)
+                    if candidate_material.catalog_revision_id
+                        == pending.candidate_catalog_revision_id =>
+                {
+                    candidate_material
+                }
+                Ok(_) | Err(_) => {
+                    return self.blocked("catalog_state_inconsistent_candidate_material");
+                }
+            };
+            let deadline = u64::try_from(pending.expires_at).unwrap_or(0);
+            let rebuilt = PreparedCandidate {
+                candidate_handle: pending.candidate_handle.clone(),
+                catalog_revision_id: pending.candidate_catalog_revision_id,
+                kind_descriptors: candidate_material.kind_descriptors,
+                profiles: candidate_material.profiles,
+                default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
+                removed_profile_ids: pending.removed_profile_ids.clone(),
+                removed_kind_ids: pending.removed_kind_ids.clone(),
+            };
+            (
+                CatalogReadiness::PendingRemoval {
+                    candidate_revision: pending.candidate_catalog_revision_id.to_string(),
+                    expires_at: deadline,
+                },
+                Some(rebuilt),
+            )
         } else {
-            CatalogReadiness::Ready
+            (CatalogReadiness::Ready, None)
         };
         self.gate.run_exclusive(|gate| {
             gate.readiness = readiness;
@@ -301,6 +361,64 @@ where
             gate.active_default_profile_id = material.default_profile_id.clone();
             gate.candidate_catalog_revision_id = state.candidate_catalog_revision_id;
             gate.degraded_reason = state.degraded_reason.clone();
+            gate.prepared = prepared;
+            Ok(())
+        })?;
+        self.activate_registry(built, admissions)?;
+        self.startup_outcome()
+    }
+
+    /// Rolls forward one removal acceptance whose catalog acceptance never
+    /// committed (crash between the two durable commits).
+    ///
+    /// The prepared material is durable, so the catalog acceptance, private
+    /// registry build, and gate activation are completed exactly once from
+    /// that material; repeated roll-forward attempts are idempotent through
+    /// the storage acceptance path (PR24-004).
+    fn roll_forward_acceptance(
+        &self,
+        pending: &PendingRemovalCandidateDto,
+        now: u64,
+    ) -> DtoResult<CatalogStartupOutcomeDto> {
+        let material = match self.catalog.load_prepared_catalog_material() {
+            Ok(material)
+                if material.catalog_revision_id == pending.candidate_catalog_revision_id =>
+            {
+                material
+            }
+            Ok(_) | Err(_) => return self.blocked("catalog_state_inconsistent_roll_forward"),
+        };
+        let accepted_at = i64_time(now);
+        let operation_id = format!("recovery-roll-forward-{}", pending.candidate_handle);
+        if self
+            .catalog
+            .accept_provider_catalog(AcceptProviderCatalogInputDto {
+                catalog_revision_id: pending.candidate_catalog_revision_id,
+                candidate_handle: pending.candidate_handle.clone(),
+                kind_descriptors: material.kind_descriptors.clone(),
+                profiles: material.profiles.clone(),
+                default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
+                accepted_at,
+                operation_id,
+            })
+            .is_err()
+        {
+            return self.blocked("activation_recovery_failed");
+        }
+        let (built, admissions) = match self.build_registry_from_candidate(
+            &material.kind_descriptors,
+            &material.profiles,
+            pending.candidate_catalog_revision_id,
+        ) {
+            Ok(built) => built,
+            Err(_) => return self.blocked("activation_recovery_failed"),
+        };
+        self.gate.run_exclusive(|gate| {
+            gate.readiness = CatalogReadiness::Ready;
+            gate.applied_revision = Some(pending.candidate_catalog_revision_id);
+            gate.active_default_profile_id = Some(DEFAULT_PROFILE_ID.to_owned());
+            gate.candidate_catalog_revision_id = None;
+            gate.degraded_reason = None;
             gate.prepared = None;
             Ok(())
         })?;
@@ -426,6 +544,10 @@ where
         source: CatalogSourceInputDto,
         now: u64,
     ) -> DtoResult<CatalogCandidateOutcomeDto> {
+        // Production expiry driver: an overdue pending candidate degrades
+        // before any new proposal so a stale pending row never blocks a
+        // corrected candidate (PR24-003).
+        self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
             if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
                 return Err(catalog_error(
@@ -435,8 +557,16 @@ where
                 ));
             }
             validate_candidate_limits(&source)?;
+            // The catalog runtime classifies only a provider-kind change as a
+            // removal-signaling configuration change: model/endpoint changes
+            // are catalog replacement material for this path. Live-reload
+            // admission of model/endpoint/kind changes is rejected earlier at
+            // the reload boundary (PR24-008); this controller never receives
+            // such a rejected candidate.
             let kind_changed =
-                reject_catalog_affecting_edits(&source.candidate, &source.previous).is_err();
+                classify_changed_fields(source.candidate.safe_snapshot(), &source.previous)
+                    .iter()
+                    .any(|category| category == "provider_kind");
             let active = self.load_active_material()?;
             // A semantically equal candidate produces no new revision once a
             // catalog is active. When no catalog is active yet, the first
@@ -515,9 +645,18 @@ where
             validate_kind_removals(&removed_kind_ids, &profiles)?;
             let removal =
                 kind_changed || !removed_kind_ids.is_empty() || !removed_profile_ids.is_empty();
-            let next_revision = gate
+            // Candidate revisions are durable monotonic identities: closed
+            // removal rows stay in history, so a corrected or repeated
+            // proposal after rejection/expiry must never reuse the closed
+            // candidate's revision or handle (PR24-006).
+            let applied_next = gate
                 .applied_revision
                 .map_or(1, |revision| revision.saturating_add(1));
+            let highest_removal = self
+                .removal
+                .load_highest_removal_candidate_revision()
+                .unwrap_or(0);
+            let next_revision = applied_next.max(highest_removal.saturating_add(1));
             let candidate_handle = format!("catalog-{next_revision}");
             self.persist_prepared_candidate(
                 &kind_descriptors,
@@ -584,7 +723,20 @@ where
             let (built, admissions) =
                 self.build_registry_from_candidate(&kind_descriptors, &profiles, next_revision)?;
             self.activate_registry(built, admissions)?;
-            self.record_tombstones(&removed_profile_ids, &removed_kind_ids);
+            let active_profile_ids = profiles
+                .iter()
+                .map(|profile| profile.profile.profile_id.clone())
+                .collect::<Vec<_>>();
+            let active_kind_ids = kind_descriptors
+                .iter()
+                .map(|kind| kind.descriptor.kind_id.clone())
+                .collect::<Vec<_>>();
+            self.record_tombstones(
+                &removed_profile_ids,
+                &removed_kind_ids,
+                &active_profile_ids,
+                &active_kind_ids,
+            );
             gate.readiness = CatalogReadiness::Ready;
             gate.applied_revision = Some(next_revision);
             gate.active_default_profile_id = Some(DEFAULT_PROFILE_ID.to_owned());
@@ -625,6 +777,9 @@ where
         operation_id: String,
         now: u64,
     ) -> DtoResult<CatalogAcceptanceOutcomeDto> {
+        // Production expiry driver: an overdue candidate expires before it can
+        // be accepted (PR24-003).
+        self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
             let prepared = gate.prepared.as_ref().ok_or_else(|| {
                 catalog_error(
@@ -676,9 +831,24 @@ where
             self.activate_registry(built, admissions)?;
             let removed_profile_ids = prepared.removed_profile_ids.clone();
             let removed_kind_ids = prepared.removed_kind_ids.clone();
+            let active_profile_ids = prepared
+                .profiles
+                .iter()
+                .map(|profile| profile.profile.profile_id.clone())
+                .collect::<Vec<_>>();
+            let active_kind_ids = prepared
+                .kind_descriptors
+                .iter()
+                .map(|kind| kind.descriptor.kind_id.clone())
+                .collect::<Vec<_>>();
             let revision = prepared.catalog_revision_id;
             let default_profile_id = prepared.default_profile_id.clone();
-            self.record_tombstones(&removed_profile_ids, &removed_kind_ids);
+            self.record_tombstones(
+                &removed_profile_ids,
+                &removed_kind_ids,
+                &active_profile_ids,
+                &active_kind_ids,
+            );
             gate.readiness = CatalogReadiness::Ready;
             gate.applied_revision = Some(revision);
             gate.active_default_profile_id = Some(default_profile_id);
@@ -712,6 +882,9 @@ where
         operation_id: String,
         now: u64,
     ) -> DtoResult<()> {
+        // Production expiry driver: an overdue candidate expires before it can
+        // be rejected (PR24-003).
+        self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
             let prepared = gate.prepared.as_ref().ok_or_else(|| {
                 catalog_error(
@@ -753,7 +926,17 @@ where
     /// gate lock is poisoned.
     pub fn expire_pending(&self, now: u64) -> DtoResult<u64> {
         self.gate.run_exclusive(|gate| {
-            if !matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
+            // The durable pending state is the authority, not the in-memory
+            // readiness: startup drives expiry before the gate has been
+            // rebuilt, so an overdue candidate must expire there too
+            // (PR24-003).
+            let durable_pending = self
+                .catalog
+                .load_provider_catalog_status()
+                .is_ok_and(|state| state.status == ProviderCatalogStatusDto::PendingRemoval);
+            if !matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. })
+                && !durable_pending
+            {
                 return Ok(0);
             }
             let expired = self.removal.expire_provider_catalog_removal_candidate(
@@ -1025,11 +1208,32 @@ where
         Ok(())
     }
 
-    /// Records tombstoned profile and kind ids on the controller side.
-    fn record_tombstones(&self, profile_ids: &[String], kind_ids: &[String]) {
+    /// Records tombstoned profile and kind ids on the controller side and
+    /// clears any tombstone for identifiers the accepted material
+    /// reintroduces.
+    ///
+    /// Durable tombstones are append-only removal-history events; admission
+    /// authority is the current active membership. An identifier removed by
+    /// an earlier catalog and present again in an accepted catalog is
+    /// therefore admitted again (PR24-017).
+    fn record_tombstones(
+        &self,
+        removed_profile_ids: &[String],
+        removed_kind_ids: &[String],
+        active_profile_ids: &[String],
+        active_kind_ids: &[String],
+    ) {
         if let Ok(mut tombstones) = self.tombstones.lock() {
-            tombstones.profile_ids.extend(profile_ids.iter().cloned());
-            tombstones.kind_ids.extend(kind_ids.iter().cloned());
+            tombstones
+                .profile_ids
+                .extend(removed_profile_ids.iter().cloned());
+            tombstones.kind_ids.extend(removed_kind_ids.iter().cloned());
+            for reintroduced in active_profile_ids {
+                tombstones.profile_ids.remove(reintroduced);
+            }
+            for reintroduced in active_kind_ids {
+                tombstones.kind_ids.remove(reintroduced);
+            }
         }
     }
 
@@ -1219,7 +1423,7 @@ fn selection_from_candidate(
 ) -> DtoResult<ProviderSelectionV1> {
     let profile = &candidate.profile;
     let selection = ProviderSelectionV1 {
-        selection_canonicalization_version: SELECTION_CANONICALIZATION_VERSION.to_owned(),
+        selection_canonicalization_version: PROVIDER_SELECTION_CANONICALIZATION_VERSION.to_owned(),
         profile_id: profile.profile_id.clone(),
         provider_profile_revision_id: profile.revision_id.clone(),
         kind_id: profile.provider_kind_id.clone(),

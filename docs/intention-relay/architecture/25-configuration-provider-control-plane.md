@@ -57,9 +57,11 @@ immutable snapshot/revision. Controlled live reload is the activated direction
 that applies a validated TOML change to a running daemon:
 
 - reload is an explicit command, contract, transaction, and outcome test: the
-  daemon re-parses, migrates, and validates a candidate snapshot, atomically
-  commits a new accepted revision, and applies it to fresh runs only; there is
-  no watcher, polling, or auto-restart, and no automatic re-application;
+  daemon re-parses and validates a candidate snapshot against the current
+  single configuration shape, atomically commits a new accepted revision, and
+  applies it to fresh runs only; configuration has no migration path and
+  unversioned or legacy documents fail closed under ADR 0038; there is no
+  watcher, polling, or auto-restart, and no automatic re-application;
 - an edit that cannot be applied atomically fails closed and leaves the
   running daemon on its recorded snapshot;
 - a reload candidate that changes catalog-affecting configuration is rejected

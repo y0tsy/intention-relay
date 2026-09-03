@@ -66,7 +66,7 @@ fn durable_lifecycle_and_replay_contracts_hold() {
         SendUserTurnCommandDto::new(session_id, TurnId::new(), "active").expect("turn is valid"),
     )) {
         ProtocolCommandResultDto::Accepted(accepted) => match accepted.result() {
-            Some(intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn)) => {
+            intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn) => {
                 match turn.outcome() {
                     SendUserTurnOutcomeDto::Started { run_id, .. } => run_id,
                     SendUserTurnOutcomeDto::Queued { .. } => panic!("first turn starts"),
@@ -104,14 +104,14 @@ fn durable_lifecycle_and_replay_contracts_hold() {
     assert!(matches!(
         facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
-            if snapshot.projection().is_some_and(|projection| projection.active_run().is_some())
+            if snapshot.projection().active_run().is_some()
     ));
     assert!(matches!(
         facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA, session_id, Some(SessionEventSequenceDto::new(0)), RunModeDto::Build,
         )),
-        SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
-            if snapshot.projection().is_some() && tail.events().is_empty()
+        SessionSubscriptionResponseDto::SnapshotAndTail { snapshot: _, tail }
+            if tail.events().is_empty()
     ));
     for (scoped_session, run_id) in [
         (session_id, Some(active_run)),
@@ -147,7 +147,7 @@ fn restart_interrupts_unfinished_work_before_ready() {
     assert!(matches!(
         reopened.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
-            if snapshot.projection().is_some_and(|projection| projection.active_run().is_none())
+            if snapshot.projection().active_run().is_none()
     ));
 }
 

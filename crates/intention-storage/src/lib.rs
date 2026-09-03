@@ -970,11 +970,11 @@ pub trait StorageRepositoryDto {
 }
 
 // ============================================================================
-// Schema-4 control-plane DTOs and repository contracts.
+// Current-schema control-plane DTOs and repository contracts.
 //
 // These contracts are DTO-only: no connection, SQL, path, or closure crosses
 // the boundary. Record JSON columns are opaque safe strings produced and
-// consumed by the backend; credentials never enter any schema-4 column.
+// consumed by the backend; credentials never enter any current-schema column.
 // ============================================================================
 
 /// The durable provider catalog lifecycle status.
@@ -1339,6 +1339,26 @@ pub struct CreateProviderCatalogRemovalCandidateInputDto {
     pub operation_id: String,
 }
 
+/// The durable identity evidence of one provider catalog removal candidate
+/// tied to the current pending-removal state.
+///
+/// Pending-removal handling never depends on process memory: the handle,
+/// revision, active baseline, and real deadline come from the durable row,
+/// and the removed-identity evidence records which active profile and kind
+/// ids the candidate removes. `removal_status` distinguishes a still-pending
+/// row from an already-accepted removal whose catalog acceptance never
+/// committed (the startup roll-forward case) (PR24-003/004/006).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingRemovalCandidateDto {
+    pub candidate_handle: String,
+    pub candidate_catalog_revision_id: u64,
+    pub active_catalog_revision_id: u64,
+    pub expires_at: i64,
+    pub removal_status: ProviderCatalogRemovalStatusDto,
+    pub removed_profile_ids: Vec<String>,
+    pub removed_kind_ids: Vec<String>,
+}
+
 /// Input accepting one pending provider catalog removal candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcceptProviderCatalogRemovalInputDto {
@@ -1478,6 +1498,29 @@ pub trait ProviderCatalogRepositoryDto {
         Err(ErrorDto::unavailable(
             "provider_catalog_material_unavailable",
             "the accepted provider catalog material is unavailable",
+        ))
+    }
+    /// Loads the full prepared provider catalog candidate material for the
+    /// durable pending candidate revision: every kind descriptor revision and
+    /// profile revision prepared with that candidate plus its default profile
+    /// id.
+    ///
+    /// This is the restart reconstruction surface for a pending removal
+    /// candidate: the controller rebuilds its in-memory prepared candidate
+    /// and the real deadline from this material together with
+    /// [`ProviderRemovalRepositoryDto::load_pending_removal_candidate`], and
+    /// rolls forward an already-accepted removal whose catalog acceptance
+    /// never committed (PR24-003/004).
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_not_active` (not-found) or a typed decode
+    /// error when no prepared candidate material is committed, or an
+    /// unavailable error when the material cannot be read.
+    fn load_prepared_catalog_material(&self) -> DtoResult<ProviderCatalogMaterialDto> {
+        Err(ErrorDto::unavailable(
+            "provider_catalog_material_unavailable",
+            "the prepared provider catalog candidate material is unavailable",
         ))
     }
 }
@@ -1644,6 +1687,35 @@ pub trait ProviderUsageRepositoryDto {
 
 /// DTO-only repository contract for the provider catalog removal lifecycle.
 pub trait ProviderRemovalRepositoryDto {
+    /// Returns the highest candidate catalog revision ever durably allocated
+    /// to a removal candidate, or zero when none exists.
+    ///
+    /// Rejection and expiry keep their closed rows, so the durable maximum is
+    /// a monotonic sequence that never reissues a candidate identity: a
+    /// corrected or repeated proposal after a close receives a fresh revision
+    /// (PR24-006). The default keeps legacy fakes on their in-memory
+    /// behavior; the SQLite repository overrides it with the durable maximum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the durable maximum cannot be read.
+    fn load_highest_removal_candidate_revision(&self) -> DtoResult<u64> {
+        Ok(0)
+    }
+    /// Loads the single durable pending removal candidate, if any.
+    ///
+    /// The pending row carries the durable handle, revision, deadline, and
+    /// removed-identity evidence so rejection, expiry, and restart handling
+    /// never depend on process memory (PR24-003). The default reports no
+    /// pending candidate; the SQLite repository overrides it with the durable
+    /// row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the pending row cannot be read.
+    fn load_pending_removal_candidate(&self) -> DtoResult<Option<PendingRemovalCandidateDto>> {
+        Ok(None)
+    }
     /// Creates one provider catalog removal candidate with a thirty-minute
     /// lifetime and at most one pending candidate.
     ///

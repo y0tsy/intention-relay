@@ -125,7 +125,7 @@ Crate ownership for the Slice 2 surface is fixed:
 | Canonical records, tags, digests, and validation | `intention-domain` |
 | Wire families, negotiation, and typed commands/queries | `intention-protocol` |
 | TOML parsing, validation, reload candidates, and configuration DTOs | `intention-config` |
-| Schema-4 migrations, projections, and durable control-plane rows | `intention-storage` and `intention-storage-sqlite` |
+| Current-schema DDL, projections, and durable control-plane rows | `intention-storage` and `intention-storage-sqlite` |
 | Provider-neutral reasoning surface (DTO-level) | `intention-model` |
 | Provider translation and dialect decoding | provider crates (adapters) |
 | Catalog, session-selection, and control-plane services | `intention-application` |
@@ -182,8 +182,9 @@ configuration schema remains 1. SQLite storage is a single live schema
 in Appendix B are part of that schema, and the 3-to-4 migration chain and
 `user_version` gate are removed by
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md). Historical
-M3/M4 fixtures and
-committed v1 protocol fixtures remain 1.0 and are not rewritten. Same-major
+1.0 wire fixtures and legacy-shape deserializers are removed with the
+same-major compatibility machinery; only current-version fixtures are
+maintained. Same-major
 compatibility (1.0 to 1.1) is superseded by
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): negotiation
 accepts only the exact current protocol version 1.1 (the
@@ -304,8 +305,8 @@ open; M3/M4 tables and rows are never rewritten.
 | --- | --- |
 | `provider_kind_descriptor_revisions` | Immutable provider-kind descriptor revisions |
 | `provider_profile_revisions` | Append-only provider-profile revisions |
-| `provider_profile_tombstones` | Permanent removed-profile identity tombstones |
-| `provider_kind_tombstones` | Permanent removed-kind identity tombstones |
+| `provider_profile_tombstones` | Append-only removed-profile removal history keyed by (id, removed catalog revision) |
+| `provider_kind_tombstones` | Append-only removed-kind removal history keyed by (id, removed catalog revision) |
 | `provider_catalog_state` | Active catalog revision and activation state |
 | `provider_catalog_profile_projection` | Current safe catalog profile projection |
 | `configuration_audit` | Separate configuration-audit sequence |
