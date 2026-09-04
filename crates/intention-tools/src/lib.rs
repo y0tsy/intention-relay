@@ -494,10 +494,14 @@ fn bounded_output_with_timeout(
 /// child. The kill is performed through the safe `rustix` process API, never
 /// through raw `unsafe` syscall blocks, so the workspace `unsafe_code` deny
 /// stays intact (PR24-011).
-fn terminate_process_tree(child: &mut Child, child_id: u32) {
+///
+/// The child identifier is consumed only by the Unix process-group kill, so
+/// the parameter keeps an underscore prefix for the platforms where it is
+/// unused.
+fn terminate_process_tree(child: &mut Child, _child_id: u32) {
     let _ = child.kill();
     #[cfg(unix)]
-    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(child_id).unwrap_or(0)) {
+    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(_child_id).unwrap_or(0)) {
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
 }

@@ -888,6 +888,14 @@ fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
     fs::remove_file(&endpoint.path).is_ok()
 }
 
+/// On platforms without Unix sockets (notably Windows named pipes), a bind
+/// conflict always means the endpoint is in use: there is no stale filesystem
+/// artifact to reclaim, so the reclaim retry never applies.
+#[cfg(not(unix))]
+fn reclaim_stale_socket(_endpoint: &LocalEndpoint) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
