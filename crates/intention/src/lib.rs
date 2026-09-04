@@ -25,7 +25,8 @@ use intention_application::{
 use intention_config::{
     ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto,
     RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial,
-    control_plane::ConfigCandidateDto,
+    control_plane::{ConfigCandidateDto, restore_credential_document},
+    parse_credential,
 };
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
@@ -37,7 +38,10 @@ use intention_domain::{
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
-use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
+use intention_model::{
+    AuthenticationHeaderPolicyV1, CredentialTransportMode as ModelCredentialTransportMode,
+    ModelCancellationSignal, ModelExecutionDriver, ReasoningEffortLevel,
+};
 #[cfg(any(test, feature = "test-support"))]
 use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
 #[cfg(test)]
@@ -54,8 +58,8 @@ use intention_protocol::{
         ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
     },
 };
-use intention_provider_generic_chat::GenericChatDriver;
-use intention_provider_openrouter::OpenRouterDriver;
+use intention_provider_generic_chat::{GenericChatDriver, GenericChatDriverOptions};
+use intention_provider_openrouter::{OpenRouterDriver, OpenRouterDriverOptions};
 #[cfg(feature = "test-support")]
 use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
@@ -71,11 +75,11 @@ use intention_storage::{
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_tools::{CancellationSignal, ToolInput, ToolResult};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
-    EventEnvelopeDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
+    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
 };
 #[cfg(test)]
-use intention_types::{ProjectId, WorkspaceId};
+use intention_types::{ErrorCategoryDto, ProjectId, WorkspaceId};
 use intention_workspace::WorkspaceRoot;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
@@ -102,6 +106,26 @@ struct FacadeInner {
     tool_cancellations: Mutex<HashMap<(SessionId, RunId), LocalToolCancellationEntry>>,
     reload_candidates: Mutex<HashMap<String, ConfigCandidateDto>>,
     control_plane: ProviderControlPlane,
+    private_credential: Mutex<PrivateCredentialState>,
+}
+
+/// The composition's private credential state.
+///
+/// This is the composition-owned private credential source of the slice: it
+/// retains the startup provider's credential value and the configuration file
+/// it came from, both captured inside the private loading boundary at open.
+/// The value is the private material restored into typed-edit candidate
+/// documents; rotation refreshes it from the same file through the private
+/// loading boundary and rebuilds the selected provider driver. The state
+/// deliberately implements no `Debug`, `Display`, or serde traits: the
+/// credential must never cross a DTO, log, error, digest, or durable surface.
+#[derive(Default)]
+struct PrivateCredentialState {
+    /// The current private credential value of the startup provider.
+    material: Option<String>,
+    /// The configuration file source retained as the private channel through
+    /// which replacement material arrives. Never disclosed in a DTO or error.
+    source: Option<ConfigSourceDto>,
 }
 
 /// The composition's provider session-selection control plane.
@@ -267,6 +291,25 @@ impl ProviderDriverFactory for CompositionDriverFactory {
         &self,
         profile: PrivateProviderProfileMaterial,
     ) -> DtoResult<Box<dyn ModelRunDriverHandle + Send + Sync>> {
+        // PR24-057: every catalog activation preflights the profile's
+        // declared options through the executing adapter's option builder via
+        // the composition seam. The registry carries credential-free opaque
+        // handles in this slice, so the derived options are validated here
+        // and the daemon host materializes the executing driver with the same
+        // seam output later; a declaration the adapter cannot apply (live
+        // `SafeHeader` wire injection is not activated) therefore fails the
+        // all-or-nothing activation instead of being silently ignored.
+        let declared = DeclaredProviderOptions::from_declaration(
+            profile.profile.credential_transport_mode,
+            profile.profile.safe_header_name.clone(),
+            None,
+        )?;
+        let preflight = if self.kind == "openrouter" {
+            declared.into_openrouter().map(|_| ())
+        } else {
+            declared.into_generic_chat().map(|_| ())
+        };
+        preflight?;
         let _ = &profile.private_credential_reference;
         Ok(Box::new(CompositionCatalogDriverHandle))
     }
@@ -416,6 +459,105 @@ fn registry_key_from_selection(
     })
 }
 
+/// The composition's provider-option seam (PR24-057).
+///
+/// The provider adapters expose additive, validated, credential-free driver
+/// option builders (`OpenRouterDriverOptions` / `GenericChatDriverOptions`)
+/// that adapter tests exercise directly but that production construction
+/// historically bypassed, leaving the live driver on adapter defaults while
+/// catalog projections advertised the profile's declared option policy. This
+/// type is the single composition-owned translation of validated provider
+/// material into those builders, applied by every production driver
+/// construction and reconstruction path in this crate:
+///
+/// - startup: [`SelectedProvider::from_startup_material`] applies the closed
+///   transport declaration of the startup profile through the seam;
+/// - catalog activation: [`CompositionDriverFactory::build`] preflights each
+///   profile's declared options through the executing adapter's builder, so a
+///   declaration the adapter cannot apply fails the activation instead of
+///   being silently ignored;
+/// - credential-driven rebuild: rotation replaces only the driver's private
+///   SDK client, so the driver keeps the options the seam applied at
+///   construction.
+///
+/// Slice 2 catalog material declares exactly the closed credential transport
+/// per profile (bearer authorization, or one descriptor-selected safe header
+/// whose complete value is the credential). The bearer declaration maps to an
+/// empty bearer header policy; live `SafeHeader` wire injection is not
+/// activated (ADR 0037, EXC-057), so both executing adapters reject it in
+/// their option `build()` and the seam surfaces
+/// `unsupported_safe_header_transport` instead of defaulting. Reasoning
+/// effort has no Slice 2 declaration surface (RSN-011), so producible
+/// declarations carry `None`; the slot flows through the same seam so a later
+/// declaration surface cannot add a second construction path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredProviderOptions {
+    header_policy: AuthenticationHeaderPolicyV1,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+}
+
+impl DeclaredProviderOptions {
+    /// Composes the closed option declaration of one validated profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_credential_transport` or `invalid_safe_header_name`
+    /// when the transport declaration is inconsistent or unbounded.
+    fn from_declaration(
+        transport: DomainCredentialTransportMode,
+        safe_header_name: Option<String>,
+        reasoning_effort: Option<ReasoningEffortLevel>,
+    ) -> DtoResult<Self> {
+        let allowed_header_names = match transport {
+            DomainCredentialTransportMode::Bearer => Vec::new(),
+            DomainCredentialTransportMode::SafeHeader => safe_header_name.into_iter().collect(),
+        };
+        let selected_transport = match transport {
+            DomainCredentialTransportMode::Bearer => ModelCredentialTransportMode::Bearer,
+            DomainCredentialTransportMode::SafeHeader => ModelCredentialTransportMode::SafeHeader,
+        };
+        Ok(Self {
+            header_policy: AuthenticationHeaderPolicyV1::new(
+                allowed_header_names,
+                selected_transport,
+            )?,
+            reasoning_effort,
+        })
+    }
+
+    /// Translates this declaration into the OpenRouter driver option builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unsupported_safe_header_transport` when the declared header
+    /// policy selects the safe-header transport, which the OpenRouter SDK
+    /// adapter cannot inject without the `http` crate as a production
+    /// dependency.
+    fn into_openrouter(self) -> DtoResult<OpenRouterDriverOptions> {
+        let mut builder = OpenRouterDriverOptions::new().with_header_policy(self.header_policy);
+        if let Some(effort) = self.reasoning_effort {
+            builder = builder.with_reasoning_effort(effort);
+        }
+        builder.build()
+    }
+
+    /// Translates this declaration into the generic-chat driver option
+    /// builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unsupported_safe_header_transport` for the not-activated
+    /// safe-header transport, or `unsupported_reasoning_effort` for the
+    /// maximum effort the pinned SDK effort set cannot express.
+    fn into_generic_chat(self) -> DtoResult<GenericChatDriverOptions> {
+        let mut builder = GenericChatDriverOptions::new().with_header_policy(self.header_policy);
+        if let Some(effort) = self.reasoning_effort {
+            builder = builder.with_reasoning_effort(effort);
+        }
+        builder.build()
+    }
+}
+
 enum SelectedProvider {
     OpenRouter(OpenRouterDriver),
     GenericChat(GenericChatDriver),
@@ -446,13 +588,59 @@ impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
 
 impl SelectedProvider {
     fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
+        // PR24-057: production construction applies the closed Slice 2
+        // transport declaration (bearer) through the composition seam instead
+        // of silently falling back to adapter-default options. The startup
+        // catalog derivation persists the same bearer declaration for the
+        // selected profile (kind descriptors derive
+        // `credential_transport_contract = "bearer"`), and the adapter
+        // option `build()` re-validates applicability, so a declaration the
+        // executing adapter cannot apply fails the daemon open path closed.
+        let declared = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            None,
+        )?;
+        Self::build_with_declared_options(material, declared)
+    }
+
+    /// Builds the executing provider driver for one seam-declared option set.
+    ///
+    /// This is the only production driver construction path; test helpers may
+    /// supply non-default declarations to observe how the seam applies them.
+    fn build_with_declared_options(
+        material: StartupProviderMaterial,
+        declared: DeclaredProviderOptions,
+    ) -> DtoResult<Self> {
         match material.safe_resolved().provider().kind() {
             ProviderKindDto::Openrouter => {
-                OpenRouterDriver::from_startup_material(material).map(Self::OpenRouter)
+                let options = declared.into_openrouter()?;
+                OpenRouterDriver::from_startup_material_with_options(material, options)
+                    .map(Self::OpenRouter)
             }
             ProviderKindDto::GenericChatCompletionApi => {
-                GenericChatDriver::from_startup_material(material).map(Self::GenericChat)
+                let options = declared.into_generic_chat()?;
+                GenericChatDriver::from_startup_material_with_options(material, options)
+                    .map(Self::GenericChat)
             }
+        }
+    }
+
+    /// Returns the OpenRouter driver's applied options, when selected.
+    #[cfg(test)]
+    const fn openrouter_options(&self) -> Option<&OpenRouterDriverOptions> {
+        match self {
+            Self::OpenRouter(driver) => Some(driver.options()),
+            _ => None,
+        }
+    }
+
+    /// Returns the generic-chat driver's applied options, when selected.
+    #[cfg(test)]
+    const fn generic_chat_options(&self) -> Option<&GenericChatDriverOptions> {
+        match self {
+            Self::GenericChat(driver) => Some(driver.options()),
+            _ => None,
         }
     }
 
@@ -485,6 +673,31 @@ impl SelectedProvider {
                 let _ = driver;
                 None
             }
+        }
+    }
+
+    /// Replaces the selected provider driver's private SDK client with one
+    /// built from fresh private credential material.
+    ///
+    /// The swap is composition-owned and happens only after the replacement
+    /// client is configured; concurrent executions keep the client they
+    /// captured before the swap. The credential never crosses a DTO, log, or
+    /// error boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider driver's typed build error, or
+    /// `credential_rotation_source_unavailable` when the facade holds no
+    /// real provider driver to rebuild.
+    fn rotate_private_credential(&self, credential: String) -> DtoResult<()> {
+        match self {
+            Self::OpenRouter(driver) => driver.rotate_credential(credential),
+            Self::GenericChat(driver) => driver.rotate_credential(credential),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::TestSupport(_) => Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private driver is bound to this profile",
+            )),
         }
     }
 }
@@ -706,44 +919,149 @@ impl SafeBindingSource for CatalogBindingSource<'_> {
     }
 }
 
-/// The composition's private credential port.
+/// The composition's private credential source.
 ///
-/// Slice 2 configures no private credential source, so production rotation
-/// always fails closed with `credential_rotation_source_unavailable` before
-/// any replacement is obtained. A configured credential source is a later
-/// slice; tests exercise the full rotation path with fake ports in the
-/// application crate.
-struct CompositionCredentialPort;
+/// The daemon's own configuration file is the configured private credential
+/// source of this slice: the file path retained at open is re-read through
+/// the private loading boundary on rotation, and its current
+/// `provider.credential` value becomes the replacement material. A facade
+/// opened without a file-backed source (test-support opens) has no configured
+/// source and fails closed with `credential_rotation_source_unavailable`
+/// before any replacement is obtained. Read, permission, or parse failures
+/// map to the same closed source-unavailable code and never disclose file
+/// content, the path, or the credential.
+struct CompositionCredentialSource<'a> {
+    state: &'a Mutex<PrivateCredentialState>,
+}
 
-impl PrivateCredentialPort for CompositionCredentialPort {
+impl PrivateCredentialPort for CompositionCredentialSource<'_> {
     fn obtain_replacement(&self, _profile_id: &str) -> DtoResult<PrivateCredentialMaterial> {
-        Err(ErrorDto::new(
-            "credential_rotation_source_unavailable",
-            ErrorCategoryDto::Unavailable,
-            "no private credential source is configured",
-            ErrorRetryDto::Manual,
-            None,
-        )?)
+        let source = self
+            .state
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "credential_rotation_source_unavailable",
+                    "the private credential source is unavailable",
+                )
+            })?
+            .source
+            .clone();
+        let Some(source) = source else {
+            return Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private credential source is configured",
+            ));
+        };
+        let replacement = read_configured_credential(&source).map_err(|_| {
+            ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "the private credential source could not supply replacement material",
+            )
+        })?;
+        Ok(PrivateCredentialMaterial::from_private_bytes(
+            replacement.into_bytes(),
+        ))
     }
+}
+
+/// Reads the current credential value from the configured configuration file.
+///
+/// The read repeats the open-time private loading boundary: owner-only
+/// permission verification on Unix, file read, and the shared credential
+/// parse. Any failure is a source failure and carries no path or content.
+fn read_configured_credential(source: &ConfigSourceDto) -> DtoResult<String> {
+    #[cfg(unix)]
+    intention_config::ensure_user_only_permissions(source.path())?;
+    let raw = fs::read_to_string(source.path().as_str()).map_err(|_| {
+        ErrorDto::unavailable(
+            "credential_source_read_unavailable",
+            "the private credential source could not be read",
+        )
+    })?;
+    parse_credential(&raw)
 }
 
 /// The composition's private driver rebuild boundary.
 ///
-/// The gate-guarded driver swap is owned by the catalog/rotation zone in a
-/// later slice. Production rotation already fails closed at the credential
-/// port, so this defensive failure is unreachable unless a credential source
-/// is configured without a rebuild path.
-struct CompositionDriverRebuildPort;
+/// Rebuild applies replacement material to the selected provider driver that
+/// actually executes runs: the facade's startup provider. The target
+/// profile's provider kind must match the selected provider, and the
+/// replacement is committed to the private credential state only after the
+/// driver swap succeeds. The rebuild also preflights the active profile's
+/// declared options through the composition seam (PR24-057), so a profile
+/// whose declared transport the executing adapter cannot apply fails closed
+/// rather than silently serving options that no longer match the profile.
+/// Test-support drivers and kind-mismatched profiles have no private driver
+/// and fail closed with `credential_rotation_source_unavailable`; the
+/// credential never crosses a DTO, log, or error.
+struct CompositionDriverRebuildPort<'a> {
+    facade: &'a DaemonApplicationFacade,
+}
 
-impl DriverRebuildPort for CompositionDriverRebuildPort {
-    fn rebuild(&self, _profile_id: &str, _material: PrivateCredentialMaterial) -> DtoResult<()> {
-        Err(ErrorDto::new(
-            "credential_rotation_source_unavailable",
-            ErrorCategoryDto::Unavailable,
-            "no private driver rebuild path is configured",
-            ErrorRetryDto::Manual,
+impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {
+    fn rebuild(&self, profile_id: &str, material: PrivateCredentialMaterial) -> DtoResult<()> {
+        let credential = String::from_utf8(material.into_private_bytes()).map_err(|_| {
+            ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "the private credential source supplied unusable material",
+            )
+        })?;
+        let resolved = self
+            .facade
+            .catalog_admission_port()
+            .resolve_enabled_profile(profile_id)?;
+        let driver_kind = self
+            .facade
+            .inner
+            ._selected_provider
+            .safe_kind()
+            .map(ProviderKindDto::as_str);
+        if driver_kind != Some(resolved.kind_id.as_str()) {
+            return Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private driver is bound to this profile",
+            ));
+        }
+        // PR24-057: a credential-driven rebuild keeps the executing driver
+        // able to apply the active profile's declared options. The seam
+        // preflights the resolved profile's declared transport through the
+        // executing adapter's option builder, so a declaration the adapter
+        // cannot apply (live `SafeHeader` wire injection is not activated)
+        // fails the rotation closed instead of silently leaving the driver on
+        // options that no longer match the profile it serves.
+        let declared_transport = match resolved.credential_transport_mode {
+            intention_protocol::contract_families::CredentialTransportMode::Bearer => {
+                DomainCredentialTransportMode::Bearer
+            }
+            intention_protocol::contract_families::CredentialTransportMode::SafeHeader => {
+                DomainCredentialTransportMode::SafeHeader
+            }
+        };
+        let declared = DeclaredProviderOptions::from_declaration(
+            declared_transport,
+            resolved.credential_transport_safe_header_name,
             None,
-        )?)
+        )?;
+        let preflight = if driver_kind == Some("openrouter") {
+            declared.into_openrouter().map(|_| ())
+        } else {
+            declared.into_generic_chat().map(|_| ())
+        };
+        preflight?;
+        self.facade
+            .inner
+            ._selected_provider
+            .rotate_private_credential(credential.clone())?;
+        let mut state = self.facade.inner.private_credential.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        state.material = Some(credential);
+        drop(state);
+        Ok(())
     }
 }
 
@@ -852,11 +1170,13 @@ fn configuration_projection(snapshot: &ConfigSnapshotDto) -> ConfigurationProjec
 ///
 /// The supported key paths are `provider.kind`, `provider.model`,
 /// `provider.endpoint`, `provider.execution.attempt_timeout_seconds`, and
-/// `provider.execution.max_attempts`. The candidate is then validated through
-/// the server-side reload contract. Because the credential is never retained
-/// server-side, an edited candidate that leaves the credential unset fails
-/// closed with `missing_provider_credential`; typed edits that preserve the
-/// credential arrive through the private channel in a later slice.
+/// `provider.execution.max_attempts`. The rendered document is deliberately
+/// credential-free: the composition restores the retained private credential
+/// through the private channel before the candidate is validated through the
+/// server-side reload contract. An edited candidate that leaves the
+/// credential unset (no retained private material) fails closed with
+/// `missing_provider_credential`; the credential itself never appears in the
+/// returned text's durable or public consumers.
 ///
 /// # Errors
 ///
@@ -1093,13 +1413,15 @@ impl DaemonApplicationFacade {
     /// Returns safe typed failures when platform configuration cannot be resolved,
     /// permission-checked, read, validated, persisted, or recovered.
     pub fn open_platform() -> DtoResult<Self> {
-        let (config_snapshot, selected_provider, raw_toml) =
-            load_platform_provider_configuration()?;
+        let source = ConfigPathResolver::resolve(None)?;
+        let (config_snapshot, selected_provider, raw_toml, private_credential) =
+            load_provider_configuration(source.clone())?;
         let facade = Self::open_with_selected_provider(
             platform_database_location()?,
             config_snapshot,
             selected_provider,
         )?;
+        retain_private_startup_credential(&facade, private_credential, source)?;
         facade.activate_startup_catalog(&raw_toml)?;
         Ok(facade)
     }
@@ -1524,6 +1846,7 @@ impl DaemonApplicationFacade {
                 tool_cancellations: Mutex::new(HashMap::new()),
                 reload_candidates: Mutex::new(HashMap::new()),
                 control_plane,
+                private_credential: Mutex::new(PrivateCredentialState::default()),
             }),
         };
         facade.recover_before_ready()?;
@@ -2041,10 +2364,14 @@ impl DaemonApplicationFacade {
     /// Applies typed edit operations and durably commits the edited candidate.
     ///
     /// The operations are applied to the active snapshot and validated
-    /// server-side through the reload contract. Because the credential is
-    /// never retained server-side, an edited candidate that leaves the
-    /// credential unset fails closed with `missing_provider_credential` in
-    /// this slice.
+    /// server-side through the reload contract. The retained private
+    /// credential is restored into the reconstructed candidate document
+    /// before parsing, so an execution-policy-only typed edit commits while
+    /// the credential never appears in a DTO, error, digest, or durable
+    /// surface. A facade that retained no private credential (test-support
+    /// opens) keeps the fail-closed behavior: an edited candidate that
+    /// leaves the credential unset is rejected with
+    /// `missing_provider_credential`.
     ///
     /// # Errors
     ///
@@ -2059,8 +2386,9 @@ impl DaemonApplicationFacade {
         let previous_revision = binding.active_revision()?;
         let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
         let edited = edited_configuration_toml(&previous, &command.operations)?;
+        let candidate_text = self.restore_private_credential(&edited)?;
         let candidate = service.prepare(
-            RawConfigInputDto::new(edited, reload_edit_source()?),
+            RawConfigInputDto::new(candidate_text, reload_edit_source()?),
             &previous,
             command.operation_id.clone(),
         )?;
@@ -2073,22 +2401,65 @@ impl DaemonApplicationFacade {
         )
     }
 
+    /// Restores the composition's retained private credential into one
+    /// credential-free typed-edit candidate document.
+    ///
+    /// When no private credential was retained (test-support facades without
+    /// a configured source) the document passes through unchanged so
+    /// downstream validation fails closed exactly as before. The restored
+    /// text exists only inside the parse call and never crosses a DTO,
+    /// error, log, digest, or durable surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the private credential state lock
+    /// is poisoned.
+    fn restore_private_credential(&self, edited: &str) -> DtoResult<String> {
+        let material = self
+            .inner
+            .private_credential
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })?
+            .material
+            .clone();
+        Ok(material.map_or_else(
+            || edited.to_owned(),
+            |credential| restore_credential_document(edited, &credential),
+        ))
+    }
+
     /// Rotates one provider's private credential material through the
-    /// composition's credential and rebuild ports.
+    /// composition's credential source and driver rebuild ports.
+    ///
+    /// The daemon's own configuration file is the configured private
+    /// credential source: its current `provider.credential` value is read
+    /// through the private loading boundary and applied to the selected
+    /// provider driver after the frozen-meaning checks pass. A facade opened
+    /// without a file-backed source fails closed with
+    /// `credential_rotation_source_unavailable`.
     ///
     /// # Errors
     ///
     /// Returns `credential_rotation_frozen_meaning_mismatch` when the safe
     /// composition changed, or `credential_rotation_source_unavailable` when
-    /// no private credential source is configured.
+    /// no private credential source or matching driver exists.
     fn rotate_credential(
         &self,
         command: RotateProviderCredentialsCommandDto,
         timestamp: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
         let binding = self.composition_binding_source();
-        let service = CredentialRotationService::new(&binding, &CompositionDriverRebuildPort);
-        let result = service.rotate(command, &CompositionCredentialPort, now_seconds(timestamp))?;
+        let rebuild = CompositionDriverRebuildPort { facade: self };
+        let service = CredentialRotationService::new(&binding, &rebuild);
+        let source = CompositionCredentialSource {
+            state: &self.inner.private_credential,
+        };
+        let result = service.rotate(command, &source, now_seconds(timestamp))?;
         Ok(ProtocolAcceptedResultDto::RotateProviderCredentials(result))
     }
 
@@ -2321,14 +2692,9 @@ const fn resync(
     ))
 }
 
-fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String)>
-{
-    load_provider_configuration(ConfigPathResolver::resolve(None)?)
-}
-
 fn load_provider_configuration(
     source: ConfigSourceDto,
-) -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String)> {
+) -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String, String)> {
     #[cfg(unix)]
     intention_config::ensure_user_only_permissions(source.path())?;
     let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
@@ -2348,12 +2714,46 @@ fn load_provider_configuration(
         material.safe_resolved().clone(),
     )?;
     let selected_provider = SelectedProvider::from_startup_material(material)?;
-    Ok((snapshot, selected_provider, raw_toml))
+    // The credential value is re-extracted from the raw text inside this
+    // private loading boundary so the composition can retain it as its
+    // private source; startup parsing already proved it is present.
+    let private_credential = parse_credential(&raw_toml)?;
+    Ok((snapshot, selected_provider, raw_toml, private_credential))
+}
+
+/// Retains the startup provider's private credential and its file source.
+///
+/// The daemon's own configuration file is the configured private credential
+/// source of this slice: the credential captured at open is the material
+/// restored into typed-edit candidates, and rotation reads replacement
+/// material from the same file through the private loading boundary. The
+/// source path is private configuration material and is never disclosed in a
+/// DTO, projection, or error.
+///
+/// # Errors
+///
+/// Returns an unavailable error when the private credential state lock is
+/// poisoned.
+fn retain_private_startup_credential(
+    facade: &DaemonApplicationFacade,
+    credential: String,
+    source: ConfigSourceDto,
+) -> DtoResult<()> {
+    let mut state = facade.inner.private_credential.lock().map_err(|_| {
+        ErrorDto::unavailable(
+            "daemon_command_unavailable",
+            "daemon command is unavailable",
+        )
+    })?;
+    state.material = Some(credential);
+    state.source = Some(source);
+    drop(state);
+    Ok(())
 }
 
 #[cfg(test)]
 fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto> {
-    load_provider_configuration(source).map(|(snapshot, _, _)| snapshot)
+    load_provider_configuration(source).map(|(snapshot, _, _, _)| snapshot)
 }
 
 fn now() -> DtoResult<TimestampDto> {
@@ -2908,7 +3308,7 @@ mod tests {
                     .expect("fixture config path is absolute"),
             );
 
-            let (snapshot, selected_provider, _) =
+            let (snapshot, selected_provider, _, _) =
                 load_provider_configuration(source).expect("valid provider config composes");
             let facade = DaemonApplicationFacade::open_with_selected_provider(
                 directory.path().join("provider.sqlite"),
@@ -3498,6 +3898,278 @@ mod tests {
             ModelCancellationSignal::new(),
         );
         futures_util::pin_mut!(stream);
+    }
+
+    /// Builds the seam's closed bearer declaration used by production
+    /// startup construction.
+    fn bearer_declaration() -> DeclaredProviderOptions {
+        DeclaredProviderOptions::from_declaration(DomainCredentialTransportMode::Bearer, None, None)
+            .expect("the closed bearer declaration is valid")
+    }
+
+    /// Parses one startup material fixture for the requested provider kind.
+    fn startup_material_fixture(kind: &str) -> StartupProviderMaterial {
+        let endpoint = if kind == "generic-chat-completion-api" {
+            "endpoint = \"https://example.invalid/v1\"\n"
+        } else {
+            ""
+        };
+        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+            format!(
+                "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"fixture\"\n{endpoint}credential = \"fixture\""
+            ),
+            ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join(format!("option-seam-{kind}.toml"))
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("fixture material parses")
+    }
+
+    /// Builds one credential-free profile material for the driver factory.
+    fn factory_material(
+        kind: &str,
+        transport: DomainCredentialTransportMode,
+        safe_header_name: Option<String>,
+    ) -> PrivateProviderProfileMaterial {
+        PrivateProviderProfileMaterial {
+            profile: intention_domain::ProviderProfileRevisionV1 {
+                profile_id: "default".to_owned(),
+                revision_id: "rev-1".to_owned(),
+                provider_kind_id: kind.to_owned(),
+                model_id: "fixture-model".to_owned(),
+                endpoint: "https://api.example.invalid/v1".to_owned(),
+                credential_transport_mode: transport,
+                safe_header_name: safe_header_name.clone(),
+                capability_taxonomy_revision:
+                    intention_domain::provider_selection::MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+                reasoning_compatibility_id: None,
+                kind_descriptor_revision_id: "kd-1".to_owned(),
+                driver_contract_revision: intention_domain::ProviderDriverContractRevisionDto {
+                    driver_family: kind.to_owned(),
+                    major: 1,
+                    minor: 1,
+                },
+            },
+            selection: ProviderSelectionV1 {
+                profile_id: "default".to_owned(),
+                provider_profile_revision_id: "rev-1".to_owned(),
+                kind_id: kind.to_owned(),
+                kind_descriptor_revision_id: "kd-1".to_owned(),
+                model_id: "fixture-model".to_owned(),
+                normalized_effective_endpoint: "https://api.example.invalid/v1".to_owned(),
+                credential_transport_mode: transport,
+                credential_transport_safe_header_name: safe_header_name,
+                declared_model_capability_subset: vec!["text_input".to_owned()],
+                resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+                effective_execution_policy: "execution-timeout-60-attempts-3".to_owned(),
+                effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+                provider_driver_contract_revision: "responses-1.1".to_owned(),
+                selection_source: Some("catalog-rev-1".to_owned()),
+                ..fixture_selection()
+            },
+            endpoint: "https://api.example.invalid/v1".to_owned(),
+            private_credential_reference: 1,
+        }
+    }
+
+    #[test]
+    fn producible_declarations_apply_the_closed_bearer_policy_to_startup_construction() {
+        // PR24-057 guard: every currently producible catalog declaration maps
+        // through the seam to the closed bearer policy with no reasoning
+        // effort, and production startup construction applies that seam
+        // instead of silently falling back to adapter-default options.
+        let declared = bearer_declaration();
+        assert_eq!(
+            declared.header_policy.allowed_header_names(),
+            &Vec::<String>::new()
+        );
+        assert_eq!(
+            declared.header_policy.selected_transport(),
+            ModelCredentialTransportMode::Bearer
+        );
+        assert_eq!(declared.reasoning_effort, None);
+
+        let openrouter =
+            SelectedProvider::from_startup_material(startup_material_fixture("openrouter"))
+                .expect("openrouter provider builds through the seam");
+        let openrouter_options = openrouter
+            .openrouter_options()
+            .expect("openrouter driver is selected");
+        assert_eq!(
+            openrouter_options.header_policy(),
+            Some(&declared.header_policy),
+            "startup construction applies the declared header policy"
+        );
+        assert_eq!(openrouter_options.reasoning_effort(), None);
+
+        let generic = SelectedProvider::from_startup_material(startup_material_fixture(
+            "generic-chat-completion-api",
+        ))
+        .expect("generic chat provider builds through the seam");
+        let generic_options = generic
+            .generic_chat_options()
+            .expect("generic chat driver is selected");
+        assert_eq!(
+            generic_options.header_policy(),
+            Some(&declared.header_policy),
+            "startup construction applies the declared header policy"
+        );
+        assert_eq!(generic_options.reasoning_effort(), None);
+
+        // The adapter defaults remain the adapter-level baseline: an unset
+        // policy means no declaration was applied, which production
+        // construction no longer performs.
+        assert_eq!(
+            OpenRouterDriverOptions::default().header_policy(),
+            None,
+            "adapter defaults stay the explicit baseline"
+        );
+        assert_eq!(
+            GenericChatDriverOptions::default().header_policy(),
+            None,
+            "adapter defaults stay the explicit baseline"
+        );
+    }
+
+    #[test]
+    fn declared_options_flow_through_construction_and_survive_credential_rebuild() {
+        // A non-default effort declaration is applied at construction through
+        // the same seam slot the closed production declaration leaves empty,
+        // and the credential-driven rebuild (rotation) never drops it: the
+        // rebuild replaces only the private SDK client.
+        let declared = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            Some(ReasoningEffortLevel::Low),
+        )
+        .expect("low effort is a valid declaration");
+        let provider = SelectedProvider::build_with_declared_options(
+            startup_material_fixture("generic-chat-completion-api"),
+            declared,
+        )
+        .expect("generic chat provider builds with the declared effort");
+        let options = provider
+            .generic_chat_options()
+            .expect("generic chat driver is selected");
+        assert_eq!(options.reasoning_effort(), Some(ReasoningEffortLevel::Low));
+
+        provider
+            .rotate_private_credential("replacement-fixture-credential".to_owned())
+            .expect("credential rebuild swaps the private client");
+        let rebuilt = provider
+            .generic_chat_options()
+            .expect("generic chat driver stays selected");
+        assert_eq!(
+            rebuilt.reasoning_effort(),
+            Some(ReasoningEffortLevel::Low),
+            "the credential-driven rebuild keeps the declared options"
+        );
+        assert_eq!(
+            rebuilt
+                .header_policy()
+                .map(|policy| policy.selected_transport()),
+            Some(ModelCredentialTransportMode::Bearer)
+        );
+    }
+
+    #[test]
+    fn inapplicable_declarations_fail_closed_at_the_seam_before_any_request() {
+        // SafeHeader live wire injection is not activated: the seam surfaces
+        // the adapter rejection for both executing adapters.
+        let safe_header = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::SafeHeader,
+            Some("x-provider-header".to_owned()),
+            None,
+        )
+        .expect("a named safe-header declaration is well-formed");
+        assert_eq!(
+            safe_header
+                .clone()
+                .into_openrouter()
+                .expect_err("openrouter cannot apply safe header")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+        assert_eq!(
+            safe_header
+                .into_generic_chat()
+                .expect_err("generic chat cannot apply safe header")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        // An inconsistent declaration (safe header without a name) fails at
+        // the header-policy validation, never reaching an adapter.
+        let inconsistent = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::SafeHeader,
+            None,
+            None,
+        );
+        assert_eq!(
+            inconsistent
+                .expect_err("safe header without a name is invalid")
+                .code(),
+            "invalid_credential_transport"
+        );
+
+        // Adapter-specific applicability stays adapter-owned: generic chat
+        // cannot express the maximum effort; OpenRouter can.
+        let max_effort = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            Some(ReasoningEffortLevel::Max),
+        )
+        .expect("max effort is a closed declaration");
+        assert_eq!(
+            max_effort
+                .clone()
+                .into_generic_chat()
+                .expect_err("generic chat rejects max effort")
+                .code(),
+            "unsupported_reasoning_effort"
+        );
+        assert!(
+            max_effort.into_openrouter().is_ok(),
+            "openrouter applies the maximum reasoning effort"
+        );
+    }
+
+    #[test]
+    fn catalog_activation_preflights_declared_options_through_the_adapter_builders() {
+        // The driver factory is the catalog-activation construction seam:
+        // producible bearer declarations build, while a profile declaring the
+        // not-activated safe-header transport fails the activation closed.
+        for kind in ["openrouter", "generic-chat-completion-api"] {
+            let factory = CompositionDriverFactory::service(kind);
+            assert!(
+                factory
+                    .build(factory_material(
+                        kind,
+                        DomainCredentialTransportMode::Bearer,
+                        None
+                    ))
+                    .is_ok(),
+                "a producible bearer profile activates"
+            );
+            assert_eq!(
+                factory
+                    .build(factory_material(
+                        kind,
+                        DomainCredentialTransportMode::SafeHeader,
+                        Some("x-provider-header".to_owned()),
+                    ))
+                    .err()
+                    .expect("safe-header declarations cannot activate")
+                    .code(),
+                "unsupported_safe_header_transport"
+            );
+        }
     }
 
     #[test]
@@ -4360,7 +5032,7 @@ mod tests {
         assert_eq!(
             transaction.safe_failure_code.as_deref(),
             Some("missing_provider_credential"),
-            "typed edits cannot reconstruct the credential and fail closed"
+            "typed edits without a retained private credential fail closed"
         );
 
         // An unrecognized key path fails closed before any candidate parse.
@@ -4388,6 +5060,253 @@ mod tests {
                 .to_string(),
             startup_revision
         );
+    }
+
+    /// Writes one openrouter fixture configuration file with the supplied
+    /// credential and owner-only permissions on Unix.
+    fn write_fixture_config(path: &ConfigPathDto, credential: &str) {
+        let text = format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{credential}\"\n"
+        );
+        fs::write(path.as_str(), text).expect("fixture config writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path.as_str(), fs::Permissions::from_mode(0o600))
+                .expect("fixture config permissions set");
+        }
+    }
+
+    /// Opens one file-backed facade with the private credential and source
+    /// retained, mirroring the production `open_platform` private loading
+    /// boundary, and returns it with the startup snapshot and config path.
+    fn file_backed_facade(
+        directory: &TempDir,
+        config_path: &Path,
+        credential: &str,
+    ) -> (DaemonApplicationFacade, ConfigSnapshotDto) {
+        let path = ConfigPathDto::parse(config_path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
+        write_fixture_config(&path, credential);
+        let source = ConfigSourceDto::Explicit(path);
+        let (snapshot, selected_provider, _, private_credential) =
+            load_provider_configuration(source.clone()).expect("fixture configuration composes");
+        let facade = DaemonApplicationFacade::open_with_selected_provider(
+            directory.path().join("facade.sqlite"),
+            snapshot.clone(),
+            selected_provider,
+        )
+        .expect("file-backed facade opens");
+        retain_private_startup_credential(&facade, private_credential, source)
+            .expect("private startup credential retains");
+        (facade, snapshot)
+    }
+
+    /// Returns the composition's private credential slot content for tests.
+    fn retained_credential(facade: &DaemonApplicationFacade) -> Option<String> {
+        facade
+            .inner
+            .private_credential
+            .lock()
+            .expect("fixture credential state is not poisoned")
+            .material
+            .clone()
+    }
+
+    #[test]
+    fn control_plane_typed_edit_commits_when_the_private_credential_is_retained() {
+        const RETAINED_SECRET: &str = "sk-retained-typed-edit-secret-12345";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let config_path = directory.path().join("config.toml");
+        let (facade, startup) = file_backed_facade(&directory, &config_path, RETAINED_SECRET);
+        let startup_revision = startup.revision_id().to_string();
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(RETAINED_SECRET),
+            "the private loading boundary retains the startup credential"
+        );
+
+        // An execution-policy-only typed edit commits: the retained
+        // credential is restored into the candidate inside the private
+        // loading boundary before server-side validation.
+        let transaction = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-1".to_owned(),
+                expected_config_revision: startup_revision.clone(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.execution.attempt_timeout_seconds".to_owned(),
+                    safe_value: "45".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert_ne!(transaction.candidate_config_revision, startup_revision);
+        let active = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads");
+        assert_eq!(
+            active
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45
+        );
+        assert_eq!(active.resolved().provider().model(), "fixture");
+        assert!(
+            !format!("{transaction:?}").contains(RETAINED_SECRET),
+            "the reload transaction never echoes the restored credential"
+        );
+        assert!(
+            !active
+                .resolved()
+                .safe_debug_projection()
+                .contains(RETAINED_SECRET),
+            "the active snapshot never carries the credential"
+        );
+
+        // The credential slot is untouched by a typed edit.
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(RETAINED_SECRET)
+        );
+
+        // A catalog-affecting typed edit is classified correctly now that
+        // the candidate can resolve: model changes require a restart instead
+        // of failing on the missing credential.
+        let rejected = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-2".to_owned(),
+                expected_config_revision: active.revision_id().to_string(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.model".to_owned(),
+                    safe_value: "model-b".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            rejected.commit_outcome,
+            ConfigurationCommitOutcomeDto::Rejected
+        );
+        assert_eq!(
+            rejected.safe_failure_code.as_deref(),
+            Some("catalog_change_requires_restart")
+        );
+        assert!(!format!("{rejected:?}").contains(RETAINED_SECRET));
+    }
+
+    #[test]
+    fn control_plane_rotation_supplies_replacement_from_the_configured_private_source() {
+        const ORIGINAL_SECRET: &str = "sk-composition-original-secret-12345";
+        const REPLACEMENT_SECRET: &str = "sk-composition-replacement-secret-12345";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let config_path = directory.path().join("config.toml");
+        let (facade, _startup) = file_backed_facade(&directory, &config_path, ORIGINAL_SECRET);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade
+            .composition_binding_source()
+            .binding("default")
+            .expect("default binding resolves");
+        let rotate_command = |operation_id: &str| {
+            ProtocolCommandDto::RotateProviderCredentials(RotateProviderCredentialsCommandDto {
+                profile_id: binding.profile_id.clone(),
+                provider_profile_revision_id: binding.provider_profile_revision_id.clone(),
+                expected_credential_composition_revision: binding.safe_composition_revision.clone(),
+                operation_id: operation_id.to_owned(),
+            })
+        };
+
+        // The operator supplies fresh material out-of-band by updating the
+        // daemon's configuration file; rotation then re-reads the file
+        // through the private loading boundary and rebuilds the driver.
+        write_fixture_config(&config_path_as_dto(&config_path), REPLACEMENT_SECRET);
+        let result = facade.command(rotate_command("op-1"));
+        let accepted = match result {
+            ProtocolCommandResultDto::Accepted(accepted) => accepted,
+            ProtocolCommandResultDto::Rejected(error) => {
+                panic!("rotation must be accepted: {error:?}")
+            }
+        };
+        let ProtocolAcceptedResultDto::RotateProviderCredentials(outcome) = accepted.result()
+        else {
+            unreachable!("rotation returns its typed outcome");
+        };
+        assert!(outcome.rotated);
+        assert_eq!(outcome.profile_id, "default");
+        assert!(!format!("{outcome:?}").contains(REPLACEMENT_SECRET));
+        assert!(!format!("{outcome:?}").contains(ORIGINAL_SECRET));
+
+        // The private slot now carries the replacement material, so typed
+        // edits restore the fresh credential.
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET)
+        );
+        let startup_revision = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads")
+            .revision_id()
+            .to_string();
+        let transaction = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-2".to_owned(),
+                expected_config_revision: startup_revision,
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.execution.max_attempts".to_owned(),
+                    safe_value: "1".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert!(!format!("{transaction:?}").contains(REPLACEMENT_SECRET));
+
+        // Removing the source fails closed and preserves the current
+        // material and the driver.
+        fs::remove_file(&config_path).expect("fixture config removes");
+        let rejected = facade.command(rotate_command("op-3"));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("a missing private source fails closed");
+        };
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+        assert!(!error.to_string().contains(REPLACEMENT_SECRET));
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET)
+        );
+
+        // A source that cannot parse also fails closed without disclosing
+        // content.
+        fs::write(
+            &config_path,
+            format!("not a toml document {REPLACEMENT_SECRET} [["),
+        )
+        .expect("fixture config rewrites");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+                .expect("fixture config permissions set");
+        }
+        let rejected = facade.command(rotate_command("op-4"));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("an unusable private source fails closed");
+        };
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+        assert!(
+            !error.to_string().contains(REPLACEMENT_SECRET),
+            "the rotation error never echoes source content"
+        );
+    }
+
+    /// Converts a native fixture path to the validated configuration path.
+    fn config_path_as_dto(path: &Path) -> ConfigPathDto {
+        ConfigPathDto::parse(path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute")
     }
 
     #[test]

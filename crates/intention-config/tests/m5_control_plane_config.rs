@@ -7,7 +7,8 @@
 
 use intention_config::control_plane::{
     CandidateIssueDto, ConfigCandidateDto, ConfigCandidateSourceDto, MAX_CANDIDATE_ISSUES,
-    classify_changed_fields, parse_candidate, reject_catalog_affecting_edits, semantic_equivalence,
+    classify_changed_fields, parse_candidate, reject_catalog_affecting_edits,
+    restore_credential_document, semantic_equivalence,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -806,4 +807,72 @@ fn candidate_source_accessors_are_exposed() {
         parsed.safe_snapshot().revision_id().to_string(),
         "the candidate revision accessor matches the snapshot"
     );
+}
+
+#[test]
+fn restore_credential_document_reinserts_the_credential_into_typed_edit_candidates() {
+    let previous = snapshot(
+        &v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, ""),
+        "33333333-3333-4333-8333-333333333331",
+    );
+    // The typed-edit renderer emits a credential-free candidate document that
+    // omits `provider.credential`; the private channel restores it.
+    let edited = "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\n[provider.execution]\nattempt_timeout_seconds = 45\nmax_attempts = 2\n";
+    let restored = restore_credential_document(edited, FAKE_CREDENTIAL);
+    assert!(
+        !restored.eq(edited),
+        "the restored document differs from the credential-free candidate"
+    );
+
+    let parsed = candidate(&restored, &previous);
+    assert!(
+        parsed.validation().issues().is_empty(),
+        "restoring the credential makes the typed-edit candidate valid"
+    );
+    assert_eq!(parsed.validation().total_issue_count(), 0);
+    let encoded = serde_json::to_string(&parsed).expect("candidate serializes");
+    assert!(
+        !encoded.contains(FAKE_CREDENTIAL),
+        "the restored credential never crosses the candidate wire"
+    );
+
+    // The restored document resolves with the exact private value: the
+    // composition-owned startup material carries the restored credential.
+    let material =
+        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(restored, source()))
+            .expect("the restored document parses as startup material");
+    let credential = material.into_parts_for_provider(|_resolved, credential| credential);
+    assert_eq!(credential, FAKE_CREDENTIAL);
+}
+
+#[test]
+fn restore_credential_document_escapes_values_and_passes_through_unsuitable_documents() {
+    // A credential carrying TOML-significant characters round-trips exactly:
+    // the value is inserted as a TOML value, so escaping is serializer-owned.
+    let tricky = "sk-\"quoted\"-and\\backslash";
+    let edited = "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\ncredential = \"previous-value\"\n[provider.execution]\nmax_attempts = 2\n";
+    let restored = restore_credential_document(edited, tricky);
+    let material =
+        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(restored, source()))
+            .expect("the escaped document parses as startup material");
+    let credential = material.into_parts_for_provider(|_resolved, credential| credential);
+    assert_eq!(
+        credential, tricky,
+        "the restored value is the exact private credential, not a mangled text"
+    );
+
+    // Documents that cannot carry a provider credential table are returned
+    // unchanged so downstream validation fails closed exactly as it does for
+    // a document that legitimately omits the credential.
+    for unsuitable in [
+        "schema_version = 1\n",
+        "not a toml document [[",
+        "provider = \"openrouter\"",
+    ] {
+        assert_eq!(
+            restore_credential_document(unsuitable, FAKE_CREDENTIAL),
+            unsuitable,
+            "unsuitable documents pass through unchanged"
+        );
+    }
 }

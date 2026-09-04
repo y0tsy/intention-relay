@@ -724,7 +724,21 @@ struct NormalizedConfig {
     provider_execution: Option<RawProviderExecutionPolicyDto>,
 }
 
-fn parse_credential(text: &str) -> DtoResult<String> {
+/// Parses and returns the private `provider.credential` value of one raw
+/// configuration document.
+///
+/// This helper is composition-only: callers must invoke it inside their own
+/// private loading boundary and must never log, serialize, or place the
+/// returned value in a DTO, error, or durable surface. It performs the same
+/// TOML parse and emptiness check as startup parsing, so the returned value
+/// is byte-exact (escaping is the TOML parser's responsibility).
+///
+/// # Errors
+///
+/// Returns `invalid_config_toml` for a document that is not valid TOML and
+/// `missing_provider_credential` when the document carries no non-empty
+/// `provider.credential` value. Errors never include document content.
+pub fn parse_credential(text: &str) -> DtoResult<String> {
     let document: toml::Value = toml::from_str(text).map_err(|_| {
         ErrorDto::validation(
             "invalid_config_toml",
@@ -1092,5 +1106,58 @@ credential = \"{credential}\"
                 .code(),
             "config_permission_metadata_unavailable"
         );
+    }
+
+    #[test]
+    fn parse_credential_extracts_the_exact_private_value_without_echoing_it() {
+        // Serialize the document so string escaping is the TOML serializer's
+        // responsibility, exactly like a raw configuration file.
+        fn document_with_credential(credential: &str) -> String {
+            let mut provider = toml::map::Map::new();
+            provider.insert(
+                "kind".to_owned(),
+                toml::Value::String("openrouter".to_owned()),
+            );
+            provider.insert(
+                "model".to_owned(),
+                toml::Value::String("fixture-model".to_owned()),
+            );
+            provider.insert(
+                "credential".to_owned(),
+                toml::Value::String(credential.to_owned()),
+            );
+            let mut document = toml::map::Map::new();
+            document.insert("schema_version".to_owned(), toml::Value::Integer(1));
+            document.insert("provider".to_owned(), toml::Value::Table(provider));
+            toml::to_string(&toml::Value::Table(document)).expect("document serializes")
+        }
+
+        let tricky = "sk-\"quoted\"-and\\backslash";
+        assert_eq!(
+            parse_credential(&document_with_credential(tricky))
+                .expect("credential parses from the document"),
+            tricky,
+            "escaping is the TOML parser's responsibility"
+        );
+        for failure in [
+            document_with_credential(" "),
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\n"
+                .to_owned(),
+            "not a toml document [[".to_owned(),
+        ] {
+            let error = parse_credential(&failure).expect_err("invalid document must fail");
+            assert!(
+                matches!(
+                    error.code(),
+                    "missing_provider_credential" | "invalid_config_toml"
+                ),
+                "unexpected failure code {}",
+                error.code()
+            );
+            assert!(
+                !error.to_string().contains(CREDENTIAL),
+                "the error never echoes document content"
+            );
+        }
     }
 }

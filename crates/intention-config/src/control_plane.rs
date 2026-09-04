@@ -721,6 +721,41 @@ fn contains_credential_shape(value: &str) -> bool {
     intention_domain::canonical::secret_value_credential_shaped(value)
 }
 
+/// Restores `provider.credential` into one raw configuration document.
+///
+/// Typed configuration edits reconstruct the candidate document from the
+/// credential-free active snapshot, so the rendered document omits the
+/// credential. This composition-only helper re-inserts the private credential
+/// value supplied through the private channel into the document's
+/// `provider.credential` table entry and returns the restored document. The
+/// value is inserted as a TOML value, so string escaping is the serializer's
+/// responsibility and any previously configured value is replaced exactly.
+/// The credential appears only in the returned in-memory text, which is
+/// consumed by the existing parse path; it never appears in a DTO, error,
+/// digest, log, or durable surface.
+///
+/// When the text is not a TOML table carrying a `provider` table, the text is
+/// returned unchanged so downstream validation fails closed exactly as it
+/// does for a document that legitimately omits the credential.
+#[must_use]
+pub fn restore_credential_document(text: &str, credential: &str) -> String {
+    let Ok(document) = toml::from_str::<toml::Value>(text) else {
+        // A non-parseable document cannot carry a provider table.
+        return text.to_owned();
+    };
+    let toml::Value::Table(mut document) = document else {
+        return text.to_owned();
+    };
+    let Some(toml::Value::Table(provider)) = document.get_mut("provider") else {
+        return text.to_owned();
+    };
+    provider.insert(
+        "credential".to_owned(),
+        toml::Value::String(credential.to_owned()),
+    );
+    toml::to_string(&toml::Value::Table(document)).unwrap_or_else(|_| text.to_owned())
+}
+
 /// Returns the current whole-second Unix timestamp.
 ///
 /// # Errors

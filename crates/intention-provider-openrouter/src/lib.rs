@@ -26,7 +26,7 @@ use openrouter_rs::{
 };
 
 /// Additive descriptor-driven driver options; the default is unchanged.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OpenRouterDriverOptions {
     header_policy: Option<AuthenticationHeaderPolicyV1>,
     reasoning_effort: Option<ReasoningEffortLevel>,
@@ -37,6 +37,18 @@ impl OpenRouterDriverOptions {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the declared header policy (names only, never values).
+    #[must_use]
+    pub const fn header_policy(&self) -> Option<&AuthenticationHeaderPolicyV1> {
+        self.header_policy.as_ref()
+    }
+
+    /// Returns the declared reasoning effort applied to OpenRouter requests.
+    #[must_use]
+    pub const fn reasoning_effort(&self) -> Option<ReasoningEffortLevel> {
+        self.reasoning_effort
     }
 
     /// Declares the descriptor header policy (names only, never values).
@@ -77,9 +89,14 @@ impl OpenRouterDriverOptions {
 }
 
 /// OpenRouter driver with private SDK client state.
+///
+/// The SDK client is held behind a read/write lock so credential rotation can
+/// rebuild it without replacing the driver instance: every in-flight stream
+/// keeps the client clone it captured at start, and later executions clone
+/// the rotated client.
 pub struct OpenRouterDriver {
     resolved: ResolvedConfigDto,
-    client: OpenRouterClient,
+    client: std::sync::RwLock<OpenRouterClient>,
     options: OpenRouterDriverOptions,
     outbound_calls_for_test: u32,
 }
@@ -145,10 +162,50 @@ impl OpenRouterDriver {
             })?;
         Ok(Self {
             resolved,
-            client,
+            client: std::sync::RwLock::new(client),
             options,
             outbound_calls_for_test: 0,
         })
+    }
+
+    /// Replaces the driver's private SDK client with one built from fresh
+    /// private credential material.
+    ///
+    /// The rebuild is composition-owned: the supplied credential must arrive
+    /// through a private channel and is never logged, serialized, or made
+    /// durable. The previous client is replaced only after the replacement
+    /// client builds successfully; concurrent executions keep the client they
+    /// captured before this call.
+    ///
+    /// # Errors
+    ///
+    /// Returns `openrouter_client_unavailable` when the replacement client
+    /// cannot be configured.
+    pub fn rotate_credential(&self, credential: String) -> DtoResult<()> {
+        let client = OpenRouterClient::builder()
+            .api_key(credential)
+            .build()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "openrouter_client_unavailable",
+                    "OpenRouter client could not be configured",
+                )
+            })?;
+        let mut guard = self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = client;
+        drop(guard);
+        Ok(())
+    }
+
+    /// Clones the current private SDK client for one execution attempt.
+    fn current_client(&self) -> OpenRouterClient {
+        self.client
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Returns the non-network preflight validation result.
@@ -168,7 +225,7 @@ impl OpenRouterDriver {
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
         let _native_request = translate_request(request, &self.options)?;
-        let _client = &self.client;
+        let _client = self.current_client();
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
     }
@@ -177,6 +234,12 @@ impl OpenRouterDriver {
     #[must_use]
     pub const fn prepared_request_count(&self) -> u32 {
         self.outbound_calls_for_test
+    }
+
+    /// Returns the driver's validated declared options.
+    #[must_use]
+    pub const fn options(&self) -> &OpenRouterDriverOptions {
+        &self.options
     }
 
     /// Maps text output into the canonical stream contract.
@@ -275,7 +338,7 @@ impl ModelExecutionDriver for OpenRouterDriver {
                 }));
             }
         };
-        let client = self.client.clone();
+        let client = self.current_client();
         Box::pin(
             stream::once(async move {
                 client

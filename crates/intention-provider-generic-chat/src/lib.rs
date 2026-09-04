@@ -37,7 +37,7 @@ use intention_model::{
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
 /// Additive descriptor-driven driver options; the default is unchanged.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenericChatDriverOptions {
     header_policy: Option<AuthenticationHeaderPolicyV1>,
     reasoning_effort: Option<ReasoningEffortLevel>,
@@ -48,6 +48,18 @@ impl GenericChatDriverOptions {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the declared header policy (names only, never values).
+    #[must_use]
+    pub const fn header_policy(&self) -> Option<&AuthenticationHeaderPolicyV1> {
+        self.header_policy.as_ref()
+    }
+
+    /// Returns the declared reasoning effort applied to requests.
+    #[must_use]
+    pub const fn reasoning_effort(&self) -> Option<ReasoningEffortLevel> {
+        self.reasoning_effort
     }
 
     /// Declares the descriptor header policy (names only, never values).
@@ -98,9 +110,14 @@ impl GenericChatDriverOptions {
 }
 
 /// Generic Chat Completions driver with private SDK client state.
+///
+/// The SDK client is held behind a read/write lock so credential rotation can
+/// rebuild it without replacing the driver instance: every in-flight stream
+/// keeps the client clone it captured at start, and later executions clone
+/// the rotated client.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
-    client: Client<OpenAIConfig>,
+    client: std::sync::RwLock<Client<OpenAIConfig>>,
     options: GenericChatDriverOptions,
     outbound_calls_for_test: u32,
 }
@@ -155,23 +172,70 @@ impl GenericChatDriver {
                 "generic chat driver requires generic chat provider configuration",
             ));
         }
+        let client = Self::configured_client(&resolved, credential)?;
+        Ok(Self {
+            resolved,
+            client: std::sync::RwLock::new(client),
+            options,
+            outbound_calls_for_test: 0,
+        })
+    }
+
+    /// Builds the private SDK client for one resolved configuration and
+    /// credential value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    fn configured_client(
+        resolved: &ResolvedConfigDto,
+        credential: String,
+    ) -> DtoResult<Client<OpenAIConfig>> {
         let endpoint = resolved.provider().endpoint().ok_or_else(|| {
             ErrorDto::validation(
                 "missing_generic_chat_endpoint",
                 "generic chat provider requires a configured endpoint",
             )
         })?;
-        let client = Client::with_config(
+        Ok(Client::with_config(
             OpenAIConfig::new()
                 .with_api_base(endpoint)
                 .with_api_key(credential),
-        );
-        Ok(Self {
-            resolved,
-            client,
-            options,
-            outbound_calls_for_test: 0,
-        })
+        ))
+    }
+
+    /// Replaces the driver's private SDK client with one built from fresh
+    /// private credential material.
+    ///
+    /// The rebuild is composition-owned: the supplied credential must arrive
+    /// through a private channel and is never logged, serialized, or made
+    /// durable. The resolved provider endpoint is unchanged, so the safe
+    /// composition is untouched. The previous client is replaced only after
+    /// the replacement client is configured; concurrent executions keep the
+    /// client they captured before this call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    pub fn rotate_credential(&self, credential: String) -> DtoResult<()> {
+        let client = Self::configured_client(&self.resolved, credential)?;
+        let mut guard = self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = client;
+        drop(guard);
+        Ok(())
+    }
+
+    /// Clones the current private SDK client for one execution attempt.
+    fn current_client(&self) -> Client<OpenAIConfig> {
+        self.client
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Returns the non-network preflight validation result.
@@ -191,7 +255,7 @@ impl GenericChatDriver {
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
         let _native_request = translate_request(request, &self.options)?;
-        let _client = &self.client;
+        let _client = self.current_client();
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
     }
@@ -200,6 +264,12 @@ impl GenericChatDriver {
     #[must_use]
     pub const fn prepared_request_count(&self) -> u32 {
         self.outbound_calls_for_test
+    }
+
+    /// Returns the driver's validated declared options.
+    #[must_use]
+    pub const fn options(&self) -> &GenericChatDriverOptions {
+        &self.options
     }
 
     /// Maps a text delta fixture into the canonical stream contract.
@@ -281,7 +351,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
-        let client = self.client.clone();
+        let client = self.current_client();
         Box::pin(
             stream::once(async move {
                 client
