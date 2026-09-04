@@ -892,7 +892,7 @@ fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
 /// conflict always means the endpoint is in use: there is no stale filesystem
 /// artifact to reclaim, so the reclaim retry never applies.
 #[cfg(not(unix))]
-fn reclaim_stale_socket(_endpoint: &LocalEndpoint) -> bool {
+const fn reclaim_stale_socket(_endpoint: &LocalEndpoint) -> bool {
     false
 }
 
