@@ -525,7 +525,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -539,7 +539,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
@@ -591,7 +591,7 @@ def test_m4_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports", "m6_reasoning_surface"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
 
@@ -609,7 +609,7 @@ def test_m5_activation_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
+            'test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
             'test_targets = []',
         )
         run(
@@ -1407,18 +1407,34 @@ def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
         return FakeCompleted(0)
 
     namespace["run_command"] = fake_run_command
+    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
+    # The fixture run writes the synthetic snapshot into the real reports
+    # root; the live metadata report must be saved and restored so this
+    # self-test never leaves fabricated metadata for later direct checks.
+    prior_bytes = snapshot.read_bytes() if snapshot.is_file() else None
     previous_argv = sys.argv
     sys.argv = ["quality/run_coverage.py", "--profile", "default"]
+    saved_correctly = False
     try:
         namespace["main"]()
+        saved_correctly = snapshot.is_file() and snapshot.read_text(encoding="utf-8") == payload
     finally:
+        if prior_bytes is None:
+            snapshot.unlink(missing_ok=True)
+        else:
+            snapshot.write_bytes(prior_bytes)
         sys.argv = previous_argv
+    if not saved_correctly:
+        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
+    if prior_bytes is None:
+        if snapshot.exists():
+            raise RuntimeError("self-test must not leave a synthetic metadata snapshot behind")
+    else:
+        if not snapshot.is_file() or snapshot.read_bytes() != prior_bytes:
+            raise RuntimeError("self-test must restore the live metadata snapshot byte-identically")
     metadata_calls = [command for command in captured if command[:2] == ["cargo", "metadata"]]
     if metadata_calls != [["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]]:
         raise RuntimeError(f"coverage metadata must be collected exactly once per run: {metadata_calls!r}")
-    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
-    if not snapshot.is_file() or snapshot.read_text(encoding="utf-8") != payload:
-        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
     checker_calls = [
         command
         for command in captured
@@ -1519,6 +1535,114 @@ def test_secret_fixture(root: Path) -> None:
         run([sys.executable, "quality/check_docs.py"], cwd=root, expect_success=False)
 
 
+def test_adr_0037_slice2_ledger_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0037 must exist as the Slice 2 activating specification")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0037](0037-m5plus-slice2-control-plane.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0037")
+
+
+def test_adr_0038_no_compatibility_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0038-no-backward-compatibility-and-legacy-removal.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0038 must exist as the no-compatibility activating specification")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0038](0038-no-backward-compatibility-and-legacy-removal.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0038")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0038" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0038")
+
+
+def test_slice2_tag_registry_parity(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    wired_slice2 = [
+        "| `model-capability-taxonomy-v1` | `0x0206` | Wired (Slice 2) |",
+        "| `provider-profile-revision-v1` | `0x0207` | Wired (Slice 2) |",
+        "| `provider-selection-v1` | `0x0208` | Wired (Slice 2) |",
+        "| `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |",
+        "| `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |",
+        "| `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |",
+    ]
+    for row in wired_slice2:
+        if row not in text:
+            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
+    for row in (
+        "| `run-execution-meaning` | `0x0101` | Wired |",
+        "| `programmatic-caller-policy-selection-v1` | `0x0201` | Wired |",
+        "| `agent-activity-selection-v1` | `0x0202` | Wired |",
+        "| `goal-run-selection-v1` | `0x0203` | ReservedForSlice3 |",
+        "| `fork-base-snapshot-v1/v2` | `0x0401` | ReservedForSlice4 |",
+        "| `agent-notification-record-v1` | `0x0505` | ReservedForSlice4 |",
+    ):
+        if row not in text:
+            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
+
+
+def test_slice2_storage_schema_declared_single_live(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "SQLite storage schema | Logical version 1" not in text:
+        raise RuntimeError(
+            "ADR 0037 must declare the single live SQLite storage schema (logical version 1)"
+        )
+
+
+def test_slice2_protocol_versions_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "Local protocol | 1.1, unchanged" not in text:
+        raise RuntimeError("ADR 0037 must declare local protocol 1.1 unchanged")
+    if "Public DTO schema | 1.1, additive, unchanged" not in text:
+        raise RuntimeError("ADR 0037 must declare public DTO schema 1.1 unchanged")
+
+
+def test_slice2_test_targets_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    for target in (
+        "m5_control_plane_canonical",
+        "m5_control_plane_rejections",
+        "m5_session_selection_overrides",
+        "control_plane_contracts",
+        "m5_control_plane_config",
+        "m5_catalog_runtime",
+        "m5_control_plane_runtime",
+        "control_plane_client",
+        "session_selection_client",
+        "m6_reasoning_surface",
+        "sqlite_contracts",
+    ):
+        if target not in text:
+            raise RuntimeError(f"ADR 0037 must declare the test target {target!r}")
+
+
+def test_slice2_no_new_crate(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "No new crate, dependency, feature, coverage tier, or exclusion is introduced." not in text:
+        raise RuntimeError("ADR 0037 must declare that no new crate is introduced")
+
+
+def test_slice2_reconciliation_rows_exist(root: Path) -> None:
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    if "| SL2-001 |" not in matrix_text or "| SL2-009 |" not in matrix_text:
+        raise RuntimeError("source-of-truth matrix must carry SL2-001..009 rows")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    evidence_text = evidence.read_text(encoding="utf-8")
+    if "| EVD-047 |" not in evidence_text or "| EVD-060 |" not in evidence_text:
+        raise RuntimeError("evidence register must carry EVD-047..060 rows")
+    if "0037-m5plus-slice2-control-plane.md" not in evidence_text:
+        raise RuntimeError("evidence register must reference ADR 0037")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
@@ -1583,6 +1707,13 @@ def main() -> None:
         test_missing_feature_profile,
         test_supply_chain_policy_failures,
         test_secret_fixture,
+        test_adr_0037_slice2_ledger_exists_and_is_indexed,
+        test_slice2_tag_registry_parity,
+        test_slice2_storage_schema_declared_single_live,
+        test_slice2_protocol_versions_declared,
+        test_slice2_test_targets_declared,
+        test_slice2_no_new_crate,
+        test_slice2_reconciliation_rows_exist,
     ]
     standalone_tests = [
         test_unused_dependency,

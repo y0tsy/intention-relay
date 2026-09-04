@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
+use crate::reasoning_history::ReasoningDeltaCategory;
 use intention_types::{
     AssistantTurnId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, FinishReasonDto,
     ProviderErrorDto, RunId, SessionEventSequenceDto, SessionId, TimestampDto, ToolCallDto,
@@ -9,7 +10,36 @@ use intention_types::{
 };
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
+const MAX_REASONING_FACT_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
+
+// The canonical reasoning category type is codec-only in `reasoning_history`;
+// its serde support lives here because the durable fact DTOs are the only
+// serde consumers of the shared category type.
+impl Serialize for ReasoningDeltaCategory {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(match self {
+            Self::Primary => "primary",
+            Self::Detail => "detail",
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ReasoningDeltaCategory {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "primary" => Ok(Self::Primary),
+            "detail" => Ok(Self::Detail),
+            _ => Err(de::Error::custom("invalid reasoning delta category")),
+        }
+    }
+}
 
 fn non_blank(value: String, code: &'static str, message: &'static str) -> DtoResult<String> {
     if value.trim().is_empty() {
@@ -28,6 +58,46 @@ fn positive_attempt(attempt: u16) -> DtoResult<()> {
     } else {
         Ok(())
     }
+}
+
+/// Validates one reasoning fact payload against the closed per-fact bound.
+///
+/// # Errors
+///
+/// Returns a validation error when content is blank or exceeds 512 KiB.
+fn validate_reasoning_fact_content(content: String) -> DtoResult<String> {
+    let content = non_blank(
+        content,
+        "invalid_reasoning_delta",
+        "reasoning delta must not be empty",
+    )?;
+    if content.len() > MAX_REASONING_FACT_BYTES {
+        return Err(ErrorDto::validation(
+            "invalid_reasoning_delta",
+            "reasoning delta must not exceed 512 KiB",
+        ));
+    }
+    Ok(content)
+}
+
+/// Validates that appending one reasoning fact keeps the combined per-run
+/// reasoning output within the closed 4 MiB bound.
+///
+/// # Errors
+///
+/// Returns a validation error when the combined reasoning output would exceed
+/// 4 MiB, or when the byte counts overflow.
+pub fn validate_reasoning_output_bound(current_bytes: u64, next_bytes: u64) -> DtoResult<()> {
+    let exceeds = current_bytes
+        .checked_add(next_bytes)
+        .is_none_or(|combined| combined > crate::reasoning_history::MAX_REASONING_AGGREGATE_BYTES);
+    if exceeds {
+        return Err(ErrorDto::validation(
+            "reasoning_output_limit_exceeded",
+            "combined reasoning output must not exceed 4 MiB per run",
+        ));
+    }
+    Ok(())
 }
 
 /// An ordered, zero-based durable model-fact position within one run.
@@ -63,6 +133,8 @@ pub enum ModelRunFactKindDto {
     AssistantContentAppended,
     /// A reasoning delta was recorded only in the event tail.
     ReasoningDeltaRecorded,
+    /// A reasoning summary delta was recorded only in the event tail.
+    ReasoningSummaryDeltaRecorded,
     /// Provider-normalized usage was recorded.
     UsageRecorded,
     /// A provider-normalized tool call was recorded.
@@ -85,6 +157,7 @@ impl ModelRunFactKindDto {
             Self::RetryScheduled => "retry_scheduled",
             Self::AssistantContentAppended => "assistant_content_appended",
             Self::ReasoningDeltaRecorded => "reasoning_delta_recorded",
+            Self::ReasoningSummaryDeltaRecorded => "reasoning_summary_delta_recorded",
             Self::UsageRecorded => "usage_recorded",
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolResultRecorded => "tool_result_recorded",
@@ -225,7 +298,12 @@ pub enum ModelRunFactInputDto {
         content: String,
     },
     /// A reasoning delta is retained only in tail history.
-    ReasoningDeltaRecorded { content: String },
+    ReasoningDeltaRecorded {
+        category: ReasoningDeltaCategory,
+        content: String,
+    },
+    /// A reasoning summary delta is retained only in tail history.
+    ReasoningSummaryDeltaRecorded { content: String },
     /// Provider-normalized usage was recorded.
     UsageRecorded { usage: UsageDto },
     /// Provider-normalized tool-call evidence was recorded.
@@ -265,6 +343,10 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
                 content: String,
             },
             ReasoningDeltaRecorded {
+                category: ReasoningDeltaCategory,
+                content: String,
+            },
+            ReasoningSummaryDeltaRecorded {
                 content: String,
             },
             UsageRecorded {
@@ -300,8 +382,11 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
                 assistant_turn_id,
                 content,
             } => Self::assistant_content_appended(assistant_turn_id, content),
-            RawModelRunFactInputDto::ReasoningDeltaRecorded { content } => {
-                Self::reasoning_delta_recorded(content)
+            RawModelRunFactInputDto::ReasoningDeltaRecorded { category, content } => {
+                Self::reasoning_delta_recorded_categorized(category, content)
+            }
+            RawModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content } => {
+                Self::reasoning_summary_delta_recorded(content)
             }
             RawModelRunFactInputDto::UsageRecorded { usage } => Ok(Self::usage_recorded(usage)),
             RawModelRunFactInputDto::ToolCallRecorded { call } => {
@@ -383,18 +468,38 @@ impl ModelRunFactInputDto {
         })
     }
 
-    /// Creates a non-blank tail-only reasoning fact.
+    /// Creates a non-blank tail-only reasoning fact categorized as primary.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when content is blank.
+    /// Returns a validation error when content is blank or exceeds 512 KiB.
     pub fn reasoning_delta_recorded(content: impl Into<String>) -> DtoResult<Self> {
+        Self::reasoning_delta_recorded_categorized(ReasoningDeltaCategory::Primary, content)
+    }
+
+    /// Creates a categorized non-blank tail-only reasoning fact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank or exceeds 512 KiB.
+    pub fn reasoning_delta_recorded_categorized(
+        category: ReasoningDeltaCategory,
+        content: impl Into<String>,
+    ) -> DtoResult<Self> {
         Ok(Self::ReasoningDeltaRecorded {
-            content: non_blank(
-                content.into(),
-                "invalid_reasoning_delta",
-                "reasoning delta must not be empty",
-            )?,
+            category,
+            content: validate_reasoning_fact_content(content.into())?,
+        })
+    }
+
+    /// Creates a non-blank tail-only reasoning summary fact.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank or exceeds 512 KiB.
+    pub fn reasoning_summary_delta_recorded(content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::ReasoningSummaryDeltaRecorded {
+            content: validate_reasoning_fact_content(content.into())?,
         })
     }
 
@@ -444,6 +549,9 @@ impl ModelRunFactInputDto {
             Self::RetryScheduled { .. } => ModelRunFactKindDto::RetryScheduled,
             Self::AssistantContentAppended { .. } => ModelRunFactKindDto::AssistantContentAppended,
             Self::ReasoningDeltaRecorded { .. } => ModelRunFactKindDto::ReasoningDeltaRecorded,
+            Self::ReasoningSummaryDeltaRecorded { .. } => {
+                ModelRunFactKindDto::ReasoningSummaryDeltaRecorded
+            }
             Self::UsageRecorded { .. } => ModelRunFactKindDto::UsageRecorded,
             Self::ToolCallRecorded { .. } => ModelRunFactKindDto::ToolCallRecorded,
             Self::ToolResultRecorded { .. } => ModelRunFactKindDto::ToolResultRecorded,

@@ -205,7 +205,8 @@ snapshot** and an empty contiguous tail at that snapshot's included sequence,
 or a typed resync when the session cannot be supplied. It is **replay-only**,
 not a retained connection and not a live event feed. Historical projection
 reconstruction is not represented in M3. The post-commit publication seam is
-intentionally a no-op in M3.
+removed (ADR 0038 Wave 7): committed evidence is published only through the
+daemon host's commit-observation path, never through a no-op session seam.
 
 M3 durability, unscoped snapshot/tail replay, ordering, and resync remain
 unchanged. Persistent delivery is implemented only for the separate M4
@@ -306,7 +307,7 @@ They must use the same command, query, snapshot, and event DTOs as the Tauri bri
 
 On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
-1. resolve and open the platform state database, applying supported SQLite migrations;
+1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
 3. snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's mandatory terminal-promotion transaction, with durable state-change event and snapshots;
 4. do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass; and

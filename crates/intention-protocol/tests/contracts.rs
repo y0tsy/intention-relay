@@ -3,11 +3,11 @@
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
-//! Test-first protocol contract and compatibility evidence.
+//! Test-first protocol contract and current-version wire evidence.
 
 use intention_domain::{
     DomainEventDto, GetSessionSnapshotQueryDto, RunModeDto, RunStatusChangedEventDto, RunStatusDto,
-    SendUserTurnCommandDto, StopRunCommandDto,
+    SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
 };
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolCapabilityDto,
@@ -18,15 +18,43 @@ use intention_protocol::{
     SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_types::{
-    CorrelationIdDto, EventEnvelopeDto, EventId, EventMetadataDto, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto,
+    CorrelationIdDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TimestampDto, WorkspaceId,
 };
+
+fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
+    intention_domain::WorkspaceRootDto::parse(
+        std::env::temp_dir()
+            .join("intention-protocol-contracts-workspace")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .expect("fixture workspace root is valid")
+}
+
+fn fixture_projection(
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        fixture_workspace_root(),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+        at_sequence,
+    )
+    .expect("fixture projection is valid")
+}
 
 fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
     let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
     EventEnvelopeDto::new(
         EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             EventId::new(),
             session_id,
             None,
@@ -46,7 +74,7 @@ fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<Domai
 #[test]
 fn protocol_hello_round_trips_with_versioned_capabilities() {
     let hello = ProtocolHelloDto::new(
-        ProtocolVersionDto::new(1, 0),
+        ProtocolVersionDto::new(1, 1),
         vec![
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
@@ -64,15 +92,14 @@ fn protocol_hello_round_trips_with_versioned_capabilities() {
 }
 
 #[test]
-fn incompatible_protocol_major_returns_a_typed_unavailable_error() {
-    let server = ProtocolVersionDto::new(1, 0);
-    let client = ProtocolVersionDto::new(2, 0);
-
-    let error = server
-        .ensure_compatible_with(client)
-        .expect_err("different major versions must be rejected");
-
-    assert_eq!(error.code(), "incompatible_protocol_version");
+fn only_the_exact_current_protocol_version_passes_negotiation_equality() {
+    let current = intention_protocol::CURRENT_PROTOCOL_VERSION;
+    assert_eq!(current, ProtocolVersionDto::new(1, 1));
+    assert_ne!(ProtocolVersionDto::new(2, 0), current);
+    assert_ne!(ProtocolVersionDto::new(1, 0), current);
+    // A non-current peer fails the daemon/client negotiation gate with the
+    // typed `incompatible_protocol_version` error (covered in
+    // intention-transport integration tests).
 }
 
 #[test]
@@ -80,10 +107,10 @@ fn correlated_versioned_requests_round_trip_with_typed_query_payloads() {
     let correlation = CorrelationIdDto::parse("11111111-1111-4111-8111-111111111111")
         .expect("fixture correlation is canonical");
     let request = ProtocolRequestEnvelopeDto::new(
-        ProtocolVersionDto::new(1, 0),
+        ProtocolVersionDto::new(1, 1),
         correlation,
         ProtocolMessageDto::new(
-            SchemaVersionDto::new(1, 0),
+            SchemaVersionDto::new(1, 1),
             ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
         ),
     );
@@ -98,10 +125,10 @@ fn correlated_versioned_requests_round_trip_with_typed_query_payloads() {
 
 #[test]
 fn daemon_health_and_snapshot_tail_contracts_round_trip() {
-    let schema = SchemaVersionDto::new(1, 0);
+    let schema = SchemaVersionDto::new(1, 1);
     let health = DaemonHealthDto::new(
         schema,
-        ProtocolVersionDto::new(1, 0),
+        ProtocolVersionDto::new(1, 1),
         DaemonReadinessDto::Ready,
     );
     assert_eq!(
@@ -113,7 +140,13 @@ fn daemon_health_and_snapshot_tail_contracts_round_trip() {
     );
 
     let session_id = SessionId::new();
-    let snapshot = SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(2));
+    let snapshot = SessionSnapshotDto::with_projection(
+        schema,
+        session_id,
+        SessionEventSequenceDto::new(2),
+        fixture_projection(session_id, SessionEventSequenceDto::new(2)),
+    )
+    .expect("fixture snapshot is valid");
     let tail = SessionEventTailBatchDto::new(
         schema,
         session_id,
@@ -131,9 +164,9 @@ fn daemon_health_and_snapshot_tail_contracts_round_trip() {
 }
 
 #[test]
-fn subscribe_command_keeps_legacy_shape_and_adds_optional_run_scope() {
+fn subscribe_command_carries_optional_run_scope_on_the_current_shape() {
     let command = SubscribeSessionCommandDto::with_run_id(
-        SchemaVersionDto::new(1, 0),
+        SchemaVersionDto::new(1, 1),
         SessionId::new(),
         Some(intention_types::RunId::new()),
         Some(SessionEventSequenceDto::new(3)),
@@ -153,7 +186,7 @@ fn subscribe_command_keeps_legacy_shape_and_adds_optional_run_scope() {
 
 #[test]
 fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
-    let schema = SchemaVersionDto::new(1, 0);
+    let schema = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
     let correlation_id = CorrelationIdDto::new();
     let request_variants = [
@@ -176,7 +209,7 @@ fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
 
     for payload in request_variants {
         let envelope = ProtocolRequestEnvelopeDto::new(
-            ProtocolVersionDto::new(1, 0),
+            ProtocolVersionDto::new(1, 1),
             correlation_id,
             ProtocolMessageDto::new(schema, payload),
         );
@@ -186,10 +219,25 @@ fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
         assert_eq!(decoded, envelope);
     }
 
-    let snapshot = SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(0));
+    let snapshot = SessionSnapshotDto::with_projection(
+        schema,
+        session_id,
+        SessionEventSequenceDto::new(0),
+        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+    )
+    .expect("fixture snapshot is valid");
     let response_variants = [
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
-            ProtocolAcceptedDto::new(correlation_id),
+            ProtocolAcceptedDto::with_result(
+                correlation_id,
+                intention_protocol::ProtocolAcceptedResultDto::StopRun(
+                    intention_protocol::StopRunAcceptedDto::new(
+                        session_id,
+                        intention_types::RunId::new(),
+                        SessionEventSequenceDto::new(1),
+                    ),
+                ),
+            ),
         )),
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
             intention_types::ErrorDto::validation("fixture_rejected", "fixture rejection"),
@@ -197,7 +245,7 @@ fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
         ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
             DaemonHealthDto::new(
                 schema,
-                ProtocolVersionDto::new(1, 0),
+                ProtocolVersionDto::new(1, 1),
                 DaemonReadinessDto::Draining,
             ),
         )),
@@ -216,7 +264,7 @@ fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
 
     for payload in response_variants {
         let envelope = ProtocolResponseEnvelopeDto::new(
-            ProtocolVersionDto::new(1, 0),
+            ProtocolVersionDto::new(1, 1),
             correlation_id,
             ProtocolMessageDto::new(schema, payload),
         );
@@ -229,7 +277,7 @@ fn protocol_request_and_response_variants_round_trip_through_wire_envelopes() {
 
 #[test]
 fn event_tails_and_subscription_responses_reject_mismatched_boundaries() {
-    let schema = SchemaVersionDto::new(1, 0);
+    let schema = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
     let other_session_id = SessionId::new();
     let overflow = SessionEventTailBatchDto::new(
@@ -258,11 +306,26 @@ fn event_tails_and_subscription_responses_reject_mismatched_boundaries() {
     )
     .expect("empty tail is valid");
     let response = SessionSubscriptionResponseDto::snapshot_and_tail(
-        SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(0)),
+        SessionSnapshotDto::with_projection(
+            schema,
+            session_id,
+            SessionEventSequenceDto::new(0),
+            fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+        )
+        .expect("fixture snapshot is valid"),
         tail,
     )
     .expect_err("snapshot and tail positions must agree");
     assert_eq!(response.code(), "invalid_subscription_response");
+}
+
+#[test]
+fn unknown_additive_hello_fields_remain_tolerated() {
+    let hello: ProtocolHelloDto = serde_json::from_str(
+        r#"{"version":{"major":1,"minor":1},"capabilities":[],"adapter_name":"fixture","future_additive":true}"#,
+    )
+    .expect("unknown additive protocol fields are ignored for compatibility");
+    assert_eq!(hello.adapter_name(), "fixture");
 }
 
 #[test]
@@ -271,7 +334,7 @@ fn malformed_protocol_payload_fields_and_closed_variants_are_rejected() {
         r#"{"kind":"command","data":{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","turn_id":"11111111-1111-4111-8111-111111111111","content":" "}}}"#,
         r#"{"kind":"query","data":{"kind":"unknown_query"}}"#,
         r#"{"status":"unknown","data":{}}"#,
-        r#"{"kind":"subscription","data":{"kind":"snapshot_and_tail","data":{"snapshot":{"schema_version":{"major":1,"minor":0},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":0},"tail":{"schema_version":{"major":1,"minor":0},"session_id":"22222222-2222-4222-8222-222222222222","after_sequence":0,"events":[]}}}}"#,
+        r#"{"kind":"subscription","data":{"kind":"snapshot_and_tail","data":{"snapshot":{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":0},"tail":{"schema_version":{"major":1,"minor":1},"session_id":"22222222-2222-4222-8222-222222222222","after_sequence":0,"events":[]}}}}"#,
     ] {
         if wire.contains("unknown_query") {
             assert!(serde_json::from_str::<ProtocolRequestPayloadDto>(wire).is_err());

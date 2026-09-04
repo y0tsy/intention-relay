@@ -8,26 +8,46 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-use intention_client::{
-    DaemonLauncher, IntentionClient, ProcessDaemonLauncher, SessionSubscriptionRecovery,
-    SessionSubscriptionReducer,
-};
-use intention_domain::{DomainEventDto, RunStatusChangedEventDto, RunStatusDto};
+use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
+use intention_domain::{RunModeDto, SessionProjectionDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolHelloDto,
     ProtocolMessageDto, ProtocolQueryResultDto, ProtocolResponseEnvelopeDto,
-    ProtocolResponsePayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionResyncDto,
-    SessionResyncReasonDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto,
+    ProtocolResponsePayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto,
+    SessionId, WorkspaceId,
 };
 use tempfile::TempDir;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+
+fn fixture_projection(
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        intention_domain::WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-client-fixture-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture workspace root is valid"),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+        at_sequence,
+    )
+    .expect("fixture projection is valid")
+}
 
 #[derive(Clone)]
 enum FixtureResponse {
@@ -35,12 +55,16 @@ enum FixtureResponse {
     Rejected(ErrorDto),
     Snapshot(SessionSnapshotDto),
     Subscription(SessionSubscriptionResponseDto),
-    SubscriptionAfter(SessionSubscriptionResponseDto, u64),
     Invalid,
     CorrelationMismatch,
     ProtocolMismatch,
+    /// The fixture daemon replies with a same-major minor-mismatched hello.
+    MinorProtocolMismatch,
     MissingCapabilities,
     ResponseVersionMismatch,
+    /// The fixture daemon replies with a response whose message schema
+    /// version differs from the current DTO schema.
+    SchemaMismatch,
     Disconnect,
 }
 
@@ -119,19 +143,6 @@ fn start_fixture_server(
     thread::spawn(move || serve_one_fixture_connection(listener, response))
 }
 
-fn start_fixture_server_sequence(
-    endpoint: LocalEndpoint,
-    responses: Vec<FixtureResponse>,
-) -> thread::JoinHandle<()> {
-    let listener = LocalListener::bind(endpoint).expect("fixture listener binds");
-    thread::spawn(move || {
-        for response in responses {
-            let connection = listener.accept().expect("fixture client connects");
-            serve_fixture_connection(connection, response);
-        }
-    })
-}
-
 fn serve_one_fixture_connection(listener: LocalListener, response: FixtureResponse) {
     let connection = listener.accept().expect("fixture client connects");
     serve_fixture_connection(connection, response);
@@ -141,16 +152,20 @@ fn serve_fixture_connection(
     mut connection: intention_transport::LocalConnection,
     response: FixtureResponse,
 ) {
-    if matches!(response, FixtureResponse::ProtocolMismatch) {
+    if matches!(response, FixtureResponse::ProtocolMismatch)
+        || matches!(response, FixtureResponse::MinorProtocolMismatch)
+    {
         connection
             .receive_hello()
             .expect("fixture client hello arrives");
-        let incompatible = ProtocolHelloDto::new(
-            ProtocolVersionDto::new(2, 0),
-            Vec::new(),
-            "incompatible-fixture-daemon",
-        )
-        .expect("fixture mismatch hello is valid");
+        let version = if matches!(response, FixtureResponse::MinorProtocolMismatch) {
+            ProtocolVersionDto::new(1, 2)
+        } else {
+            ProtocolVersionDto::new(2, 0)
+        };
+        let incompatible =
+            ProtocolHelloDto::new(version, Vec::new(), "incompatible-fixture-daemon")
+                .expect("fixture mismatch hello is valid");
         connection
             .send_hello(&incompatible)
             .expect("fixture mismatch hello sends");
@@ -173,19 +188,9 @@ fn serve_fixture_connection(
     let request = connection
         .receive_request()
         .expect("fixture request arrives");
-    if let FixtureResponse::SubscriptionAfter(_, expected_after) = &response {
-        let received_after = match request.message().payload() {
-            intention_protocol::ProtocolRequestPayloadDto::Command(
-                intention_protocol::ProtocolCommandDto::SubscribeSession(subscription),
-            ) => subscription
-                .after_sequence()
-                .map_or(0, SessionEventSequenceDto::value),
-            _ => panic!("recovery fixture receives a subscription request"),
-        };
-        assert_eq!(received_after, *expected_after);
-    }
     let is_correlation_mismatch = matches!(response, FixtureResponse::CorrelationMismatch);
     let is_response_version_mismatch = matches!(response, FixtureResponse::ResponseVersionMismatch);
+    let is_schema_mismatch = matches!(response, FixtureResponse::SchemaMismatch);
     let payload = match response {
         FixtureResponse::Health(health) => {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health))
@@ -196,21 +201,21 @@ fn serve_fixture_connection(
         FixtureResponse::Snapshot(snapshot) => ProtocolResponsePayloadDto::QueryResult(
             ProtocolQueryResultDto::SessionSnapshot(snapshot),
         ),
-        FixtureResponse::Subscription(subscription)
-        | FixtureResponse::SubscriptionAfter(subscription, _) => {
+        FixtureResponse::Subscription(subscription) => {
             ProtocolResponsePayloadDto::Subscription(subscription)
         }
         FixtureResponse::Invalid
         | FixtureResponse::CorrelationMismatch
         | FixtureResponse::MissingCapabilities
         | FixtureResponse::ResponseVersionMismatch
+        | FixtureResponse::SchemaMismatch
         | FixtureResponse::Disconnect => ProtocolResponsePayloadDto::CommandResult(
             intention_protocol::ProtocolCommandResultDto::Rejected(ErrorDto::validation(
                 "fixture_invalid_response",
                 "fixture intentionally returns a mismatched payload",
             )),
         ),
-        FixtureResponse::ProtocolMismatch => return,
+        FixtureResponse::ProtocolMismatch | FixtureResponse::MinorProtocolMismatch => return,
     };
     let correlation_id = if is_correlation_mismatch {
         CorrelationIdDto::new()
@@ -222,11 +227,16 @@ fn serve_fixture_connection(
     } else {
         local_protocol_version()
     };
+    let schema_version = if is_schema_mismatch {
+        SchemaVersionDto::new(1, 2)
+    } else {
+        SCHEMA_VERSION
+    };
     connection
         .send_response(&ProtocolResponseEnvelopeDto::new(
             response_version,
             correlation_id,
-            ProtocolMessageDto::new(SCHEMA_VERSION, payload),
+            ProtocolMessageDto::new(schema_version, payload),
         ))
         .expect("fixture response sends");
 }
@@ -236,27 +246,6 @@ const fn ready_health() -> DaemonHealthDto {
         SCHEMA_VERSION,
         local_protocol_version(),
         DaemonReadinessDto::Ready,
-    )
-}
-
-fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
-    let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
-    EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SCHEMA_VERSION,
-            EventId::new(),
-            session_id,
-            None,
-            None,
-            SessionEventSequenceDto::new(sequence),
-            occurred_at,
-        ),
-        DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
-            session_id,
-            intention_types::RunId::new(),
-            RunStatusDto::Running,
-            occurred_at,
-        )),
     )
 }
 
@@ -365,6 +354,14 @@ fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed
             "incompatible_protocol_version",
         ),
         (
+            FixtureResponse::MinorProtocolMismatch,
+            "incompatible_protocol_version",
+        ),
+        (
+            FixtureResponse::SchemaMismatch,
+            "invalid_local_protocol_response",
+        ),
+        (
             FixtureResponse::MissingCapabilities,
             "incompatible_protocol_capabilities",
         ),
@@ -393,8 +390,13 @@ fn snapshot_and_subscription_validate_success_rejection_and_response_shape() {
     let _guard = fixture_guard();
     let directory = TempDir::new().expect("temporary directory is available");
     let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(4));
+    let snapshot = SessionSnapshotDto::with_projection(
+        SCHEMA_VERSION,
+        session_id,
+        SessionEventSequenceDto::new(4),
+        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
+    )
+    .expect("fixture snapshot is valid");
     let valid_snapshot_endpoint = endpoint(&directory);
     let server = start_fixture_server(
         valid_snapshot_endpoint.clone(),
@@ -541,137 +543,4 @@ fn non_ready_health_is_not_returned_as_a_successful_connection() {
         assert_eq!(error.code(), expected);
         server.join().expect("non-ready fixture server completes");
     }
-}
-
-#[test]
-fn stateful_recovery_reuses_the_last_sequence_or_clears_on_resync() {
-    let _guard = fixture_guard();
-    let directory = TempDir::new().expect("temporary directory is available");
-    let endpoint = endpoint(&directory);
-    let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
-    let first = SessionSubscriptionResponseDto::snapshot_and_tail(
-        snapshot.clone(),
-        SessionEventTailBatchDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            snapshot.at_sequence(),
-            vec![fixture_event(session_id, 1)],
-        )
-        .expect("fixture tail is contiguous"),
-    )
-    .expect("fixture subscription is valid");
-    let resync = SessionSubscriptionResponseDto::resync_required(SessionResyncDto::new(
-        SCHEMA_VERSION,
-        session_id,
-        SessionResyncReasonDto::HistoryUnavailable,
-    ));
-    let server = start_fixture_server_sequence(
-        endpoint.clone(),
-        vec![
-            FixtureResponse::SubscriptionAfter(first, 0),
-            FixtureResponse::SubscriptionAfter(resync, 1),
-        ],
-    );
-    let client = client(
-        endpoint,
-        FixtureResponse::Health(ready_health()),
-        Arc::new(AtomicUsize::new(0)),
-    );
-    let mut recovery = SessionSubscriptionRecovery::new(subscription(session_id, 0));
-    assert!(
-        !recovery
-            .recover(&client)
-            .expect("first recovery accepts snapshot and tail")
-    );
-    assert_eq!(
-        recovery.last_sequence(),
-        Some(SessionEventSequenceDto::new(1))
-    );
-    assert_eq!(recovery.snapshot(), Some(snapshot));
-    assert!(
-        recovery
-            .recover(&client)
-            .expect("typed resync clears local projection")
-    );
-    assert_eq!(recovery.snapshot(), None);
-    assert_eq!(recovery.last_sequence(), None);
-    server.join().expect("recovery fixture server completes");
-}
-
-#[test]
-fn subscription_reducer_accepts_ordered_state_and_requires_resync_for_bad_state() {
-    let _guard = fixture_guard();
-    let session_id = SessionId::new();
-    let snapshot =
-        SessionSnapshotDto::new(SCHEMA_VERSION, session_id, SessionEventSequenceDto::new(0));
-    let event = fixture_event(session_id, 1);
-    let tail = SessionEventTailBatchDto::new(
-        SCHEMA_VERSION,
-        session_id,
-        snapshot.at_sequence(),
-        vec![event.clone()],
-    )
-    .expect("fixture tail is contiguous");
-    let mut reducer = SessionSubscriptionReducer::new(session_id);
-    assert!(
-        !reducer
-            .apply(
-                SessionSubscriptionResponseDto::snapshot_and_tail(snapshot.clone(), tail)
-                    .expect("fixture subscription is valid"),
-            )
-            .expect("ordered snapshot and tail are accepted")
-    );
-    assert_eq!(reducer.snapshot(), Some(snapshot));
-    assert_eq!(
-        reducer.last_sequence(),
-        Some(SessionEventSequenceDto::new(1))
-    );
-    reducer
-        .apply_event(&event)
-        .expect("duplicate event is ignored");
-    reducer
-        .apply_event(&fixture_event(session_id, 0))
-        .expect("stale event is ignored");
-    assert_eq!(
-        reducer
-            .apply_event(&fixture_event(session_id, 3))
-            .expect_err("sequence gap requires recovery")
-            .code(),
-        "subscription_sequence_gap"
-    );
-    assert_eq!(
-        reducer
-            .apply_event(&fixture_event(SessionId::new(), 2))
-            .expect_err("another session is rejected")
-            .code(),
-        "invalid_subscription_session"
-    );
-    assert!(
-        reducer
-            .apply(SessionSubscriptionResponseDto::resync_required(
-                SessionResyncDto::new(
-                    SCHEMA_VERSION,
-                    session_id,
-                    SessionResyncReasonDto::HistoryUnavailable,
-                )
-            ))
-            .expect("matching resync clears local state")
-    );
-    assert_eq!(reducer.snapshot(), None);
-    assert_eq!(reducer.last_sequence(), None);
-    assert_eq!(
-        reducer
-            .apply(SessionSubscriptionResponseDto::resync_required(
-                SessionResyncDto::new(
-                    SCHEMA_VERSION,
-                    SessionId::new(),
-                    SessionResyncReasonDto::InvalidPosition,
-                )
-            ))
-            .expect_err("wrong-session resync is rejected")
-            .code(),
-        "invalid_subscription_session"
-    );
 }

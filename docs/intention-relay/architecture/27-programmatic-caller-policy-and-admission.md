@@ -231,10 +231,10 @@ calls require an exact confirmation or a bounded confirmation corridor.
 
 The baseline itself is a code-owned `InteractiveLocalReadBaselineV1` selection
 with a maximum of 256 root-run actions and 16 concurrent actions. It has no
-calendar counter, cannot create a corridor, and is frozen into the v3 policy
-selection like every other selected rule. A durable policy may only narrow this
-baseline. Thus the absence of a stored policy does not produce an unbounded or
-unaccounted admission path.
+calendar counter, cannot create a corridor, and is frozen into the current
+v4 run-execution-meaning record like every other selected rule. A durable
+policy may only narrow this baseline. Thus the absence of a stored policy does
+not produce an unbounded or unaccounted admission path.
 
 An admission rule may select only descriptor-declared closed typed input
 constraint families. A `DescriptorInputConstraintSelectionDto` names its
@@ -430,9 +430,9 @@ default, a different counter, a live ancestor, or a fresh authorization.
 
 ## Run-selection compatibility and closed safe failures
 
-The selected immutable execution meaning is first selected in
-`run-execution-meaning-v3` for programmatic-caller policy and then extended by
-the separately versioned `run-execution-meaning-v4` activity selection:
+The selected immutable execution meaning is carried by the single live
+`run-execution-meaning-v4` record, which extends the former v3 field table with
+the separately versioned activity selection at tag 11:
 
 ```text
 ProgrammaticCallerPolicySelectionV1
@@ -444,7 +444,7 @@ ProgrammaticCallerPolicySelectionV1
 ```
 
 `RunExecutionMeaningDto.programmatic_caller_policy_selection` is `Disabled`
-only for historical M4 and earlier post-M4 selection versions. Every new v3 or
+only for historical M4 and earlier post-M4 selection versions. Every new
 v4 ordinary, goal-directed, verification, child, and harness run carries this
 selection, including a selection that contains only the narrow interactive
 direct-local-read baseline. `GoalRunSelectionV1`, `SubAgentDelegationSnapshotDto`,
@@ -532,7 +532,7 @@ bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 - reservation/calendar fixtures: atomic pre-start transaction, idempotent
   equal-replay, release-on-known-pre-effect, permanent-on-start, and
   `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery;
-- run-selection compatibility fixtures: v3/v4 selection, `Disabled` for
+- run-selection compatibility fixtures: v4 selection, `Disabled` for
   historical M4, and no-current-state reconstruction;
 - closed safe-failure and fake-secret regression across logs, errors,
   snapshots, events, and adapter DTOs.

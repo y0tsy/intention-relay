@@ -119,6 +119,22 @@ to the provider exchange as a tool-role message. Provider adapters never
 execute local tools. The runtime owns the provider continuation until the
 provider finishes.
 
+### Tooling execution API and status rendering
+
+`intention-tools` exposes exactly one current execution surface: the
+cancellation-aware bare-result dispatch (`dispatch_with_cancellation`) and the
+envelope entry (`invoke_enveloped` / `invoke_enveloped_with_cancellation`) that
+returns the result-boundary envelope with observability and execution
+metadata. There are no compatibility wrappers without cancellation, and no
+caller-facing path that bypasses the typed invocation envelope when invocation
+identity and durable metadata are required. Every executed program is
+classified by a typed `ToolProcessStatus` (`success`, `non_zero` with its
+numeric code, or `signal` with its recorded signal); the classification is
+carried on the durable execution metadata. The execute result's text rendering
+is derived from that same typed status, so the text and the typed
+classification can never disagree and no arbitrary sentinel exit code is
+invented for signal termination.
+
 ## Hook system
 
 `intention-hooks` owns typed registration, order, hook context, and dispatcher behavior.

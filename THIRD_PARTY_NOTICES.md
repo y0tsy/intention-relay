@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 125 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 128 dependency entries
 - [MIT License](#MIT), used by 43 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 19 dependency entries
 - [ISC License](#ISC), used by 5 dependency entries
@@ -288,7 +288,11 @@ PERFORMANCE OF THIS SOFTWARE.
 #### Used by
 
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
+- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
+- [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_gnu 0.52.6](https://github.com/microsoft/windows-rs)
+- [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```text
                                  Apache License
@@ -1135,7 +1139,7 @@ PERFORMANCE OF THIS SOFTWARE.
 - [fallible-iterator 0.3.0](https://github.com/sfackler/rust-fallible-iterator)
 - [fallible-streaming-iterator 0.1.9](https://github.com/sfackler/fallible-streaming-iterator)
 - [serde_spanned 1.1.1](https://github.com/toml-rs/toml)
-- [toml 1.1.4+spec-1.1.0](https://github.com/toml-rs/toml)
+- [toml 1.1.5+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_datetime 1.1.1+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_parser 1.1.3+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_writer 1.1.2+spec-1.1.0](https://github.com/toml-rs/toml)
@@ -4340,7 +4344,7 @@ limitations under the License.
 - [dyn-clone 1.0.20](https://github.com/dtolnay/dyn-clone)
 - [eventsource-stream 0.2.3](https://github.com/jpopesculian/eventsource-stream)
 - [ident_case 1.0.1](https://github.com/TedDriggs/ident_case)
-- [interprocess 2.4.3](https://github.com/kotauskas/interprocess)
+- [interprocess 2.4.4](https://github.com/kotauskas/interprocess)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.189](https://github.com/rust-lang/libc)
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
@@ -4350,7 +4354,6 @@ limitations under the License.
 - [rand_chacha 0.9.0](https://github.com/rust-random/rand)
 - [ref-cast-impl 1.0.27](https://github.com/dtolnay/ref-cast)
 - [ref-cast 1.0.27](https://github.com/dtolnay/ref-cast)
-- [rusqlite_migration 2.6.0](https://github.com/cljoly/rusqlite_migration)
 - [ryu 1.0.23](https://github.com/dtolnay/ryu)
 - [serde 1.0.229](https://github.com/serde-rs/serde)
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)

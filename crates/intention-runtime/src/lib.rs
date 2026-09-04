@@ -397,14 +397,15 @@ pub trait ModelRunCommitObserver: Send + Sync {
     fn observe_model_run_commit(&self, committed: ModelRunCommitDto);
 }
 
-/// DTO-only executor over injected storage, selected driver, time port, and optional observer.
+/// DTO-only executor over injected storage, selected driver, time port, optional
+/// observer and gate, and the mandatory tool executor.
 pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
     observer: Option<&'a dyn ModelRunCommitObserver>,
     first_append_gate: Option<&'a dyn ModelRunFirstAppendGate>,
-    tool_executor: Option<&'a dyn ToolExecutionPort>,
+    tool_executor: &'a dyn ToolExecutionPort,
 }
 
 impl<'a, Repository, Driver, Time> ModelRunExecutionService<'a, Repository, Driver, Time>
@@ -413,16 +414,24 @@ where
     Driver: ModelExecutionDriver + ?Sized,
     Time: ModelTimePort,
 {
-    /// Creates an executor without selecting providers or owning an async runtime.
+    /// Creates an executor with the mandatory tool executor.
+    ///
+    /// Provider-emitted tool calls always execute through the supplied
+    /// `ToolExecutionPort`; a no-port fallback no longer exists.
     #[must_use]
-    pub const fn new(repository: &'a Repository, driver: &'a Driver, time: &'a Time) -> Self {
+    pub const fn new(
+        repository: &'a Repository,
+        driver: &'a Driver,
+        time: &'a Time,
+        tool_executor: &'a dyn ToolExecutionPort,
+    ) -> Self {
         Self {
             repository,
             driver,
             time,
             observer: None,
             first_append_gate: None,
-            tool_executor: None,
+            tool_executor,
         }
     }
 
@@ -433,6 +442,7 @@ where
         driver: &'a Driver,
         time: &'a Time,
         observer: &'a dyn ModelRunCommitObserver,
+        tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
             repository,
@@ -440,7 +450,7 @@ where
             time,
             observer: Some(observer),
             first_append_gate: None,
-            tool_executor: None,
+            tool_executor,
         }
     }
 
@@ -455,6 +465,7 @@ where
         time: &'a Time,
         observer: &'a dyn ModelRunCommitObserver,
         first_append_gate: &'a dyn ModelRunFirstAppendGate,
+        tool_executor: &'a dyn ToolExecutionPort,
     ) -> Self {
         Self {
             repository,
@@ -462,47 +473,7 @@ where
             time,
             observer: Some(observer),
             first_append_gate: Some(first_append_gate),
-            tool_executor: None,
-        }
-    }
-
-    /// Adds a deterministic tool executor for the model-tool loop.
-    ///
-    /// Without an executor, tool calls durably deny with
-    /// `tool_execution_unavailable` exactly as in the pre-loop runtime.
-    #[must_use]
-    pub const fn with_tool_executor(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: None,
-            first_append_gate: None,
-            tool_executor: Some(tool_executor),
-        }
-    }
-
-    /// Adds a post-commit observer and a deterministic tool executor together.
-    #[must_use]
-    pub const fn with_commit_observer_and_tool_executor(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        observer: &'a dyn ModelRunCommitObserver,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: Some(observer),
-            first_append_gate: None,
-            tool_executor: Some(tool_executor),
+            tool_executor,
         }
     }
 
@@ -723,124 +694,80 @@ where
                     calls,
                 } => {
                     cursor = calls_cursor;
-                    match self.tool_executor {
-                        None => {
-                            let failure = RunFailureDto::new(
-                                "tool_execution_unavailable",
-                                ErrorRetryDto::Never,
-                                None,
-                            )?;
-                            let mut facts = calls
-                                .iter()
-                                .cloned()
-                                .map(ModelRunFactInputDto::tool_call_recorded)
-                                .collect::<Vec<_>>();
-                            facts.push(ModelRunFactInputDto::failed(failure));
-                            cursor = self.append(
-                                input.session_id,
-                                input.run_id,
-                                cursor,
-                                facts,
-                                Some(RunStatusDto::Failed),
-                            )?;
-                            return Ok(AttemptResult::FailedTerminal { cursor });
+                    tool_round += 1;
+                    messages.push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
+                    for call in calls {
+                        let facts = vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
+                        cursor =
+                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
+                        if input.cancellation.is_cancelled() {
+                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
                         }
-                        Some(port) => {
-                            tool_round += 1;
-                            messages
-                                .push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
-                            for call in calls {
-                                let facts =
-                                    vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    facts,
-                                    None,
-                                )?;
-                                if input.cancellation.is_cancelled() {
-                                    return self.cancel_attempt(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                    );
-                                }
-                                let outcome = match port
-                                    .execute_tool(input.session_id, input.run_id, call.clone())
-                                    .await
-                                {
-                                    Ok(outcome) => outcome,
-                                    Err(error) => {
-                                        // A tool infrastructure error is a typed failed
-                                        // tool result: record it first, then terminalize.
-                                        let failure = failure_from_error(&error)?;
-                                        let outcome = ToolResultOutcomeDto::failed(failure.clone());
-                                        let fact = ModelRunFactInputDto::tool_result_recorded(
-                                            call.call_id(),
-                                            outcome,
-                                        )?;
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            vec![fact],
-                                            None,
-                                        )?;
-                                        *durable_output = true;
-                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            facts,
-                                            Some(RunStatusDto::Failed),
-                                        )?;
-                                        return Ok(AttemptResult::FailedTerminal { cursor });
-                                    }
-                                };
-                                if input.cancellation.is_cancelled() {
-                                    return self.cancel_attempt(
-                                        input.session_id,
-                                        input.run_id,
-                                        cursor,
-                                    );
-                                }
+                        let outcome = match self
+                            .tool_executor
+                            .execute_tool(input.session_id, input.run_id, call.clone())
+                            .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                // A tool infrastructure error is a typed failed
+                                // tool result: record it first, then terminalize.
+                                let failure = failure_from_error(&error)?;
+                                let outcome = ToolResultOutcomeDto::failed(failure.clone());
                                 let fact = ModelRunFactInputDto::tool_result_recorded(
                                     call.call_id(),
-                                    outcome.clone(),
+                                    outcome,
                                 )?;
-                                let facts = vec![fact];
                                 cursor = self.append(
                                     input.session_id,
                                     input.run_id,
                                     cursor,
-                                    facts,
+                                    vec![fact],
                                     None,
                                 )?;
                                 *durable_output = true;
-                                match outcome {
-                                    ToolResultOutcomeDto::Succeeded { content } => {
-                                        let message =
-                                            ModelMessageDto::tool_result(call.call_id(), content)?;
-                                        messages.push(message);
-                                    }
-                                    ToolResultOutcomeDto::Failed { failure } => {
-                                        let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                        cursor = self.append(
-                                            input.session_id,
-                                            input.run_id,
-                                            cursor,
-                                            facts,
-                                            Some(RunStatusDto::Failed),
-                                        )?;
-                                        return Ok(AttemptResult::FailedTerminal { cursor });
-                                    }
-                                }
+                                let facts = vec![ModelRunFactInputDto::failed(failure)];
+                                cursor = self.append(
+                                    input.session_id,
+                                    input.run_id,
+                                    cursor,
+                                    facts,
+                                    Some(RunStatusDto::Failed),
+                                )?;
+                                return Ok(AttemptResult::FailedTerminal { cursor });
                             }
-                            request = input.request.with_messages(messages.clone())?;
+                        };
+                        if input.cancellation.is_cancelled() {
+                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
+                        }
+                        let fact = ModelRunFactInputDto::tool_result_recorded(
+                            call.call_id(),
+                            outcome.clone(),
+                        )?;
+                        let facts = vec![fact];
+                        cursor =
+                            self.append(input.session_id, input.run_id, cursor, facts, None)?;
+                        *durable_output = true;
+                        match outcome {
+                            ToolResultOutcomeDto::Succeeded { content } => {
+                                let message =
+                                    ModelMessageDto::tool_result(call.call_id(), content)?;
+                                messages.push(message);
+                            }
+                            ToolResultOutcomeDto::Failed { failure } => {
+                                let facts = vec![ModelRunFactInputDto::failed(failure)];
+                                cursor = self.append(
+                                    input.session_id,
+                                    input.run_id,
+                                    cursor,
+                                    facts,
+                                    Some(RunStatusDto::Failed),
+                                )?;
+                                return Ok(AttemptResult::FailedTerminal { cursor });
+                            }
                         }
                     }
+                    request = input.request.with_messages(messages.clone())?;
                 }
             }
         }
@@ -848,9 +775,9 @@ where
 
     /// Drives one provider round: a single stream with its own start event.
     ///
-    /// Tool-call events are only collected here; durable recording, execution,
-    /// and request extension happen in [`Self::drive_attempt`] so the no-port
-    /// denial stays a single atomic append.
+    /// Tool-call events are only collected here; durable recording and
+    /// execution happen in [`Self::drive_attempt`] against the mandatory tool
+    /// executor.
     #[expect(
         clippy::too_many_arguments,
         reason = "The round helper carries the attempt's mutable state explicitly so the caller owns the tool loop."
@@ -956,16 +883,45 @@ where
                     *durable_output |= next_cursor != cursor;
                     cursor = next_cursor;
                 }
-                ModelEventDto::ReasoningDelta { content } => {
+                ModelEventDto::ReasoningDelta { category, content } => {
+                    let category = match category {
+                        intention_model::ReasoningFragmentCategoryDto::Primary => {
+                            intention_domain::ReasoningDeltaCategory::Primary
+                        }
+                        intention_model::ReasoningFragmentCategoryDto::Detail => {
+                            intention_domain::ReasoningDeltaCategory::Detail
+                        }
+                    };
                     cursor = self.append(
                         input.session_id,
                         input.run_id,
                         cursor,
-                        vec![ModelRunFactInputDto::reasoning_delta_recorded(content)?],
+                        vec![ModelRunFactInputDto::reasoning_delta_recorded_categorized(
+                            category, content,
+                        )?],
                         None,
                     )?;
                     *durable_output = true;
                 }
+                ModelEventDto::ReasoningSummaryDelta { content } => {
+                    cursor = self.append(
+                        input.session_id,
+                        input.run_id,
+                        cursor,
+                        vec![ModelRunFactInputDto::reasoning_summary_delta_recorded(
+                            content,
+                        )?],
+                        None,
+                    )?;
+                    *durable_output = true;
+                }
+                // The per-fact 512 KiB reasoning bound is enforced by the
+                // domain constructors above; the combined per-run 4 MiB bound
+                // (`intention_domain::validate_reasoning_fact_output_bound`)
+                // is enforced at the durable append authority against the
+                // per-run `reasoning_aggregate_bytes` accounting, which
+                // rejects the whole crossing batch before any write
+                // (PR24-024).
                 ModelEventDto::Usage { usage } => {
                     cursor = self.append(
                         input.session_id,
@@ -1353,4 +1309,115 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
 
 fn failure_from_error(error: &ErrorDto) -> DtoResult<RunFailureDto> {
     RunFailureDto::new(error.code(), error.retry(), error.correlation_id())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Accessor fixtures use expect to provide precise test failure messages."
+    )]
+
+    use super::*;
+    use intention_config::{
+        ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+    };
+    use intention_model::{ModelCancellationSignal, ModelMessageDto, ModelRequestDto};
+    use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+
+    fn fixture_input() -> ModelRunExecutionInputDto {
+        let session_id = SessionId::parse("11111111-1111-4111-8111-111111111111")
+            .expect("fixture session id is valid");
+        let run_id =
+            RunId::parse("22222222-2222-4222-8222-222222222222").expect("fixture run id is valid");
+        let request = ModelRequestDto::new(
+            run_id,
+            "fixture-model",
+            vec![
+                ModelMessageDto::new(intention_model::ModelRoleDto::User, "fixture turn")
+                    .expect("fixture message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("fixture request is valid");
+        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\ncredential = \"fixture-credential-not-real-12345\"\n"
+                .to_owned(),
+            ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-runtime-accessor-fixture.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("fixture configuration resolves");
+        let safe_config = ConfigSnapshotDto::new(
+            SchemaVersionDto::new(1, 0),
+            ConfigRevisionId::parse("33333333-3333-4333-8333-333333333333")
+                .expect("fixture revision is a canonical UUID"),
+            TimestampDto::from_unix_seconds(1_700_000_000).expect("fixture timestamp is valid"),
+            resolved,
+        )
+        .expect("fixture snapshot is valid");
+        ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request,
+            safe_config,
+            ModelCancellationSignal::new(),
+        )
+    }
+
+    #[test]
+    fn execution_input_accessors_expose_all_fields() {
+        let input = fixture_input();
+        assert_eq!(
+            input.session_id(),
+            SessionId::parse("11111111-1111-4111-8111-111111111111")
+                .expect("fixture session id is valid")
+        );
+        assert_eq!(
+            input.run_id(),
+            RunId::parse("22222222-2222-4222-8222-222222222222").expect("fixture run id is valid")
+        );
+        assert_eq!(input.request().model(), "fixture-model");
+        assert_eq!(
+            input.safe_config().resolved().provider().model(),
+            "fixture-model"
+        );
+        assert!(
+            !input
+                .safe_config()
+                .resolved()
+                .provider()
+                .credential_configured()
+                || input.safe_config().resolved().provider().kind().as_str() == "openrouter",
+            "the safe configuration is the credential-free resolved projection"
+        );
+    }
+
+    #[test]
+    fn runtime_values_accessors_expose_all_fields() {
+        let values = RuntimeValuesDto::new(
+            RunId::parse("44444444-4444-4444-8444-444444444444").expect("fixture run id is valid"),
+            fixture_input().safe_config().clone(),
+            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
+        );
+        assert_eq!(
+            values.next_run_id(),
+            RunId::parse("44444444-4444-4444-8444-444444444444").expect("fixture run id is valid")
+        );
+        assert_eq!(
+            values.config_snapshot().resolved().provider().model(),
+            "fixture-model"
+        );
+        assert_eq!(
+            values.occurred_at(),
+            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid")
+        );
+    }
 }

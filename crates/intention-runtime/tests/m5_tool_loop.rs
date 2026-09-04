@@ -665,7 +665,7 @@ fn execute(
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
     futures_executor::block_on(
-        ModelRunExecutionService::with_tool_executor(repository, driver, &clock, port).execute(
+        ModelRunExecutionService::new(repository, driver, &clock, port).execute(
             ModelRunExecutionInputDto::new(
                 repository.session_id,
                 repository.run_id,
@@ -1058,14 +1058,15 @@ fn cancellation_during_tool_execution_suppresses_continuation() {
 
     let execution = std::thread::spawn(move || {
         let outcome = futures_executor::block_on(
-            ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port)
-                .execute(ModelRunExecutionInputDto::new(
+            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
+                ModelRunExecutionInputDto::new(
                     session_id,
                     run_id,
                     request(run_id, "fixture"),
                     config,
                     execution_signal,
-                )),
+                ),
+            ),
         );
         (outcome, repository, driver, port)
     });
@@ -1113,50 +1114,6 @@ fn cancellation_during_tool_execution_suppresses_continuation() {
             .collect::<Vec<_>>(),
         vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
     );
-}
-
-#[test]
-fn no_port_preserves_m4_denial() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = snapshot("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call)),
-    ]);
-    let clock = ImmediateTime::new();
-
-    let outcome = futures_executor::block_on(
-        ModelRunExecutionService::new(&repository, &driver, &clock).execute(
-            ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            ),
-        ),
-    )
-    .expect("tool denial commits");
-
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(3)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 1);
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [
-            ModelRunFactInputDto::ToolCallRecorded { .. },
-            ModelRunFactInputDto::Failed { failure },
-        ] if failure.code() == "tool_execution_unavailable"
-    ));
-    assert_eq!(appends[1].status(), Some(RunStatusDto::Failed));
 }
 
 #[test]
@@ -1232,7 +1189,7 @@ fn cancellation_during_provider_round_cancels_run() {
     let clock = ImmediateTime::new();
 
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port).execute(
+        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
                 run_id,
@@ -1288,7 +1245,7 @@ fn cancellation_before_port_invocation_suppresses_tool() {
     let clock = ImmediateTime::new();
 
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port).execute(
+        ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
             ModelRunExecutionInputDto::new(
                 session_id,
                 run_id,
@@ -1351,7 +1308,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     let clock = ImmediateTime::new();
 
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::with_commit_observer_and_tool_executor(
+        ModelRunExecutionService::with_commit_observer(
             &repository,
             &driver,
             &clock,
@@ -1415,14 +1372,15 @@ fn cancellation_while_round_is_waiting_cancels_run() {
 
     let execution = std::thread::spawn(move || {
         let outcome = futures_executor::block_on(
-            ModelRunExecutionService::with_tool_executor(&repository, &driver, &clock, &port)
-                .execute(ModelRunExecutionInputDto::new(
+            ModelRunExecutionService::new(&repository, &driver, &clock, &port).execute(
+                ModelRunExecutionInputDto::new(
                     session_id,
                     run_id,
                     request(run_id, "fixture"),
                     config,
                     execution_signal,
-                )),
+                ),
+            ),
         );
         (outcome, repository)
     });
@@ -1567,19 +1525,14 @@ fn second_tool_call_does_not_start_until_first_finishes() {
 
     let execution = std::thread::spawn(move || {
         let outcome = futures_executor::block_on(
-            ModelRunExecutionService::with_tool_executor(
-                &repository,
-                &driver,
-                &clock,
-                execution_port.as_ref(),
-            )
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+            ModelRunExecutionService::new(&repository, &driver, &clock, execution_port.as_ref())
+                .execute(ModelRunExecutionInputDto::new(
+                    session_id,
+                    run_id,
+                    request(run_id, "fixture"),
+                    config,
+                    ModelCancellationSignal::new(),
+                )),
         );
         (outcome, repository, driver)
     });

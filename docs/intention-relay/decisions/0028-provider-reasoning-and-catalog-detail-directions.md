@@ -32,8 +32,6 @@ The following detail from
 - catalog lifecycle limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB raw
   candidate, 32 issues, 30-minute removal, 8 promotions, 32 reconciliation),
   tombstones, and the closed audit taxonomy; and
-- the legacy M4 selection bridge (`LegacyM4SelectionBindingDto`,
-  `historical_selection_corrupt`);
 - the normalized-reasoning-stream detail: the closed provider/model/domain/
   durable correspondence (`ModelEventDto::ReasoningDelta { category, content }`,
   `ModelEventDto::ReasoningSummaryDelta { content }`,
@@ -42,11 +40,11 @@ The following detail from
   domain `ReasoningDeltaRecorded`/`ReasoningSummaryDeltaRecorded` variants),
   the closed `provider_reasoning_stream_invalid` failure, the fixed 4-MiB
   combined per-run reasoning-output bound with
-  `reasoning_output_limit_exceeded`, the historical M4
-  `ReasoningDeltaRecorded { content }` decoding as historical `Primary`
-  reasoning evidence without rewriting its stored bytes, and the descriptor
-  owning the fixed field-path and array-index order for values originating in
-  one native response;
+  `reasoning_output_limit_exceeded`, `category` required on the wire with no
+  defaulting to `Primary` per
+  [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md), and the
+  descriptor owning the fixed field-path and array-index order for values
+  originating in one native response;
 - the unified model-capability taxonomy value `model-capability-taxonomy-v1`
   and the supersession note that the concept2 `reasoning_history_transfer`
   field name is research-only (architecture 22 owns
@@ -76,8 +74,8 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the reasoning history,
-usage, paged delivery, dialect catalog, catalog limits, and legacy bridge are
-present in `m4plus_concept.md` but absent from architecture 22, and that the
+usage, paged delivery, dialect catalog, and catalog limits are present in
+`m4plus_concept.md` but absent from architecture 22, and that the
 session-selection layer was explicitly excluded. This decision adopts the detail
 so the authoritative documentation fully covers the features, while preserving
 the project rule that no feature is documented as implemented without code
@@ -99,8 +97,10 @@ evidence.
    provider JSON, or generic request templates.
 6. Catalog/profile/kind rows are immutable append-only history; tombstones are
    permanent; a tombstoned ID cannot be reintroduced.
-7. The legacy M4 bridge is additive: original IDs, snapshot JSON, and UUIDs are
-   never replaced; a missing/corrupt binding is `historical_selection_corrupt`.
+7. The legacy M4 selection bridge is removed by
+   [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no legacy
+   selection binding is materialized for historical runs, and no synthetic
+   provider selection or binding is ever created.
 8. The normalized reasoning stream has one shared `RunEventCursorDto`; a
    malformed, duplicate-where-forbidden, out-of-order, or post-terminal value
    fails closed with `provider_reasoning_stream_invalid`, and the combined

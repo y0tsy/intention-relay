@@ -1,5 +1,5 @@
 # Reviewed direct-dependency compatibility holds for cargo-outdated.
-# The async-openai 0.41.3 migration removed the 0.29.3 hold and its transitive
+# The async-openai 0.41.3 upgrade removed the 0.29.3 hold and its transitive
 # RUSTSEC acknowledgements (the backoff chain is gone). The list stays empty
 # until a new reviewed hold is required.
 

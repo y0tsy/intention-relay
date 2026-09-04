@@ -127,22 +127,6 @@ impl SchemaVersionDto {
     pub const fn minor(self) -> u16 {
         self.minor
     }
-
-    /// Validates that another schema version has the same major version.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe unavailable error if the major schema versions differ.
-    pub fn ensure_compatible_with(self, other: Self) -> DtoResult<()> {
-        if self.major == other.major {
-            Ok(())
-        } else {
-            Err(ErrorDto::unavailable(
-                "incompatible_schema_version",
-                "schema major versions are incompatible",
-            ))
-        }
-    }
 }
 
 /// A safe Unix timestamp represented in whole seconds.
@@ -754,18 +738,11 @@ mod tests {
         let current = SchemaVersionDto::new(1, 2);
         assert_eq!(current.major(), 1);
         assert_eq!(current.minor(), 2);
-        assert!(
-            current
-                .ensure_compatible_with(SchemaVersionDto::new(1, 9))
-                .is_ok()
-        );
-        assert_eq!(
-            current
-                .ensure_compatible_with(SchemaVersionDto::new(2, 0))
-                .expect_err("major mismatch must fail")
-                .code(),
-            "incompatible_schema_version"
-        );
+        // Schema versions compare by exact equality: a differing minor is
+        // rejected exactly like a differing major (no same-major tolerance).
+        assert_ne!(current, SchemaVersionDto::new(1, 9));
+        assert_ne!(current, SchemaVersionDto::new(2, 0));
+        assert_eq!(current, SchemaVersionDto::new(1, 2));
 
         assert_eq!(
             TimestampDto::from_unix_seconds(4)

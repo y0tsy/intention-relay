@@ -14,16 +14,6 @@ const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 const WORKSPACE_ROOT: &str = "/workspace/private-project";
 
 #[test]
-fn legacy_error_fixture_decodes_without_additive_detail_fields() {
-    let error: ErrorDto = serde_json::from_str(include_str!("fixtures/error-v1-legacy.json"))
-        .expect("legacy error fixture must decode");
-
-    assert_eq!(error.code(), "legacy_not_found");
-    assert_eq!(error.correlation_id(), None);
-    assert_eq!(error.detail(), None);
-}
-
-#[test]
 fn versioned_missing_path_fixture_decodes_and_round_trips_safely() {
     let error: ErrorDto = serde_json::from_str(include_str!(
         "fixtures/error-v1-missing-workspace-path.json"
@@ -56,11 +46,36 @@ fn typed_missing_path_detail_round_trips_without_exposing_root_or_secret() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, error);
+    assert!(error.detail().is_some(), "typed detail is retained");
+    assert!(error.correlation_id().is_some(), "correlation is retained");
     assert!(!encoded.contains(FAKE_CREDENTIAL));
     assert!(!encoded.contains(WORKSPACE_ROOT));
     assert!(!error.to_string().contains("src/missing.rs"));
     let correlation_text = correlation.as_str();
     assert!(!error.to_string().contains(&correlation_text));
+}
+
+#[test]
+fn current_shape_minimal_error_decodes_absent_optional_fields_as_none() {
+    // The current ErrorDto shape keeps `correlation_id` and `detail` optional
+    // on the wire: a minimal current error without either field must decode
+    // both as None and re-encode without inventing values.
+    let error: ErrorDto = serde_json::from_str(
+        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual"}"#,
+    )
+    .expect("minimal current-shape error decodes");
+    assert_eq!(error.code(), "fixture");
+    assert_eq!(error.category(), ErrorCategoryDto::NotFound);
+    assert_eq!(error.retry(), ErrorRetryDto::Manual);
+    assert!(
+        error.correlation_id().is_none(),
+        "absent correlation is None"
+    );
+    assert!(error.detail().is_none(), "absent detail is None");
+    let encoded = serde_json::to_string(&error).expect("test serialization must succeed");
+    let decoded: ErrorDto =
+        serde_json::from_str(&encoded).expect("round trip must decode identically");
+    assert_eq!(decoded, error);
 }
 
 #[test]

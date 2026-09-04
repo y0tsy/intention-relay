@@ -44,6 +44,28 @@
 | Process/publication and assembly | `intention-daemon` / `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
 | Adapters | `intention-client`, then TUI/Tauri | client mapping | domain facts | no adapter authority | protocol client | adapter parity fixtures | Existing declared tiers |
 
+## M5+ Slice 2 control-plane ownership
+
+| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Provider catalog and capability resolution | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_control_plane_canonical`, `m5_catalog_runtime` | Existing declared tiers |
+| Provider selection and rejection semantics | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_control_plane_rejections`, `control_plane_contracts` | Existing declared tiers |
+| Session defaults and per-turn/fork overrides | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_session_selection_overrides`, `session_selection_client` | Existing declared tiers |
+| Configuration reload and editing | `intention-config` | `intention-config` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_config` | Existing declared tiers |
+| Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `intention-application` | `intention-domain` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_runtime`, `control_plane_client` | Existing declared tiers |
+| Reasoning surface (DTO-level) | `intention-model` | `intention-domain` | domain registry | existing storage owners | protocol DTOs | `m6_reasoning_surface` | Existing declared tiers |
+| Current storage schema and durable rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `sqlite_contracts` (current-schema tests) | Existing declared tiers |
+| Daemon hosting and degraded gate | `intention-daemon` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
+| Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `control_plane_client`, `session_selection_client` | Existing declared tiers |
+| Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
+
+No second authority is introduced: the control-plane surface is served through
+the daemon facade with typed commands and queries; health, discovery, and
+pricing are non-authorizing; and there is no second runtime, registry,
+scheduler, persistence authority, or sandbox. Fork wire commands remain Slice 4
+even though the override fields exist on the fork DTOs and the resolution
+service is implemented.
+
 ```mermaid
 flowchart TD
   F[Foundation] --> E[Execution meaning]

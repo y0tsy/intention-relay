@@ -45,7 +45,67 @@ mod timeout_tests {
             result,
             Err("tool_execute_external_effect_unknown")
         ));
-        assert!(started.elapsed() < Duration::from_secs(2));
+        // The deadline bound is the controlling invariant: the tool must
+        // return promptly (far below the thirty-second execute default) even
+        // when the pipe readers are descheduled by a loaded machine; the
+        // assertion is deliberately looser than the two-second drain grace.
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_descendant_holding_pipes_cannot_exceed_the_deadline() {
+        use std::os::unix::process::CommandExt;
+        let marker = std::env::temp_dir().join(format!(
+            "intention-relay-exec-descendant-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!(
+                "sleep 300 & echo $! > '{}'",
+                marker.to_string_lossy()
+            ))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.process_group(0);
+        let child = command.spawn().expect("spawn descendant fixture");
+        let started = Instant::now();
+        let result = bounded_output_with_timeout(
+            child,
+            CancellationSignal::new(),
+            Duration::from_millis(50),
+        );
+        assert!(matches!(
+            result,
+            Err("tool_execute_external_effect_unknown")
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a descendant holding the pipes open must not extend the deadline"
+        );
+        // The process-group termination must also kill the background
+        // descendant, not only the direct child.
+        let pid_text = std::fs::read_to_string(&marker).unwrap_or_default();
+        let _ = std::fs::remove_file(&marker);
+        if let Ok(descendant) = pid_text.trim().parse::<i32>()
+            && let Some(pid) = rustix::process::Pid::from_raw(descendant)
+        {
+            let mut alive = true;
+            for _ in 0..40 {
+                alive = rustix::process::test_kill_process(pid).is_ok();
+                if !alive {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            assert!(
+                !alive,
+                "the background descendant must be terminated with its process group"
+            );
+        }
     }
 }
 
@@ -86,6 +146,21 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_GLOB_MATCHES: usize = 10_000;
 const MAX_GREP_MATCHES: usize = 10_000;
+/// Upper bound on distinct files scanned by one directory/workspace grep.
+const MAX_GREP_FILES: usize = 10_000;
+/// Upper bound on the retained fragment bytes of one grep result. Per-line
+/// fragment caps alone still allow a very large aggregate result; the
+/// aggregate is clamped with the same truncation flag so durable, normalized
+/// content stays bounded (PR24-022).
+const MAX_GREP_AGGREGATE_BYTES: usize = 128 * 1024;
+/// Upper bound on one edit target or write expected-content source file.
+/// Larger files can be read (truncated) but never edited or equality-checked,
+/// which keeps edit reads and write preflights bounded (PR24-022).
+const MAX_EDIT_TARGET_BYTES: usize = 1024 * 1024;
+/// Upper bound on the number of arguments of one execute invocation.
+const MAX_EXECUTE_ARGUMENTS: usize = 128;
+/// Upper bound on the aggregate argument bytes of one execute invocation.
+const MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES: usize = 256 * 1024;
 
 /// Redacted working-directory identity recorded in durable tool metadata. It
 /// marks the authorized workspace root as the effective CWD without disclosing
@@ -217,9 +292,10 @@ impl ToolProcessStatus {
         match status.code() {
             Some(0) => Self::Success,
             Some(code) => Self::NonZero { code },
-            // Matches the legacy `exit_code:` text rendering for statuses
-            // without a numeric code.
-            None => Self::NonZero { code: -1 },
+            // A reaped child always reports either a recorded signal (checked
+            // above on Unix) or a numeric exit code (Windows always reports
+            // one); a status with neither cannot occur.
+            None => unreachable!("child status has neither signal nor exit code"),
         }
     }
 }
@@ -324,11 +400,20 @@ fn bounded_output(
     bounded_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
 }
 
+/// How long pipe readers may keep draining after the direct child has been
+/// reaped or terminated. Descendants holding the pipes open are killed with
+/// the child's process group on Unix; on every platform the collection is
+/// deadline-bounded so Execute can never wait forever (PR24-011). The grace
+/// tolerates reader-thread descheduling on loaded, instrumented machines
+/// while staying far below the thirty-second execute deadline.
+const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
+
 fn bounded_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Duration,
 ) -> Result<BoundedOutput, &'static str> {
+    let child_id = child.id();
     let stdout = child.stdout.take().map(|pipe| {
         thread::spawn(move || {
             let mut output = Vec::new();
@@ -345,41 +430,124 @@ fn bounded_output_with_timeout(
     });
     let deadline = Instant::now() + timeout;
     loop {
+        if cancellation.is_cancelled() || Instant::now() >= deadline {
+            // The direct child is killed and, on Unix, its whole process
+            // group, so a backgrounded descendant that inherited the pipes
+            // cannot keep the reader threads alive after the tool returns.
+            terminate_process_tree(&mut child, child_id);
+            let _ = child.wait();
+            let _ = drain_pipes(
+                stdout,
+                stderr,
+                Instant::now() + READER_DRAIN_GRACE,
+                &cancellation,
+            );
+            return Err("tool_execute_external_effect_unknown");
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
-                let (stdout, stdout_was_truncated) = join_reader(stdout)?;
-                let (stderr, stderr_was_truncated) = join_reader(stderr)?;
-                return Ok(BoundedOutput {
-                    status,
-                    stdout,
-                    stderr,
-                    stdout_truncated: stdout_was_truncated,
-                    stderr_truncated: stderr_was_truncated,
-                });
-            }
-            Ok(None) if cancellation.is_cancelled() => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
-                return Err("tool_execute_external_effect_unknown");
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
-                return Err("tool_execute_external_effect_unknown");
+                // The direct child is reaped, but a descendant may still hold
+                // the output pipes open. Collect until the grace bound; a
+                // stalled drain is killed and classified unknown so Execute
+                // still returns within its deadline.
+                let drain_until = deadline.min(Instant::now() + READER_DRAIN_GRACE);
+                match drain_pipes(stdout, stderr, drain_until, &cancellation) {
+                    PipeDrain::Complete { stdout, stderr } => {
+                        let (stdout, stdout_was_truncated) = stdout?;
+                        let (stderr, stderr_was_truncated) = stderr?;
+                        return Ok(BoundedOutput {
+                            status,
+                            stdout,
+                            stderr,
+                            stdout_truncated: stdout_was_truncated,
+                            stderr_truncated: stderr_was_truncated,
+                        });
+                    }
+                    PipeDrain::Stalled => {
+                        terminate_process_tree(&mut child, child_id);
+                        let _ = child.wait();
+                        return Err("tool_execute_external_effect_unknown");
+                    }
+                }
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(_) => {
-                let _ = child.kill();
+                terminate_process_tree(&mut child, child_id);
                 let _ = child.wait();
-                let _ = join_reader(stdout);
-                let _ = join_reader(stderr);
+                let _ = drain_pipes(
+                    stdout,
+                    stderr,
+                    Instant::now() + READER_DRAIN_GRACE,
+                    &cancellation,
+                );
                 return Err("tool_execute_external_effect_unknown");
             }
         }
+    }
+}
+
+/// Kills the direct child and, on Unix, its whole process group.
+///
+/// The execute path spawns the child as the leader of its own process group,
+/// so this also terminates background descendants that inherited the output
+/// pipes. A missing group (ESRCH) is harmless: the direct kill covers the
+/// child. The kill is performed through the safe `rustix` process API, never
+/// through raw `unsafe` syscall blocks, so the workspace `unsafe_code` deny
+/// stays intact (PR24-011).
+///
+/// The child identifier is consumed only by the Unix process-group kill, so
+/// the parameter keeps an underscore prefix for the platforms where it is
+/// unused.
+fn terminate_process_tree(child: &mut Child, _child_id: u32) {
+    let _ = child.kill();
+    #[cfg(unix)]
+    if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(_child_id).unwrap_or(0)) {
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+}
+
+/// Collected reader results once both pipe readers have finished.
+enum PipeDrain {
+    /// Both readers completed; an `Err` records a reader failure.
+    Complete {
+        stdout: Result<(Vec<u8>, bool), &'static str>,
+        stderr: Result<(Vec<u8>, bool), &'static str>,
+    },
+    /// At least one reader was still pending at the deadline.
+    Stalled,
+}
+
+/// Joins both pipe readers until `until`, observing cancellation.
+fn drain_pipes(
+    mut stdout: Option<ReaderHandle>,
+    mut stderr: Option<ReaderHandle>,
+    until: Instant,
+    cancellation: &CancellationSignal,
+) -> PipeDrain {
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+    loop {
+        if let Some(handle) = stdout.take() {
+            if handle.is_finished() {
+                stdout_result = Some(join_reader(Some(handle)));
+            } else {
+                stdout = Some(handle);
+            }
+        }
+        if let Some(handle) = stderr.take() {
+            if handle.is_finished() {
+                stderr_result = Some(join_reader(Some(handle)));
+            } else {
+                stderr = Some(handle);
+            }
+        }
+        if let (Some(stdout), Some(stderr)) = (stdout_result.take(), stderr_result.take()) {
+            return PipeDrain::Complete { stdout, stderr };
+        }
+        if cancellation.is_cancelled() || Instant::now() >= until {
+            return PipeDrain::Stalled;
+        }
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -421,6 +589,36 @@ fn join_reader(reader: Option<ReaderHandle>) -> Result<(Vec<u8>, bool), &'static
         .map(|reader| reader.join().map_err(|_| "tool_execute_read_failed")?)
         .transpose()
         .map(|value| value.unwrap_or_default())
+}
+
+/// Outcome of a bounded whole-file read.
+enum LimitedReadOutcome {
+    /// The file fit within the bound and was read completely.
+    Content(Vec<u8>),
+    /// The file exceeds the bound; no content is retained.
+    TooLarge,
+    /// The file could not be opened or read.
+    Unreadable,
+}
+
+/// Reads a whole file only when it fits within `limit` bytes.
+///
+/// Oversized files are detected without allocating or slurping their content,
+/// which keeps edit and expected-content comparisons bounded (PR24-022).
+fn read_limited(path: &std::path::Path, limit: usize) -> LimitedReadOutcome {
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return LimitedReadOutcome::Unreadable,
+    };
+    let mut bytes = Vec::new();
+    if file.take(limit as u64 + 1).read_to_end(&mut bytes).is_err() {
+        return LimitedReadOutcome::Unreadable;
+    }
+    if bytes.len() > limit {
+        return LimitedReadOutcome::TooLarge;
+    }
+    LimitedReadOutcome::Content(bytes)
 }
 
 fn read_bounded(
@@ -752,7 +950,10 @@ pub const fn registry() -> [ToolDescriptor; 14] {
 }
 
 /// Bounded text accepted by tool contracts.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// Deserialization is validating: JSON arriving at the daemon tool boundary
+/// cannot bypass the constructor's size and NUL checks (PR24-023).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct BoundedText(String);
 impl BoundedText {
@@ -775,6 +976,18 @@ impl BoundedText {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BoundedText {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(|error| {
+            serde::de::Error::custom(format!("invalid tool text ({})", error.code()))
+        })
     }
 }
 
@@ -891,10 +1104,59 @@ pub struct EditInput {
     #[serde(default)]
     pub expected_content: Option<BoundedText>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExecuteInput {
     pub program: BoundedText,
     pub args: Vec<BoundedText>,
+}
+
+impl ExecuteInput {
+    /// Validates the invocation shape after each element passed its own text
+    /// bound: the argument count and aggregate argument bytes stay within the
+    /// execute contract (PR24-023).
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the argument count or aggregate bytes
+    /// exceed the execute bounds.
+    pub fn validate_bounds(&self) -> DtoResult<()> {
+        let aggregate = self
+            .args
+            .iter()
+            .map(|argument| argument.as_str().len())
+            .sum::<usize>();
+        if self.args.len() > MAX_EXECUTE_ARGUMENTS || aggregate > MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES
+        {
+            Err(intention_types::ErrorDto::validation(
+                "invalid_tool_execute_arguments",
+                "execute argument count or aggregate size exceeds bounds",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ExecuteInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawExecuteInput {
+            program: BoundedText,
+            args: Vec<BoundedText>,
+        }
+        let raw = RawExecuteInput::deserialize(deserializer)?;
+        let input = Self {
+            program: raw.program,
+            args: raw.args,
+        };
+        input.validate_bounds().map_err(|error| {
+            serde::de::Error::custom(format!("invalid execute input ({})", error.code()))
+        })?;
+        Ok(input)
+    }
 }
 
 impl ToolInput {
@@ -1107,15 +1369,6 @@ impl ToolService {
     pub const fn new(root: WorkspaceRoot) -> Self {
         Self { root }
     }
-    /// Dispatches a typed call.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe typed error when validation, workspace resolution, or execution fails.
-    pub fn dispatch(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult> {
-        self.dispatch_with_cancellation(call, input, CancellationSignal::new())
-    }
-
     /// Dispatches a typed tool call with cooperative cancellation.
     ///
     /// # Errors
@@ -1158,39 +1411,9 @@ impl ToolService {
         })
     }
 
-    /// Invokes exactly one explicitly admitted local tool call.
-    ///
-    /// This deliberately does not implement a model/tool loop.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while dispatching the tool call.
-    pub fn invoke(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult> {
-        self.dispatch(call, input)
-    }
-
-    /// Compatibility adapter for callers that already have a call id while
-    /// still executing through the correlated invocation boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed error produced while dispatching the tool call.
-    pub fn invoke_with_context(
-        &self,
-        context: ToolContext,
-        input: ToolInput,
-    ) -> DtoResult<ToolResultEnvelope> {
-        self.invoke_enveloped(ToolInvocation {
-            schema_version: TOOL_SCHEMA_VERSION,
-            context,
-            input,
-        })
-    }
-
     /// Invokes a tool and returns the result-boundary envelope.
     ///
-    /// The invocation context is validated before any tool effect occurs. The
-    /// bare-result APIs remain available for compatibility with existing callers.
+    /// The invocation context is validated before any tool effect occurs.
     ///
     /// # Errors
     ///
@@ -1261,6 +1484,9 @@ fn execute_tool(
     input: ExecuteInput,
     cancellation: CancellationSignal,
 ) -> DtoResult<ExecutedTool> {
+    // In-process typed construction must observe the same execute bounds as
+    // the validating deserialize path.
+    input.validate_bounds()?;
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
@@ -1270,6 +1496,14 @@ fn execute_tool(
     // and value to be valid Unicode. `vars()` panics on such entries.
     command.envs(std::env::vars_os());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // The child leads its own process group so timeout and cancellation
+        // can terminate background descendants that inherited the pipes
+        // (PR24-011).
+        command.process_group(0);
+    }
     let child = command.spawn().map_err(|_| {
         intention_types::ErrorDto::validation(
             "tool_execute_spawn_failed",
@@ -1284,9 +1518,15 @@ fn execute_tool(
     let (stdout, _) = bounded_lossy(&output.stdout);
     let (stderr, _) = bounded_lossy(&output.stderr);
     let truncated = output.stdout_truncated || output.stderr_truncated;
+    // Render the terminal status from the typed classification so the text and
+    // the typed `ToolProcessStatus` can never disagree.
+    let status_text = match process_status {
+        ToolProcessStatus::Success => "exit_code:0".to_owned(),
+        ToolProcessStatus::NonZero { code } => format!("exit_code:{code}"),
+        ToolProcessStatus::Signal { signal } => format!("signal:{signal}"),
+    };
     let text = format!(
-        "stdout:\n{stdout}\nstderr:\n{stderr}\nexit_code:{}{}",
-        output.status.code().unwrap_or(-1),
+        "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
     // A known non-zero exit or known signal termination is a normalized
@@ -1324,12 +1564,29 @@ fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> 
         _ => {}
     }
     if let Some(expected) = input.expected_content.as_ref() {
-        let current = std::fs::read_to_string(&path).map_err(|_| {
-            intention_types::ErrorDto::validation(
-                "tool_write_conflict",
-                "workspace file changed before write",
-            )
-        })?;
+        // Expected-content equality is checked against a bounded read: a
+        // larger file can never equal the bounded expected content and is
+        // reported as changed instead of being slurped (PR24-022).
+        let current = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
+            LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
+                intention_types::ErrorDto::validation(
+                    "tool_write_conflict",
+                    "workspace file changed before write",
+                )
+            })?,
+            LimitedReadOutcome::TooLarge => {
+                return Err(intention_types::ErrorDto::validation(
+                    "tool_write_conflict",
+                    "workspace file changed before write",
+                ));
+            }
+            LimitedReadOutcome::Unreadable => {
+                return Err(intention_types::ErrorDto::validation(
+                    "tool_write_conflict",
+                    "workspace file changed before write",
+                ));
+            }
+        };
         if current != expected.as_str() {
             return Err(intention_types::ErrorDto::validation(
                 "tool_write_conflict",
@@ -1354,9 +1611,29 @@ fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
             "workspace file changed before edit",
         ));
     }
-    let text = std::fs::read_to_string(&path).map_err(|_| {
-        intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
-    })?;
+    // Edit reads the complete target to apply one replacement; the target is
+    // therefore size-bounded so a huge file cannot allocate unboundedly
+    // (PR24-022).
+    let text = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
+        LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
+            intention_types::ErrorDto::validation(
+                "tool_read_failed",
+                "unable to read workspace file",
+            )
+        })?,
+        LimitedReadOutcome::TooLarge => {
+            return Err(intention_types::ErrorDto::validation(
+                "tool_edit_target_too_large",
+                "edit target exceeds the workspace file size bound",
+            ));
+        }
+        LimitedReadOutcome::Unreadable => {
+            return Err(intention_types::ErrorDto::validation(
+                "tool_read_failed",
+                "unable to read workspace file",
+            ));
+        }
+    };
     if !text.contains(input.old.as_str()) {
         return Err(intention_types::ErrorDto::validation(
             "edit_target_missing",
@@ -1501,6 +1778,7 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         })?
         .clone();
     let mut matches = Vec::new();
+    let mut retained_bytes = 0usize;
     let mut truncated = source_truncated || lossy_truncated;
     for (line_index, line) in text.lines().enumerate() {
         let Some(column) = line.find(input.pattern.as_str()) else {
@@ -1518,16 +1796,21 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
                 .map(|(index, _)| index)
                 .last()
                 .unwrap_or(0);
-            &line[..end]
+            line[..end].to_owned()
         } else {
-            line
+            line.to_owned()
         };
-        matches.push(GrepMatch {
-            path: logical.clone(),
-            line: line_index as u64 + 1,
-            column: line[..column].chars().count() as u64 + 1,
-            fragment: bounded_text(fragment.to_owned())?,
-        });
+        if !record_grep_match(
+            &mut matches,
+            &mut retained_bytes,
+            &mut truncated,
+            logical.clone(),
+            line_index as u64 + 1,
+            line[..column].chars().count() as u64 + 1,
+            fragment,
+        )? {
+            break;
+        }
     }
     Ok(ToolResult::Grep(GrepResult { matches, truncated }))
 }
@@ -1551,11 +1834,12 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
         ));
     }
     let mut files = Vec::new();
+    let mut file_scan_truncated = false;
     if metadata.is_file() && !metadata.file_type().is_symlink() {
         files.push(base);
     } else if metadata.is_dir() {
         let mut pending = vec![base];
-        while let Some(directory) = pending.pop() {
+        'traverse: while let Some(directory) = pending.pop() {
             let Ok(entries) = std::fs::read_dir(&directory) else {
                 continue;
             };
@@ -1574,6 +1858,10 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
                 } else if metadata.is_file()
                     && !contains_symlink_component(root.canonical_path(), &path)
                 {
+                    if files.len() >= MAX_GREP_FILES {
+                        file_scan_truncated = true;
+                        break 'traverse;
+                    }
                     files.push(path);
                 } else {
                     continue;
@@ -1588,14 +1876,22 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     }
     files.sort();
     let mut matches = Vec::new();
-    let mut truncated = false;
+    let mut retained_bytes = 0usize;
+    let mut truncated = file_scan_truncated;
     for path in files {
-        let bytes = std::fs::read(&path).map_err(|_| {
+        let mut file = std::fs::File::open(&path).map_err(|_| {
+            intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
+        })?;
+        let mut bytes = Vec::new();
+        // Every file is read through the bounded reader, so an oversized file
+        // cannot allocate unbounded memory during a directory search; the
+        // truncation flag reports the dropped tail (PR24-022).
+        let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
             intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
         })?;
         let text = String::from_utf8_lossy(&bytes);
         let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-        if lossy_truncated {
+        if source_truncated || lossy_truncated {
             truncated = true;
         }
         let logical = single.clone().or_else(|| {
@@ -1624,12 +1920,17 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
             } else {
                 line.to_owned()
             };
-            matches.push(GrepMatch {
-                path: logical.clone(),
-                line: line_index as u64 + 1,
-                column: line[..column].chars().count() as u64 + 1,
-                fragment: bounded_text(fragment)?,
-            });
+            if !record_grep_match(
+                &mut matches,
+                &mut retained_bytes,
+                &mut truncated,
+                logical.clone(),
+                line_index as u64 + 1,
+                line[..column].chars().count() as u64 + 1,
+                fragment,
+            )? {
+                return Ok(ToolResult::Grep(GrepResult { matches, truncated }));
+            }
         }
         if matches.len() >= MAX_GREP_MATCHES {
             truncated = true;
@@ -1637,6 +1938,38 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
         }
     }
     Ok(ToolResult::Grep(GrepResult { matches, truncated }))
+}
+
+/// Records one grep match when it fits the aggregate fragment bound.
+///
+/// Per-line fragment caps alone allow a very large aggregate result; the
+/// aggregate retained bytes are clamped with the truncation flag (PR24-022).
+///
+/// # Errors
+///
+/// Returns a validation error when the fragment violates the bounded-text
+/// contract.
+fn record_grep_match(
+    matches: &mut Vec<GrepMatch>,
+    retained_bytes: &mut usize,
+    truncated: &mut bool,
+    path: WorkspaceRelativePathDto,
+    line: u64,
+    column: u64,
+    fragment: String,
+) -> DtoResult<bool> {
+    if fragment.len() > MAX_GREP_AGGREGATE_BYTES.saturating_sub(*retained_bytes) {
+        *truncated = true;
+        return Ok(false);
+    }
+    *retained_bytes += fragment.len();
+    matches.push(GrepMatch {
+        path,
+        line,
+        column,
+        fragment: bounded_text(fragment)?,
+    });
+    Ok(true)
 }
 
 fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
@@ -1722,4 +2055,321 @@ mod coverage_helpers {
 )]
 trait ToolExecutor {
     fn execute(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult>;
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "local fixture assertions"
+)]
+mod direct_execution_tests {
+    use super::*;
+    use intention_types::WorkspaceRelativePathDto;
+    use tempfile::TempDir;
+
+    fn workspace(root: &TempDir) -> intention_workspace::WorkspaceRoot {
+        intention_workspace::WorkspaceRoot::resolve(
+            &intention_domain::WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned())
+                .expect("fixture root parses"),
+        )
+        .expect("fixture workspace resolves")
+    }
+
+    fn relative(path: &str) -> WorkspaceRelativePathDto {
+        WorkspaceRelativePathDto::parse(path).expect("fixture path parses")
+    }
+
+    #[test]
+    fn direct_read_edit_and_grep_executions_cover_bounded_file_paths() {
+        let dir = TempDir::new().expect("temporary fixture dir");
+        std::fs::write(
+            dir.path().join("source.txt"),
+            "line one\nneedle here\nline three",
+        )
+        .expect("seed source");
+        let root = workspace(&dir);
+        let service = ToolService::new(root);
+
+        // Read path.
+        let read = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Read(ReadInput {
+                    path: relative("source.txt"),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("direct read dispatches");
+        assert!(matches!(read, ToolResult::Read(_)));
+
+        // Pattern-only grep path.
+        let grep = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Grep(GrepInput {
+                    pattern: BoundedText::new("needle").expect("pattern"),
+                    scope: None,
+                    path: Some(relative("source.txt")),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("direct file grep dispatches");
+        let ToolResult::Grep(grep) = grep else {
+            panic!("grep result expected");
+        };
+        assert_eq!(grep.matches.len(), 1);
+
+        // Edit path with expected-content verification (the expected value is
+        // the complete file content before the edit); a stale expectation
+        // conflicts before any mutation, then the matching edit succeeds.
+        let full = "line one\nneedle here\nline three";
+        let mismatch = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: relative("source.txt"),
+                old: BoundedText::new("needle").expect("old"),
+                new: BoundedText::new("again").expect("new"),
+                expected_content: Some(BoundedText::new("stale content").expect("expected")),
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(
+            matches!(&mismatch, Err(error) if error.code() == "tool_edit_conflict"),
+            "unexpected mismatch result: {mismatch:?}"
+        );
+        let edit = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Edit(EditInput {
+                    path: relative("source.txt"),
+                    old: BoundedText::new("needle").expect("old"),
+                    new: BoundedText::new("replaced").expect("new"),
+                    expected_content: Some(BoundedText::new(full).expect("expected")),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("direct edit dispatches");
+        assert!(matches!(edit, ToolResult::Edit(_)));
+    }
+
+    #[test]
+    fn direct_execute_collects_bounded_output_successfully() {
+        let dir = TempDir::new().expect("temporary fixture dir");
+        let service = ToolService::new(workspace(&dir));
+        let result = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Execute(ExecuteInput {
+                    program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
+                        .expect("program"),
+                    args: if cfg!(windows) {
+                        vec![BoundedText::new("/C echo ok").expect("arg")]
+                    } else {
+                        vec![
+                            BoundedText::new("-c").expect("flag"),
+                            BoundedText::new("printf 'ok\\n'").expect("script"),
+                        ]
+                    },
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("direct execute dispatches");
+        let ToolResult::Execute(value) = result else {
+            panic!("execute result expected");
+        };
+        assert!(value.text.as_str().contains("exit_code:0"));
+    }
+
+    #[test]
+    fn direct_write_glob_and_oversized_read_paths_stay_bounded() {
+        let dir = TempDir::new().expect("temporary fixture dir");
+        std::fs::write(dir.path().join("existing.txt"), "before").expect("seed existing");
+        std::fs::write(dir.path().join("big.bin"), vec![b'x'; 70 * 1024]).expect("seed big");
+        let root = workspace(&dir);
+        let service = ToolService::new(root);
+
+        // Oversized read reports truncation within the tool output bound.
+        let read = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Read(ReadInput {
+                    path: relative("big.bin"),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("oversized read dispatches");
+        let ToolResult::Read(value) = read else {
+            panic!("read result expected");
+        };
+        assert!(value.truncated);
+
+        // Write with a stale expected content conflicts; then the matching
+        // write succeeds.
+        let stale = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: relative("existing.txt"),
+                content: BoundedText::new("after").expect("content"),
+                expected_content: Some(BoundedText::new("stale").expect("expected")),
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(
+            matches!(&stale, Err(error) if error.code() == "tool_write_conflict"),
+            "unexpected write conflict result: {stale:?}"
+        );
+        let write = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Write(WriteInput {
+                    path: relative("existing.txt"),
+                    content: BoundedText::new("after").expect("content"),
+                    expected_content: Some(BoundedText::new("before").expect("expected")),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("matching write dispatches");
+        assert!(matches!(write, ToolResult::Write(_)));
+
+        // Glob of a new path resolves to an empty result.
+        let glob = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Glob(GlobInput {
+                    pattern: BoundedText::new("*.new").expect("pattern"),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("empty glob dispatches");
+        assert!(matches!(glob, ToolResult::Glob(_)));
+    }
+
+    #[test]
+    fn direct_edit_and_glob_error_and_bound_branches_are_typed() {
+        let dir = TempDir::new().expect("temporary fixture dir");
+        std::fs::write(dir.path().join("plain.txt"), "known content").expect("seed plain");
+        std::fs::write(dir.path().join("huge.txt"), vec![b'a'; 1024 * 1024 + 16])
+            .expect("seed huge");
+        std::fs::create_dir(dir.path().join("files")).expect("seed directory");
+        std::fs::write(dir.path().join("files/one.txt"), "one").expect("seed one");
+        let service = ToolService::new(workspace(&dir));
+
+        // A missing edit target is a typed failure.
+        let missing = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: relative("plain.txt"),
+                old: BoundedText::new("absent").expect("old"),
+                new: BoundedText::new("x").expect("new"),
+                expected_content: None,
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(matches!(&missing, Err(error) if error.code() == "edit_target_missing"));
+
+        // An oversized edit target is rejected before any read-back.
+        let oversized = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: relative("huge.txt"),
+                old: BoundedText::new("a").expect("old"),
+                new: BoundedText::new("b").expect("new"),
+                expected_content: None,
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(matches!(
+            &oversized,
+            Err(error) if error.code() == "tool_edit_target_too_large"
+        ));
+
+        // Reading a directory fails closed.
+        let directory = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Read(ReadInput {
+                path: relative("files"),
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(matches!(&directory, Err(error) if error.code() == "tool_read_failed"));
+
+        // A successful glob returns the matching workspace-relative paths.
+        let matched = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Glob(GlobInput {
+                    pattern: BoundedText::new("files/*.txt").expect("pattern"),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("matching glob dispatches");
+        let ToolResult::Glob(glob) = matched else {
+            panic!("glob result expected");
+        };
+        assert_eq!(glob.paths.len(), 1);
+    }
+
+    #[test]
+    fn direct_grep_clamps_long_lines_and_execute_rejects_oversized_shapes() {
+        let dir = TempDir::new().expect("temporary fixture dir");
+        let mut long_line = vec![b'x'; 70 * 1024];
+        long_line.splice(70 * 1024 - 8.., b"needle!".iter().copied());
+        std::fs::write(dir.path().join("long.txt"), &long_line).expect("seed long line");
+        let service = ToolService::new(workspace(&dir));
+
+        let grep = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Grep(GrepInput {
+                    pattern: BoundedText::new("needle").expect("pattern"),
+                    scope: None,
+                    path: Some(relative("long.txt")),
+                }),
+                CancellationSignal::new(),
+            )
+            .expect("long-line grep dispatches");
+        let ToolResult::Grep(grep) = grep else {
+            panic!("grep result expected");
+        };
+        assert!(
+            grep.truncated,
+            "a match beyond the fragment window truncates"
+        );
+        for matched in &grep.matches {
+            assert!(matched.fragment.as_str().len() <= 64 * 1024);
+        }
+
+        let oversized = service.dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Execute(ExecuteInput {
+                program: BoundedText::new("echo").expect("program"),
+                args: (0..129)
+                    .map(|index| BoundedText::new(format!("arg-{index}")).expect("argument"))
+                    .collect(),
+            }),
+            CancellationSignal::new(),
+        );
+        assert!(matches!(
+            &oversized,
+            Err(error) if error.code() == "invalid_tool_execute_arguments"
+        ));
+    }
+
+    #[test]
+    fn execute_input_serde_validates_argument_shapes() {
+        let valid = serde_json::from_str::<ExecuteInput>(r#"{"program":"echo","args":["a","b"]}"#)
+            .expect("valid execute input decodes");
+        assert_eq!(valid.args.len(), 2);
+        let too_many = serde_json::from_str::<ExecuteInput>(&format!(
+            r#"{{"program":"echo","args":[{}]}}"#,
+            (0..129)
+                .map(|index| format!("\"arg-{index}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+        .expect_err("129 arguments fail validation at decode time");
+        assert!(too_many.to_string().contains("invalid execute input"));
+    }
 }

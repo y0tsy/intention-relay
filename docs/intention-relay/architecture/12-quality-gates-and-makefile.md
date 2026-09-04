@@ -241,7 +241,7 @@ An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an i
 
 M4 added direct `openrouter-rs 0.14.0` and `async-openai 0.29.3` dependencies. The post-M4 `async-openai` 0.41.3 migration replaced the Generic Chat SDK line with the namespaced `types::chat` contract and dropped the `backoff` chain. Their graphs require existing-policy MIT/Apache terms plus BSD-3-Clause, ISC, and CDLA-Permissive-2.0 for Rustls, `webpki-roots`, and the AWS-LC provider (`aws-lc-rs 1.18.0` / `aws-lc-sys 0.44.0`, both Apache-2.0/ISC); each is explicitly allowed in `deny.toml` and `quality/about.toml`, then disclosed by generated notices. The reviewed duplicate branches from these SDKs are: `getrandom@0.2.17` (ring 0.17 through the openrouter-rs reqwest 0.12 Rustls chain), `getrandom@0.3.4` (`async-openai` -> rand 0.9), target-only `r-efi@5.3.0` (`async-openai` -> rand 0.9 -> getrandom 0.3 on EFI targets), `reqwest@0.12.28` (openrouter-rs) alongside `reqwest@0.13.4` (`async-openai`), target-only `wasm-streams@0.4.2` (reqwest 0.12) alongside `wasm-streams@0.5.0` (reqwest 0.13), `syn@1.0.109` (openrouter-rs -> dotenvy_macro), `thiserror@1.0.69` and `thiserror-impl@1.0.69` (openrouter-rs), and target-only `windows-sys@0.52.0` (ring). Each exception is limited to the documented provider SDK path in `deny.toml` and must be reassessed when either selected SDK or its immediate HTTP/random/TLS path changes. The M4-era advisory acknowledgements `RUSTSEC-2025-0012` (`async-openai -> backoff`) and `RUSTSEC-2024-0384` (`async-openai -> backoff -> instant`) and the reviewed `cargo outdated` hold on `async-openai` were removed with the 0.41.3 migration: the `backoff` chain is gone, `cargo audit` and `cargo outdated` are clean, and `check_deny_policy.py` now rejects new advisory ignores or outdated holds. No source exception is approved by this package.
 
-Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. The approved `0BSD` entry is required transitively by `interprocess`'s local-IPC support (`doctest-file` and `recvmsg`) and is an OSI-approved permissive license. The SQLite graph also introduces `foldhash 0.2.0`, whose Zlib license is explicitly allowed in both `quality/about.toml` and `deny.toml` and disclosed through the generated notices. The current graph has two narrowly version-pinned duplicate exceptions: `hashbrown@0.16.1` is required only by `rsqlite-vfs 0.1.1` through the target-specific WASM chain `rusqlite 0.40.2 -> sqlite-wasm-rs 0.5.5`, while `syn@2.0.119` is required by `async-openai 0.41.3 -> async-openai-macros 0.3.0` (proc-macro) and by `wasm-bindgen-macro-support 0.2.126` through `wasm-bindgen 0.2.126` on WASM targets. Native bundled SQLite instead resolves `rusqlite 0.40.2 -> hashlink 0.12.1 -> hashbrown 0.17.1`; the independently required native proc-macro path retains `syn@3.0.3`. The native daemon continues to use bundled SQLite through `rusqlite` with its `bundled` feature and retains `rusqlite_migration 2.6.0`; these exceptions do not replace either dependency or relax duplicate bans for other crates or versions. Reassess both exceptions whenever `rusqlite`, `sqlite-wasm-rs`, `rsqlite-vfs`, `wasm-bindgen`, or their supported target selection changes; record the locked native and WASM validation trees with the review. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
+Exceptions use reviewed, versioned policy/allowlist files. Every exception has a justification and, where applicable, expiration/review date. The approved `0BSD` entry is required transitively by `interprocess`'s local-IPC support (`doctest-file` and `recvmsg`) and is an OSI-approved permissive license. The SQLite graph also introduces `foldhash 0.2.0`, whose Zlib license is explicitly allowed in both `quality/about.toml` and `deny.toml` and disclosed through the generated notices. The current graph has two narrowly version-pinned duplicate exceptions: `hashbrown@0.16.1` is required only by `rsqlite-vfs 0.1.1` through the target-specific WASM chain `rusqlite 0.40.2 -> sqlite-wasm-rs 0.5.5`, while `syn@2.0.119` is required by `async-openai 0.41.3 -> async-openai-macros 0.3.0` (proc-macro) and by `wasm-bindgen-macro-support 0.2.126` through `wasm-bindgen 0.2.126` on WASM targets. Native bundled SQLite instead resolves `rusqlite 0.40.2 -> hashlink 0.12.1 -> hashbrown 0.17.1`; the independently required native proc-macro path retains `syn@3.0.3`. The native daemon continues to use bundled SQLite through `rusqlite` with its `bundled` feature; `rusqlite_migration 2.6.0` is no longer in the graph because the schema-migration machinery was removed (ADR 0038, Wave 4); these exceptions do not replace either dependency or relax duplicate bans for other crates or versions. Reassess both exceptions whenever `rusqlite`, `sqlite-wasm-rs`, `rsqlite-vfs`, `wasm-bindgen`, or their supported target selection changes; record the locked native and WASM validation trees with the review. Ignoring a failing gate, using a broad CI bypass, or silently allowing a tool failure is prohibited.
 
 ## Test-first, architectural, and outcome integration
 
@@ -263,6 +263,28 @@ validation/repair phase. This historical process did not replace steps 5–7 or
 authorize an unimplemented focused gate.
 
 A high coverage percentage, passing lint, or successful compilation never replaces a required end-to-end outcome scenario.
+
+### M5+ Slice 2 test targets and evidence requirements
+
+The M5+ Slice 2 control-plane activation
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) adds the
+following integration test targets to the machine-readable policy:
+`intention-domain` `m5_control_plane_canonical`, `m5_control_plane_rejections`,
+`m5_session_selection_overrides`; `intention-protocol`
+`control_plane_contracts`; `intention-config` `m5_control_plane_config`;
+`intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`;
+`intention-client` `control_plane_client`, `session_selection_client`;
+`intention-model` `m6_reasoning_surface`. `intention-storage-sqlite` adds no
+new integration file; the current-schema tests live inside the existing
+`sqlite_contracts` target. No new CI job, Makefile target, crate, dependency,
+feature profile, coverage tier, or exclusion is added: the existing check count
+and the `make quick`, `make verify`, `docs-check`, and `architecture` gates
+remain the Slice 2 acceptance gate. Slice 2 required evidence is the reload
+transaction fault-injection, rotation no-frozen-meaning and fail-closed
+fixtures, health/discovery/pricing non-authority fixtures, promotion/
+reconciliation limit fixtures, catalog acceptance/recovery fixtures,
+control-plane safe-projection fixtures, and current-schema creation fixtures
+anchored in ADR 0037.
 
 ### M4 controller charter and closure record
 
@@ -410,7 +432,13 @@ coverage tier, feature combination, protocol implementation, migration, quality
 tool, or Makefile target. A later activating change must declare exact provider
 owners, dependencies, test targets, coverage/features, storage/wire policy,
 expected-failure architecture fixtures, redaction evidence, and Linux/Windows
-outcomes atomically with production work.
+outcomes atomically with production work. The M5+ Slice 2 control-plane
+activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) is
+that activating change for the provider catalog, selection, capability
+taxonomy, reasoning surface, header/preservation/parser
+contracts, and the configuration/provider control-plane cluster; it declares
+the exact test targets above and the single current-schema storage/wire policy,
+and passes the standard gates.
 
 The post-M4 Session branching and regeneration package is documentation-only. It
 activates no crate, test target, coverage tier, feature profile, storage/wire

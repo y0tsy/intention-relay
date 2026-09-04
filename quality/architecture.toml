@@ -71,12 +71,12 @@ public_resource_patterns = [
 [dependencies]
 "intention-types" = []
 "intention-domain" = ["intention-types"]
-"intention-config" = ["intention-types"]
+"intention-config" = ["intention-domain", "intention-types"]
 "intention-protocol" = ["intention-types", "intention-domain"]
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
 "intention-client" = ["intention-domain", "intention-protocol", "intention-transport", "intention-types"]
-"intention" = ["intention-application", "intention-client", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
+"intention" = ["intention-application", "intention-config", "intention-domain", "intention-hooks", "intention-model", "intention-protocol", "intention-provider-generic-chat", "intention-provider-openrouter", "intention-runtime", "intention-storage", "intention-storage-sqlite", "intention-tools", "intention-types", "intention-workspace"]
 "intention-daemon" = ["intention", "intention-application", "intention-client", "intention-config", "intention-domain", "intention-model", "intention-protocol", "intention-runtime", "intention-tools", "intention-transport", "intention-types"]
 "intention-application" = ["intention-config", "intention-domain", "intention-hooks", "intention-protocol", "intention-runtime", "intention-storage", "intention-tools", "intention-types", "intention-workspace"]
 "intention-runtime" = ["intention-config", "intention-domain", "intention-model", "intention-storage", "intention-types"]
@@ -103,11 +103,11 @@ public_resource_patterns = [
 "intention-application" = []
 "intention-runtime" = ["futures-executor", "futures-util"]
 "intention-storage" = ["serde_json"]
-"intention-storage-sqlite" = ["rusqlite", "rusqlite_migration", "serde_json", "tempfile"]
+"intention-storage-sqlite" = ["rusqlite", "serde_json", "tempfile"]
 "intention-model" = ["futures-core", "futures-executor", "futures-util", "serde", "serde_json"]
 "intention-provider-openrouter" = ["futures-util", "http", "openrouter-rs", "serde_json"]
 "intention-provider-generic-chat" = ["async-openai", "futures-util", "http", "serde_json"]
-"intention-tools" = ["glob", "serde", "serde_json", "tempfile"]
+"intention-tools" = ["glob", "rustix", "serde", "serde_json", "tempfile"]
 "intention-workspace" = []
 "intention-hooks" = []
 
@@ -178,7 +178,7 @@ coverage_tier = "A"
 name = "intention-domain"
 responsibility = "Domain DTOs, value validation, domain events, and invariants."
 test_target = "domain state and invariant tests"
-test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
+test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_control_plane_canonical", "m5_control_plane_rejections", "m5_session_selection_overrides", "m5_tool_results"]
 coverage_tier = "A"
 
 # Active M3 application lifecycle targets are checked against Cargo metadata.
@@ -186,14 +186,14 @@ coverage_tier = "A"
 name = "intention-application"
 responsibility = "Commands, queries, use cases, and transaction orchestration."
 test_target = "use-case and architecture tests"
-test_targets = ["m3_application", "m4_application_scheduling"]
+test_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-runtime"
 responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
 test_target = "deterministic actor integration tests"
-test_targets = ["m3_runtime", "m4_application_scheduling", "m4_model_execution", "m5_tool_loop"]
+test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -205,23 +205,23 @@ coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage-sqlite"
-responsibility = "SQLite schema, migrations, projections, and repository implementation."
-test_target = "migration and transaction fault-injection tests"
-test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
+responsibility = "SQLite current-schema creation, projections, and repository implementation."
+test_target = "current-schema and transaction fault-injection tests"
+test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "m5_control_plane_repos", "sqlite_contracts"]
 coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-config"
-responsibility = "TOML parsing, validation, migrations, and resolved configuration DTOs."
+responsibility = "TOML parsing, validation, and resolved configuration DTOs."
 test_target = "configuration fixture tests"
-test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts"]
+test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts", "m5_control_plane_config"]
 coverage_tier = "A"
 
 [[future_crates]]
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]
+test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports", "m6_reasoning_surface"]
 coverage_tier = "C"
 
 [[future_crates]]
@@ -242,7 +242,7 @@ coverage_tier = "C"
 name = "intention-tools"
 responsibility = "Typed tool registry and core tool contracts."
 test_target = "tool invocation and policy tests"
-test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
+test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
 coverage_tier = "B"
 
 [[future_crates]]
@@ -283,8 +283,8 @@ coverage_tier = "B"
 [[future_crates]]
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
-test_target = "protocol compatibility fixtures"
-test_targets = ["contracts", "protocol_fixtures", "accessors", "m3_contracts", "m4_run_stream_contracts"]
+test_target = "current-version wire contract fixtures"
+test_targets = ["contracts", "accessors", "m3_contracts", "m4_run_stream_contracts", "control_plane_contracts"]
 coverage_tier = "A"
 
 [[future_crates]]
@@ -298,7 +298,7 @@ coverage_tier = "C"
 name = "intention-client"
 responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
 test_target = "client contract and reconnect tests"
-test_targets = ["client_contract", "run_stream_contract"]
+test_targets = ["client_contract", "run_stream_contract", "control_plane_client", "session_selection_client"]
 coverage_tier = "C"
 
 [[future_crates]]

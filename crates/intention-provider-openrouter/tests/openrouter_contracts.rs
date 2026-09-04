@@ -93,7 +93,7 @@ fn openrouter_mapping_normalizes_text_reasoning_usage_finish_error_and_tool_call
         OpenRouterDriver::map_fixture_reasoning("considering context").expect("reasoning maps");
     assert_eq!(
         serde_json::to_string(&reasoning).expect("serializes"),
-        r#"{"kind":"reasoning_delta","content":"considering context"}"#
+        r#"{"kind":"reasoning_delta","category":"primary","content":"considering context"}"#
     );
     let usage = OpenRouterDriver::map_fixture_usage(2, 3, 5).expect("usage maps");
     assert!(
@@ -219,7 +219,6 @@ fn openrouter_driver_rejects_wrong_kind_and_maps_all_finish_and_error_classes() 
         ("stop", FinishReasonDto::Stop),
         ("length", FinishReasonDto::Length),
         ("tool_calls", FinishReasonDto::ToolCalls),
-        ("function_call", FinishReasonDto::ToolCalls),
         ("content_filter", FinishReasonDto::ContentFilter),
         ("error", FinishReasonDto::Error),
         ("unknown", FinishReasonDto::Unknown),

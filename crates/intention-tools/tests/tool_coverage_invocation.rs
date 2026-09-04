@@ -62,12 +62,13 @@ fn invocation_constructor_and_context_path_metadata_are_checked() {
     assert_eq!(error.code(), "tool_schema_mismatch");
 
     let error = service
-        .invoke_with_context(
-            context(ToolCallId::new()),
-            ToolInput::Read(ReadInput {
+        .invoke_enveloped(ToolInvocation {
+            schema_version: TOOL_SCHEMA_VERSION,
+            context: context(ToolCallId::new()),
+            input: ToolInput::Read(ReadInput {
                 path: WorkspaceRelativePathDto::parse("missing").unwrap(),
             }),
-        )
+        })
         .unwrap_err();
     assert_eq!(error.code(), "workspace_path_unavailable");
 }
@@ -141,7 +142,11 @@ fn read_and_edit_failures_are_typed_through_context_invocation() {
         }),
     ] {
         let error = service
-            .invoke_with_context(context(ToolCallId::new()), input)
+            .invoke_enveloped(ToolInvocation {
+                schema_version: TOOL_SCHEMA_VERSION,
+                context: context(ToolCallId::new()),
+                input,
+            })
             .unwrap_err();
         assert!(matches!(
             error.code(),

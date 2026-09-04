@@ -61,6 +61,34 @@ pub enum CanonicalError {
     OverLimit,
     DigestMismatch,
     InvalidDigest,
+    /// A provider kind identifier violates the closed kind policy.
+    InvalidProviderKind,
+    /// An endpoint violates the closed endpoint policy.
+    InvalidEndpoint,
+    /// A provider profile, kind descriptor, or capability record is invalid.
+    ProviderProfileRevisionInvalid,
+    /// A context source manifest violates its closed bounds.
+    ContextSourceManifestInvalid,
+    /// A model context projection record is semantically invalid.
+    ModelContextProjectionInvalid,
+    /// A model context projection exceeds its aggregate byte bound.
+    ModelContextProjectionTooLarge,
+    /// A credential-shaped value reached a field that must never carry secrets.
+    CredentialsForbidden,
+    /// A provider kind revision changes immutable kind identity or closed parts.
+    ProviderKindImmutableMismatch,
+    /// A provider kind still has dependent profiles and cannot be removed.
+    ProviderKindHasDependents,
+    /// Required reasoning history material is missing or corrupt.
+    ReasoningHistoryUnavailable,
+    /// Required reasoning history is incompatible with the transfer policy.
+    ReasoningHistoryIncompatible,
+    /// Reasoning history exceeds its aggregate or entry bound.
+    ReasoningHistoryTooLarge,
+    /// A reasoning fragment would exceed the fixed per-run output bound.
+    ReasoningOutputLimitExceeded,
+    /// A provider reasoning stream value violates the closed stream rules.
+    ProviderReasoningStreamInvalid,
 }
 
 impl CanonicalError {
@@ -86,6 +114,20 @@ impl CanonicalError {
             Self::OverLimit => "over_limit",
             Self::DigestMismatch => "digest_mismatch",
             Self::InvalidDigest => "invalid_digest",
+            Self::InvalidProviderKind => "invalid_provider_kind",
+            Self::InvalidEndpoint => "invalid_endpoint",
+            Self::ProviderProfileRevisionInvalid => "provider_profile_revision_invalid",
+            Self::ContextSourceManifestInvalid => "context_source_manifest_invalid",
+            Self::ModelContextProjectionInvalid => "model_context_projection_invalid",
+            Self::ModelContextProjectionTooLarge => "model_context_projection_too_large",
+            Self::CredentialsForbidden => "credentials_forbidden",
+            Self::ProviderKindImmutableMismatch => "provider_kind_immutable_mismatch",
+            Self::ProviderKindHasDependents => "provider_kind_has_dependents",
+            Self::ReasoningHistoryUnavailable => "reasoning_history_unavailable",
+            Self::ReasoningHistoryIncompatible => "reasoning_history_incompatible",
+            Self::ReasoningHistoryTooLarge => "reasoning_history_too_large",
+            Self::ReasoningOutputLimitExceeded => "reasoning_output_limit_exceeded",
+            Self::ProviderReasoningStreamInvalid => "provider_reasoning_stream_invalid",
         }
     }
 }
@@ -122,6 +164,28 @@ impl Digest256 {
     #[must_use]
     pub fn sha256(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
+    }
+
+    /// Parses exactly sixty-four lowercase hex digits into a digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidDigest` when `value` is not exactly
+    /// sixty-four lowercase hex digits.
+    pub fn from_str_hex(value: &str) -> Result<Self, CanonicalError> {
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(CanonicalError::InvalidDigest);
+        }
+        let mut bytes = [0; 32];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+                .map_err(|_| CanonicalError::InvalidDigest)?;
+        }
+        Ok(Self(bytes))
     }
 
     /// Returns the thirty-two raw digest bytes.
@@ -715,13 +779,240 @@ pub fn decode_uuid_list(bytes: &[u8]) -> Result<Vec<[u8; 16]>, CanonicalError> {
     Ok(items)
 }
 
+/// Maximum items in one decoded length-prefixed list.
+///
+/// Every item carries at least a four-byte length prefix, so the cap is
+/// `MAX_FIELD_BYTES / 4`, the largest number of items that can fit inside one
+/// field value. It bounds the allocation a hostile declared count could drive.
+pub const MAX_LIST_ITEMS: usize = MAX_FIELD_BYTES / 4;
+
+/// Encodes items into a strict length-prefixed list.
+///
+/// A list is a big-endian `u32` item count followed by exactly that many
+/// length-prefixed items; the count is the item count, never a byte total.
+#[must_use]
+pub fn encode_list_items(items: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(items.len() as u32).to_be_bytes());
+    for item in items {
+        out.extend_from_slice(&(item.len() as u32).to_be_bytes());
+        out.extend_from_slice(item);
+    }
+    out
+}
+
+/// Decodes a strict length-prefixed list of opaque items.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::OverLimit` when the declared count exceeds
+/// `MAX_LIST_ITEMS`, `CanonicalError::Truncated` when the count or an item
+/// does not fit the remaining bytes, and `CanonicalError::TrailingBytes`
+/// when bytes remain after the declared items.
+pub fn decode_list_items(bytes: &[u8]) -> Result<Vec<Vec<u8>>, CanonicalError> {
+    if bytes.len() < 4 {
+        return Err(CanonicalError::Truncated);
+    }
+    let count = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    if count > MAX_LIST_ITEMS {
+        return Err(CanonicalError::OverLimit);
+    }
+    let mut position = 4usize;
+    let mut items = Vec::with_capacity(count);
+    for _ in 0..count {
+        if bytes.len() - position < 4 {
+            return Err(CanonicalError::Truncated);
+        }
+        let length = u32::from_be_bytes([
+            bytes[position],
+            bytes[position + 1],
+            bytes[position + 2],
+            bytes[position + 3],
+        ]) as usize;
+        position += 4;
+        if length > bytes.len() - position {
+            return Err(CanonicalError::Truncated);
+        }
+        items.push(bytes[position..position + length].to_vec());
+        position += length;
+    }
+    if position != bytes.len() {
+        return Err(CanonicalError::TrailingBytes);
+    }
+    Ok(items)
+}
+
+/// Encodes a strict list of UTF-8 strings.
+#[must_use]
+pub fn encode_utf8_list(items: &[String]) -> Vec<u8> {
+    encode_list_items(
+        &items
+            .iter()
+            .map(|item| item.as_bytes().to_vec())
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Decodes a strict list of UTF-8 strings.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::InvalidUtf8` when any item is not valid UTF-8,
+/// and the list framing errors of [`decode_list_items`] otherwise.
+pub fn decode_utf8_list(bytes: &[u8]) -> Result<Vec<String>, CanonicalError> {
+    decode_list_items(bytes)?
+        .into_iter()
+        .map(|item| Ok(decode_utf8(&item)?.to_owned()))
+        .collect()
+}
+
+/// Encodes an optional string as a one-byte presence marker followed by the
+/// UTF-8 value when present.
+#[must_use]
+pub fn encode_optional_utf8(value: &Option<String>) -> Vec<u8> {
+    value.as_ref().map_or_else(
+        || vec![0],
+        |text| {
+            let mut bytes = vec![1];
+            bytes.extend_from_slice(text.as_bytes());
+            bytes
+        },
+    )
+}
+
+/// Decodes an optional string from its presence-marker framing.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::InvalidOptional` when the presence marker is
+/// missing or a closed marker carries payload bytes, and
+/// `CanonicalError::InvalidUtf8` when an open value is not valid UTF-8.
+pub fn decode_optional_utf8(bytes: &[u8]) -> Result<Option<String>, CanonicalError> {
+    let Some((&marker, rest)) = bytes.split_first() else {
+        return Err(CanonicalError::InvalidOptional);
+    };
+    match marker {
+        0 if rest.is_empty() => Ok(None),
+        1 => Ok(Some(decode_utf8(rest)?.to_owned())),
+        _ => Err(CanonicalError::InvalidOptional),
+    }
+}
+
+/// Whether `value` carries a credential-shaped token that must never enter a
+/// canonical record, digest, or durable identity.
+///
+/// This is the secret-value role of the shared credential-shape policy; every
+/// boundary delegates to the same role functions so verdicts cannot diverge
+/// (PR24-035).
+#[must_use]
+pub fn contains_credential_shape(value: &str) -> bool {
+    secret_value_credential_shaped(value)
+}
+
+/// Whether a secret-style value carries a credential pattern.
+///
+/// Secret-value role: `sk-` prefixes, `Bearer ` tokens, and the
+/// `api_key`/`apikey`/`secret`/`password`/`token=`/`key=`/`auth=` value
+/// patterns. Case-insensitive.
+#[must_use]
+pub fn secret_value_credential_shaped(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("sk-")
+        || lower.starts_with("bearer ")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("token=")
+        || lower.contains("key=")
+        || lower.contains("auth=")
+}
+
+/// Whether an identifier-like field value is credential-shaped.
+///
+/// Identifier role: any control character anywhere, or a trimmed,
+/// case-insensitive value carrying the `key`, `token`, or `sk-` substring, or
+/// a `bearer` word followed by a non-empty token. Intentionally
+/// over-inclusive: identifiers and provider-adjacent DTO fields fail closed.
+#[must_use]
+pub fn credential_shaped_identifier(value: &str) -> bool {
+    value.chars().any(char::is_control) || {
+        let lower = value.trim().to_ascii_lowercase();
+        lower.contains("key")
+            || lower.contains("token")
+            || lower.contains("sk-")
+            || bearer_token_shape(&lower)
+    }
+}
+
+/// Whether a configuration key name is credential-shaped.
+///
+/// Key-name role: the secret-value patterns or one of the reserved
+/// credential key names (`token`, `bearer`, `auth`, `authorization`,
+/// `access_token`, `auth_token`). Case-insensitive.
+#[must_use]
+pub fn credential_shaped_key_name(key: &str) -> bool {
+    secret_value_credential_shaped(key)
+        || matches!(
+            key.to_ascii_lowercase().as_str(),
+            "token" | "bearer" | "auth" | "authorization" | "access_token" | "auth_token"
+        )
+}
+
+/// Whether raw configuration text carries a credential shape.
+///
+/// Raw-content role: unlike the identifier role, the line breaks and tabs
+/// that are legitimate inside TOML text are ignored; only credential
+/// substrings and bearer tokens are detected, so multi-line configuration
+/// content is not rejected for its formatting alone.
+#[must_use]
+pub fn credential_shaped_raw_content(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains("key")
+        || lower.contains("token")
+        || lower.contains("sk-")
+        || bearer_token_shape(&lower)
+}
+
+/// Whether `value` (already lowercased) carries a Bearer-token shape: the
+/// word `bearer` followed, possibly after whitespace or control characters,
+/// by a non-empty token.
+#[must_use]
+fn bearer_token_shape(lower: &str) -> bool {
+    lower.match_indices("bearer").any(|(index, _)| {
+        let after = &lower[index + "bearer".len()..];
+        let Some(first) = after.chars().next() else {
+            return false;
+        };
+        (first.is_whitespace() || first.is_control())
+            && after
+                .trim_start_matches(|c: char| c.is_whitespace() || c.is_control())
+                .chars()
+                .next()
+                .is_some()
+    })
+}
+
+/// Whether `value` contains a control character or a NUL byte.
+///
+/// Control characters and NUL bytes are rejected before canonical encoding so
+/// they can never reach record bytes, digests, or logs.
+#[must_use]
+pub fn contains_control_or_nul(value: &str) -> bool {
+    value
+        .bytes()
+        .any(|byte| byte == 0 || byte.is_ascii_control())
+}
+
 /// Whether a ledger tag has a production codec in this slice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TagStatus {
     /// The tag has a production codec in this PR.
     Wired,
-    /// The tag is reserved for a later slice with no production codec yet.
-    ReservedForSlice2,
+    /// The tag is reserved for Slice 3 with no production codec yet.
+    ReservedForSlice3,
+    /// The tag is reserved for Slice 4 with no production codec yet.
+    ReservedForSlice4,
 }
 
 /// One ADR 0036 ledger registry entry.
@@ -751,7 +1042,6 @@ impl TagRegistry {
     pub const REASONING_HISTORY_MANIFEST_V1: u32 = 0x0209;
     pub const CONTEXT_SOURCE_MANIFEST_V1: u32 = 0x020A;
     pub const MODEL_CONTEXT_PROJECTION_V1: u32 = 0x020B;
-    pub const LEGACY_M4_SELECTION_BINDING: u32 = 0x020C;
     pub const TOOL_DESCRIPTOR_REVISION: u32 = 0x0301;
     pub const TOOL_REGISTRY_REVISION: u32 = 0x0302;
     pub const MODEL_TOOL_LOOP_V1: u32 = 0x0303;
@@ -788,112 +1078,107 @@ impl TagRegistry {
         LedgerTag {
             name: "goal-run-selection-v1",
             value: 0x0203,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "continual-harness-selection-v1",
             value: 0x0204,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "mcp-method-catalog-selection-v1",
             value: 0x0205,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "model-capability-taxonomy-v1",
             value: 0x0206,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "provider-profile-revision-v1",
             value: 0x0207,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "provider-selection-v1",
             value: 0x0208,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "reasoning-history-manifest-v1",
             value: 0x0209,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "context-source-manifest-v1",
             value: 0x020A,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "model-context-projection-v1",
             value: 0x020B,
-            status: TagStatus::ReservedForSlice2,
-        },
-        LedgerTag {
-            name: "legacy-m4-selection-binding",
-            value: 0x020C,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "tool-descriptor-revision",
             value: 0x0301,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "tool-registry-revision",
             value: 0x0302,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "model-tool-loop-v1",
             value: 0x0303,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "bridge-invocation-v1",
             value: 0x0304,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice3,
         },
         LedgerTag {
             name: "fork-base-snapshot-v1/v2",
             value: 0x0401,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "fork-preview-v1/v2",
             value: 0x0402,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "fork-command-v1",
             value: 0x0403,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "agent-activity-tree-v1",
             value: 0x0501,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "agent-activity-pair-v1",
             value: 0x0502,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "agent-message-v1",
             value: 0x0503,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "agent-activity-journal-record-v1",
             value: 0x0504,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
         LedgerTag {
             name: "agent-notification-record-v1",
             value: 0x0505,
-            status: TagStatus::ReservedForSlice2,
+            status: TagStatus::ReservedForSlice4,
         },
     ];
 }

@@ -127,9 +127,9 @@ configuration policy:
 - configuration discovers a platform-standard config location, with a validated
   explicit absolute-path override for tests, portable invocation, and future
   daemon composition. It never falls back to process CWD;
-- the initial TOML schema is version 1, includes a tested supported v0-to-v1
-  migration, rejects future schemas with an `ErrorDto`, and exposes only
-  redacted public configuration projections;
+- the initial TOML schema is version 1 (the single current shape; unversioned
+  documents fail closed), rejects future schemas with an `ErrorDto`, and
+  exposes only redacted public configuration projections;
 - M1 defines a serializable, credential-free `ConfigSnapshotDto` contract
   foundation with `ConfigRevisionId` and capture time. Configuration revision
   persistence, daemon application/reload, and attaching a snapshot to a live
@@ -234,7 +234,7 @@ transport and adapter constraints are in [Daemon, Transport, and Adapters](03-da
 
 ### Deliver
 
-- repository DTO contracts and bundled-SQLite implementation using `rusqlite_migration`;
+- repository DTO contracts and the bundled-SQLite implementation creating the single current storage schema directly on open;
 - activated `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite` ownership, including the required storage/application/runtime-to-config snapshot edges;
 - session/project/workspace-root state with stable `WorkspaceId` association;
 - canonical credential-free `ConfigSnapshotDto` revision persistence: an equal snapshot for the same `ConfigRevisionId` is idempotent, while a different snapshot for that ID fails with a typed conflict; and immutable per-started/promoted-run attachment;
@@ -283,8 +283,9 @@ startup; accepted and promoted runs retain their own immutable snapshot/revision
 M3 applies TOML at startup only. A TOML edit becomes effective on restart and
 cannot mutate a running daemon or an existing run.
 
-The SQLite backend owns bundled SQLite migrations through `rusqlite_migration`,
-semantic transactional repository methods, normalized current projections,
+The SQLite backend creates the single current storage schema directly on open
+(no migration chain or version gate), and owns semantic transactional
+repository methods, normalized current projections,
 append-only events, and per-state-change session/run snapshots. Its public
 storage contract remains DTO-only: it does not expose a SQL connection,
 transaction closure, path, or SQLite row.
@@ -426,13 +427,14 @@ activated by earlier slices in this order:
 
 1. **Contracts and versions** — the versioned protocol/schema/
    execution-meaning/DTO contract ledger for the full post-M5 stack: local
-   protocol and schema version advancement; `run-execution-meaning-v3`/`v4`
+   protocol and schema version advancement; `run-execution-meaning-v4`
    field tables (`ProgrammaticCallerPolicySelectionV1`, `GoalRunSelectionV1`,
    `AgentActivitySelectionV1`, `ContinualHarnessSelectionV1`); the negotiated
    capability families (`provider_profiles_v1`, `session_fork_v1`,
    `normalized_reasoning_stream_v1`, `agent_activity_v1`,
    `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`);
-   additive storage migration with M3/M4 byte preservation; canonical tags
+   SQLite as one live storage schema created directly on open (no migration
+   chain; ADR 0038); canonical tags
    and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
    ownership, feature-profile, and coverage-tier declarations for every
    activated family. The activating contract ledger is [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md).
@@ -443,7 +445,9 @@ activated by earlier slices in this order:
    provider-native preservation controls; server-side parser setup; session
    defaults and per-turn/fork overrides; unavailable-queue promotion and
    reconciliation; `provider_profiles_v1`; pending-removal and degraded
-   recovery; and the provider reasoning/catalog surface.
+   recovery; and the provider reasoning/catalog surface. **Activated by
+   [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); Slice 2 is
+   complete.**
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
@@ -453,9 +457,8 @@ activated by earlier slices in this order:
 4. **UI foundation** — session branching, activity/notification, reasoning/
    catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
    0028/0029/0032/0033/0034): `session_fork_v1`; activity journal and
-   notification projections; normalized reasoning delivery; the legacy M4
-   selection bridge; RLM packaging and export; and the exact typed
-   client/protocol surface that M6 consumes.
+   notification projections; normalized reasoning delivery; RLM packaging and
+   export; and the exact typed client/protocol surface that M6 consumes.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
@@ -464,9 +467,9 @@ inside its slice, each with its own contract, transaction, and outcome test.
 ### Tests first
 
 - slice 1: DTO round-trip and golden digest fixtures; version-negotiation
-  fixtures (compatible minor, incompatible major, unnegotiated capability
-  fail-closed); additive migration fixtures proving M3/M4 values unchanged;
-  future-schema rejection; canonical-tag and digest goldens;
+  fixtures (exact current-version equality, incompatible major, unnegotiated
+  capability fail-closed); current-schema creation fixtures; canonical-tag
+  and digest goldens;
 - slice 2: reload transaction fault injection (atomic commit or fail-closed,
   no partial snapshot, no mutation of existing runs); rotation redaction and
   no-frozen-meaning-change; health/discovery non-authority (no RunId/reason/
@@ -474,6 +477,18 @@ inside its slice, each with its own contract, transaction, and outcome test.
   classification; promotion/reconciliation limits; catalog acceptance and
   recovery; control-plane safe-projection (no raw TOML, credentials, or
   resources cross public or durable boundaries);
+  **implemented (ADR 0037); evidence anchors:**
+  `crates/intention-domain/tests/m5_control_plane_canonical.rs`,
+  `crates/intention-domain/tests/m5_control_plane_rejections.rs`,
+  `crates/intention-domain/tests/m5_session_selection_overrides.rs`,
+  `crates/intention-protocol/tests/control_plane_contracts.rs`,
+  `crates/intention-config/tests/m5_control_plane_config.rs`,
+  `crates/intention-application/tests/m5_catalog_runtime.rs`,
+  `crates/intention-application/tests/m5_control_plane_runtime.rs`,
+  `crates/intention-client/tests/control_plane_client.rs`,
+  `crates/intention-client/tests/session_selection_client.rs`,
+  `crates/intention-model/tests/m6_reasoning_surface.rs`, and the
+  current-schema tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`;
 - slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
   conclusion bounds; class resolution; corridor admission and reservation
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
@@ -492,16 +507,23 @@ inside its slice, each with its own contract, transaction, and outcome test.
   quality-policy change;
 - M3/M4 startup-only configuration, recorded revisions, persisted run
   snapshots, queue tickets, sessions, runs, events, and bytes remain
-  authoritative and unchanged;
+  authoritative and unchanged; SQLite storage is the single live schema
+  created directly on open (the schema-3-to-4 migration chain and preservation
+  fixtures are removed by ADR 0038; current-schema tests in
+  `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`);
 - health, discovery, and pricing create no RunId, reason, lifecycle
   transition, scheduler candidate, tool permission, child edge, verifier
   authority, MCP capability, bridge grant, kernel epoch, context projection,
-  branch, or reconciliation result;
+  branch, or reconciliation result (non-authority fixtures in
+  `crates/intention-application/tests/m5_control_plane_runtime.rs` and
+  `crates/intention-client/tests/control_plane_client.rs`);
 - applicable crates meet their declared coverage tiers without excluding
   policy or boundary logic; every activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
-  owner, tests, policy mapping, migration behavior, and evidence together.
+  owner, tests, policy mapping, storage/schema treatment, and evidence
+  together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
+  3-4 remain.
 
 ### Exit criteria
 
@@ -1114,7 +1136,7 @@ milestone.
 - policy lifecycle with live tightening, drafts, and no-reactivation-after-revoke;
 - run and calendar limits with atomic reservations and
   `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
-- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v3`/v4 with
+- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v4` with
   `Disabled` only for historical M4.
 
 ### Exit criteria
@@ -1285,8 +1307,8 @@ profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package extending architecture 22.** It records typed
 cross-turn reasoning history, reasoning usage, paged delivery, the dialect
-catalog, catalog limits/tombstones/audit, and the legacy M4 selection bridge,
-adopted by [decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
+catalog, and catalog limits/tombstones/audit, adopted by
+[decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
 It activates no crate, schema, migration, protocol implementation, feature
 profile, quality-policy target, or implementation milestone.
 
@@ -1299,7 +1321,6 @@ profile, quality-policy target, or implementation milestone.
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
   minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
-- `LegacyM4SelectionBindingDto` and `historical_selection_corrupt`;
 - the taxonomy value `model-capability-taxonomy-v1`, the
   `reasoning_input_contract` field name (superseding the concept2
   `reasoning_history_transfer`), and the descriptor-owned field-path/

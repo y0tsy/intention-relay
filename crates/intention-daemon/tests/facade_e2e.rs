@@ -85,18 +85,12 @@ impl E2eHost {
 
     /// Kills the current daemon and starts a fresh process with identical
     /// environment, state directories, and endpoint.
+    ///
+    /// The kill is a hard kill: the daemon cannot run its listener Drop, so
+    /// its Unix socket file survives. The transport reclaims the stale socket
+    /// on the next bind (PR24-010); the fixture no longer deletes it by hand.
     fn restart_daemon(&mut self) {
         self.kill_daemon();
-        #[cfg(unix)]
-        {
-            // A hard-killed daemon cannot run its listener Drop, so its Unix
-            // socket file survives. The endpoint instance id is unique to this
-            // test process, so removing that exact path only ever removes the
-            // file this fixture's daemon created.
-            if let Some(path) = endpoint_socket_path(&self.endpoint) {
-                let _ = std::fs::remove_file(path);
-            }
-        }
         self.daemon = Some(spawn_daemon(
             &self.endpoint,
             self.config_home.path(),
@@ -713,7 +707,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("user turn starts a run, got: {result:?}")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("user turn result starts a run, got: {accepted:?}")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -926,7 +920,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("user turn starts a run, got: {result:?}")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("user turn result starts a run, got: {accepted:?}")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {

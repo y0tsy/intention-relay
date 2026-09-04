@@ -19,7 +19,7 @@ use async_openai::{
         ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
         ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
         CreateChatCompletionRequestArgs, CreateChatCompletionStreamResponse, FinishReason,
-        FunctionCall,
+        FunctionCall, ReasoningEffort,
     },
 };
 use futures_util::{
@@ -29,16 +29,96 @@ use futures_util::{
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
+    ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
+    ReasoningEffortLevel, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
+/// Additive descriptor-driven driver options; the default is unchanged.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GenericChatDriverOptions {
+    header_policy: Option<AuthenticationHeaderPolicyV1>,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+}
+
+impl GenericChatDriverOptions {
+    /// Creates default driver options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the declared header policy (names only, never values).
+    #[must_use]
+    pub const fn header_policy(&self) -> Option<&AuthenticationHeaderPolicyV1> {
+        self.header_policy.as_ref()
+    }
+
+    /// Returns the declared reasoning effort applied to requests.
+    #[must_use]
+    pub const fn reasoning_effort(&self) -> Option<ReasoningEffortLevel> {
+        self.reasoning_effort
+    }
+
+    /// Declares the descriptor header policy (names only, never values).
+    ///
+    /// The policy is validated by construction and stored privately; it is
+    /// never logged, serialized, or made durable.
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "Moving the validated policy into the option requires a drop that const fn cannot evaluate."
+    )]
+    pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
+        self.header_policy = Some(policy);
+        self
+    }
+
+    /// Declares the closed reasoning effort request field.
+    #[must_use]
+    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Validates that every declared option is applicable to this adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the header policy selects the
+    /// safe-header transport or the maximum reasoning effort is declared (the
+    /// pinned SDK effort set has no max).
+    pub fn build(self) -> DtoResult<Self> {
+        if self.header_policy.as_ref().is_some_and(|policy| {
+            policy.selected_transport() == CredentialTransportMode::SafeHeader
+        }) {
+            return Err(ErrorDto::validation(
+                "unsupported_safe_header_transport",
+                "the generic chat adapter does not yet support safe-header credential transport",
+            ));
+        }
+        if self.reasoning_effort == Some(ReasoningEffortLevel::Max) {
+            return Err(ErrorDto::validation(
+                "unsupported_reasoning_effort",
+                "the generic chat adapter cannot express the maximum reasoning effort",
+            ));
+        }
+        Ok(self)
+    }
+}
+
 /// Generic Chat Completions driver with private SDK client state.
+///
+/// The SDK client is held behind a read/write lock so credential rotation can
+/// rebuild it without replacing the driver instance: every in-flight stream
+/// keeps the client clone it captured at start, and later executions clone
+/// the rotated client.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
-    client: Client<OpenAIConfig>,
+    client: std::sync::RwLock<Client<OpenAIConfig>>,
+    options: GenericChatDriverOptions,
     outbound_calls_for_test: u32,
 }
 
@@ -62,29 +142,100 @@ impl GenericChatDriver {
         material.into_parts_for_provider(Self::with_credential)
     }
 
+    /// Creates the driver from opaque startup-only provider material and
+    /// validated descriptor-driven options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the material selects a different provider kind.
+    pub fn from_startup_material_with_options(
+        material: StartupProviderMaterial,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
+        material.into_parts_for_provider(move |resolved, credential| {
+            Self::with_credential_and_options(resolved, credential, options)
+        })
+    }
+
     fn with_credential(resolved: ResolvedConfigDto, credential: String) -> DtoResult<Self> {
+        Self::with_credential_and_options(resolved, credential, GenericChatDriverOptions::default())
+    }
+
+    fn with_credential_and_options(
+        resolved: ResolvedConfigDto,
+        credential: String,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
         if resolved.provider().kind() != ProviderKindDto::GenericChatCompletionApi {
             return Err(ErrorDto::validation(
                 "invalid_generic_chat_provider_config",
                 "generic chat driver requires generic chat provider configuration",
             ));
         }
+        let client = Self::configured_client(&resolved, credential)?;
+        Ok(Self {
+            resolved,
+            client: std::sync::RwLock::new(client),
+            options,
+            outbound_calls_for_test: 0,
+        })
+    }
+
+    /// Builds the private SDK client for one resolved configuration and
+    /// credential value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    fn configured_client(
+        resolved: &ResolvedConfigDto,
+        credential: String,
+    ) -> DtoResult<Client<OpenAIConfig>> {
         let endpoint = resolved.provider().endpoint().ok_or_else(|| {
             ErrorDto::validation(
                 "missing_generic_chat_endpoint",
                 "generic chat provider requires a configured endpoint",
             )
         })?;
-        let client = Client::with_config(
+        Ok(Client::with_config(
             OpenAIConfig::new()
                 .with_api_base(endpoint)
                 .with_api_key(credential),
-        );
-        Ok(Self {
-            resolved,
-            client,
-            outbound_calls_for_test: 0,
-        })
+        ))
+    }
+
+    /// Replaces the driver's private SDK client with one built from fresh
+    /// private credential material.
+    ///
+    /// The rebuild is composition-owned: the supplied credential must arrive
+    /// through a private channel and is never logged, serialized, or made
+    /// durable. The resolved provider endpoint is unchanged, so the safe
+    /// composition is untouched. The previous client is replaced only after
+    /// the replacement client is configured; concurrent executions keep the
+    /// client they captured before this call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    pub fn rotate_credential(&self, credential: String) -> DtoResult<()> {
+        let client = Self::configured_client(&self.resolved, credential)?;
+        let mut guard = self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = client;
+        drop(guard);
+        Ok(())
+    }
+
+    /// Clones the current private SDK client for one execution attempt.
+    fn current_client(&self) -> Client<OpenAIConfig> {
+        self.client
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Returns the non-network preflight validation result.
@@ -103,8 +254,8 @@ impl GenericChatDriver {
     /// Returns a safe policy or translation error before outbound work.
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
-        let _native_request = translate_request(request)?;
-        let _client = &self.client;
+        let _native_request = translate_request(request, &self.options)?;
+        let _client = self.current_client();
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
     }
@@ -113,6 +264,12 @@ impl GenericChatDriver {
     #[must_use]
     pub const fn prepared_request_count(&self) -> u32 {
         self.outbound_calls_for_test
+    }
+
+    /// Returns the driver's validated declared options.
+    #[must_use]
+    pub const fn options(&self) -> &GenericChatDriverOptions {
+        &self.options
     }
 
     /// Maps a text delta fixture into the canonical stream contract.
@@ -186,7 +343,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 Err(non_retryable_error("generic_chat_request_rejected"))
             }));
         }
-        let native_request = match translate_request(&request) {
+        let native_request = match translate_request(&request, &self.options) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
@@ -194,7 +351,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
-        let client = self.client.clone();
+        let client = self.current_client();
         Box::pin(
             stream::once(async move {
                 client
@@ -229,9 +386,9 @@ struct GenericStreamState<S> {
     cancellation: ModelCancellationSignal,
     pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
-    legacy_tools: BTreeMap<u32, FunctionToolFragments>,
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
+    usage_reported: bool,
 }
 
 impl<S> GenericStreamState<S>
@@ -246,9 +403,9 @@ where
             cancellation,
             pending,
             tools: BTreeMap::new(),
-            legacy_tools: BTreeMap::new(),
             terminal: false,
             terminal_reason: None,
+            usage_reported: false,
         }
     }
 
@@ -263,33 +420,67 @@ where
             if self.terminal {
                 return None;
             }
-            if let Some(reason) = self.terminal_reason.take() {
-                self.finish(reason);
-                continue;
-            }
             match select(self.native.next(), self.cancellation.cancelled()).await {
                 Either::Left((Some(Ok(chunk)), _)) => self.accept_chunk(chunk),
                 Either::Left((Some(Err(error)), _)) => self.fail_error(map_openai_error(&error)),
-                Either::Left((None, _)) => self.fail("generic_chat_stream_incomplete"),
+                Either::Left((None, _)) => self.native_ended(),
                 Either::Right(((), _)) => return None,
             }
         }
     }
 
     fn accept_chunk(&mut self, chunk: CreateChatCompletionStreamResponse) {
+        let post_finish = self.terminal_reason.is_some();
+        if post_finish
+            && chunk.choices.iter().any(|choice| {
+                choice.finish_reason.is_some()
+                    || choice
+                        .delta
+                        .content
+                        .as_deref()
+                        .is_some_and(|content| !content.is_empty())
+                    || choice.delta.tool_calls.is_some()
+            })
+        {
+            // Chunks after the finish reason may carry at most the final
+            // usage summary; any further content, tool fragment, or finish is
+            // malformed and fails the stream.
+            if chunk
+                .choices
+                .iter()
+                .any(|choice| choice.finish_reason.is_some())
+            {
+                self.fail("generic_chat_duplicate_finish");
+            } else {
+                self.fail("generic_chat_post_finish_content");
+            }
+            return;
+        }
         if let Some(usage) = chunk.usage {
+            if self.usage_reported {
+                self.fail("generic_chat_duplicate_usage");
+                return;
+            }
             match UsageDto::reported(
                 u64::from(usage.prompt_tokens),
                 u64::from(usage.completion_tokens),
                 u64::from(usage.total_tokens),
             ) {
-                Ok(usage) => self.pending.push_back(Ok(ModelEventDto::usage(usage))),
+                Ok(usage) => {
+                    self.usage_reported = true;
+                    self.pending.push_back(Ok(ModelEventDto::usage(usage)));
+                }
                 Err(_) => self.fail("generic_chat_invalid_usage"),
             }
         }
+        if post_finish {
+            return;
+        }
         for choice in chunk.choices {
             if self.accept_delta(choice.index, choice.delta).is_err() {
-                self.fail("generic_chat_invalid_tool_call");
+                if !self.terminal {
+                    self.fail("generic_chat_invalid_tool_call");
+                }
                 return;
             }
             if let Some(reason) = choice.finish_reason
@@ -313,14 +504,6 @@ where
             self.pending
                 .push_back(Ok(ModelEventDto::text_delta(content).map_err(|_| ())?));
         }
-        #[allow(
-            deprecated,
-            reason = "Chat Completions exposes legacy function-call stream fragments."
-        )]
-        if let Some(function) = delta.function_call {
-            let fragments = self.legacy_tools.entry(choice_index).or_default();
-            fragments.merge_legacy(function)?;
-        }
         if let Some(calls) = delta.tool_calls {
             for call in calls {
                 let fragments = self.tools.entry((choice_index, call.index)).or_default();
@@ -334,28 +517,37 @@ where
         Ok(())
     }
 
+    /// Handles the native end-of-stream.
+    ///
+    /// A recorded finish reason is terminal only once the native stream ends:
+    /// standard streams deliver a trailing usage-only chunk after the
+    /// finish-reason chunk, and the driver requested usage inclusion.
+    /// Recording the reason and continuing to poll collects that usage
+    /// exactly once (PR24-009). An absent reason fails the incomplete stream.
+    fn native_ended(&mut self) {
+        if let Some(reason) = self.terminal_reason.take() {
+            self.finish(reason);
+        } else {
+            self.fail("generic_chat_stream_incomplete");
+        }
+    }
+
     fn finish(&mut self, reason: FinishReasonDto) {
-        let modern = std::mem::take(&mut self.tools)
+        match std::mem::take(&mut self.tools)
             .into_values()
             .map(FunctionToolFragments::finish)
-            .collect::<Result<Vec<_>, _>>();
-        let legacy = std::mem::take(&mut self.legacy_tools)
-            .into_values()
-            .map(FunctionToolFragments::finish_legacy)
-            .collect::<Result<Vec<_>, _>>();
-        match (modern, legacy) {
-            (Ok(modern), Ok(legacy)) if modern.is_empty() || legacy.is_empty() => {
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(calls) => {
                 self.pending.extend(
-                    modern
+                    calls
                         .into_iter()
-                        .chain(legacy)
                         .map(|call| Ok(ModelEventDto::tool_call(call))),
                 );
                 self.pending.push_back(Ok(ModelEventDto::finished(reason)));
                 self.terminal = true;
             }
-            (Ok(_), Ok(_)) => self.fail("generic_chat_conflicting_tool_call"),
-            (Err(()), _) | (_, Err(())) => self.fail("generic_chat_invalid_tool_call"),
+            Err(()) => self.fail("generic_chat_invalid_tool_call"),
         }
     }
 
@@ -398,22 +590,6 @@ impl FunctionToolFragments {
         Ok(())
     }
 
-    fn finish_legacy(self) -> Result<ToolCallDto, ()> {
-        let name = self.name.ok_or(())?;
-        ToolCallDto::new(ToolCallId::new(), name, self.arguments).map_err(|_| ())
-    }
-
-    fn merge_legacy(
-        &mut self,
-        function: async_openai::types::chat::FunctionCallStream,
-    ) -> Result<(), ()> {
-        merge_constant(&mut self.name, function.name)?;
-        if let Some(arguments) = function.arguments {
-            self.arguments.push_str(&arguments);
-        }
-        Ok(())
-    }
-
     fn finish(self) -> Result<ToolCallDto, ()> {
         let _id = self.id.ok_or(())?;
         let name = self.name.ok_or(())?;
@@ -435,7 +611,7 @@ fn map_finish_reason(reason: &str) -> FinishReasonDto {
     match reason {
         "stop" => FinishReasonDto::Stop,
         "length" => FinishReasonDto::Length,
-        "tool_calls" | "function_call" => FinishReasonDto::ToolCalls,
+        "tool_calls" => FinishReasonDto::ToolCalls,
         "content_filter" => FinishReasonDto::ContentFilter,
         "error" => FinishReasonDto::Error,
         _ => FinishReasonDto::Unknown,
@@ -446,8 +622,9 @@ const fn map_native_finish(reason: FinishReason) -> FinishReasonDto {
     match reason {
         FinishReason::Stop => FinishReasonDto::Stop,
         FinishReason::Length => FinishReasonDto::Length,
-        FinishReason::ToolCalls | FinishReason::FunctionCall => FinishReasonDto::ToolCalls,
+        FinishReason::ToolCalls => FinishReasonDto::ToolCalls,
         FinishReason::ContentFilter => FinishReasonDto::ContentFilter,
+        FinishReason::FunctionCall => FinishReasonDto::Unknown,
     }
 }
 
@@ -488,7 +665,10 @@ fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
         .expect("fixed normalized provider error code is valid")
 }
 
-fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletionRequest> {
+fn translate_request(
+    request: &ModelRequestDto,
+    options: &GenericChatDriverOptions,
+) -> DtoResult<CreateChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
         messages.push(ChatCompletionRequestMessage::System(
@@ -501,20 +681,43 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletio
     for message in request.messages() {
         messages.push(translate_message(message)?);
     }
-    CreateChatCompletionRequestArgs::default()
-        .model(request.model())
-        .messages(messages)
-        .stream_options(ChatCompletionStreamOptions {
-            include_usage: Some(true),
-            include_obfuscation: None,
-        })
-        .build()
-        .map_err(|_| {
-            ErrorDto::validation(
-                "invalid_generic_chat_request",
-                "generic chat request could not be translated",
-            )
-        })
+    let mut args = CreateChatCompletionRequestArgs::default();
+    args.model(request.model());
+    args.messages(messages);
+    args.stream_options(ChatCompletionStreamOptions {
+        include_usage: Some(true),
+        include_obfuscation: None,
+    });
+    if let Some(effort) = options.reasoning_effort {
+        args.reasoning_effort(map_reasoning_effort(effort)?);
+    }
+    args.build().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_generic_chat_request",
+            "generic chat request could not be translated",
+        )
+    })
+}
+
+/// Maps the closed effort level onto the pinned SDK effort set.
+///
+/// # Errors
+///
+/// Returns a validation error for the maximum effort, which the pinned SDK
+/// effort set cannot express.
+fn map_reasoning_effort(effort: ReasoningEffortLevel) -> DtoResult<ReasoningEffort> {
+    match effort {
+        ReasoningEffortLevel::None => Ok(ReasoningEffort::None),
+        ReasoningEffortLevel::Minimal => Ok(ReasoningEffort::Minimal),
+        ReasoningEffortLevel::Low => Ok(ReasoningEffort::Low),
+        ReasoningEffortLevel::Medium => Ok(ReasoningEffort::Medium),
+        ReasoningEffortLevel::High => Ok(ReasoningEffort::High),
+        ReasoningEffortLevel::Xhigh => Ok(ReasoningEffort::Xhigh),
+        ReasoningEffortLevel::Max => Err(ErrorDto::validation(
+            "unsupported_reasoning_effort",
+            "the generic chat adapter cannot express the maximum reasoning effort",
+        )),
+    }
 }
 
 fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionRequestMessage> {
@@ -640,8 +843,11 @@ mod tests {
         )
         .expect("request is valid");
 
-        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -684,8 +890,11 @@ mod tests {
             None,
         )
         .expect("request is valid");
-        let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&follow_up, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         let assistant = &wire["messages"][1];
         assert!(assistant.get("content").is_none());
         assert_eq!(
@@ -795,50 +1004,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_function_fragments_complete_only_at_terminal() {
-        let mut fragments = FunctionToolFragments::default();
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{\"path\"".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: None,
-                arguments: Some(":\"src\"}".to_owned()),
-            })
-            .expect("legacy continuation is valid");
-        let call = fragments.finish_legacy().expect("legacy call completes");
-        assert_eq!(call.name(), "inspect");
-        assert_eq!(call.arguments_json(), "{\"path\":\"src\"}");
-        assert!(FunctionToolFragments::default().finish_legacy().is_err());
-        let mut malformed = FunctionToolFragments::default();
-        malformed
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("not-json".to_owned()),
-            })
-            .expect("legacy fragment shape is valid");
-        assert!(malformed.finish_legacy().is_err());
-        let mut conflicting = FunctionToolFragments::default();
-        conflicting
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        assert!(
-            conflicting
-                .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                    name: Some("other".to_owned()),
-                    arguments: None,
-                })
-                .is_err()
-        );
-    }
-
-    #[test]
     fn native_errors_preserve_safe_retry_guidance() {
         let rate_limited = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
             status_code: http::StatusCode::TOO_MANY_REQUESTS,
@@ -880,29 +1045,40 @@ mod tests {
         deprecated,
         reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
     )]
-    fn usage_only_final_chunk_maps_before_finish() {
+    fn trailing_usage_after_finish_reason_is_drained_before_finished() {
+        // Standard stream order: finish-reason chunk, trailing usage-only
+        // chunk, then end. The finish reason must not terminalize the stream
+        // before the usage chunk is polled (PR24-009).
         let mut state = GenericStreamState::new(
             futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
             ),
             ModelCancellationSignal::new(),
         );
-        state.accept_chunk(CreateChatCompletionStreamResponse {
-            id: "fixture".to_owned(),
-            choices: Vec::new(),
-            created: 0,
-            model: "fixture".to_owned(),
-            service_tier: None,
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_owned(),
-            usage: Some(async_openai::types::chat::CompletionUsage {
+        state.accept_chunk(chunk(
+            vec![delta(None, None, Some(FinishReason::Stop))],
+            None,
+        ));
+        assert!(
+            state.terminal_reason.is_some(),
+            "the finish reason is recorded when its chunk arrives"
+        );
+        assert!(
+            !state.terminal,
+            "a recorded finish reason must not terminalize the stream"
+        );
+        state.accept_chunk(chunk(
+            Vec::new(),
+            Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 2,
                 completion_tokens: 3,
                 total_tokens: 5,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
-        });
-        state.finish(FinishReasonDto::Stop);
+        ));
+        // The native stream ends: the recorded reason becomes terminal and
+        // the collected usage is emitted before Finished.
+        state.native_ended();
         assert_eq!(
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::started()))
@@ -917,43 +1093,42 @@ mod tests {
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
         );
+        assert_eq!(state.pending.pop_front(), None);
+        assert!(state.terminal);
     }
 
     #[test]
-    fn conflicting_modern_and_legacy_calls_fail_without_duplicate_output() {
-        let mut state = GenericStreamState::new(
-            futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
-            ),
-            ModelCancellationSignal::new(),
-        );
-        let mut modern = FunctionToolFragments::default();
-        modern
-            .merge(
-                Some("modern".to_owned()),
-                Some("function".to_owned()),
-                Some(async_openai::types::chat::FunctionCallStream {
-                    name: Some("inspect".to_owned()),
-                    arguments: Some("{}".to_owned()),
-                }),
-            )
-            .expect("modern fixture is valid");
-        let mut legacy = FunctionToolFragments::default();
-        legacy
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy fixture is valid");
-        state.tools.insert((0, 0), modern);
-        state.legacy_tools.insert(0, legacy);
-        state.finish(FinishReasonDto::ToolCalls);
-        assert_eq!(
-            state.pending.pop_front(),
-            Some(Ok(ModelEventDto::started()))
-        );
+    #[allow(
+        deprecated,
+        reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
+    )]
+    fn usage_is_emitted_at_most_once_and_post_finish_content_fails() {
+        let mut duplicated =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        let usage = || async_openai::types::chat::CompletionUsage {
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        };
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
         assert!(matches!(
-            state.pending.pop_front(),
-            Some(Err(error)) if error.code() == "generic_chat_conflicting_tool_call"
+            duplicated.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_duplicate_usage"
+        ));
+
+        let mut post_finish =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        post_finish.accept_chunk(chunk(
+            vec![delta(None, None, Some(FinishReason::Stop))],
+            None,
+        ));
+        post_finish.accept_chunk(chunk(vec![delta(Some("late"), None, None)], None));
+        assert!(matches!(
+            post_finish.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
         ));
     }
 
@@ -979,7 +1154,7 @@ mod tests {
 
     #[allow(
         deprecated,
-        reason = "The private fixture constructs the SDK legacy-field shape accepted by normalization."
+        reason = "The pinned SDK delta struct requires its deprecated function-call field in initializers."
     )]
     fn delta(
         content: Option<&str>,
@@ -1105,5 +1280,115 @@ mod tests {
             incomplete.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
+    }
+
+    #[test]
+    fn descriptor_options_reject_before_any_request_and_never_disclose_policy() {
+        let bearer = AuthenticationHeaderPolicyV1::new(
+            Vec::new(),
+            intention_model::CredentialTransportMode::Bearer,
+        )
+        .expect("bearer policy is valid");
+        let options = GenericChatDriverOptions::new()
+            .with_header_policy(bearer)
+            .with_reasoning_effort(ReasoningEffortLevel::High)
+            .build()
+            .expect("descriptor options build");
+        assert!(!format!("{options:?}").contains("X-Custom-Auth"));
+
+        let safe_header = AuthenticationHeaderPolicyV1::new(
+            vec!["X-Custom-Auth".to_owned()],
+            intention_model::CredentialTransportMode::SafeHeader,
+        )
+        .expect("safe-header policy is valid");
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_header_policy(safe_header)
+                .build()
+                .expect_err("safe-header transport is rejected before any request")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        let material = startup_material();
+        let driver = GenericChatDriver::from_startup_material_with_options(material, options)
+            .expect("driver builds with validated options");
+        let debug = format!("{driver:?}");
+        assert!(!debug.contains("fixture-credential-not-real-12345"));
+        assert!(!debug.contains("X-Custom-Auth"));
+        assert!(!debug.contains("reasoning"));
+        assert_eq!(driver.prepared_request_count(), 0);
+    }
+
+    #[test]
+    fn unapplicable_effort_declarations_reject_before_any_request() {
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_reasoning_effort(ReasoningEffortLevel::Max)
+                .build()
+                .expect_err("maximum effort is rejected")
+                .code(),
+            "unsupported_reasoning_effort"
+        );
+    }
+
+    #[test]
+    fn declared_reasoning_effort_is_applied_to_the_native_request() {
+        let options = GenericChatDriverOptions::new()
+            .with_reasoning_effort(ReasoningEffortLevel::Low)
+            .build()
+            .expect("descriptor options build");
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid");
+        let wire = serde_json::to_value(
+            translate_request(&request, &options).expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(wire["reasoning_effort"], "low");
+
+        let default_wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(default_wire.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn normalized_reasoning_failures_never_carry_raw_provider_text() {
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        state.fail("provider_reasoning_stream_invalid");
+        let error = state
+            .pending
+            .back()
+            .expect("failure is pending")
+            .as_ref()
+            .expect_err("failure is an error");
+        assert_eq!(error.code(), "provider_reasoning_stream_invalid");
+        let encoded = serde_json::to_string(error).expect("error serializes");
+        assert!(!encoded.contains("secret provider text"));
+        assert!(!encoded.contains("fixture-credential-not-real-12345"));
+    }
+
+    fn startup_material() -> StartupProviderMaterial {
+        ResolvedConfigDto::parse_startup_material(intention_config::RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"fixture-credential-not-real-12345\"",
+            intention_config::ConfigSourceDto::Explicit(
+                intention_config::ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-relay-generic-chat-options.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("generic chat config resolves")
     }
 }

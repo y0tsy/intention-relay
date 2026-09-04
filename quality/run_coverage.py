@@ -130,6 +130,27 @@ def main() -> None:
             if crate == "intention-daemon" and "--all-features" not in coverage_flags:
                 coverage_flags.append("--all-features")
             effective = tuple(coverage_flags)
+            if crate == "intention-daemon" and "--all-features" in coverage_flags:
+                # `--all-features` subsumes default/no-default feature
+                # selection for the daemon package: normalize the semantic
+                # feature set (dropping default-toggle and --features
+                # selector tokens) before deduplicating, so equivalent
+                # profiles do not execute the same instrumented daemon set
+                # under different flag tuples. The first profile keeps its
+                # report name; later equivalent profiles are skipped.
+                normalized: list[str] = []
+                index = 0
+                while index < len(coverage_flags):
+                    flag = coverage_flags[index]
+                    if flag == "--no-default-features":
+                        index += 1
+                        continue
+                    if flag == "--features":
+                        index += 2
+                        continue
+                    normalized.append(flag)
+                    index += 1
+                effective = tuple(normalized)
             if crate == "intention-daemon" and effective in seen_effective:
                 continue
             seen_effective.add(effective)

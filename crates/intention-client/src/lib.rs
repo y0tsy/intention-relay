@@ -14,20 +14,36 @@ use std::time::{Duration, Instant};
 
 use intention_domain::{ModelRunFactDto, ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolDaemonFrameDto,
-    ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    ProtocolVersionDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunStreamFrameDto,
-    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto,
+    ProtocolCommandDto, ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto,
+    ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunLiveBatchDto,
+    RunResyncDto, RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto,
+    RunSubscriptionResponseDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    contract_families::{
+        AcceptProviderCatalogRemovalAcceptedDto, AcceptProviderCatalogRemovalCommandDto,
+        AdmitRecoveredRunAcceptedDto, AdmitRecoveredRunCommandDto, ConfigurationEditCommandDto,
+        ConfigurationProjectionDto, CredentialRotationResultDto,
+        GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto, GetProviderCatalogQueryDto,
+        GetProviderCatalogStatusQueryDto, GetProviderDiscoveryStatusQueryDto,
+        GetProviderHealthEvidenceQueryDto, GetProviderUsageQueryDto,
+        GetSessionProviderProfileQueryDto, PricingProjectionDto, ProviderCatalogPageDto,
+        ProviderCatalogStatusDto, ProviderDiscoveryProjectionDto, ProviderHealthProjectionDto,
+        RawTomlEditCommandDto, ReconcileUnavailableQueueAcceptedDto,
+        ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
+        RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
+        ReloadTransactionDto, RotateProviderCredentialsCommandDto, SessionProviderProfileDto,
+        SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto,
+        UsageAggregationDto,
+    },
 };
 use intention_transport::{
     AsyncDaemonFrameReceiver, AsyncLocalClientConnection, AsyncRequestSender, LocalConnection,
     LocalEndpoint, local_protocol_version, negotiate_client,
 };
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorCategoryDto, ErrorDto, EventEnvelopeDto, EventId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId,
+    CorrelationIdDto, DtoResult, ErrorCategoryDto, ErrorDto, SchemaVersionDto, SessionId,
 };
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
@@ -210,6 +226,362 @@ impl IntentionClient {
         }
     }
 
+    /// Reloads daemon configuration from a prepared candidate reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn reload_configuration(
+        &self,
+        command: ReloadConfigurationCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ReloadConfiguration(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Submits a bounded, credential-free raw TOML configuration edit.
+    ///
+    /// The daemon parses and validates the candidate server-side and never
+    /// echoes the raw content back. The response is the durable reload
+    /// transaction outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn submit_raw_toml_edit(
+        &self,
+        command: RawTomlEditCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::SubmitRawTomlEdit(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Applies typed, credential-free configuration edit operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected transaction outcome, or a typed unavailable
+    /// or invalid-response error.
+    pub fn apply_configuration_edit(
+        &self,
+        command: ConfigurationEditCommandDto,
+    ) -> DtoResult<ReloadTransactionDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ApplyConfigurationEdit(command))? {
+            ProtocolAcceptedResultDto::ReloadConfiguration(transaction) => Ok(transaction),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rotates one provider's private credential material.
+    ///
+    /// The command carries no credential material; the replacement arrives
+    /// through the daemon's private channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejected rotation outcome, or a typed unavailable or
+    /// invalid-response error.
+    pub fn rotate_credential(
+        &self,
+        command: RotateProviderCredentialsCommandDto,
+    ) -> DtoResult<CredentialRotationResultDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::RotateProviderCredentials(command))? {
+            ProtocolAcceptedResultDto::RotateProviderCredentials(result) => Ok(result),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries non-authorizing health evidence for one provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_health(
+        &self,
+        query: GetProviderHealthEvidenceQueryDto,
+    ) -> DtoResult<ProviderHealthProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderHealthEvidence(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderHealthEvidence(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the status of one provider discovery attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn discovery_status(
+        &self,
+        query: GetProviderDiscoveryStatusQueryDto,
+    ) -> DtoResult<ProviderDiscoveryProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderDiscoveryStatus(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderDiscoveryStatus(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the safe non-authorizing pricing policy projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn pricing(&self, query: GetPricingPolicyQueryDto) -> DtoResult<PricingProjectionDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetPricingPolicy(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::PricingPolicy(
+                projection,
+            )) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the safe applied configuration projection.
+    ///
+    /// The projection never carries raw TOML, credentials, private endpoints,
+    /// or paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn configuration_projection(&self) -> DtoResult<ConfigurationProjectionDto> {
+        let query = GetConfigurationProjectionQueryDto {
+            schema_version: schema_version_string(),
+        };
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetConfigurationProjection(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ConfigurationProjection(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Binds one session's durable provider profile intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn set_session_provider_profile(
+        &self,
+        command: SetSessionProviderProfileCommandDto,
+    ) -> DtoResult<SetSessionProviderProfileAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::SetSessionProviderProfile(command))? {
+            ProtocolAcceptedResultDto::SetSessionProviderProfile(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries one session's durable provider profile projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn session_provider_profile(
+        &self,
+        session_id: SessionId,
+    ) -> DtoResult<SessionProviderProfileDto> {
+        let query = GetSessionProviderProfileQueryDto {
+            schema_version: schema_version_string(),
+            session_id: session_id.to_string(),
+        };
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetSessionProviderProfile(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::SessionProviderProfile(projection),
+            ) => Ok(projection),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Loads one paged provider catalog projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn list_provider_profiles(
+        &self,
+        query: GetProviderCatalogQueryDto,
+    ) -> DtoResult<ProviderCatalogPageDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderCatalog(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::ProviderCatalog(
+                page,
+            )) => Ok(page),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries the provider catalog activation and degradation status.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_catalog_status(
+        &self,
+        query: GetProviderCatalogStatusQueryDto,
+    ) -> DtoResult<ProviderCatalogStatusDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderCatalogStatus(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(
+                ProtocolQueryResultDto::ProviderCatalogStatus(status),
+            ) => Ok(status),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Reconciles one bounded page of a session's unavailable-run queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn reconcile_unavailable_queue(
+        &self,
+        command: ReconcileUnavailableQueueCommandDto,
+    ) -> DtoResult<ReconcileUnavailableQueueAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::ReconcileUnavailableQueue(command))? {
+            ProtocolAcceptedResultDto::ReconcileUnavailableQueue(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Accepts one pending provider catalog removal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn accept_provider_catalog_removal(
+        &self,
+        command: AcceptProviderCatalogRemovalCommandDto,
+    ) -> DtoResult<AcceptProviderCatalogRemovalAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::AcceptProviderCatalogRemoval(command))? {
+            ProtocolAcceptedResultDto::AcceptProviderCatalogRemoval(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Rejects one pending provider catalog removal candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn reject_provider_catalog_candidate(
+        &self,
+        command: RejectProviderCatalogCandidateCommandDto,
+    ) -> DtoResult<RejectProviderCatalogCandidateAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::RejectProviderCatalogCandidate(command))? {
+            ProtocolAcceptedResultDto::RejectProviderCatalogCandidate(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Admits one held recovered run back into its session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rejection error, or a typed unavailable or
+    /// invalid-response error.
+    pub fn admit_recovered_run(
+        &self,
+        command: AdmitRecoveredRunCommandDto,
+    ) -> DtoResult<AdmitRecoveredRunAcceptedDto> {
+        command.validate()?;
+        match self.command_result(ProtocolCommandDto::AdmitRecoveredRun(command))? {
+            ProtocolAcceptedResultDto::AdmitRecoveredRun(accepted) => Ok(accepted),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    /// Queries one provider's usage aggregation over a period.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unavailable, rejected, or invalid-response error.
+    pub fn provider_usage(
+        &self,
+        query: GetProviderUsageQueryDto,
+    ) -> DtoResult<UsageAggregationDto> {
+        query.validate()?;
+        let response = self.request(ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetProviderUsage(query),
+        ))?;
+        match response {
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::ProviderUsage(
+                usage,
+            )) => Ok(usage),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
+                Err(error)
+            }
+            _ => Err(invalid_response()),
+        }
+    }
+
     fn connect_ready(&self) -> DtoResult<DaemonHealthDto> {
         let mut connection = self.connect()?;
         let health = self.request_on(
@@ -257,6 +629,23 @@ impl IntentionClient {
         self.request_on(&mut connection, payload)
     }
 
+    /// Sends one control-plane command and returns its typed accepted result.
+    ///
+    /// A rejected command propagates the daemon's typed error; every current
+    /// acceptance carries an operation-specific result.
+    fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
+        let response = self.request(ProtocolRequestPayloadDto::Command(command))?;
+        match response {
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(
+                accepted,
+            )) => Ok(accepted.result().clone()),
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
+                error,
+            )) => Err(error),
+            _ => Err(invalid_response()),
+        }
+    }
+
     fn connect(&self) -> DtoResult<NegotiatedConnection> {
         let mut connection = LocalConnection::connect(&self.endpoint)?;
         let remote = negotiate_client(&mut connection, self.hello.clone())?;
@@ -288,8 +677,12 @@ impl IntentionClient {
         );
         connection.connection.send_request(&request)?;
         let response = connection.connection.receive_response()?;
+        // The synchronous response path applies the same DTO schema-version
+        // equality as the stream clients, not only correlation and protocol
+        // version checks.
         if response.correlation_id() != correlation_id
             || response.protocol_version() != connection.daemon_version
+            || response.message().schema_version() != SCHEMA_VERSION
         {
             return Err(invalid_response());
         }
@@ -373,11 +766,7 @@ impl RunStreamClient {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == remote.version()
-                    && response
-                        .message()
-                        .schema_version()
-                        .ensure_compatible_with(subscription.schema_version())
-                        .is_ok() =>
+                    && response.message().schema_version() == subscription.schema_version() =>
             {
                 response
             }
@@ -450,11 +839,7 @@ impl RunStreamSubscription {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == self.daemon_version
-                    && response
-                        .message()
-                        .schema_version()
-                        .ensure_compatible_with(self.schema_version)
-                        .is_ok() =>
+                    && response.message().schema_version() == self.schema_version =>
             {
                 response
             }
@@ -598,7 +983,7 @@ impl RunSubscriptionReducer {
         let mut historical_cursors = self.historical_reasoning_cursors.clone();
         for fact in batch.facts() {
             if fact.cursor().value() <= snapshot_cursor.value() {
-                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+                if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
                     && historical_cursors.insert(fact.cursor())
                 {
                     appended_reasoning.push_str(content);
@@ -634,7 +1019,7 @@ impl RunSubscriptionReducer {
                     "run replay tail requires contiguous facts",
                 ));
             }
-            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content } = fact.input()
+            if let ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. } = fact.input()
                 && reasoning_cursors.insert(fact.cursor())
             {
                 reasoning_content.push_str(content);
@@ -701,175 +1086,6 @@ impl RunSubscriptionReducer {
     #[must_use]
     pub const fn history_unavailable(&self) -> bool {
         self.history_unavailable
-    }
-}
-
-/// Stateful recovery for one replay-only snapshot-and-tail subscription.
-///
-/// The local transport deliberately closes every request connection. This handle
-/// therefore records the latest accepted sequence and creates a fresh negotiated
-/// subscription request after a disconnect. It does not imply a live stream.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionSubscriptionRecovery {
-    schema_version: SchemaVersionDto,
-    session_id: SessionId,
-    run_id: Option<intention_types::RunId>,
-    requested_mode: intention_domain::RunModeDto,
-    reducer: SessionSubscriptionReducer,
-}
-
-impl SessionSubscriptionRecovery {
-    /// Creates recovery state for one typed subscription.
-    #[must_use]
-    pub const fn new(subscription: SubscribeSessionCommandDto) -> Self {
-        let session_id = subscription.session_id();
-        Self {
-            schema_version: subscription.schema_version(),
-            session_id,
-            run_id: subscription.run_id(),
-            requested_mode: subscription.requested_mode(),
-            reducer: SessionSubscriptionReducer::new(session_id),
-        }
-    }
-
-    /// Requests a fresh snapshot/tail from the last accepted sequence.
-    ///
-    /// `Ok(false)` means a consistent state was applied. `Ok(true)` means the
-    /// daemon required resynchronization and the local projection was cleared.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed transport, protocol, or continuity error.
-    pub fn recover(&mut self, client: &IntentionClient) -> DtoResult<bool> {
-        let subscription = SubscribeSessionCommandDto::with_run_id(
-            self.schema_version,
-            self.session_id,
-            self.run_id,
-            self.reducer.last_sequence(),
-            self.requested_mode,
-        );
-        self.reducer.apply(client.subscribe(subscription)?)
-    }
-
-    /// Returns the accepted daemon checkpoint, if recovery has succeeded.
-    #[must_use]
-    pub fn snapshot(&self) -> Option<SessionSnapshotDto> {
-        self.reducer.snapshot()
-    }
-
-    /// Returns the latest locally accepted daemon event sequence.
-    #[must_use]
-    pub const fn last_sequence(&self) -> Option<SessionEventSequenceDto> {
-        self.reducer.last_sequence()
-    }
-}
-
-/// A sequence-aware local reducer for snapshot-plus-tail subscription recovery.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionSubscriptionReducer {
-    session_id: SessionId,
-    snapshot: Option<SessionSnapshotDto>,
-    last_sequence: Option<SessionEventSequenceDto>,
-    seen_events: BTreeSet<EventId>,
-}
-
-impl SessionSubscriptionReducer {
-    /// Creates an empty local reducer for one daemon-owned session.
-    #[must_use]
-    pub const fn new(session_id: SessionId) -> Self {
-        Self {
-            session_id,
-            snapshot: None,
-            last_sequence: None,
-            seen_events: BTreeSet::new(),
-        }
-    }
-
-    /// Applies a complete subscription recovery response.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the response belongs to another session or
-    /// contains a non-contiguous tail. A resync instruction clears local state and
-    /// is returned as `Ok(true)`.
-    pub fn apply(&mut self, response: SessionSubscriptionResponseDto) -> DtoResult<bool> {
-        match response {
-            SessionSubscriptionResponseDto::ResyncRequired(resync) => {
-                if resync.session_id() != self.session_id {
-                    return Err(ErrorDto::validation(
-                        "invalid_subscription_session",
-                        "subscription response belongs to another session",
-                    ));
-                }
-                self.snapshot = None;
-                self.last_sequence = None;
-                self.seen_events.clear();
-                Ok(true)
-            }
-            SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } => {
-                if snapshot.session_id() != self.session_id || tail.session_id() != self.session_id
-                {
-                    return Err(ErrorDto::validation(
-                        "invalid_subscription_session",
-                        "subscription response belongs to another session",
-                    ));
-                }
-                let snapshot_sequence = snapshot.at_sequence();
-                self.snapshot = Some(snapshot);
-                self.last_sequence = Some(snapshot_sequence);
-                self.seen_events.clear();
-                for event in tail.events() {
-                    self.apply_event(event)?;
-                }
-                Ok(false)
-            }
-        }
-    }
-
-    /// Applies one ordered live event, ignoring a duplicate or stale sequence.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error for another session or a non-contiguous future
-    /// sequence, which tells the adapter to request snapshot recovery.
-    pub fn apply_event(
-        &mut self,
-        event: &EventEnvelopeDto<intention_domain::DomainEventDto>,
-    ) -> DtoResult<()> {
-        if event.session_id() != self.session_id {
-            return Err(ErrorDto::validation(
-                "invalid_subscription_session",
-                "subscription event belongs to another session",
-            ));
-        }
-        if self.seen_events.contains(&event.event_id()) {
-            return Ok(());
-        }
-        let expected = self.last_sequence.map_or(0, SessionEventSequenceDto::value);
-        if event.sequence().value() <= expected {
-            return Ok(());
-        }
-        if event.sequence().value() != expected.saturating_add(1) {
-            return Err(ErrorDto::validation(
-                "subscription_sequence_gap",
-                "subscription event sequence requires snapshot recovery",
-            ));
-        }
-        self.seen_events.insert(event.event_id());
-        self.last_sequence = Some(event.sequence());
-        Ok(())
-    }
-
-    /// Returns the last applied daemon sequence, if a snapshot has been accepted.
-    #[must_use]
-    pub const fn last_sequence(&self) -> Option<SessionEventSequenceDto> {
-        self.last_sequence
-    }
-
-    /// Returns the current accepted snapshot checkpoint.
-    #[must_use]
-    pub fn snapshot(&self) -> Option<SessionSnapshotDto> {
-        self.snapshot.clone()
     }
 }
 
@@ -968,6 +1184,12 @@ fn is_daemon_unavailable(error: &ErrorDto) -> bool {
         error.code(),
         "local_daemon_unavailable" | "local_daemon_connection_unavailable"
     )
+}
+
+/// Formats the current DTO schema version as the protocol `major.minor` text.
+#[must_use]
+fn schema_version_string() -> String {
+    format!("{}.{}", SCHEMA_VERSION.major(), SCHEMA_VERSION.minor())
 }
 
 fn is_daemon_starting(error: &ErrorDto) -> bool {

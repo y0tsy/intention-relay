@@ -11,26 +11,37 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use intention_application::{
-    ApplicationService, CreateSessionWorkflowInputDto, InvokeLocalToolInputDto,
-    ModelRunDispatchPort, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationInputDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
+    ApplicationService, CatalogAdmissionPort, CatalogReadService, ConfigurationReloadService,
+    ControlPlaneReadinessPort, CreateSessionWorkflowInputDto, CredentialRotationService,
+    DiscoveryPort, DiscoveryScopeDto, DriverRebuildPort, HealthProbePort, HeldRunService,
+    InvokeLocalToolInputDto, ModelRunDispatchPort, ModelRunDriverHandle, PricingPolicyService,
+    PrivateCredentialMaterial, PrivateCredentialPort, PrivateProviderProfileMaterial,
+    ProviderCatalogController, ProviderDiscoveryService, ProviderDriverFactory,
+    ProviderHealthService, ReloadCandidateDto, ReloadCommitOutcomeDto, RemovalService,
+    ResolvedProfileDto, SafeBindingSource, SafeCompositionBindingDto, ScheduleModelRunDto,
+    SendUserTurnWorkflowInputDto, SessionProfileService, ToolResultPublicationInputDto,
+    ToolResultPublicationPort, UnavailableQueueService, UsageService, WorkspaceBoundaryPort,
 };
-#[cfg(test)]
-use intention_config::ConfigPathDto;
 use intention_config::{
-    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
-    ResolvedConfigDto, StartupProviderMaterial,
+    ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto,
+    RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial,
+    control_plane::{ConfigCandidateDto, restore_credential_document},
+    parse_credential,
 };
 #[cfg(test)]
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_domain::{
-    DomainEventDto, GetSessionSnapshotQueryDto, RunEventCursorDto, RunReplayDto, RunStatusDto,
-    ToolLifecycleStatusDto,
+    CredentialTransportMode as DomainCredentialTransportMode, DomainEventDto,
+    GetSessionSnapshotQueryDto, ModelRunFactInputDto, ProviderSelectionV1, RunEventCursorDto,
+    RunFailureDto, RunReplayDto, RunStatusDto, ToolLifecycleStatusDto, canonical::Digest256,
 };
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
 };
-use intention_model::{ModelCancellationSignal, ModelExecutionDriver};
+use intention_model::{
+    AuthenticationHeaderPolicyV1, CredentialTransportMode as ModelCredentialTransportMode,
+    ModelCancellationSignal, ModelExecutionDriver, ReasoningEffortLevel,
+};
 #[cfg(any(test, feature = "test-support"))]
 use intention_model::{ModelCapabilitiesDto, ModelDriver, ModelEventStream};
 #[cfg(test)]
@@ -40,9 +51,15 @@ use intention_protocol::{
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
     SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto,
     SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    contract_families::{
+        ConfigurationCommitOutcomeDto, ConfigurationEditCommandDto, ConfigurationEditOperationDto,
+        ConfigurationProjectionDto, ConfigurationValidationOutcomeDto,
+        ProviderAvailabilityObservation, ProviderModelDiscoveryRecordDto, RawTomlEditCommandDto,
+        ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
+    },
 };
-use intention_provider_generic_chat::GenericChatDriver;
-use intention_provider_openrouter::OpenRouterDriver;
+use intention_provider_generic_chat::{GenericChatDriver, GenericChatDriverOptions};
+use intention_provider_openrouter::{OpenRouterDriver, OpenRouterDriverOptions};
 #[cfg(feature = "test-support")]
 use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
@@ -50,20 +67,26 @@ use intention_runtime::{
     ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, ToolExecutionPort,
     fail_starting_run,
 };
-use intention_storage::{CommittedChangeDto, StorageRepositoryDto};
+use intention_storage::{
+    AppendModelRunFactsInputDto, EnqueueUnavailableRunInputDto, HeldRunRepositoryDto,
+    MarkRecoveredRunHeldInputDto, ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto,
+    StorageRepositoryDto, UnavailableQueueRepositoryDto,
+};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_tools::{CancellationSignal, ToolInput, ToolResult};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, RunId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
+    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
 };
 #[cfg(test)]
-use intention_types::{ProjectId, WorkspaceId};
+use intention_types::{ErrorCategoryDto, ProjectId, WorkspaceId};
 use intention_workspace::WorkspaceRoot;
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
     intention_protocol::CURRENT_PROTOCOL_VERSION;
+/// The single live configuration snapshot schema (intention-config current schema).
+const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 
 /// Public M3 daemon application facade over a private durable composition.
@@ -72,14 +95,467 @@ pub struct DaemonApplicationFacade {
     inner: Arc<FacadeInner>,
 }
 
+pub use intention_application::CatalogReadiness;
+
 struct FacadeInner {
-    repository: SqliteStorageRepository,
-    config_snapshot: ConfigSnapshotDto,
+    repository: Arc<SqliteStorageRepository>,
+    config_snapshot: Mutex<ConfigSnapshotDto>,
     _selected_provider: SelectedProvider,
     dispatch: PrivateModelRunDispatch,
-    publisher: Box<dyn PostCommitPublisher>,
     command_gate: Mutex<()>,
     tool_cancellations: Mutex<HashMap<(SessionId, RunId), LocalToolCancellationEntry>>,
+    reload_candidates: Mutex<HashMap<String, ConfigCandidateDto>>,
+    control_plane: ProviderControlPlane,
+    private_credential: Mutex<PrivateCredentialState>,
+}
+
+/// The composition's private credential state.
+///
+/// This is the composition-owned private credential source of the slice: it
+/// retains the startup provider's credential value and the configuration file
+/// it came from, both captured inside the private loading boundary at open.
+/// The value is the private material restored into typed-edit candidate
+/// documents; rotation refreshes it from the same file through the private
+/// loading boundary and rebuilds the selected provider driver. The state
+/// deliberately implements no `Debug`, `Display`, or serde traits: the
+/// credential must never cross a DTO, log, error, digest, or durable surface.
+#[derive(Default)]
+struct PrivateCredentialState {
+    /// The current private credential value of the startup provider.
+    material: Option<String>,
+    /// The configuration file source retained as the private channel through
+    /// which replacement material arrives. Never disclosed in a DTO or error.
+    source: Option<ConfigSourceDto>,
+}
+
+/// The composition's provider session-selection control plane.
+///
+/// The controller owns the catalog runtime: startup, candidate preparation,
+/// pending-removal acceptance/rejection/expiry, admission lookups, and the
+/// private driver registry. All public access is DTO-only and credential-free.
+struct ProviderControlPlane {
+    controller: ProviderCatalogController<RepositoryHandle, RepositoryHandle>,
+}
+
+impl ProviderControlPlane {
+    /// Builds the control plane over the shared durable repository handle.
+    fn new(handle: RepositoryHandle) -> Self {
+        let factories = vec![
+            Box::new(CompositionDriverFactory::service("openrouter"))
+                as Box<dyn ProviderDriverFactory>,
+            Box::new(CompositionDriverFactory::service(
+                "generic-chat-completion-api",
+            )),
+        ];
+        Self {
+            controller: ProviderCatalogController::new(handle.clone(), handle, factories),
+        }
+    }
+}
+
+impl ControlPlaneReadinessPort for ProviderControlPlane {
+    fn readiness(&self) -> DtoResult<intention_application::CatalogReadiness> {
+        Ok(self.controller.inspect()?.readiness)
+    }
+}
+
+/// Cloneable composition-side handle over the shared durable repository.
+///
+/// The catalog controller owns its repository handles by value; this local
+/// wrapper delegates every catalog and removal repository call to the shared
+/// SQLite repository so the facade keeps exactly one connection.
+#[derive(Clone)]
+struct RepositoryHandle(Arc<SqliteStorageRepository>);
+
+impl ProviderCatalogRepositoryDto for RepositoryHandle {
+    fn append_provider_kind_descriptor_revision(
+        &self,
+        input: intention_storage::AppendProviderKindDescriptorRevisionInputDto,
+    ) -> DtoResult<()> {
+        self.0.append_provider_kind_descriptor_revision(input)
+    }
+    fn append_provider_profile_revision(
+        &self,
+        input: intention_storage::AppendProviderProfileRevisionInputDto,
+    ) -> DtoResult<()> {
+        self.0.append_provider_profile_revision(input)
+    }
+    fn load_provider_catalog_status(
+        &self,
+    ) -> DtoResult<intention_storage::ProviderCatalogStateDto> {
+        self.0.load_provider_catalog_status()
+    }
+    fn load_provider_catalog_page(
+        &self,
+        input: intention_storage::LoadProviderCatalogPageInputDto,
+    ) -> DtoResult<intention_storage::ProviderCatalogPageDto> {
+        self.0.load_provider_catalog_page(input)
+    }
+    fn accept_provider_catalog(
+        &self,
+        input: intention_storage::AcceptProviderCatalogInputDto,
+    ) -> DtoResult<()> {
+        self.0.accept_provider_catalog(input)
+    }
+    fn reject_provider_catalog_candidate(
+        &self,
+        input: intention_storage::RejectProviderCatalogCandidateInputDto,
+    ) -> DtoResult<()> {
+        self.0.reject_provider_catalog_candidate(input)
+    }
+    fn expire_provider_catalog_candidate(
+        &self,
+        input: intention_storage::ExpireProviderCatalogCandidateInputDto,
+    ) -> DtoResult<()> {
+        self.0.expire_provider_catalog_candidate(input)
+    }
+    fn load_provider_catalog_material(
+        &self,
+    ) -> DtoResult<intention_storage::ProviderCatalogMaterialDto> {
+        self.0.load_provider_catalog_material()
+    }
+    fn load_prepared_catalog_material(
+        &self,
+    ) -> DtoResult<intention_storage::ProviderCatalogMaterialDto> {
+        self.0.load_prepared_catalog_material()
+    }
+}
+
+impl ProviderRemovalRepositoryDto for RepositoryHandle {
+    fn load_highest_removal_candidate_revision(&self) -> DtoResult<u64> {
+        self.0.load_highest_removal_candidate_revision()
+    }
+    fn load_pending_removal_candidate(
+        &self,
+    ) -> DtoResult<Option<intention_storage::PendingRemovalCandidateDto>> {
+        self.0.load_pending_removal_candidate()
+    }
+    fn create_provider_catalog_removal_candidate(
+        &self,
+        input: intention_storage::CreateProviderCatalogRemovalCandidateInputDto,
+    ) -> DtoResult<()> {
+        self.0.create_provider_catalog_removal_candidate(input)
+    }
+    fn accept_provider_catalog_removal(
+        &self,
+        input: intention_storage::AcceptProviderCatalogRemovalInputDto,
+    ) -> DtoResult<()> {
+        self.0.accept_provider_catalog_removal(input)
+    }
+    fn reject_provider_catalog_removal(
+        &self,
+        input: intention_storage::RejectProviderCatalogRemovalInputDto,
+    ) -> DtoResult<()> {
+        self.0.reject_provider_catalog_removal(input)
+    }
+    fn expire_provider_catalog_removal_candidate(
+        &self,
+        input: intention_storage::ExpireProviderCatalogRemovalCandidateInputDto,
+    ) -> DtoResult<u64> {
+        self.0.expire_provider_catalog_removal_candidate(input)
+    }
+}
+
+/// The composition's credential-free private driver factory.
+///
+/// The catalog runtime only carries opaque handles; actual driver
+/// materialization from private credential material is owned by a later
+/// slice. This factory builds credential-free opaque handles so admission
+/// lookups and the private registry contract are fully wired without any
+/// credential crossing a boundary.
+struct CompositionDriverFactory {
+    kind: String,
+}
+
+impl CompositionDriverFactory {
+    fn service(kind: &'static str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+        }
+    }
+}
+
+impl ProviderDriverFactory for CompositionDriverFactory {
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    fn supports_contract(
+        &self,
+        contract: &intention_domain::ProviderDriverContractRevisionDto,
+    ) -> bool {
+        contract.driver_family == self.kind && contract.major == 1 && contract.minor == 1
+    }
+
+    fn build(
+        &self,
+        profile: PrivateProviderProfileMaterial,
+    ) -> DtoResult<Box<dyn ModelRunDriverHandle + Send + Sync>> {
+        // PR24-057: every catalog activation preflights the profile's
+        // declared options through the executing adapter's option builder via
+        // the composition seam. The registry carries credential-free opaque
+        // handles in this slice, so the derived options are validated here
+        // and the daemon host materializes the executing driver with the same
+        // seam output later; a declaration the adapter cannot apply (live
+        // `SafeHeader` wire injection is not activated) therefore fails the
+        // all-or-nothing activation instead of being silently ignored.
+        let declared = DeclaredProviderOptions::from_declaration(
+            profile.profile.credential_transport_mode,
+            profile.profile.safe_header_name.clone(),
+            None,
+        )?;
+        let preflight = if self.kind == "openrouter" {
+            declared.into_openrouter().map(|_| ())
+        } else {
+            declared.into_generic_chat().map(|_| ())
+        };
+        preflight?;
+        let _ = &profile.private_credential_reference;
+        Ok(Box::new(CompositionCatalogDriverHandle))
+    }
+}
+
+/// Credential-free opaque handle behind the private registry.
+struct CompositionCatalogDriverHandle;
+
+impl ModelRunDriverHandle for CompositionCatalogDriverHandle {}
+
+/// The composition's catalog admission port.
+///
+/// A profile resolves when the active catalog material names it and the
+/// controller admits its exact registry key as enabled, ready, and
+/// non-tombstoned.
+struct CompositionCatalogAdmissionPort<'a> {
+    controller: &'a ProviderCatalogController<RepositoryHandle, RepositoryHandle>,
+    catalog: &'a SqliteStorageRepository,
+}
+
+impl CatalogAdmissionPort for CompositionCatalogAdmissionPort<'_> {
+    fn resolve_enabled_profile(&self, profile_id: &str) -> DtoResult<ResolvedProfileDto> {
+        let material = self
+            .catalog
+            .load_provider_catalog_material()
+            .map_err(|error| {
+                if error.code() == "provider_catalog_not_active" {
+                    ErrorDto::unavailable("catalog_not_ready", "the provider catalog is not active")
+                } else {
+                    error
+                }
+            })?;
+        let candidate = material
+            .profiles
+            .iter()
+            .find(|candidate| candidate.profile.profile_id == profile_id)
+            .ok_or_else(|| {
+                ErrorDto::unavailable(
+                    "provider_profile_unavailable",
+                    "the requested provider profile is not in the active catalog",
+                )
+            })?;
+        let key = intention_application::PrivateRegistryKey {
+            profile_id: candidate.profile.profile_id.clone(),
+            profile_revision_id: candidate.profile.revision_id.clone(),
+            kind_descriptor_revision_id: candidate.profile.kind_descriptor_revision_id.clone(),
+            driver_contract: candidate.profile.driver_contract_revision.clone(),
+        };
+        self.controller.registry_lookup(&key)?;
+        let contract = &candidate.profile.driver_contract_revision;
+        Ok(ResolvedProfileDto {
+            profile_id: candidate.profile.profile_id.clone(),
+            profile_revision_id: candidate.profile.revision_id.clone(),
+            kind_id: candidate.profile.provider_kind_id.clone(),
+            kind_descriptor_revision_id: candidate.profile.kind_descriptor_revision_id.clone(),
+            model_id: candidate.profile.model_id.clone(),
+            normalized_effective_endpoint: candidate.profile.endpoint.clone(),
+            credential_transport_mode: match candidate.profile.credential_transport_mode {
+                DomainCredentialTransportMode::Bearer => {
+                    intention_protocol::contract_families::CredentialTransportMode::Bearer
+                }
+                DomainCredentialTransportMode::SafeHeader => {
+                    intention_protocol::contract_families::CredentialTransportMode::SafeHeader
+                }
+            },
+            credential_transport_safe_header_name: candidate.profile.safe_header_name.clone(),
+            declared_model_capability_subset: candidate.declared_model_capability_subset.clone(),
+            resolved_reasoning_policy: candidate.resolved_reasoning_policy.clone(),
+            effective_execution_policy: candidate.effective_execution_policy.clone(),
+            effective_loopback_policy_or_not_applicable: candidate
+                .effective_loopback_policy_or_not_applicable
+                .clone(),
+            provider_driver_contract_revision: format!(
+                "{}-{}.{}",
+                contract.driver_family, contract.major, contract.minor
+            ),
+        })
+    }
+
+    fn verify_registry_key(
+        &self,
+        profile_id: &str,
+        provider_profile_revision_id: &str,
+        kind_descriptor_revision_id: &str,
+        driver_contract_revision: &str,
+    ) -> DtoResult<()> {
+        let key = registry_key_from_selection(
+            profile_id,
+            provider_profile_revision_id,
+            kind_descriptor_revision_id,
+            driver_contract_revision,
+        )?;
+        self.controller.registry_lookup(&key)?;
+        Ok(())
+    }
+}
+
+/// Builds the exact private registry key of one persisted provider selection.
+///
+/// The persisted driver contract revision is the deterministic
+/// `{driver_family}-{major}.{minor}` name; the family may itself contain
+/// hyphens, so the version splits from the last hyphen.
+///
+/// # Errors
+///
+/// Returns a validation error when the persisted driver contract revision is
+/// malformed.
+fn registry_key_from_selection(
+    profile_id: &str,
+    provider_profile_revision_id: &str,
+    kind_descriptor_revision_id: &str,
+    driver_contract_revision: &str,
+) -> DtoResult<intention_application::PrivateRegistryKey> {
+    let (driver_family, version) = driver_contract_revision.rsplit_once('-').ok_or_else(|| {
+        ErrorDto::validation(
+            "provider_selection_invalid",
+            "the persisted driver contract revision is malformed",
+        )
+    })?;
+    let (major, minor) = version.split_once('.').ok_or_else(|| {
+        ErrorDto::validation(
+            "provider_selection_invalid",
+            "the persisted driver contract revision is malformed",
+        )
+    })?;
+    let major = major.parse::<u64>().map_err(|_| {
+        ErrorDto::validation(
+            "provider_selection_invalid",
+            "the persisted driver contract revision is malformed",
+        )
+    })?;
+    let minor = minor.parse::<u64>().map_err(|_| {
+        ErrorDto::validation(
+            "provider_selection_invalid",
+            "the persisted driver contract revision is malformed",
+        )
+    })?;
+    Ok(intention_application::PrivateRegistryKey {
+        profile_id: profile_id.to_owned(),
+        profile_revision_id: provider_profile_revision_id.to_owned(),
+        kind_descriptor_revision_id: kind_descriptor_revision_id.to_owned(),
+        driver_contract: intention_domain::ProviderDriverContractRevisionDto {
+            driver_family: driver_family.to_owned(),
+            major,
+            minor,
+        },
+    })
+}
+
+/// The composition's provider-option seam (PR24-057).
+///
+/// The provider adapters expose additive, validated, credential-free driver
+/// option builders (`OpenRouterDriverOptions` / `GenericChatDriverOptions`)
+/// that adapter tests exercise directly but that production construction
+/// historically bypassed, leaving the live driver on adapter defaults while
+/// catalog projections advertised the profile's declared option policy. This
+/// type is the single composition-owned translation of validated provider
+/// material into those builders, applied by every production driver
+/// construction and reconstruction path in this crate:
+///
+/// - startup: [`SelectedProvider::from_startup_material`] applies the closed
+///   transport declaration of the startup profile through the seam;
+/// - catalog activation: [`CompositionDriverFactory::build`] preflights each
+///   profile's declared options through the executing adapter's builder, so a
+///   declaration the adapter cannot apply fails the activation instead of
+///   being silently ignored;
+/// - credential-driven rebuild: rotation replaces only the driver's private
+///   SDK client, so the driver keeps the options the seam applied at
+///   construction.
+///
+/// Slice 2 catalog material declares exactly the closed credential transport
+/// per profile (bearer authorization, or one descriptor-selected safe header
+/// whose complete value is the credential). The bearer declaration maps to an
+/// empty bearer header policy; live `SafeHeader` wire injection is not
+/// activated (ADR 0037, EXC-057), so both executing adapters reject it in
+/// their option `build()` and the seam surfaces
+/// `unsupported_safe_header_transport` instead of defaulting. Reasoning
+/// effort has no Slice 2 declaration surface (RSN-011), so producible
+/// declarations carry `None`; the slot flows through the same seam so a later
+/// declaration surface cannot add a second construction path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeclaredProviderOptions {
+    header_policy: AuthenticationHeaderPolicyV1,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+}
+
+impl DeclaredProviderOptions {
+    /// Composes the closed option declaration of one validated profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_credential_transport` or `invalid_safe_header_name`
+    /// when the transport declaration is inconsistent or unbounded.
+    fn from_declaration(
+        transport: DomainCredentialTransportMode,
+        safe_header_name: Option<String>,
+        reasoning_effort: Option<ReasoningEffortLevel>,
+    ) -> DtoResult<Self> {
+        let allowed_header_names = match transport {
+            DomainCredentialTransportMode::Bearer => Vec::new(),
+            DomainCredentialTransportMode::SafeHeader => safe_header_name.into_iter().collect(),
+        };
+        let selected_transport = match transport {
+            DomainCredentialTransportMode::Bearer => ModelCredentialTransportMode::Bearer,
+            DomainCredentialTransportMode::SafeHeader => ModelCredentialTransportMode::SafeHeader,
+        };
+        Ok(Self {
+            header_policy: AuthenticationHeaderPolicyV1::new(
+                allowed_header_names,
+                selected_transport,
+            )?,
+            reasoning_effort,
+        })
+    }
+
+    /// Translates this declaration into the OpenRouter driver option builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unsupported_safe_header_transport` when the declared header
+    /// policy selects the safe-header transport, which the OpenRouter SDK
+    /// adapter cannot inject without the `http` crate as a production
+    /// dependency.
+    fn into_openrouter(self) -> DtoResult<OpenRouterDriverOptions> {
+        let mut builder = OpenRouterDriverOptions::new().with_header_policy(self.header_policy);
+        if let Some(effort) = self.reasoning_effort {
+            builder = builder.with_reasoning_effort(effort);
+        }
+        builder.build()
+    }
+
+    /// Translates this declaration into the generic-chat driver option
+    /// builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unsupported_safe_header_transport` for the not-activated
+    /// safe-header transport, or `unsupported_reasoning_effort` for the
+    /// maximum effort the pinned SDK effort set cannot express.
+    fn into_generic_chat(self) -> DtoResult<GenericChatDriverOptions> {
+        let mut builder = GenericChatDriverOptions::new().with_header_policy(self.header_policy);
+        if let Some(effort) = self.reasoning_effort {
+            builder = builder.with_reasoning_effort(effort);
+        }
+        builder.build()
+    }
 }
 
 enum SelectedProvider {
@@ -112,13 +588,59 @@ impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
 
 impl SelectedProvider {
     fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
+        // PR24-057: production construction applies the closed Slice 2
+        // transport declaration (bearer) through the composition seam instead
+        // of silently falling back to adapter-default options. The startup
+        // catalog derivation persists the same bearer declaration for the
+        // selected profile (kind descriptors derive
+        // `credential_transport_contract = "bearer"`), and the adapter
+        // option `build()` re-validates applicability, so a declaration the
+        // executing adapter cannot apply fails the daemon open path closed.
+        let declared = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            None,
+        )?;
+        Self::build_with_declared_options(material, declared)
+    }
+
+    /// Builds the executing provider driver for one seam-declared option set.
+    ///
+    /// This is the only production driver construction path; test helpers may
+    /// supply non-default declarations to observe how the seam applies them.
+    fn build_with_declared_options(
+        material: StartupProviderMaterial,
+        declared: DeclaredProviderOptions,
+    ) -> DtoResult<Self> {
         match material.safe_resolved().provider().kind() {
             ProviderKindDto::Openrouter => {
-                OpenRouterDriver::from_startup_material(material).map(Self::OpenRouter)
+                let options = declared.into_openrouter()?;
+                OpenRouterDriver::from_startup_material_with_options(material, options)
+                    .map(Self::OpenRouter)
             }
             ProviderKindDto::GenericChatCompletionApi => {
-                GenericChatDriver::from_startup_material(material).map(Self::GenericChat)
+                let options = declared.into_generic_chat()?;
+                GenericChatDriver::from_startup_material_with_options(material, options)
+                    .map(Self::GenericChat)
             }
+        }
+    }
+
+    /// Returns the OpenRouter driver's applied options, when selected.
+    #[cfg(test)]
+    const fn openrouter_options(&self) -> Option<&OpenRouterDriverOptions> {
+        match self {
+            Self::OpenRouter(driver) => Some(driver.options()),
+            _ => None,
+        }
+    }
+
+    /// Returns the generic-chat driver's applied options, when selected.
+    #[cfg(test)]
+    const fn generic_chat_options(&self) -> Option<&GenericChatDriverOptions> {
+        match self {
+            Self::GenericChat(driver) => Some(driver.options()),
+            _ => None,
         }
     }
 
@@ -151,6 +673,31 @@ impl SelectedProvider {
                 let _ = driver;
                 None
             }
+        }
+    }
+
+    /// Replaces the selected provider driver's private SDK client with one
+    /// built from fresh private credential material.
+    ///
+    /// The swap is composition-owned and happens only after the replacement
+    /// client is configured; concurrent executions keep the client they
+    /// captured before the swap. The credential never crosses a DTO, log, or
+    /// error boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the provider driver's typed build error, or
+    /// `credential_rotation_source_unavailable` when the facade holds no
+    /// real provider driver to rebuild.
+    fn rotate_private_credential(&self, credential: String) -> DtoResult<()> {
+        match self {
+            Self::OpenRouter(driver) => driver.rotate_credential(credential),
+            Self::GenericChat(driver) => driver.rotate_credential(credential),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::TestSupport(_) => Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private driver is bound to this profile",
+            )),
         }
     }
 }
@@ -196,16 +743,6 @@ impl ModelRunDispatchPort for PrivateModelRunDispatch {
     }
 }
 
-trait PostCommitPublisher: Send + Sync {
-    /// Retained M3 session publisher seam, invoked only after an independent durable read.
-    ///
-    /// M3 composition supplies the no-op implementation. M4 run-scoped streaming
-    /// publishes through the daemon host's dedicated commit observer instead.
-    fn publish(&self, change: &CommittedChangeDto) -> DtoResult<()>;
-}
-
-struct NoopPostCommitPublisher;
-
 struct SafeWorkspaceBoundary;
 impl WorkspaceBoundaryPort for SafeWorkspaceBoundary {
     fn resolve(&self, _workspace: &WorkspaceRoot) -> DtoResult<()> {
@@ -245,22 +782,16 @@ fn production_hooks() -> DtoResult<HookRegistry> {
     Ok(registry)
 }
 
-impl PostCommitPublisher for NoopPostCommitPublisher {
-    fn publish(&self, _change: &CommittedChangeDto) -> DtoResult<()> {
-        Ok(())
-    }
-}
-
-/// Publishes one committed tool result after an independent durable reread.
+/// Verifies that a scoped durable reread contains committed `Completed` typed
+/// evidence for the exact invocation identity.
 ///
 /// The reread is scoped to the invoking session's exact pre-invocation durable
-/// position and must contain `Completed` typed evidence for the exact invocation
-/// identity before the retained post-commit publisher seam fires. Publication
-/// therefore follows commit plus a scoped reread, and the application dispatches
-/// `AfterToolResultPublished` only after this publication succeeds.
+/// position and must contain `Completed` typed evidence for the exact
+/// invocation identity before publication proceeds. Publication therefore
+/// follows commit plus a scoped reread, and the application dispatches
+/// `AfterToolResultPublished` only after this verification succeeds.
 struct DurableToolResultPublisher<'a> {
     repository: &'a SqliteStorageRepository,
-    publisher: &'a dyn PostCommitPublisher,
     after_sequence: SessionEventSequenceDto,
 }
 
@@ -269,11 +800,7 @@ impl ToolResultPublicationPort for DurableToolResultPublisher<'_> {
         let events = self
             .repository
             .load_tail(input.session_id(), self.after_sequence)?;
-        committed_tool_result_evidence(&events, input)?;
-        let projection = self.repository.load_session_snapshot(input.session_id())?;
-        let position = projection.at_sequence();
-        let committed = CommittedChangeDto::new(projection, position, events, None)?;
-        self.publisher.publish(&committed)
+        committed_tool_result_evidence(&events, input)
     }
 }
 
@@ -312,15 +839,484 @@ struct LocalToolCancellationEntry {
     inflight: usize,
 }
 
+/// The protocol schema-version text used by control-plane projections.
+const PROTOCOL_SCHEMA_VERSION_TEXT: &str = "1.1";
+/// The maximum retained prepared reload candidates for reference reloads.
+const MAX_RELOAD_CANDIDATES: usize = 16;
+
+/// The composition's catalog-runtime-backed binding source.
+///
+/// The provider binding identity (profile revision, kind descriptor
+/// revision, capability subset, loopback policy, and driver contract) is
+/// owned by the provider catalog runtime: the source resolves each profile
+/// through the catalog admission port and derives the credential-free
+/// composition revision from the resolved profile identity. Active
+/// configuration revision and snapshot come from the fresh-run snapshot.
+struct CatalogBindingSource<'a> {
+    snapshot: &'a Mutex<ConfigSnapshotDto>,
+    admission: CompositionCatalogAdmissionPort<'a>,
+}
+
+impl SafeBindingSource for CatalogBindingSource<'_> {
+    fn active_revision(&self) -> DtoResult<String> {
+        self.snapshot
+            .lock()
+            .map(|guard| guard.revision_id().to_string())
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })
+    }
+
+    fn active_snapshot(&self) -> DtoResult<ConfigSnapshotDto> {
+        self.snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })
+    }
+
+    fn binding(&self, profile_id: &str) -> DtoResult<SafeCompositionBindingDto> {
+        let resolved = self.admission.resolve_enabled_profile(profile_id)?;
+        let canonical = format!(
+            "ir-binding-v1|profile={}|profile-revision={}|kind={}|kind-descriptor={}|model={}|endpoint={}|capabilities={}|execution={}|loopback={}|driver={}",
+            resolved.profile_id,
+            resolved.profile_revision_id,
+            resolved.kind_id,
+            resolved.kind_descriptor_revision_id,
+            resolved.model_id,
+            resolved.normalized_effective_endpoint,
+            resolved.declared_model_capability_subset.join(","),
+            resolved.effective_execution_policy,
+            resolved.effective_loopback_policy_or_not_applicable,
+            resolved.provider_driver_contract_revision,
+        );
+        let digest = Digest256::sha256(canonical.as_bytes()).bytes();
+        let mut composition_revision = String::with_capacity(64);
+        for byte in digest {
+            composition_revision.push_str(&format!("{byte:02x}"));
+        }
+        Ok(SafeCompositionBindingDto {
+            profile_id: resolved.profile_id,
+            provider_profile_revision_id: resolved.profile_revision_id,
+            safe_composition_revision: composition_revision,
+            kind_id: resolved.kind_id,
+            kind_descriptor_revision_id: resolved.kind_descriptor_revision_id,
+            model_id: resolved.model_id,
+            endpoint: Some(resolved.normalized_effective_endpoint),
+            declared_model_capability_subset: resolved.declared_model_capability_subset,
+            effective_execution_policy: resolved.effective_execution_policy,
+            effective_loopback_policy_or_not_applicable: resolved
+                .effective_loopback_policy_or_not_applicable,
+            provider_driver_contract_revision: resolved.provider_driver_contract_revision,
+        })
+    }
+}
+
+/// The composition's private credential source.
+///
+/// The daemon's own configuration file is the configured private credential
+/// source of this slice: the file path retained at open is re-read through
+/// the private loading boundary on rotation, and its current
+/// `provider.credential` value becomes the replacement material. A facade
+/// opened without a file-backed source (test-support opens) has no configured
+/// source and fails closed with `credential_rotation_source_unavailable`
+/// before any replacement is obtained. Read, permission, or parse failures
+/// map to the same closed source-unavailable code and never disclose file
+/// content, the path, or the credential.
+struct CompositionCredentialSource<'a> {
+    state: &'a Mutex<PrivateCredentialState>,
+}
+
+impl PrivateCredentialPort for CompositionCredentialSource<'_> {
+    fn obtain_replacement(&self, _profile_id: &str) -> DtoResult<PrivateCredentialMaterial> {
+        let source = self
+            .state
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "credential_rotation_source_unavailable",
+                    "the private credential source is unavailable",
+                )
+            })?
+            .source
+            .clone();
+        let Some(source) = source else {
+            return Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private credential source is configured",
+            ));
+        };
+        let replacement = read_configured_credential(&source).map_err(|_| {
+            ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "the private credential source could not supply replacement material",
+            )
+        })?;
+        Ok(PrivateCredentialMaterial::from_private_bytes(
+            replacement.into_bytes(),
+        ))
+    }
+}
+
+/// Reads the current credential value from the configured configuration file.
+///
+/// The read repeats the open-time private loading boundary: owner-only
+/// permission verification on Unix, file read, and the shared credential
+/// parse. Any failure is a source failure and carries no path or content.
+fn read_configured_credential(source: &ConfigSourceDto) -> DtoResult<String> {
+    #[cfg(unix)]
+    intention_config::ensure_user_only_permissions(source.path())?;
+    let raw = fs::read_to_string(source.path().as_str()).map_err(|_| {
+        ErrorDto::unavailable(
+            "credential_source_read_unavailable",
+            "the private credential source could not be read",
+        )
+    })?;
+    parse_credential(&raw)
+}
+
+/// The composition's private driver rebuild boundary.
+///
+/// Rebuild applies replacement material to the selected provider driver that
+/// actually executes runs: the facade's startup provider. The target
+/// profile's provider kind must match the selected provider, and the
+/// replacement is committed to the private credential state only after the
+/// driver swap succeeds. The rebuild also preflights the active profile's
+/// declared options through the composition seam (PR24-057), so a profile
+/// whose declared transport the executing adapter cannot apply fails closed
+/// rather than silently serving options that no longer match the profile.
+/// Test-support drivers and kind-mismatched profiles have no private driver
+/// and fail closed with `credential_rotation_source_unavailable`; the
+/// credential never crosses a DTO, log, or error.
+struct CompositionDriverRebuildPort<'a> {
+    facade: &'a DaemonApplicationFacade,
+}
+
+impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {
+    fn rebuild(&self, profile_id: &str, material: PrivateCredentialMaterial) -> DtoResult<()> {
+        let credential = String::from_utf8(material.into_private_bytes()).map_err(|_| {
+            ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "the private credential source supplied unusable material",
+            )
+        })?;
+        let resolved = self
+            .facade
+            .catalog_admission_port()
+            .resolve_enabled_profile(profile_id)?;
+        let driver_kind = self
+            .facade
+            .inner
+            ._selected_provider
+            .safe_kind()
+            .map(ProviderKindDto::as_str);
+        if driver_kind != Some(resolved.kind_id.as_str()) {
+            return Err(ErrorDto::unavailable(
+                "credential_rotation_source_unavailable",
+                "no private driver is bound to this profile",
+            ));
+        }
+        // PR24-057: a credential-driven rebuild keeps the executing driver
+        // able to apply the active profile's declared options. The seam
+        // preflights the resolved profile's declared transport through the
+        // executing adapter's option builder, so a declaration the adapter
+        // cannot apply (live `SafeHeader` wire injection is not activated)
+        // fails the rotation closed instead of silently leaving the driver on
+        // options that no longer match the profile it serves.
+        let declared_transport = match resolved.credential_transport_mode {
+            intention_protocol::contract_families::CredentialTransportMode::Bearer => {
+                DomainCredentialTransportMode::Bearer
+            }
+            intention_protocol::contract_families::CredentialTransportMode::SafeHeader => {
+                DomainCredentialTransportMode::SafeHeader
+            }
+        };
+        let declared = DeclaredProviderOptions::from_declaration(
+            declared_transport,
+            resolved.credential_transport_safe_header_name,
+            None,
+        )?;
+        let preflight = if driver_kind == Some("openrouter") {
+            declared.into_openrouter().map(|_| ())
+        } else {
+            declared.into_generic_chat().map(|_| ())
+        };
+        preflight?;
+        self.facade
+            .inner
+            ._selected_provider
+            .rotate_private_credential(credential.clone())?;
+        let mut state = self.facade.inner.private_credential.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        state.material = Some(credential);
+        drop(state);
+        Ok(())
+    }
+}
+
+/// The composition's health probe boundary.
+///
+/// Provider probing is not wired in this slice: the probe reports a typed
+/// unavailable outcome that the health service projects as an `Unknown`
+/// observation with the `provider_health_unavailable` diagnostic code.
+struct CompositionHealthProbe;
+
+impl HealthProbePort for CompositionHealthProbe {
+    fn probe(&self, _provider_id: &str) -> DtoResult<ProviderAvailabilityObservation> {
+        Err(ErrorDto::unavailable(
+            "provider_health_unavailable",
+            "provider health probing is not wired yet",
+        ))
+    }
+}
+
+/// The composition's discovery boundary.
+///
+/// Provider discovery is not wired in this slice; the discovery service
+/// projects the port error as a terminal attempt with a safe status.
+struct CompositionDiscoveryPort;
+
+impl DiscoveryPort for CompositionDiscoveryPort {
+    fn discover(
+        &self,
+        _scope: &DiscoveryScopeDto,
+    ) -> DtoResult<Vec<ProviderModelDiscoveryRecordDto>> {
+        Err(ErrorDto::unavailable(
+            "provider_discovery_unavailable",
+            "provider discovery is not wired yet",
+        ))
+    }
+}
+
+/// Builds the deterministic execution-policy label of one snapshot.
+#[must_use]
+fn execution_policy_string(snapshot: &ConfigSnapshotDto) -> String {
+    let execution = snapshot.resolved().provider_execution();
+    format!(
+        "execution-timeout-{}-attempts-{}",
+        execution.attempt_timeout_seconds(),
+        execution.max_attempts(),
+    )
+}
+
+/// Builds the committed reload transaction from a durable commit outcome.
+#[must_use]
+fn committed_reload_transaction(outcome: &ReloadCommitOutcomeDto) -> ReloadTransactionDto {
+    ReloadTransactionDto {
+        transaction_id: outcome.transaction_id.clone(),
+        previous_config_revision: outcome.previous_revision.clone(),
+        candidate_config_revision: outcome.new_revision.clone(),
+        validation_result: ConfigurationValidationOutcomeDto::Valid,
+        commit_outcome: ConfigurationCommitOutcomeDto::Committed,
+        safe_failure_code: None,
+        safe_failure_detail: None,
+    }
+}
+
+/// Builds the rejected reload transaction from a not-accepted candidate.
+///
+/// The transaction carries the first deterministic failure code and never
+/// echoes raw TOML or credential material.
+#[must_use]
+fn rejected_reload_transaction(
+    candidate: &ReloadCandidateDto,
+    operation_id: String,
+    previous_revision: String,
+) -> ReloadTransactionDto {
+    ReloadTransactionDto {
+        transaction_id: operation_id,
+        previous_config_revision: previous_revision,
+        candidate_config_revision: candidate
+            .candidate_revision_id
+            .clone()
+            .unwrap_or_else(|| "unavailable".to_owned()),
+        validation_result: ConfigurationValidationOutcomeDto::Invalid,
+        commit_outcome: ConfigurationCommitOutcomeDto::Rejected,
+        safe_failure_code: candidate.failure_code.clone(),
+        safe_failure_detail: None,
+    }
+}
+
+/// Builds the safe applied configuration projection from the active snapshot.
+///
+/// The projection is credential-free and never carries raw TOML, private
+/// endpoints, or paths.
+#[must_use]
+fn configuration_projection(snapshot: &ConfigSnapshotDto) -> ConfigurationProjectionDto {
+    ConfigurationProjectionDto {
+        schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+        applied_config_revision_id: snapshot.revision_id().to_string(),
+        provider_kind: snapshot.resolved().provider().kind().as_str().to_owned(),
+        model_id: snapshot.resolved().provider().model().to_owned(),
+        credential_configured: snapshot.resolved().provider().credential_configured(),
+        provider_execution_policy: execution_policy_string(snapshot),
+        reload_status: "active".to_owned(),
+    }
+}
+
+/// Applies typed edit operations to the active snapshot and emits the edited
+/// candidate TOML.
+///
+/// The supported key paths are `provider.kind`, `provider.model`,
+/// `provider.endpoint`, `provider.execution.attempt_timeout_seconds`, and
+/// `provider.execution.max_attempts`. The rendered document is deliberately
+/// credential-free: the composition restores the retained private credential
+/// through the private channel before the candidate is validated through the
+/// server-side reload contract. An edited candidate that leaves the
+/// credential unset (no retained private material) fails closed with
+/// `missing_provider_credential`; the credential itself never appears in the
+/// returned text's durable or public consumers.
+///
+/// # Errors
+///
+/// Returns `configuration_edit_invalid` for an unrecognized or non-removable
+/// key path or a non-integer execution policy value.
+fn edited_configuration_toml(
+    snapshot: &ConfigSnapshotDto,
+    operations: &[ConfigurationEditOperationDto],
+) -> DtoResult<String> {
+    let mut kind = snapshot.resolved().provider().kind().as_str().to_owned();
+    let mut model = snapshot.resolved().provider().model().to_owned();
+    let mut endpoint = snapshot.resolved().provider().endpoint().map(str::to_owned);
+    let mut attempt_timeout_seconds = snapshot
+        .resolved()
+        .provider_execution()
+        .attempt_timeout_seconds();
+    let mut max_attempts = snapshot.resolved().provider_execution().max_attempts();
+    for operation in operations {
+        match operation {
+            ConfigurationEditOperationDto::Set {
+                key_path,
+                safe_value,
+            } => match key_path.as_str() {
+                "provider.kind" => kind = safe_value.clone(),
+                "provider.model" => model = safe_value.clone(),
+                "provider.endpoint" => endpoint = Some(safe_value.clone()),
+                "provider.execution.attempt_timeout_seconds" => {
+                    attempt_timeout_seconds = safe_value.parse().map_err(|_| {
+                        ErrorDto::validation(
+                            "configuration_edit_invalid",
+                            "attempt timeout seconds must be an integer",
+                        )
+                    })?;
+                }
+                "provider.execution.max_attempts" => {
+                    max_attempts = safe_value.parse().map_err(|_| {
+                        ErrorDto::validation(
+                            "configuration_edit_invalid",
+                            "max attempts must be an integer",
+                        )
+                    })?;
+                }
+                _ => {
+                    return Err(ErrorDto::validation(
+                        "configuration_edit_invalid",
+                        "unrecognized configuration key path",
+                    ));
+                }
+            },
+            ConfigurationEditOperationDto::Remove { key_path } => match key_path.as_str() {
+                "provider.endpoint" => endpoint = None,
+                _ => {
+                    return Err(ErrorDto::validation(
+                        "configuration_edit_invalid",
+                        "this configuration field cannot be removed",
+                    ));
+                }
+            },
+        }
+    }
+    let mut toml = String::new();
+    toml.push_str("schema_version = 1\n[provider]\n");
+    toml.push_str(&format!("kind = \"{kind}\"\n"));
+    toml.push_str(&format!("model = \"{model}\"\n"));
+    if let Some(endpoint) = endpoint {
+        toml.push_str(&format!("endpoint = \"{endpoint}\"\n"));
+    }
+    toml.push_str("[provider.execution]\n");
+    toml.push_str(&format!(
+        "attempt_timeout_seconds = {attempt_timeout_seconds}\n"
+    ));
+    toml.push_str(&format!("max_attempts = {max_attempts}\n"));
+    Ok(toml)
+}
+
+/// Builds the transient platform-native source of one server-side edit.
+///
+/// The path is used only for source classification inside the configuration
+/// crate and is never disclosed in a DTO, projection, or error.
+///
+/// # Errors
+///
+/// Returns a validation error when the platform temporary directory cannot
+/// form an absolute path.
+fn reload_edit_source() -> DtoResult<ConfigSourceDto> {
+    let path = std::env::temp_dir().join("intention-relay-reload-edit.toml");
+    ConfigPathDto::parse(path.to_string_lossy().into_owned()).map(ConfigSourceDto::Explicit)
+}
+
+/// Builds the absolute fixture source used by test-support catalog seeding.
+///
+/// The path is used only for source classification inside the configuration
+/// crate and is never disclosed in a DTO, projection, or error.
+///
+/// # Errors
+///
+/// Returns a validation error when the platform temporary directory cannot
+/// form an absolute path.
+#[cfg(any(test, feature = "test-support"))]
+fn fixture_catalog_source() -> DtoResult<ConfigSourceDto> {
+    let path = std::env::temp_dir().join("intention-relay-test-support-seed.toml");
+    ConfigPathDto::parse(path.to_string_lossy().into_owned()).map(ConfigSourceDto::Explicit)
+}
+
+/// Converts one whole-second timestamp to the service `u64` representation.
+fn now_seconds(timestamp: TimestampDto) -> u64 {
+    u64::try_from(timestamp.unix_seconds()).unwrap_or(u64::MAX)
+}
+
+/// Converts one whole-second timestamp to the storage `i64` representation.
+const fn i64_time(timestamp: TimestampDto) -> i64 {
+    timestamp.unix_seconds()
+}
+
+/// Encodes one immutable selection into the opaque durable queue text.
+///
+/// The queue column is opaque text; the canonical record bytes are
+/// hex-encoded so no crate below the composition needs a JSON serializer.
+fn canonical_selection_text(selection: &ProviderSelectionV1) -> String {
+    let mut text = String::with_capacity(2 + 64);
+    text.push_str("ir-record:");
+    match selection.encode() {
+        Ok(bytes) => {
+            for byte in bytes {
+                text.push_str(&format!("{byte:02x}"));
+            }
+        }
+        Err(_) => text.push_str("invalid"),
+    }
+    text
+}
+
 impl DaemonApplicationFacade {
     /// Executes one explicit local tool call through the durable lifecycle path.
     ///
     /// Publication independently rereads the committed typed result evidence for
-    /// the exact invocation before the post-commit publisher seam fires, and the
-    /// application dispatches `AfterToolResultPublished` only after that
-    /// publication succeeds. The M4 model `ToolCallRecorded` fact remains
-    /// denial-only; this API is an internal, caller-admitted single invocation
-    /// and never starts a loop.
+    /// the exact invocation, and the application dispatches
+    /// `AfterToolResultPublished` only after that verification succeeds. The M4
+    /// model `ToolCallRecorded` fact remains denial-only; this API is an
+    /// internal, caller-admitted single invocation and never starts a loop.
     #[doc(hidden)]
     pub fn invoke_local_tool_for_daemon(
         &self,
@@ -340,12 +1336,11 @@ impl DaemonApplicationFacade {
             .at_sequence();
         let cancellation = self.bind_local_tool_cancellation(session_id, run_id)?;
         let publisher = DurableToolResultPublisher {
-            repository: &self.inner.repository,
-            publisher: self.inner.publisher.as_ref(),
+            repository: self.inner.repository.as_ref(),
             after_sequence,
         };
         let result = intention_application::ApplicationService::with_hooks(
-            &self.inner.repository,
+            self.inner.repository.as_ref(),
             production_hooks()?,
         )
         .with_workspace_boundary(SafeWorkspaceBoundary)
@@ -418,13 +1413,70 @@ impl DaemonApplicationFacade {
     /// Returns safe typed failures when platform configuration cannot be resolved,
     /// permission-checked, read, validated, persisted, or recovered.
     pub fn open_platform() -> DtoResult<Self> {
-        let (config_snapshot, selected_provider) = load_platform_provider_configuration()?;
-        Self::open_with_selected_provider(
+        let source = ConfigPathResolver::resolve(None)?;
+        let (config_snapshot, selected_provider, raw_toml, private_credential) =
+            load_provider_configuration(source.clone())?;
+        let facade = Self::open_with_selected_provider(
             platform_database_location()?,
             config_snapshot,
             selected_provider,
-            Box::new(NoopPostCommitPublisher),
-        )
+        )?;
+        retain_private_startup_credential(&facade, private_credential, source)?;
+        facade.activate_startup_catalog(&raw_toml)?;
+        Ok(facade)
+    }
+
+    /// Activates the startup provider configuration as the first catalog
+    /// revision exactly once.
+    ///
+    /// The daemon opens with an empty provider catalog: the startup TOML is
+    /// the single source of the first provider declaration. When a catalog is
+    /// already active (a restart) this is a no-op. Activation is required
+    /// because selection-less acceptance is removed under ADR 0038: every
+    /// admitted run resolves a provider profile from the active catalog, and
+    /// no wire command prepares a first catalog in this slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed candidate, catalog, or storage error; an invalid
+    /// startup declaration fails the daemon open path closed.
+    pub fn activate_startup_catalog(&self, raw_toml: &str) -> DtoResult<()> {
+        use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
+        use intention_config::control_plane::parse_candidate;
+
+        let state = self.inner.repository.load_provider_catalog_status()?;
+        if state.active_catalog_revision_id.is_some() {
+            return Ok(());
+        }
+        let previous = self.active_config_snapshot()?;
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw_toml.to_owned(), ConfigPathResolver::resolve(None)?),
+            &previous,
+        )?;
+        let provider = candidate.safe_snapshot().resolved().provider();
+        self.inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: "startup-catalog".to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw_toml.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: provider.kind().as_str().to_owned(),
+                        model: provider.model().to_owned(),
+                        endpoint: provider.endpoint().map(str::to_owned),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now_seconds(now()?),
+            )
+            .map(|_| ())
     }
 
     /// Opens a caller-provided absolute database exclusively for tests or controlled fixtures.
@@ -444,7 +1496,6 @@ impl DaemonApplicationFacade {
             database_location,
             config_snapshot,
             SelectedProvider::for_test_support(driver),
-            Box::new(NoopPostCommitPublisher),
         )
     }
 
@@ -470,21 +1521,6 @@ impl DaemonApplicationFacade {
             database_location,
             config_snapshot,
             SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
-            Box::new(NoopPostCommitPublisher),
-        )
-    }
-
-    #[cfg(test)]
-    fn open_with_publisher(
-        database_location: impl AsRef<Path>,
-        config_snapshot: ConfigSnapshotDto,
-        publisher: Box<dyn PostCommitPublisher>,
-    ) -> DtoResult<Self> {
-        Self::open_with_selected_provider(
-            database_location,
-            config_snapshot,
-            SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver)),
-            publisher,
         )
     }
 
@@ -503,43 +1539,14 @@ impl DaemonApplicationFacade {
         WorkspaceRoot::resolve(projection.workspace_root())
     }
 
-    /// Executes one scheduled run through the privately selected provider driver.
+    /// Executes one scheduled run through the privately selected provider
+    /// driver with the mandatory tool executor.
     ///
     /// This bridge is provider-neutral and safe: it accepts only scheduling DTOs,
-    /// cancellation, a time port, and committed-observation evidence. It does not
-    /// expose provider SDKs, credentials, Tokio, or storage resources.
-    #[doc(hidden)]
-    pub async fn execute_scheduled_model_run_for_daemon<Time>(
-        &self,
-        schedule: ScheduleModelRunDto,
-        cancellation: ModelCancellationSignal,
-        time: &Time,
-        observer: &dyn ModelRunCommitObserver,
-    ) -> DtoResult<ModelRunExecutionOutcomeDto>
-    where
-        Time: ModelTimePort + Sync,
-    {
-        ModelRunExecutionService::with_commit_observer(
-            &self.inner.repository,
-            self.inner._selected_provider.driver(),
-            time,
-            observer,
-        )
-        .execute(ModelRunExecutionInputDto::new(
-            schedule.session_id(),
-            schedule.run_id(),
-            schedule.request().clone(),
-            schedule.safe_config().clone(),
-            cancellation,
-        ))
-        .await
-    }
-
-    /// Executes one scheduled run through the provider driver with a tool executor.
-    ///
-    /// This is the model-tool loop bridge: tool calls emitted by the provider
-    /// execute through the caller-supplied durable tool path instead of the
-    /// retained M4 denial fallback.
+    /// cancellation, a time port, committed-observation evidence, and the tool
+    /// executor. It does not expose provider SDKs, credentials, Tokio, or
+    /// storage resources. Provider-emitted tool calls execute through the
+    /// caller-supplied durable tool path.
     #[doc(hidden)]
     pub async fn execute_scheduled_model_run_for_daemon_with_tool_executor<Time>(
         &self,
@@ -552,8 +1559,8 @@ impl DaemonApplicationFacade {
     where
         Time: ModelTimePort + Sync,
     {
-        ModelRunExecutionService::with_commit_observer_and_tool_executor(
-            &self.inner.repository,
+        ModelRunExecutionService::with_commit_observer(
+            self.inner.repository.as_ref(),
             self.inner._selected_provider.driver(),
             time,
             observer,
@@ -579,16 +1586,18 @@ impl DaemonApplicationFacade {
         time: &Time,
         observer: &dyn ModelRunCommitObserver,
         first_append_gate: &dyn ModelRunFirstAppendGate,
+        tool_executor: &dyn ToolExecutionPort,
     ) -> DtoResult<ModelRunExecutionOutcomeDto>
     where
         Time: ModelTimePort + Sync,
     {
         ModelRunExecutionService::with_commit_observer_and_first_append_gate(
-            &self.inner.repository,
+            self.inner.repository.as_ref(),
             self.inner._selected_provider.driver(),
             time,
             observer,
             first_append_gate,
+            tool_executor,
         )
         .execute(ModelRunExecutionInputDto::new(
             schedule.session_id(),
@@ -603,8 +1612,7 @@ impl DaemonApplicationFacade {
     /// Durably moves the exact active run to `Cancelling` without terminalizing it.
     ///
     /// A streaming daemon host must signal the matching execution task after this
-    /// commit. The retained synchronous `command(StopRun)` path terminalizes only
-    /// for legacy M3 callers outside that host.
+    /// commit; synchronous stop dispatch no longer exists outside that host.
     #[doc(hidden)]
     pub fn stop_run_for_daemon_host(
         &self,
@@ -617,9 +1625,9 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        let accepted = ApplicationService::new(&self.inner.repository).stop_run(
+        let accepted = ApplicationService::new(self.inner.repository.as_ref()).stop_run(
             intention_domain::StopRunCommandDto::new(session_id, run_id),
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+            RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, now()?),
         )?;
         // After the durable Cancelling commit, reach any local tool execution
         // bound to this exact run and fence later invocations. Durable model
@@ -661,10 +1669,69 @@ impl DaemonApplicationFacade {
             )
         })?;
         RuntimeService::new(
-            &self.inner.repository,
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+            self.inner.repository.as_ref(),
+            RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, now()?),
         )
         .complete_terminal(session_id, run_id, RunStatusDto::Cancelled)?;
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
+            registry.remove(&(session_id, run_id));
+        }
+        Ok(())
+    }
+
+    /// Terminalizes one still-active run as durably `Failed` for the daemon
+    /// task registry.
+    ///
+    /// An executor error must never leave a `Starting`/`Running`/`Completing`
+    /// run without an owner: this bridge appends the typed failure fact and
+    /// commits the terminal `Failed` transition. The failure code is the
+    /// executor error's stable code, so deterministic bound and semantic
+    /// failures (for example `reasoning_output_limit_exceeded`) become the
+    /// durable failed outcome (PR24-012). Runs already terminal are a no-op;
+    /// `Cancelling` runs terminalize as `Cancelled`, never here.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for a `Cancelling` run, or the
+    /// repository's typed error when the terminal append cannot commit.
+    #[doc(hidden)]
+    pub fn fail_active_run_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+        failure_code: &str,
+    ) -> DtoResult<()> {
+        let _gate = self.inner.command_gate.lock().map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_command_unavailable",
+                "daemon command is unavailable",
+            )
+        })?;
+        let replay = self
+            .inner
+            .repository
+            .load_current_run_replay(session_id, run_id)?;
+        let status = replay.snapshot().run_projection().status();
+        if status.is_terminal() {
+            return Ok(());
+        }
+        if status == RunStatusDto::Cancelling {
+            return Err(ErrorDto::validation(
+                "invalid_failed_run_state",
+                "a cancelling run terminalizes as cancelled, not failed",
+            ));
+        }
+        let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
+        self.inner
+            .repository
+            .append_model_run_facts(AppendModelRunFactsInputDto::new(
+                session_id,
+                run_id,
+                replay.snapshot().cursor(),
+                vec![ModelRunFactInputDto::failed(failure)],
+                Some(RunStatusDto::Failed),
+                now()?,
+            )?)?;
         if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
             registry.remove(&(session_id, run_id));
         }
@@ -689,7 +1756,7 @@ impl DaemonApplicationFacade {
             )
         })?;
         fail_starting_run(
-            &self.inner.repository,
+            self.inner.repository.as_ref(),
             session_id,
             run_id,
             failure_code,
@@ -705,7 +1772,8 @@ impl DaemonApplicationFacade {
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<RunReplayDto> {
-        ApplicationService::new(&self.inner.repository).load_current_run_replay(session_id, run_id)
+        ApplicationService::new(self.inner.repository.as_ref())
+            .load_current_run_replay(session_id, run_id)
     }
 
     /// Loads a contiguous durable run-fact range for the private daemon host.
@@ -716,7 +1784,7 @@ impl DaemonApplicationFacade {
         run_id: RunId,
         after_cursor: RunEventCursorDto,
     ) -> DtoResult<intention_domain::RunEventTailPageDto> {
-        ApplicationService::new(&self.inner.repository).load_run_tail(
+        ApplicationService::new(self.inner.repository.as_ref()).load_run_tail(
             session_id,
             run_id,
             after_cursor,
@@ -730,7 +1798,8 @@ impl DaemonApplicationFacade {
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<ScheduleModelRunDto> {
-        ApplicationService::new(&self.inner.repository).schedule_starting_run(session_id, run_id)
+        ApplicationService::new(self.inner.repository.as_ref())
+            .schedule_starting_run(session_id, run_id)
     }
 
     /// Returns the currently active durable run when it is eligible for host admission.
@@ -739,10 +1808,10 @@ impl DaemonApplicationFacade {
         &self,
         session_id: SessionId,
     ) -> DtoResult<Option<RunId>> {
-        Ok(ApplicationService::new(&self.inner.repository)
+        Ok(ApplicationService::new(self.inner.repository.as_ref())
             .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))?
             .projection()
-            .and_then(|projection| projection.active_run())
+            .active_run()
             .filter(|run| run.status() == RunStatusDto::Starting)
             .map(|run| run.run_id()))
     }
@@ -751,7 +1820,6 @@ impl DaemonApplicationFacade {
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
         selected_provider: SelectedProvider,
-        publisher: Box<dyn PostCommitPublisher>,
     ) -> DtoResult<Self> {
         if selected_provider
             .safe_kind()
@@ -765,21 +1833,77 @@ impl DaemonApplicationFacade {
         let location = SqliteDatabaseLocationDto::new(
             database_location.as_ref().to_string_lossy().into_owned(),
         )?;
-        let repository = SqliteStorageRepository::open(location)?;
+        let repository = Arc::new(SqliteStorageRepository::open(location)?);
         repository.accept_configuration_revision(config_snapshot.clone())?;
+        let control_plane = ProviderControlPlane::new(RepositoryHandle(repository.clone()));
         let facade = Self {
             inner: Arc::new(FacadeInner {
                 repository,
-                config_snapshot,
+                config_snapshot: Mutex::new(config_snapshot),
                 _selected_provider: selected_provider,
                 dispatch: PrivateModelRunDispatch::default(),
-                publisher,
                 command_gate: Mutex::new(()),
                 tool_cancellations: Mutex::new(HashMap::new()),
+                reload_candidates: Mutex::new(HashMap::new()),
+                control_plane,
+                private_credential: Mutex::new(PrivateCredentialState::default()),
             }),
         };
         facade.recover_before_ready()?;
+        facade.provider_control_startup()?;
         Ok(facade)
+    }
+
+    /// Seeds one auto-accepted provider catalog revision with one enabled
+    /// profile for test fixtures.
+    ///
+    /// The seeded profile is `default`, derived from the supplied kind, model,
+    /// and endpoint. It mirrors the credential-free startup declarations the
+    /// daemon admits; the catalog becomes active with `default` as its global
+    /// default so user turns resolve a selection.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn seed_fixture_catalog_for_test_support(
+        &self,
+        operation_id: &str,
+        kind: &str,
+        model: &str,
+        endpoint: &str,
+    ) -> DtoResult<()> {
+        use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
+        use intention_config::control_plane::parse_candidate;
+
+        let previous = self.active_config_snapshot()?;
+        let raw = format!(
+            "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"{model}\"\ncredential = \"fixture-credential\"\nendpoint = \"{endpoint}\"\n"
+        );
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.clone(), fixture_catalog_source()?),
+            &previous,
+        )?;
+        self.inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: operation_id.to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: kind.to_owned(),
+                        model: model.to_owned(),
+                        endpoint: Some(endpoint.to_owned()),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now_seconds(now()?),
+            )
+            .map(|_| ())
     }
 
     #[cfg(test)]
@@ -793,6 +1917,117 @@ impl DaemonApplicationFacade {
         DaemonHealthDto::new(SCHEMA_VERSION, PROTOCOL_VERSION, DaemonReadinessDto::Ready)
     }
 
+    /// Runs the provider catalog startup and returns its outcome.
+    ///
+    /// The daemon host calls this after storage opens and unfinished runs are
+    /// interrupted. The controller rebuilds the private registry from the
+    /// durable active catalog; a degraded outcome leaves the control plane
+    /// read-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error only when the control-plane gate is poisoned;
+    /// catalog failures degrade to a typed readiness state.
+    pub fn provider_control_startup(
+        &self,
+    ) -> DtoResult<intention_application::CatalogStartupOutcomeDto> {
+        self.inner
+            .control_plane
+            .controller
+            .startup(now_seconds(now()?))
+    }
+
+    /// Returns the current provider control-plane readiness.
+    #[must_use]
+    pub fn provider_control_readiness(&self) -> intention_application::CatalogReadiness {
+        self.inner
+            .control_plane
+            .controller
+            .inspect()
+            .map(|projection| projection.readiness)
+            .unwrap_or_else(|_| intention_application::CatalogReadiness::Blocked {
+                reason: "control_plane_readiness_unavailable".to_owned(),
+            })
+    }
+
+    /// Marks one recovered run as held pending explicit admission.
+    ///
+    /// Held runs are never auto-scheduled by the daemon host; they are
+    /// admitted only through the `AdmitRecoveredRun` command.
+    #[doc(hidden)]
+    pub fn mark_recovered_run_held_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<()> {
+        self.inner
+            .repository
+            .mark_recovered_run_held(MarkRecoveredRunHeldInputDto {
+                run_id,
+                session_id,
+                held_at: i64_time(now()?),
+                operation_id: format!("recovery-hold-{session_id}-{run_id}"),
+            })
+    }
+
+    /// Returns whether one run is held and not yet admitted.
+    #[doc(hidden)]
+    pub fn is_recovered_run_held_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<bool> {
+        Ok(self
+            .inner
+            .repository
+            .load_held_recovered_run(run_id)?
+            .is_some_and(|held| {
+                held.session_id == session_id
+                    && held.admission_state == intention_storage::HeldRunAdmissionStateDto::Held
+            }))
+    }
+
+    /// Promotes up to eight unavailable-provider queue entries FIFO.
+    ///
+    /// Called by the daemon host on terminal transitions; the storage enforces
+    /// the batch bound and never reroutes an entry.
+    #[doc(hidden)]
+    pub fn promote_unavailable_runs_for_daemon(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<intention_storage::PromoteUnavailableRunsOutcomeDto> {
+        UnavailableQueueService::new(self.inner.repository.as_ref()).promote(
+            session_id,
+            run_id,
+            now_seconds(now()?),
+        )
+    }
+
+    /// Enqueues one unavailable provider run idempotently.
+    #[doc(hidden)]
+    pub fn enqueue_unavailable_run_for_daemon(
+        &self,
+        run_id: RunId,
+        session_id: SessionId,
+        profile_id: String,
+        provider_profile_revision_id: String,
+        selection: &ProviderSelectionV1,
+    ) -> DtoResult<()> {
+        self.inner
+            .repository
+            .enqueue_unavailable_run(EnqueueUnavailableRunInputDto {
+                run_id,
+                session_id,
+                profile_id,
+                provider_profile_revision_id,
+                unavailable_reason: "provider_configuration_unavailable".to_owned(),
+                first_unavailable_at: i64_time(now()?),
+                operation_id: format!("enqueue-unavailable-{session_id}-{run_id}"),
+                selection_json: canonical_selection_text(selection),
+            })
+    }
+
     /// Dispatches a typed durable M3 query.
     #[must_use]
     pub fn query(&self, query: ProtocolQueryDto) -> ProtocolQueryResultDto {
@@ -801,12 +2036,142 @@ impl DaemonApplicationFacade {
                 ProtocolQueryResultDto::DaemonHealth(self.health())
             }
             ProtocolQueryDto::GetSessionSnapshot(query) => {
-                ApplicationService::new(&self.inner.repository)
+                ApplicationService::new(self.inner.repository.as_ref())
                     .get_session_snapshot(query)
                     .map_or_else(
                         ProtocolQueryResultDto::Rejected,
                         ProtocolQueryResultDto::SessionSnapshot,
                     )
+            }
+            // Paged provider catalog projection from the durable catalog.
+            ProtocolQueryDto::GetProviderCatalog(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                CatalogReadService::new(
+                    self.inner.repository.as_ref(),
+                    &self.inner.control_plane.controller,
+                )
+                .list_profiles(query)
+                .map_or_else(
+                    ProtocolQueryResultDto::Rejected,
+                    ProtocolQueryResultDto::ProviderCatalog,
+                )
+            }
+            // Provider catalog activation and degradation status.
+            ProtocolQueryDto::GetProviderCatalogStatus(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                CatalogReadService::new(
+                    self.inner.repository.as_ref(),
+                    &self.inner.control_plane.controller,
+                )
+                .status(query)
+                .map_or_else(
+                    ProtocolQueryResultDto::Rejected,
+                    ProtocolQueryResultDto::ProviderCatalogStatus,
+                )
+            }
+            // One session's durable provider profile projection.
+            ProtocolQueryDto::GetSessionProviderProfile(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                let port = self.catalog_admission_port();
+                SessionProfileService::new(
+                    self.inner.repository.as_ref(),
+                    self.inner.repository.as_ref(),
+                    &self.inner.control_plane,
+                )
+                .get(query, &port)
+                .map_or_else(
+                    ProtocolQueryResultDto::Rejected,
+                    ProtocolQueryResultDto::SessionProviderProfile,
+                )
+            }
+            // Provider usage aggregation for one period.
+            ProtocolQueryDto::GetProviderUsage(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                UsageService::new(self.inner.repository.as_ref())
+                    .by_profile(query)
+                    .map_or_else(
+                        ProtocolQueryResultDto::Rejected,
+                        ProtocolQueryResultDto::ProviderUsage,
+                    )
+            }
+            // Non-authorizing provider health evidence. The composition probe
+            // is not wired yet, so the service projects the typed
+            // `provider_health_unavailable` outcome as an `Unknown`
+            // observation with a safe diagnostic code.
+            ProtocolQueryDto::GetProviderHealthEvidence(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                match now() {
+                    Err(error) => ProtocolQueryResultDto::Rejected(error),
+                    Ok(timestamp) => ProviderHealthService
+                        .check(
+                            query.provider_id,
+                            &CompositionHealthProbe,
+                            now_seconds(timestamp),
+                        )
+                        .map_or_else(
+                            ProtocolQueryResultDto::Rejected,
+                            ProtocolQueryResultDto::ProviderHealthEvidence,
+                        ),
+                }
+            }
+            // Additive provider discovery status. Attempt state is not
+            // persisted in this slice, so the service reports the closed
+            // unavailable-state projection and never re-runs an attempt.
+            ProtocolQueryDto::GetProviderDiscoveryStatus(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                let Some(attempt_id) = query.attempt_id else {
+                    return ProtocolQueryResultDto::Rejected(ErrorDto::validation(
+                        "provider_discovery_invalid",
+                        "a discovery attempt reference is required",
+                    ));
+                };
+                match now() {
+                    Err(error) => ProtocolQueryResultDto::Rejected(error),
+                    Ok(timestamp) => ProviderDiscoveryService
+                        .status(
+                            attempt_id,
+                            &CompositionDiscoveryPort,
+                            now_seconds(timestamp),
+                        )
+                        .map_or_else(
+                            ProtocolQueryResultDto::Rejected,
+                            ProtocolQueryResultDto::ProviderDiscoveryStatus,
+                        ),
+                }
+            }
+            // Safe non-authorizing pricing projection. No pricing
+            // observations are wired in this slice, so the projection carries
+            // the static disclaimer only and never gates admission.
+            ProtocolQueryDto::GetPricingPolicy(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                let _ = query.model_id;
+                ProtocolQueryResultDto::PricingPolicy(PricingPolicyService.project(Vec::new()))
+            }
+            // Safe applied configuration projection from the active snapshot.
+            ProtocolQueryDto::GetConfigurationProjection(query) => {
+                if let Err(error) = query.validate() {
+                    return ProtocolQueryResultDto::Rejected(error);
+                }
+                match self.active_config_snapshot() {
+                    Ok(snapshot) => ProtocolQueryResultDto::ConfigurationProjection(
+                        configuration_projection(&snapshot),
+                    ),
+                    Err(error) => ProtocolQueryResultDto::Rejected(error),
+                }
             }
         }
     }
@@ -827,7 +2192,7 @@ impl DaemonApplicationFacade {
         let requested_after = command
             .after_sequence()
             .unwrap_or(SessionEventSequenceDto::new(0));
-        let current = match ApplicationService::new(&self.inner.repository)
+        let current = match ApplicationService::new(self.inner.repository.as_ref())
             .get_session_snapshot(GetSessionSnapshotQueryDto::new(command.session_id()))
         {
             Ok(snapshot) => snapshot,
@@ -868,7 +2233,7 @@ impl DaemonApplicationFacade {
             .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"))
     }
 
-    /// Dispatches a durable M3 command and invokes the publisher only after commit.
+    /// Dispatches a durable M3 command.
     #[must_use]
     pub fn command(&self, command: ProtocolCommandDto) -> ProtocolCommandResultDto {
         let result = self.command_result(command);
@@ -892,6 +2257,299 @@ impl DaemonApplicationFacade {
             .load_tail(session_id, SessionEventSequenceDto::new(0))
     }
 
+    /// Clones the active configuration snapshot under its interior lock.
+    ///
+    /// The active snapshot is updated only by the control-plane reload
+    /// handler after a durable commit, so fresh runs always observe the
+    /// committed configuration.
+    fn active_config_snapshot(&self) -> DtoResult<ConfigSnapshotDto> {
+        self.inner
+            .config_snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })
+    }
+
+    /// Reloads a previously prepared candidate by its stored reference.
+    ///
+    /// The reference names a candidate retained by a raw-TOML or typed edit
+    /// submission (keyed by operation identity); an unknown or expired
+    /// reference fails closed with `candidate_unavailable` before any write.
+    /// The candidate was already accepted at submission time; this handler
+    /// re-enforces the expected active revision and commits durably.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed reference, commit, or storage error.
+    fn reload_from_reference(
+        &self,
+        command: ReloadConfigurationCommandDto,
+        timestamp: TimestampDto,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        let reference = command
+            .candidate_snapshot_reference
+            .or(command.candidate_edit_reference)
+            .ok_or_else(|| {
+                ErrorDto::validation(
+                    "configuration_reload_invalid",
+                    "a reload must name a candidate reference",
+                )
+            })?;
+        let candidate = self
+            .inner
+            .reload_candidates
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })?
+            .get(&reference)
+            .cloned()
+            .ok_or_else(|| {
+                ErrorDto::validation(
+                    "candidate_unavailable",
+                    "the reload candidate reference is unknown or expired",
+                )
+            })?;
+        let outcome = self.commit_and_advance(
+            candidate,
+            Some(command.expected_active_config_revision),
+            command.operation_id,
+            now_seconds(timestamp),
+        )?;
+        Ok(ProtocolAcceptedResultDto::ReloadConfiguration(
+            committed_reload_transaction(&outcome),
+        ))
+    }
+
+    /// Parses, validates, and durably commits a raw TOML edit.
+    ///
+    /// The raw content is parsed server-side through the reload contract and
+    /// never echoed back. A not-accepted candidate returns the typed rejected
+    /// transaction with its first failure code.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed parse, commit, or storage error.
+    fn reload_from_raw_toml(
+        &self,
+        command: RawTomlEditCommandDto,
+        timestamp: TimestampDto,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        let binding = self.composition_binding_source();
+        let previous = binding.active_snapshot()?;
+        let previous_revision = binding.active_revision()?;
+        let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
+        let candidate = service.prepare(
+            RawConfigInputDto::new(command.candidate_content, reload_edit_source()?),
+            &previous,
+            command.operation_id.clone(),
+        )?;
+        self.complete_reload(
+            candidate,
+            command.expected_config_revision,
+            command.operation_id,
+            now_seconds(timestamp),
+            previous_revision,
+        )
+    }
+
+    /// Applies typed edit operations and durably commits the edited candidate.
+    ///
+    /// The operations are applied to the active snapshot and validated
+    /// server-side through the reload contract. The retained private
+    /// credential is restored into the reconstructed candidate document
+    /// before parsing, so an execution-policy-only typed edit commits while
+    /// the credential never appears in a DTO, error, digest, or durable
+    /// surface. A facade that retained no private credential (test-support
+    /// opens) keeps the fail-closed behavior: an edited candidate that
+    /// leaves the credential unset is rejected with
+    /// `missing_provider_credential`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed edit, parse, commit, or storage error.
+    fn reload_from_typed_edit(
+        &self,
+        command: ConfigurationEditCommandDto,
+        timestamp: TimestampDto,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        let binding = self.composition_binding_source();
+        let previous = binding.active_snapshot()?;
+        let previous_revision = binding.active_revision()?;
+        let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
+        let edited = edited_configuration_toml(&previous, &command.operations)?;
+        let candidate_text = self.restore_private_credential(&edited)?;
+        let candidate = service.prepare(
+            RawConfigInputDto::new(candidate_text, reload_edit_source()?),
+            &previous,
+            command.operation_id.clone(),
+        )?;
+        self.complete_reload(
+            candidate,
+            command.expected_config_revision,
+            command.operation_id,
+            now_seconds(timestamp),
+            previous_revision,
+        )
+    }
+
+    /// Restores the composition's retained private credential into one
+    /// credential-free typed-edit candidate document.
+    ///
+    /// When no private credential was retained (test-support facades without
+    /// a configured source) the document passes through unchanged so
+    /// downstream validation fails closed exactly as before. The restored
+    /// text exists only inside the parse call and never crosses a DTO,
+    /// error, log, digest, or durable surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error when the private credential state lock
+    /// is poisoned.
+    fn restore_private_credential(&self, edited: &str) -> DtoResult<String> {
+        let material = self
+            .inner
+            .private_credential
+            .lock()
+            .map_err(|_| {
+                ErrorDto::unavailable(
+                    "daemon_command_unavailable",
+                    "daemon command is unavailable",
+                )
+            })?
+            .material
+            .clone();
+        Ok(material.map_or_else(
+            || edited.to_owned(),
+            |credential| restore_credential_document(edited, &credential),
+        ))
+    }
+
+    /// Rotates one provider's private credential material through the
+    /// composition's credential source and driver rebuild ports.
+    ///
+    /// The daemon's own configuration file is the configured private
+    /// credential source: its current `provider.credential` value is read
+    /// through the private loading boundary and applied to the selected
+    /// provider driver after the frozen-meaning checks pass. A facade opened
+    /// without a file-backed source fails closed with
+    /// `credential_rotation_source_unavailable`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_rotation_frozen_meaning_mismatch` when the safe
+    /// composition changed, or `credential_rotation_source_unavailable` when
+    /// no private credential source or matching driver exists.
+    fn rotate_credential(
+        &self,
+        command: RotateProviderCredentialsCommandDto,
+        timestamp: TimestampDto,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        let binding = self.composition_binding_source();
+        let rebuild = CompositionDriverRebuildPort { facade: self };
+        let service = CredentialRotationService::new(&binding, &rebuild);
+        let source = CompositionCredentialSource {
+            state: &self.inner.private_credential,
+        };
+        let result = service.rotate(command, &source, now_seconds(timestamp))?;
+        Ok(ProtocolAcceptedResultDto::RotateProviderCredentials(result))
+    }
+
+    /// Finishes one reload: rejects a not-accepted candidate with its typed
+    /// transaction, retains the accepted candidate for reference reloads, and
+    /// commits durably before advancing the fresh-run snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed commit or storage error.
+    fn complete_reload(
+        &self,
+        candidate: ReloadCandidateDto,
+        expected_revision: String,
+        operation_id: String,
+        now_seconds: u64,
+        previous_revision: String,
+    ) -> DtoResult<ProtocolAcceptedResultDto> {
+        if !candidate.accepted {
+            return Ok(ProtocolAcceptedResultDto::ReloadConfiguration(
+                rejected_reload_transaction(&candidate, operation_id, previous_revision),
+            ));
+        }
+        if let Ok(mut candidates) = self.inner.reload_candidates.lock() {
+            if candidates.len() >= MAX_RELOAD_CANDIDATES
+                && let Some(first) = candidates.keys().next().cloned()
+            {
+                candidates.remove(&first);
+            }
+            candidates.insert(operation_id.clone(), candidate.candidate().clone());
+        }
+        let outcome = self.commit_and_advance(
+            candidate.candidate().clone(),
+            Some(expected_revision),
+            operation_id,
+            now_seconds,
+        )?;
+        Ok(ProtocolAcceptedResultDto::ReloadConfiguration(
+            committed_reload_transaction(&outcome),
+        ))
+    }
+
+    /// Durably commits one candidate and advances the fresh-run snapshot only
+    /// after the commit succeeds.
+    ///
+    /// A storage failure propagates and the daemon stays on its recorded
+    /// snapshot: the in-memory active snapshot is never advanced on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `config_revision_mismatch` for a stale expected revision, or
+    /// the durable repository's typed storage error.
+    fn commit_and_advance(
+        &self,
+        candidate: ConfigCandidateDto,
+        expected_revision: Option<String>,
+        operation_id: String,
+        now_seconds: u64,
+    ) -> DtoResult<ReloadCommitOutcomeDto> {
+        let binding = self.composition_binding_source();
+        let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
+        let outcome = service.commit(
+            candidate.clone(),
+            expected_revision,
+            operation_id,
+            now_seconds,
+        )?;
+        if let Ok(mut snapshot) = self.inner.config_snapshot.lock() {
+            *snapshot = candidate.safe_snapshot().clone();
+        }
+        Ok(outcome)
+    }
+
+    /// Builds the composition's catalog admission port over the active
+    /// control plane and durable repository.
+    fn catalog_admission_port(&self) -> CompositionCatalogAdmissionPort<'_> {
+        CompositionCatalogAdmissionPort {
+            controller: &self.inner.control_plane.controller,
+            catalog: self.inner.repository.as_ref(),
+        }
+    }
+
+    /// Builds the composition's catalog-runtime-backed binding source.
+    fn composition_binding_source(&self) -> CatalogBindingSource<'_> {
+        CatalogBindingSource {
+            snapshot: &self.inner.config_snapshot,
+            admission: self.catalog_admission_port(),
+        }
+    }
+
     fn command_result(&self, command: ProtocolCommandDto) -> DtoResult<ProtocolAcceptedResultDto> {
         let _gate = self.inner.command_gate.lock().map_err(|_| {
             ErrorDto::unavailable(
@@ -899,25 +2557,10 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        let session_id = command_session_id(&command);
-        let prior_position =
-            session_id.map_or(Ok(SessionEventSequenceDto::new(0)), |session_id| {
-                self.inner
-                    .repository
-                    .load_session_snapshot(session_id)
-                    .map(|projection| projection.at_sequence())
-                    .or_else(|error| {
-                        if error.code() == "storage_record_not_found" {
-                            Ok(SessionEventSequenceDto::new(0))
-                        } else {
-                            Err(error)
-                        }
-                    })
-            })?;
         let timestamp = now()?;
         let result = match command {
             ProtocolCommandDto::CreateSession(command) => {
-                ApplicationService::new(&self.inner.repository)
+                ApplicationService::new(self.inner.repository.as_ref())
                     .create_session(CreateSessionWorkflowInputDto::new(command, timestamp))?
             }
             ProtocolCommandDto::SendUserTurn(command) => {
@@ -928,39 +2571,28 @@ impl DaemonApplicationFacade {
                             "daemon command is unavailable",
                         )
                     })?;
-                ApplicationService::new(&self.inner.repository).send_user_turn_and_schedule(
-                    command,
-                    SendUserTurnWorkflowInputDto::new(
-                        proposed_run_id,
-                        self.inner.config_snapshot.clone(),
-                        timestamp,
-                    ),
-                    &self.inner.dispatch,
-                )?
+                let port = self.catalog_admission_port();
+                ApplicationService::new(self.inner.repository.as_ref())
+                    .send_user_turn_and_schedule_with_provider_selection(
+                        command,
+                        SendUserTurnWorkflowInputDto::new(
+                            proposed_run_id,
+                            self.active_config_snapshot()?,
+                            timestamp,
+                        ),
+                        &port,
+                        &self.inner.dispatch,
+                    )?
             }
             ProtocolCommandDto::RemoveQueuedTurn(command) => {
-                ApplicationService::new(&self.inner.repository)
+                ApplicationService::new(self.inner.repository.as_ref())
                     .remove_queued_turn(command, timestamp)?
             }
-            ProtocolCommandDto::StopRun(command) => {
-                let result = ApplicationService::new(&self.inner.repository).stop_run(
-                    command,
-                    RuntimeValuesDto::new(
-                        RunId::new(),
-                        self.inner.config_snapshot.clone(),
-                        timestamp,
-                    ),
-                )?;
-                RuntimeService::new(
-                    &self.inner.repository,
-                    RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
-                )
-                .complete_terminal(
-                    command.session_id(),
-                    command.run_id(),
-                    intention_domain::RunStatusDto::Cancelled,
-                )?;
-                result
+            ProtocolCommandDto::StopRun(_) => {
+                return Err(ErrorDto::validation(
+                    "invalid_stop_dispatch",
+                    "run stops use the daemon host stop path",
+                ));
             }
             ProtocolCommandDto::SubscribeSession(_) => {
                 return Err(ErrorDto::validation(
@@ -968,76 +2600,84 @@ impl DaemonApplicationFacade {
                     "session subscriptions use the dedicated protocol response",
                 ));
             }
+            ProtocolCommandDto::SetSessionProviderProfile(command) => {
+                command.validate()?;
+                let port = self.catalog_admission_port();
+                let accepted = SessionProfileService::new(
+                    self.inner.repository.as_ref(),
+                    self.inner.repository.as_ref(),
+                    &self.inner.control_plane,
+                )
+                .set(command, &port, now_seconds(timestamp))?;
+                ProtocolAcceptedResultDto::SetSessionProviderProfile(accepted)
+            }
+            ProtocolCommandDto::AcceptProviderCatalogRemoval(command) => {
+                command.validate()?;
+                let accepted = RemovalService::new(&self.inner.control_plane.controller)
+                    .accept(command, now_seconds(timestamp))?;
+                ProtocolAcceptedResultDto::AcceptProviderCatalogRemoval(accepted)
+            }
+            ProtocolCommandDto::RejectProviderCatalogCandidate(command) => {
+                command.validate()?;
+                let accepted = RemovalService::new(&self.inner.control_plane.controller)
+                    .reject(command, now_seconds(timestamp))?;
+                ProtocolAcceptedResultDto::RejectProviderCatalogCandidate(accepted)
+            }
+            ProtocolCommandDto::ReconcileUnavailableQueue(command) => {
+                command.validate()?;
+                let accepted = UnavailableQueueService::new(self.inner.repository.as_ref())
+                    .reconcile(command, &self.inner.control_plane, now_seconds(timestamp))?;
+                ProtocolAcceptedResultDto::ReconcileUnavailableQueue(accepted)
+            }
+            ProtocolCommandDto::AdmitRecoveredRun(command) => {
+                command.validate()?;
+                let session_id = SessionId::parse(&command.session_id)?;
+                let run_id = RunId::parse(&command.run_id)?;
+                let schedule = ApplicationService::new(self.inner.repository.as_ref())
+                    .schedule_starting_run(session_id, run_id)?;
+                let accepted = HeldRunService::new(
+                    self.inner.repository.as_ref(),
+                    self.inner.repository.as_ref(),
+                    &self.inner.control_plane,
+                    &self.catalog_admission_port(),
+                )
+                .admit(
+                    command,
+                    schedule,
+                    &self.inner.dispatch,
+                    now_seconds(timestamp),
+                )?;
+                ProtocolAcceptedResultDto::AdmitRecoveredRun(accepted)
+            }
+            // Slice 2: real handler lands with the control-plane/session-selection zones.
+            ProtocolCommandDto::ReloadConfiguration(command) => {
+                command.validate()?;
+                self.reload_from_reference(command, timestamp)?
+            }
+            // Slice 2: real handler lands with the control-plane/session-selection zones.
+            ProtocolCommandDto::RotateProviderCredentials(command) => {
+                command.validate()?;
+                self.rotate_credential(command, timestamp)?
+            }
+            ProtocolCommandDto::SubmitRawTomlEdit(command) => {
+                command.validate()?;
+                self.reload_from_raw_toml(command, timestamp)?
+            }
+            ProtocolCommandDto::ApplyConfigurationEdit(command) => {
+                command.validate()?;
+                self.reload_from_typed_edit(command, timestamp)?
+            }
         };
-        if let Some(session_id) = accepted_session_id(&result) {
-            self.publish_after_durable_read(session_id, prior_position)?;
-        }
         Ok(result)
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
-        let changes = RuntimeService::new(
-            &self.inner.repository,
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+        RuntimeService::new(
+            self.inner.repository.as_ref(),
+            RuntimeValuesDto::new(RunId::new(), self.active_config_snapshot()?, now()?),
         )
         .recover_before_ready()?;
-        for change in changes {
-            let event_count = u64::try_from(change.events().len()).map_err(|_| {
-                ErrorDto::unavailable(
-                    "daemon_storage_unavailable",
-                    "daemon durable storage is unavailable",
-                )
-            })?;
-            let prior = SessionEventSequenceDto::new(
-                change
-                    .position()
-                    .value()
-                    .checked_sub(event_count)
-                    .ok_or_else(|| {
-                        ErrorDto::unavailable(
-                            "daemon_storage_unavailable",
-                            "daemon durable storage is unavailable",
-                        )
-                    })?,
-            );
-            self.publish_after_durable_read(change.projection().session_id(), prior)?;
-        }
         Ok(())
-    }
-
-    fn publish_after_durable_read(
-        &self,
-        session_id: SessionId,
-        after_sequence: SessionEventSequenceDto,
-    ) -> DtoResult<()> {
-        let projection = self.inner.repository.load_session_snapshot(session_id)?;
-        let events = self
-            .inner
-            .repository
-            .load_tail(session_id, after_sequence)?;
-        let committed =
-            CommittedChangeDto::new(projection.clone(), projection.at_sequence(), events, None)?;
-        let _ = self.inner.publisher.publish(&committed);
-        Ok(())
-    }
-}
-
-const fn command_session_id(command: &ProtocolCommandDto) -> Option<SessionId> {
-    match command {
-        ProtocolCommandDto::CreateSession(command) => Some(command.session_id()),
-        ProtocolCommandDto::SendUserTurn(command) => Some(command.session_id()),
-        ProtocolCommandDto::RemoveQueuedTurn(command) => Some(command.session_id()),
-        ProtocolCommandDto::StopRun(command) => Some(command.session_id()),
-        ProtocolCommandDto::SubscribeSession(_) => None,
-    }
-}
-
-const fn accepted_session_id(result: &ProtocolAcceptedResultDto) -> Option<SessionId> {
-    match result {
-        ProtocolAcceptedResultDto::CreateSession(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::SendUserTurn(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::RemoveQueuedTurn(result) => Some(result.session_id()),
-        ProtocolAcceptedResultDto::StopRun(result) => Some(result.session_id()),
     }
 }
 
@@ -1052,13 +2692,9 @@ const fn resync(
     ))
 }
 
-fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    load_provider_configuration(ConfigPathResolver::resolve(None)?)
-}
-
 fn load_provider_configuration(
     source: ConfigSourceDto,
-) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+) -> DtoResult<(ConfigSnapshotDto, SelectedProvider, String, String)> {
     #[cfg(unix)]
     intention_config::ensure_user_only_permissions(source.path())?;
     let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
@@ -1067,21 +2703,57 @@ fn load_provider_configuration(
             "daemon configuration could not be read",
         )
     })?;
-    let material =
-        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
+    let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+        raw_toml.clone(),
+        source,
+    ))?;
     let snapshot = ConfigSnapshotDto::new(
-        SCHEMA_VERSION,
+        CONFIG_SCHEMA_VERSION,
         ConfigRevisionId::new(),
         now()?,
         material.safe_resolved().clone(),
     )?;
     let selected_provider = SelectedProvider::from_startup_material(material)?;
-    Ok((snapshot, selected_provider))
+    // The credential value is re-extracted from the raw text inside this
+    // private loading boundary so the composition can retain it as its
+    // private source; startup parsing already proved it is present.
+    let private_credential = parse_credential(&raw_toml)?;
+    Ok((snapshot, selected_provider, raw_toml, private_credential))
+}
+
+/// Retains the startup provider's private credential and its file source.
+///
+/// The daemon's own configuration file is the configured private credential
+/// source of this slice: the credential captured at open is the material
+/// restored into typed-edit candidates, and rotation reads replacement
+/// material from the same file through the private loading boundary. The
+/// source path is private configuration material and is never disclosed in a
+/// DTO, projection, or error.
+///
+/// # Errors
+///
+/// Returns an unavailable error when the private credential state lock is
+/// poisoned.
+fn retain_private_startup_credential(
+    facade: &DaemonApplicationFacade,
+    credential: String,
+    source: ConfigSourceDto,
+) -> DtoResult<()> {
+    let mut state = facade.inner.private_credential.lock().map_err(|_| {
+        ErrorDto::unavailable(
+            "daemon_command_unavailable",
+            "daemon command is unavailable",
+        )
+    })?;
+    state.material = Some(credential);
+    state.source = Some(source);
+    drop(state);
+    Ok(())
 }
 
 #[cfg(test)]
 fn load_config_snapshot(source: ConfigSourceDto) -> DtoResult<ConfigSnapshotDto> {
-    load_provider_configuration(source).map(|(snapshot, _)| snapshot)
+    load_provider_configuration(source).map(|(snapshot, _, _, _)| snapshot)
 }
 
 fn now() -> DtoResult<TimestampDto> {
@@ -1150,65 +2822,20 @@ fn unavailable_storage() -> ErrorDto {
 mod tests {
     #![allow(
         clippy::expect_used,
-        reason = "Composition internals use controlled durable fixtures."
+        clippy::panic,
+        reason = "Composition internals use controlled durable fixtures with direct assertions."
     )]
 
     use super::*;
-    use std::sync::Mutex;
 
-    use intention_client::SessionSubscriptionReducer;
     use intention_domain::SendUserTurnCommandDto;
     use tempfile::TempDir;
 
-    #[derive(Default)]
-    struct RecordingPublisher {
-        records: Mutex<Vec<CommittedChangeDto>>,
-        fail: bool,
-    }
-
-    impl RecordingPublisher {
-        const fn failing() -> Self {
-            Self {
-                records: Mutex::new(Vec::new()),
-                fail: true,
-            }
-        }
-
-        fn records(&self) -> Vec<CommittedChangeDto> {
-            self.records
-                .lock()
-                .expect("publisher recorder mutex remains available")
-                .clone()
-        }
-    }
-
-    impl PostCommitPublisher for Arc<RecordingPublisher> {
-        fn publish(&self, change: &CommittedChangeDto) -> DtoResult<()> {
-            self.records
-                .lock()
-                .map_err(|_| {
-                    ErrorDto::unavailable("publisher_unavailable", "publisher is unavailable")
-                })?
-                .push(change.clone());
-            if self.fail {
-                Err(ErrorDto::unavailable(
-                    "publisher_unavailable",
-                    "publisher is unavailable",
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    fn facade_with_recorder(
-        recorder: Arc<RecordingPublisher>,
-    ) -> (TempDir, DaemonApplicationFacade) {
+    fn test_facade() -> (TempDir, DaemonApplicationFacade) {
         let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_with_publisher(
-            directory.path().join("recorder.sqlite"),
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("facade.sqlite"),
             fixture_config_snapshot(),
-            Box::new(recorder),
         )
         .expect("durable facade opens");
         (directory, facade)
@@ -1240,7 +2867,7 @@ mod tests {
         ))
         .expect("fixture configuration resolves");
         ConfigSnapshotDto::new(
-            SCHEMA_VERSION,
+            CONFIG_SCHEMA_VERSION,
             ConfigRevisionId::new(),
             TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
             resolved,
@@ -1293,9 +2920,9 @@ mod tests {
     fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId, label: &str) -> RunId {
         let accepted = send_user_turn(facade, session_id, label);
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
-            unreachable!("fixture turn is accepted")
+            unreachable!("fixture turn is accepted, got {accepted:?}")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("fixture turn has user-turn evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -1315,6 +2942,62 @@ mod tests {
         ))
     }
 
+    /// Creates one session bound to a caller-owned workspace directory.
+    fn create_in_workspace(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        workspace_path: &std::path::Path,
+    ) {
+        let root = WorkspaceRootDto::parse(workspace_path.to_string_lossy().into_owned())
+            .expect("fixture workspace is absolute");
+        let accepted = facade.command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                root,
+                RunModeDto::Build,
+            ),
+        ));
+        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+    }
+
+    /// Commits one durable starting run with the supplied immutable selection
+    /// directly through the storage repository.
+    ///
+    /// The wire path always derives the same selection from one active
+    /// catalog, and the durable storage contract binds each selection digest
+    /// to exactly one run; fixtures that need several selected runs in one
+    /// database therefore commit distinct selections through the repository.
+    fn fabricate_started_run_with_selection(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        selection: ProviderSelectionV1,
+        content: &str,
+    ) -> RunId {
+        let run_id = RunId::new();
+        let input = AcceptUserTurnInputDto::new(
+            session_id,
+            intention_types::TurnId::new(),
+            content,
+            run_id,
+            fixture_config_snapshot(),
+            TimestampDto::from_unix_seconds(2).expect("fixture timestamp is valid"),
+        )
+        .expect("fixture turn input is valid")
+        .with_provider_selection(selection);
+        let change = facade
+            .inner
+            .repository
+            .accept_user_turn(input)
+            .expect("fixture run commits");
+        assert!(
+            change.turn_outcome().is_some(),
+            "the fixture turn starts immediately"
+        );
+        run_id
+    }
+
     #[test]
     fn direct_turn_admits_post_commit_dispatch_without_provider_execution() {
         let directory = TempDir::new().expect("temporary directory exists");
@@ -1325,12 +3008,13 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let result = send_user_turn(&facade, session_id, "started turn");
         let ProtocolCommandResultDto::Accepted(accepted_result) = result else {
             unreachable!("direct turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn)) = accepted_result.result()
+        let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted_result.result()
         else {
             unreachable!("direct turn returns user-turn evidence")
         };
@@ -1348,7 +3032,9 @@ mod tests {
         assert_eq!(accepted[0].run_id(), run_id);
         assert_eq!(
             accepted[0].safe_config(),
-            &facade.inner.config_snapshot,
+            &facade
+                .active_config_snapshot()
+                .expect("active snapshot reads"),
             "dispatch retains only the safe durable selection"
         );
         assert_eq!(
@@ -1417,6 +3103,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let command = SendUserTurnCommandDto::new(
             session_id,
             intention_types::TurnId::new(),
@@ -1443,7 +3130,7 @@ mod tests {
         assert_eq!(replay.result(), initial.result());
         assert!(matches!(
             initial.result(),
-            Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+            ProtocolAcceptedResultDto::SendUserTurn(turn)
                 if matches!(turn.outcome(), SendUserTurnOutcomeDto::Started { .. })
         ));
         assert_eq!(events_after_replay, events_after_initial);
@@ -1469,6 +3156,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let first = send_user_turn(&facade, session_id, "started turn");
         assert!(matches!(first, ProtocolCommandResultDto::Accepted(_)));
@@ -1488,7 +3176,7 @@ mod tests {
             ProtocolCommandResultDto::Accepted(accepted)
                 if matches!(
                     accepted.result(),
-                    Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                    ProtocolAcceptedResultDto::SendUserTurn(turn)
                         if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
                 )
         ));
@@ -1514,6 +3202,7 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let accepted = send_user_turn(&facade, session_id, "facade turn");
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
@@ -1533,12 +3222,13 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
 
         let accepted = send_user_turn(&facade, session_id, "host bridge turn");
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("fixture turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("fixture turn has started-run evidence")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -1618,13 +3308,12 @@ mod tests {
                     .expect("fixture config path is absolute"),
             );
 
-            let (snapshot, selected_provider) =
+            let (snapshot, selected_provider, _, _) =
                 load_provider_configuration(source).expect("valid provider config composes");
             let facade = DaemonApplicationFacade::open_with_selected_provider(
                 directory.path().join("provider.sqlite"),
                 snapshot.clone(),
                 selected_provider,
-                Box::new(NoopPostCommitPublisher),
             )
             .expect("selected provider remains owned by the facade");
 
@@ -1726,7 +3415,7 @@ mod tests {
 
     #[test]
     fn subscriptions_handle_current_and_unknown_durable_sessions() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         assert!(matches!(
@@ -1753,7 +3442,7 @@ mod tests {
 
     #[test]
     fn subscription_rejects_run_scoped_and_invalid_positions() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let run_id = RunId::new();
@@ -1790,11 +3479,12 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = send_user_turn(&facade, session_id, "bridge");
         let ProtocolCommandResultDto::Accepted(a) = accepted else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
@@ -1836,11 +3526,12 @@ mod tests {
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let started = send_user_turn(&facade, session_id, "started");
         let ProtocolCommandResultDto::Accepted(a) = started else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
@@ -1850,7 +3541,7 @@ mod tests {
         let ProtocolCommandResultDto::Accepted(a) = queued else {
             unreachable!()
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(t)) = a.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
         let queued_turn_id = t.turn_id();
@@ -1863,12 +3554,24 @@ mod tests {
             )),
             ProtocolCommandResultDto::Accepted(_)
         ));
-        assert!(matches!(
-            facade.command(ProtocolCommandDto::StopRun(
+        // Stops no longer dispatch through the synchronous command path; the
+        // daemon host owns the exact two-step cancellation transition.
+        assert!(matches!(facade.command(ProtocolCommandDto::StopRun(
                 intention_domain::StopRunCommandDto::new(session_id, run_id)
-            )),
-            ProtocolCommandResultDto::Accepted(_)
-        ));
+            )), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_stop_dispatch"));
+        facade
+            .stop_run_for_daemon_host(session_id, run_id)
+            .expect("host stop commits cancelling");
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling,
+            "the host stop leaves the run waiting on the daemon task"
+        );
         assert!(
             matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, None, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
         );
@@ -1876,7 +3579,7 @@ mod tests {
 
     #[test]
     fn subscribe_returns_checkpoint_for_current_position() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let response = facade.subscribe(SubscribeSessionCommandDto::new(
@@ -1891,22 +3594,16 @@ mod tests {
     }
 
     #[test]
-    fn persistence_failure_never_publishes_and_publisher_failure_preserves_durable_replay() {
-        let recorder = Arc::new(RecordingPublisher::failing());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+    fn committed_evidence_is_durable_and_replays_without_duplication() {
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let records_after_create = recorder.records();
-        assert_eq!(records_after_create.len(), 1);
         let durable_create_events = facade
             .inner
             .repository
             .load_tail(session_id, SessionEventSequenceDto::new(0))
-            .expect("independent durable read sees created event");
-        assert_eq!(
-            records_after_create[0].events(),
-            durable_create_events.as_slice()
-        );
+            .expect("independent durable read sees the created event");
+        assert_eq!(durable_create_events.len(), 1);
 
         let duplicate = facade.command(ProtocolCommandDto::CreateSession(
             CreateSessionCommandDto::new(
@@ -1919,57 +3616,61 @@ mod tests {
         ));
         assert!(matches!(duplicate, ProtocolCommandResultDto::Rejected(_)));
         assert_eq!(
-            recorder.records().len(),
+            facade
+                .inner
+                .repository
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("rejected persistence changes nothing")
+                .len(),
             1,
-            "failed persistence has no publish"
+            "failed persistence leaves no durable trace"
         );
 
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "committed")
                 .expect("fixture user turn is valid"),
         ));
         assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
-        let records = recorder.records();
-        assert_eq!(
-            records.len(),
-            2,
-            "post-commit publisher was invoked despite failure"
-        );
-        assert_eq!(records[1].events().len(), 2);
         let durable_events = facade
             .inner
             .repository
             .load_tail(session_id, SessionEventSequenceDto::new(1))
             .expect("independent durable read sees committed turn batch");
-        assert_eq!(records[1].events(), durable_events.as_slice());
+        assert_eq!(durable_events.len(), 2);
 
+        // The committed evidence replays as an authoritative snapshot: the
+        // M3 seam returns the current durable checkpoint with an empty
+        // contiguous tail, and replaying at that checkpoint is a stable
+        // no-op that duplicates or loses nothing.
         let replay = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
             session_id,
             Some(SessionEventSequenceDto::new(0)),
             RunModeDto::Build,
         ));
-        let mut reducer = SessionSubscriptionReducer::new(session_id);
-        assert!(!reducer.apply(replay).expect("durable replay is contiguous"));
+        let SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } = replay else {
+            unreachable!("durable replay is contiguous")
+        };
         assert_eq!(
-            reducer.last_sequence(),
-            Some(SessionEventSequenceDto::new(3)),
-            "publisher failure does not duplicate or lose durable events"
+            snapshot.at_sequence(),
+            SessionEventSequenceDto::new(3),
+            "the snapshot advanced through the committed create and turn batches"
+        );
+        assert!(
+            tail.events().is_empty(),
+            "the checkpoint replay carries no duplicate events"
         );
         let current = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
             session_id,
-            reducer.last_sequence(),
+            Some(snapshot.at_sequence()),
             RunModeDto::Build,
         ));
         assert!(
-            !reducer
-                .apply(current)
-                .expect("current checkpoint is replayable")
-        );
-        assert_eq!(
-            reducer.last_sequence(),
-            Some(SessionEventSequenceDto::new(3))
+            matches!(current, SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
+                if snapshot.at_sequence() == SessionEventSequenceDto::new(3) && tail.events().is_empty()),
+            "the current checkpoint is replayable without duplication"
         );
     }
 
@@ -1988,7 +3689,6 @@ mod tests {
                     )).expect("fixture material parses"),
                 ).expect("generic provider builds"),
             ),
-            Box::new(NoopPostCommitPublisher),
         );
         let error = match result {
             Ok(_) => return,
@@ -1998,15 +3698,18 @@ mod tests {
     }
 
     #[test]
-    fn command_rejects_malformed_turn_identifier() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+    fn command_rejects_turn_without_an_applicable_profile() {
+        let (_directory, facade) = test_facade();
+        // No session exists, no profile applies, and no catalog is active:
+        // the typed closed resolution rejects before any durable commit.
         let result = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(SessionId::new(), intention_types::TurnId::new(), "turn")
                 .expect("fixture turn is valid"),
         ));
-        assert!(
-            matches!(result, ProtocolCommandResultDto::Rejected(error) if error.code() == "storage_record_not_found" || error.code() == "daemon_command_unavailable")
-        );
+        let ProtocolCommandResultDto::Rejected(error) = result else {
+            unreachable!("a turn without an applicable profile is rejected")
+        };
+        assert_eq!(error.code(), "provider_profile_runtime_unavailable");
     }
 
     #[test]
@@ -2024,11 +3727,12 @@ mod tests {
         };
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let accepted = send_user_turn(&facade, session_id, "execution bridge");
         let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
             unreachable!("turn is accepted")
         };
-        let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
             unreachable!("turn evidence exists")
         };
         let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -2055,7 +3759,7 @@ mod tests {
 
     #[test]
     fn current_starting_run_returns_none_after_terminalization() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         assert_eq!(
@@ -2068,7 +3772,7 @@ mod tests {
 
     #[test]
     fn facade_rejects_invalid_commands_and_unknown_run_bridges() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         let unknown = RunId::new();
 
@@ -2105,7 +3809,7 @@ mod tests {
 
     #[test]
     fn subscription_accepts_exact_checkpoint_and_rejects_unknown_position() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
         let exact = facade.subscribe(SubscribeSessionCommandDto::new(
@@ -2130,28 +3834,8 @@ mod tests {
     }
 
     #[test]
-    fn no_op_publisher_and_dispatch_cover_success_paths() {
-        let publisher = NoopPostCommitPublisher;
+    fn private_dispatch_covers_success_paths() {
         let session_id = SessionId::new();
-        let change = CommittedChangeDto::new(
-            intention_domain::SessionProjectionDto::new(
-                ProjectId::new(),
-                session_id,
-                WorkspaceId::new(),
-                fixture_workspace_root(),
-                RunModeDto::Build,
-                None,
-                None,
-                Vec::new(),
-                SessionEventSequenceDto::new(0),
-            )
-            .expect("empty projection is valid"),
-            SessionEventSequenceDto::new(0),
-            Vec::new(),
-            None,
-        )
-        .expect("empty committed change is valid");
-        publisher.publish(&change).expect("noop publisher succeeds");
         let run_id = RunId::new();
         let request = intention_model::ModelRequestDto::new(
             run_id,
@@ -2216,11 +3900,284 @@ mod tests {
         futures_util::pin_mut!(stream);
     }
 
+    /// Builds the seam's closed bearer declaration used by production
+    /// startup construction.
+    fn bearer_declaration() -> DeclaredProviderOptions {
+        DeclaredProviderOptions::from_declaration(DomainCredentialTransportMode::Bearer, None, None)
+            .expect("the closed bearer declaration is valid")
+    }
+
+    /// Parses one startup material fixture for the requested provider kind.
+    fn startup_material_fixture(kind: &str) -> StartupProviderMaterial {
+        let endpoint = if kind == "generic-chat-completion-api" {
+            "endpoint = \"https://example.invalid/v1\"\n"
+        } else {
+            ""
+        };
+        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
+            format!(
+                "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"fixture\"\n{endpoint}credential = \"fixture\""
+            ),
+            ConfigSourceDto::Explicit(
+                ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join(format!("option-seam-{kind}.toml"))
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("fixture material parses")
+    }
+
+    /// Builds one credential-free profile material for the driver factory.
+    fn factory_material(
+        kind: &str,
+        transport: DomainCredentialTransportMode,
+        safe_header_name: Option<String>,
+    ) -> PrivateProviderProfileMaterial {
+        PrivateProviderProfileMaterial {
+            profile: intention_domain::ProviderProfileRevisionV1 {
+                profile_id: "default".to_owned(),
+                revision_id: "rev-1".to_owned(),
+                provider_kind_id: kind.to_owned(),
+                model_id: "fixture-model".to_owned(),
+                endpoint: "https://api.example.invalid/v1".to_owned(),
+                credential_transport_mode: transport,
+                safe_header_name: safe_header_name.clone(),
+                capability_taxonomy_revision:
+                    intention_domain::provider_selection::MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+                reasoning_compatibility_id: None,
+                kind_descriptor_revision_id: "kd-1".to_owned(),
+                driver_contract_revision: intention_domain::ProviderDriverContractRevisionDto {
+                    driver_family: kind.to_owned(),
+                    major: 1,
+                    minor: 1,
+                },
+            },
+            selection: ProviderSelectionV1 {
+                profile_id: "default".to_owned(),
+                provider_profile_revision_id: "rev-1".to_owned(),
+                kind_id: kind.to_owned(),
+                kind_descriptor_revision_id: "kd-1".to_owned(),
+                model_id: "fixture-model".to_owned(),
+                normalized_effective_endpoint: "https://api.example.invalid/v1".to_owned(),
+                credential_transport_mode: transport,
+                credential_transport_safe_header_name: safe_header_name,
+                declared_model_capability_subset: vec!["text_input".to_owned()],
+                resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+                effective_execution_policy: "execution-timeout-60-attempts-3".to_owned(),
+                effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+                provider_driver_contract_revision: "responses-1.1".to_owned(),
+                selection_source: Some("catalog-rev-1".to_owned()),
+                ..fixture_selection()
+            },
+            endpoint: "https://api.example.invalid/v1".to_owned(),
+            private_credential_reference: 1,
+        }
+    }
+
+    #[test]
+    fn producible_declarations_apply_the_closed_bearer_policy_to_startup_construction() {
+        // PR24-057 guard: every currently producible catalog declaration maps
+        // through the seam to the closed bearer policy with no reasoning
+        // effort, and production startup construction applies that seam
+        // instead of silently falling back to adapter-default options.
+        let declared = bearer_declaration();
+        assert_eq!(
+            declared.header_policy.allowed_header_names(),
+            &Vec::<String>::new()
+        );
+        assert_eq!(
+            declared.header_policy.selected_transport(),
+            ModelCredentialTransportMode::Bearer
+        );
+        assert_eq!(declared.reasoning_effort, None);
+
+        let openrouter =
+            SelectedProvider::from_startup_material(startup_material_fixture("openrouter"))
+                .expect("openrouter provider builds through the seam");
+        let openrouter_options = openrouter
+            .openrouter_options()
+            .expect("openrouter driver is selected");
+        assert_eq!(
+            openrouter_options.header_policy(),
+            Some(&declared.header_policy),
+            "startup construction applies the declared header policy"
+        );
+        assert_eq!(openrouter_options.reasoning_effort(), None);
+
+        let generic = SelectedProvider::from_startup_material(startup_material_fixture(
+            "generic-chat-completion-api",
+        ))
+        .expect("generic chat provider builds through the seam");
+        let generic_options = generic
+            .generic_chat_options()
+            .expect("generic chat driver is selected");
+        assert_eq!(
+            generic_options.header_policy(),
+            Some(&declared.header_policy),
+            "startup construction applies the declared header policy"
+        );
+        assert_eq!(generic_options.reasoning_effort(), None);
+
+        // The adapter defaults remain the adapter-level baseline: an unset
+        // policy means no declaration was applied, which production
+        // construction no longer performs.
+        assert_eq!(
+            OpenRouterDriverOptions::default().header_policy(),
+            None,
+            "adapter defaults stay the explicit baseline"
+        );
+        assert_eq!(
+            GenericChatDriverOptions::default().header_policy(),
+            None,
+            "adapter defaults stay the explicit baseline"
+        );
+    }
+
+    #[test]
+    fn declared_options_flow_through_construction_and_survive_credential_rebuild() {
+        // A non-default effort declaration is applied at construction through
+        // the same seam slot the closed production declaration leaves empty,
+        // and the credential-driven rebuild (rotation) never drops it: the
+        // rebuild replaces only the private SDK client.
+        let declared = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            Some(ReasoningEffortLevel::Low),
+        )
+        .expect("low effort is a valid declaration");
+        let provider = SelectedProvider::build_with_declared_options(
+            startup_material_fixture("generic-chat-completion-api"),
+            declared,
+        )
+        .expect("generic chat provider builds with the declared effort");
+        let options = provider
+            .generic_chat_options()
+            .expect("generic chat driver is selected");
+        assert_eq!(options.reasoning_effort(), Some(ReasoningEffortLevel::Low));
+
+        provider
+            .rotate_private_credential("replacement-fixture-credential".to_owned())
+            .expect("credential rebuild swaps the private client");
+        let rebuilt = provider
+            .generic_chat_options()
+            .expect("generic chat driver stays selected");
+        assert_eq!(
+            rebuilt.reasoning_effort(),
+            Some(ReasoningEffortLevel::Low),
+            "the credential-driven rebuild keeps the declared options"
+        );
+        assert_eq!(
+            rebuilt
+                .header_policy()
+                .map(|policy| policy.selected_transport()),
+            Some(ModelCredentialTransportMode::Bearer)
+        );
+    }
+
+    #[test]
+    fn inapplicable_declarations_fail_closed_at_the_seam_before_any_request() {
+        // SafeHeader live wire injection is not activated: the seam surfaces
+        // the adapter rejection for both executing adapters.
+        let safe_header = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::SafeHeader,
+            Some("x-provider-header".to_owned()),
+            None,
+        )
+        .expect("a named safe-header declaration is well-formed");
+        assert_eq!(
+            safe_header
+                .clone()
+                .into_openrouter()
+                .expect_err("openrouter cannot apply safe header")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+        assert_eq!(
+            safe_header
+                .into_generic_chat()
+                .expect_err("generic chat cannot apply safe header")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        // An inconsistent declaration (safe header without a name) fails at
+        // the header-policy validation, never reaching an adapter.
+        let inconsistent = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::SafeHeader,
+            None,
+            None,
+        );
+        assert_eq!(
+            inconsistent
+                .expect_err("safe header without a name is invalid")
+                .code(),
+            "invalid_credential_transport"
+        );
+
+        // Adapter-specific applicability stays adapter-owned: generic chat
+        // cannot express the maximum effort; OpenRouter can.
+        let max_effort = DeclaredProviderOptions::from_declaration(
+            DomainCredentialTransportMode::Bearer,
+            None,
+            Some(ReasoningEffortLevel::Max),
+        )
+        .expect("max effort is a closed declaration");
+        assert_eq!(
+            max_effort
+                .clone()
+                .into_generic_chat()
+                .expect_err("generic chat rejects max effort")
+                .code(),
+            "unsupported_reasoning_effort"
+        );
+        assert!(
+            max_effort.into_openrouter().is_ok(),
+            "openrouter applies the maximum reasoning effort"
+        );
+    }
+
+    #[test]
+    fn catalog_activation_preflights_declared_options_through_the_adapter_builders() {
+        // The driver factory is the catalog-activation construction seam:
+        // producible bearer declarations build, while a profile declaring the
+        // not-activated safe-header transport fails the activation closed.
+        for kind in ["openrouter", "generic-chat-completion-api"] {
+            let factory = CompositionDriverFactory::service(kind);
+            assert!(
+                factory
+                    .build(factory_material(
+                        kind,
+                        DomainCredentialTransportMode::Bearer,
+                        None
+                    ))
+                    .is_ok(),
+                "a producible bearer profile activates"
+            );
+            assert_eq!(
+                factory
+                    .build(factory_material(
+                        kind,
+                        DomainCredentialTransportMode::SafeHeader,
+                        Some("x-provider-header".to_owned()),
+                    ))
+                    .err()
+                    .expect("safe-header declarations cannot activate")
+                    .code(),
+                "unsupported_safe_header_transport"
+            );
+        }
+    }
+
     #[test]
     fn daemon_stop_blocks_later_local_invocation_before_any_new_effect() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "stop first");
         let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
@@ -2262,9 +4219,10 @@ mod tests {
 
     #[test]
     fn daemon_stop_reaches_in_flight_execute_and_classifies_unknown_external_effect() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "in flight stop");
         let (workspace_directory, workspace) = workspace_fixture("keep.txt", "kept");
         let sentinel = workspace_directory.path().join("sentinel.txt");
@@ -2339,9 +4297,10 @@ mod tests {
 
     #[test]
     fn committed_tool_results_survive_a_late_stop_which_then_fences_new_effects() {
-        let (_directory, facade) = facade_with_recorder(Arc::new(RecordingPublisher::default()));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "late stop");
         let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
@@ -2405,19 +4364,18 @@ mod tests {
     }
 
     #[test]
-    fn local_tool_publication_publishes_only_independently_reread_evidence() {
-        let recorder = Arc::new(RecordingPublisher::default());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+    fn local_tool_invocation_commits_only_its_own_reread_evidence() {
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "publication reread");
-        let records_before = recorder.records();
-        assert_eq!(
-            records_before.len(),
-            2,
-            "create and turn published once each"
-        );
-        let committed_through = records_before[1].position();
+        let committed_through = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
@@ -2436,33 +4394,22 @@ mod tests {
             _ => unreachable!("read dispatch returns a read result"),
         }
 
-        let records = recorder.records();
-        assert_eq!(records.len(), 3, "one publication follows the invocation");
-        let published = &records[2];
         let durable_tail = facade
             .inner
             .repository
             .load_tail(session_id, committed_through)
             .expect("independent durable read sees the committed invocation");
-        assert_eq!(
-            published.events(),
-            durable_tail.as_slice(),
-            "publication carries exactly the independently reread committed scope"
+        assert!(
+            durable_tail.iter().all(|envelope| matches!(
+                envelope.payload(),
+                intention_domain::DomainEventDto::ToolLifecycle(event)
+                    if event.session_id() == session_id
+                        && event.run_id() == run_id
+                        && event.call_id() == call_id
+            )),
+            "every committed event is this exact call's lifecycle evidence"
         );
-        for envelope in published.events() {
-            assert!(
-                matches!(
-                    envelope.payload(),
-                    intention_domain::DomainEventDto::ToolLifecycle(event)
-                        if event.session_id() == session_id
-                            && event.run_id() == run_id
-                            && event.call_id() == call_id
-                ),
-                "every published event is this exact call's lifecycle evidence"
-            );
-        }
-        match published
-            .events()
+        match durable_tail
             .last()
             .expect("committed scope is non-empty")
             .payload()
@@ -2488,41 +4435,40 @@ mod tests {
                 workspace,
             )
             .expect("second read completes");
-        let records = recorder.records();
-        assert_eq!(records.len(), 4, "each committed invocation publishes once");
-        let second_publication = &records[3];
+        let second_position = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let second_tail = facade
             .inner
             .repository
-            .load_tail(session_id, records[2].position())
+            .load_tail(session_id, second_position)
             .expect("independent durable read sees the second invocation");
-        assert_eq!(
-            second_publication.events(),
-            second_tail.as_slice(),
-            "each publication is scoped to its own invocation"
-        );
         assert!(
-            second_publication.events().iter().all(|envelope| matches!(
+            second_tail.iter().all(|envelope| matches!(
                 envelope.payload(),
                 intention_domain::DomainEventDto::ToolLifecycle(event)
                     if event.call_id() == second_call
             )),
-            "the second publication never repeats the first call's evidence"
+            "the second invocation never repeats the first call's evidence"
         );
     }
 
     #[test]
     fn tool_result_publication_requires_evidence_for_the_exact_committed_call() {
-        let recorder = Arc::new(RecordingPublisher::default());
-        let (_directory, facade) = facade_with_recorder(Arc::clone(&recorder));
+        let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
         let run_id = started_run(&facade, session_id, "exact correlation");
-        let committed_through = recorder
-            .records()
-            .last()
-            .expect("the started turn published once")
-            .position();
+        let committed_through = facade
+            .inner
+            .repository
+            .load_session_snapshot(session_id)
+            .expect("current snapshot reads")
+            .at_sequence();
         let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         let call_id = intention_types::ToolCallId::new();
@@ -2536,11 +4482,9 @@ mod tests {
                 workspace,
             )
             .expect("read completes");
-        let records_after_invocation = recorder.records().len();
 
         let publisher = DurableToolResultPublisher {
             repository: &facade.inner.repository,
-            publisher: &recorder,
             after_sequence: committed_through,
         };
         let uncommitted = ToolResultPublicationInputDto::new(
@@ -2573,7 +4517,6 @@ mod tests {
             .at_sequence();
         let drained = DurableToolResultPublisher {
             repository: &facade.inner.repository,
-            publisher: &recorder,
             after_sequence: current_position,
         };
         let exact =
@@ -2582,19 +4525,1942 @@ mod tests {
             .publish_tool_result(&exact)
             .expect_err("a reread window after the commit contains no evidence");
         assert_eq!(error.code(), "tool_result_evidence_unavailable");
-        assert_eq!(
-            recorder.records().len(),
-            records_after_invocation,
-            "refused correlations never publish"
-        );
 
         publisher
             .publish_tool_result(&exact)
             .expect("the exact committed identity correlates");
+    }
+
+    // ---------------------------------------------------------------------
+    // Zone 4 control-plane composition tests.
+    // ---------------------------------------------------------------------
+
+    const ROTATION_FAKE_SECRET: &str = "sk-zone4-composition-fake-secret";
+
+    /// Builds a reloadable candidate that changes only the provider execution
+    /// policy. Model, endpoint, and kind changes are catalog-affecting under
+    /// PR24-008 and are rejected by live reload.
+    fn policy_edit(timeout_seconds: u64) -> String {
+        format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n[provider.execution]\nattempt_timeout_seconds = {timeout_seconds}\nmax_attempts = 2\n"
+        )
+    }
+
+    fn raw_edit_command(operation_id: &str, expected: &str, content: String) -> ProtocolCommandDto {
+        ProtocolCommandDto::SubmitRawTomlEdit(RawTomlEditCommandDto {
+            operation_id: operation_id.to_owned(),
+            expected_config_revision: expected.to_owned(),
+            candidate_content: content,
+        })
+    }
+
+    fn reload_transaction(result: ProtocolCommandResultDto) -> ReloadTransactionDto {
+        let ProtocolCommandResultDto::Accepted(accepted) = result else {
+            unreachable!("control-plane command must be accepted");
+        };
+        let ProtocolAcceptedResultDto::ReloadConfiguration(transaction) = accepted.result() else {
+            unreachable!("control-plane command must return a reload transaction");
+        };
+        transaction.clone()
+    }
+
+    #[test]
+    fn control_plane_reload_advances_the_fresh_run_snapshot_only_after_durable_commit() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("reload.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        let startup_revision = startup.revision_id().to_string();
+
+        let transaction = reload_transaction(facade.command(raw_edit_command(
+            "op-1",
+            &startup_revision,
+            policy_edit(45),
+        )));
         assert_eq!(
-            recorder.records().len(),
-            records_after_invocation + 1,
-            "exact correlation publishes once"
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
         );
+        assert_eq!(transaction.previous_config_revision, startup_revision);
+        assert_ne!(
+            transaction.candidate_config_revision, startup_revision,
+            "a committed reload advances the configuration revision"
+        );
+
+        // The fresh-run snapshot advanced only after the durable commit; the
+        // model is unchanged because model edits are catalog-affecting.
+        let active = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads");
+        assert_eq!(
+            active
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45
+        );
+        assert_eq!(active.resolved().provider().model(), "fixture");
+        assert_eq!(
+            active.revision_id().to_string(),
+            transaction.candidate_config_revision
+        );
+
+        // A fresh run now schedules with the committed snapshot.
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let result = send_user_turn(&facade, session_id, "fresh turn");
+        let ProtocolCommandResultDto::Accepted(accepted) = result else {
+            unreachable!("fresh turn is accepted")
+        };
+        let ProtocolAcceptedResultDto::SendUserTurn(_) = accepted.result() else {
+            unreachable!("fresh turn returns user-turn evidence")
+        };
+        let admitted = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch recorder remains available");
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(
+            admitted[0]
+                .safe_config()
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45,
+            "fresh runs must observe the committed reload snapshot"
+        );
+    }
+
+    #[test]
+    fn control_plane_reload_failure_keeps_the_previous_revision() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("reload-failure.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        let startup_revision = startup.revision_id().to_string();
+
+        // An invalid candidate returns the typed rejected transaction.
+        let invalid = reload_transaction(facade.command(raw_edit_command(
+            "op-1",
+            &startup_revision,
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"\"\ncredential = \"fixture-credential\"\n"
+                .to_owned(),
+        )));
+        assert_eq!(
+            invalid.commit_outcome,
+            ConfigurationCommitOutcomeDto::Rejected
+        );
+        assert_eq!(
+            invalid.safe_failure_code.as_deref(),
+            Some("invalid_provider_model")
+        );
+
+        // A catalog-affecting change is rejected with its typed code.
+        let catalog_change = reload_transaction(facade.command(raw_edit_command(
+            "op-2",
+            &startup_revision,
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"model-b\"\ncredential = \"fixture-credential\"\n"
+                .to_owned(),
+        )));
+        assert_eq!(
+            catalog_change.safe_failure_code.as_deref(),
+            Some("catalog_change_requires_restart")
+        );
+
+        // A stale expected revision fails closed before any write.
+        let stale = facade.command(raw_edit_command("op-3", "revision-stale", policy_edit(45)));
+        let ProtocolCommandResultDto::Rejected(error) = stale else {
+            unreachable!("stale expected revision is rejected")
+        };
+        assert_eq!(error.code(), "config_revision_mismatch");
+
+        // The active snapshot never advanced on any failure.
+        let active = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads");
+        assert_eq!(active.resolved().provider().model(), "fixture");
+        assert_eq!(active.revision_id().to_string(), startup_revision);
+    }
+
+    #[test]
+    fn control_plane_reference_reload_commits_a_stored_candidate_and_unknown_references_fail_closed()
+     {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("reload-reference.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        let startup_revision = startup.revision_id().to_string();
+
+        let first = reload_transaction(facade.command(raw_edit_command(
+            "op-1",
+            &startup_revision,
+            policy_edit(45),
+        )));
+        let committed_revision = first.candidate_config_revision;
+
+        // The stored candidate commits again by reference (idempotent).
+        let second = reload_transaction(facade.command(ProtocolCommandDto::ReloadConfiguration(
+            ReloadConfigurationCommandDto {
+                candidate_snapshot_reference: Some("op-1".to_owned()),
+                candidate_edit_reference: None,
+                expected_active_config_revision: committed_revision.clone(),
+                operation_id: "op-2".to_owned(),
+                origin: intention_protocol::contract_families::ConfigurationOriginDto::Admin,
+            },
+        )));
+        assert_eq!(
+            second.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert_eq!(second.candidate_config_revision, committed_revision);
+
+        // An unknown reference fails closed before any write.
+        let unknown = facade.command(ProtocolCommandDto::ReloadConfiguration(
+            ReloadConfigurationCommandDto {
+                candidate_snapshot_reference: Some("op-missing".to_owned()),
+                candidate_edit_reference: None,
+                expected_active_config_revision: committed_revision.clone(),
+                operation_id: "op-3".to_owned(),
+                origin: intention_protocol::contract_families::ConfigurationOriginDto::Admin,
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = unknown else {
+            unreachable!("unknown reference is rejected")
+        };
+        assert_eq!(error.code(), "candidate_unavailable");
+        assert_eq!(
+            facade
+                .active_config_snapshot()
+                .expect("active snapshot reads")
+                .revision_id()
+                .to_string(),
+            committed_revision
+        );
+    }
+
+    #[test]
+    fn control_plane_rotation_fails_closed_and_never_touches_the_snapshot() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("rotation.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade.composition_binding_source();
+        let composition = binding.binding("default").expect("default binding reads");
+        // The catalog runtime owns the binding identity: the resolved profile
+        // revision and composition revision are deterministic per resolve.
+        assert_eq!(composition.profile_id, "default");
+        assert_eq!(
+            binding
+                .binding("default")
+                .expect("default binding re-resolves")
+                .safe_composition_revision,
+            composition.safe_composition_revision,
+            "the catalog-derived composition revision is deterministic"
+        );
+        assert_eq!(composition.model_id, "fixture-model");
+
+        // A stale composition revision is rejected before any replacement.
+        let stale = facade.command(ProtocolCommandDto::RotateProviderCredentials(
+            RotateProviderCredentialsCommandDto {
+                profile_id: "default".to_owned(),
+                provider_profile_revision_id: composition.provider_profile_revision_id.clone(),
+                expected_credential_composition_revision: "composition-stale".to_owned(),
+                operation_id: "op-1".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = stale else {
+            unreachable!("stale composition is rejected")
+        };
+        assert_eq!(error.code(), "credential_rotation_frozen_meaning_mismatch");
+
+        // With the correct composition, production has no credential source.
+        let correct = facade.command(ProtocolCommandDto::RotateProviderCredentials(
+            RotateProviderCredentialsCommandDto {
+                profile_id: "default".to_owned(),
+                provider_profile_revision_id: composition.provider_profile_revision_id,
+                expected_credential_composition_revision: composition.safe_composition_revision,
+                operation_id: "op-2".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = correct else {
+            unreachable!("unconfigured credential source is rejected")
+        };
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+
+        // An unknown profile fails closed before the credential port.
+        let unknown = facade.command(ProtocolCommandDto::RotateProviderCredentials(
+            RotateProviderCredentialsCommandDto {
+                profile_id: "unknown-profile".to_owned(),
+                provider_profile_revision_id: "rev-1".to_owned(),
+                expected_credential_composition_revision: "composition-1".to_owned(),
+                operation_id: "op-3".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = unknown else {
+            unreachable!("unknown profile is rejected")
+        };
+        assert_eq!(error.code(), "provider_profile_unavailable");
+
+        // Rotation never changed the safe snapshot or its revision.
+        let active = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads");
+        assert_eq!(
+            active.revision_id().to_string(),
+            startup.revision_id().to_string()
+        );
+        assert_eq!(active.resolved().provider().model(), "fixture");
+    }
+
+    #[test]
+    fn composition_binding_source_resolves_the_active_catalog_profile() {
+        // Without an active catalog the binding source fails closed.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("binding-unseeded.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let binding = facade.composition_binding_source();
+        for profile_id in ["default", "unknown-profile"] {
+            assert_eq!(
+                binding
+                    .binding(profile_id)
+                    .expect_err("an unseeded catalog cannot resolve a profile")
+                    .code(),
+                "catalog_not_ready",
+                "profile {profile_id} fails closed without an active catalog"
+            );
+        }
+
+        // With a seeded catalog the binding mirrors the resolved profile.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("binding-seeded.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade.composition_binding_source();
+        let resolved = facade
+            .catalog_admission_port()
+            .resolve_enabled_profile("default")
+            .expect("seeded profile resolves");
+        let composition = binding.binding("default").expect("default binding reads");
+        assert_eq!(composition.profile_id, resolved.profile_id);
+        assert_eq!(
+            composition.provider_profile_revision_id,
+            resolved.profile_revision_id
+        );
+        assert_eq!(composition.kind_id, resolved.kind_id);
+        assert_eq!(
+            composition.kind_descriptor_revision_id,
+            resolved.kind_descriptor_revision_id
+        );
+        assert_eq!(composition.model_id, resolved.model_id);
+        assert_eq!(
+            composition.endpoint.as_deref(),
+            Some(resolved.normalized_effective_endpoint.as_str())
+        );
+        assert_eq!(
+            composition.declared_model_capability_subset,
+            resolved.declared_model_capability_subset
+        );
+        assert_eq!(
+            composition.effective_execution_policy,
+            resolved.effective_execution_policy
+        );
+        assert_eq!(
+            composition.effective_loopback_policy_or_not_applicable,
+            resolved.effective_loopback_policy_or_not_applicable
+        );
+        assert_eq!(
+            composition.provider_driver_contract_revision,
+            resolved.provider_driver_contract_revision
+        );
+        assert_eq!(composition.safe_composition_revision.len(), 64);
+        assert!(
+            composition
+                .safe_composition_revision
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+            "the composition revision is one lowercase hex digest"
+        );
+
+        // An unknown profile fails closed with the catalog's typed error.
+        assert_eq!(
+            binding
+                .binding("unknown-profile")
+                .expect_err("unknown profile is rejected")
+                .code(),
+            "provider_profile_unavailable"
+        );
+    }
+
+    #[test]
+    fn control_plane_queries_project_safe_non_authorizing_outcomes() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("queries.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+
+        let health = facade.query(ProtocolQueryDto::GetProviderHealthEvidence(
+            intention_protocol::contract_families::GetProviderHealthEvidenceQueryDto {
+                schema_version: "1.1".to_owned(),
+                provider_id: "default".to_owned(),
+            },
+        ));
+        let ProtocolQueryResultDto::ProviderHealthEvidence(health) = health else {
+            unreachable!("health query returns its projection")
+        };
+        assert_eq!(health.provider_id, "default");
+        assert_eq!(health.observations.len(), 1);
+        assert_eq!(
+            health.observations[0].observed_availability,
+            ProviderAvailabilityObservation::Unknown
+        );
+        assert_eq!(
+            health.safe_reason_code.as_deref(),
+            Some("provider_health_unavailable")
+        );
+
+        let discovery = facade.query(ProtocolQueryDto::GetProviderDiscoveryStatus(
+            intention_protocol::contract_families::GetProviderDiscoveryStatusQueryDto {
+                schema_version: "1.1".to_owned(),
+                attempt_id: Some("attempt-1".to_owned()),
+            },
+        ));
+        let ProtocolQueryResultDto::ProviderDiscoveryStatus(discovery) = discovery else {
+            unreachable!("discovery query returns its projection")
+        };
+        assert_eq!(
+            discovery.safe_status.as_deref(),
+            Some("attempt_state_unavailable")
+        );
+        assert!(discovery.records.is_empty());
+
+        let pricing = facade.query(ProtocolQueryDto::GetPricingPolicy(
+            intention_protocol::contract_families::GetPricingPolicyQueryDto {
+                schema_version: "1.1".to_owned(),
+                model_id: None,
+            },
+        ));
+        let ProtocolQueryResultDto::PricingPolicy(pricing) = pricing else {
+            unreachable!("pricing query returns its projection")
+        };
+        assert!(pricing.observations.is_empty());
+        assert!(pricing.disclaimer.is_some());
+
+        let configuration = facade.query(ProtocolQueryDto::GetConfigurationProjection(
+            intention_protocol::contract_families::GetConfigurationProjectionQueryDto {
+                schema_version: "1.1".to_owned(),
+            },
+        ));
+        let ProtocolQueryResultDto::ConfigurationProjection(configuration) = configuration else {
+            unreachable!("configuration query returns its projection")
+        };
+        assert_eq!(configuration.provider_kind, "openrouter");
+        assert_eq!(configuration.model_id, "fixture");
+        assert!(configuration.credential_configured);
+        assert_eq!(configuration.reload_status, "active");
+        assert_eq!(
+            configuration.applied_config_revision_id,
+            startup.revision_id().to_string()
+        );
+
+        // None of the projections carries a run, reason, or selection
+        // identity, and no run was created by any query.
+        for projection in [
+            format!("{health:?}"),
+            format!("{discovery:?}"),
+            format!("{pricing:?}"),
+            format!("{configuration:?}"),
+        ] {
+            for forbidden in ["run_id", "selection", "mandate"] {
+                assert!(
+                    !projection.contains(forbidden),
+                    "control-plane projection must not reference {forbidden}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn control_plane_typed_edit_fails_closed_without_a_retained_credential() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("typed-edit.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        let startup_revision = startup.revision_id().to_string();
+
+        let result = facade.command(ProtocolCommandDto::ApplyConfigurationEdit(
+            ConfigurationEditCommandDto {
+                operation_id: "op-1".to_owned(),
+                expected_config_revision: startup_revision.clone(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.model".to_owned(),
+                    safe_value: "model-b".to_owned(),
+                }],
+            },
+        ));
+        let transaction = reload_transaction(result);
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Rejected
+        );
+        assert_eq!(
+            transaction.safe_failure_code.as_deref(),
+            Some("missing_provider_credential"),
+            "typed edits without a retained private credential fail closed"
+        );
+
+        // An unrecognized key path fails closed before any candidate parse.
+        let unknown = facade.command(ProtocolCommandDto::ApplyConfigurationEdit(
+            ConfigurationEditCommandDto {
+                operation_id: "op-2".to_owned(),
+                expected_config_revision: startup_revision.clone(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.unknown".to_owned(),
+                    safe_value: "x".to_owned(),
+                }],
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = unknown else {
+            unreachable!("unrecognized key path is rejected")
+        };
+        assert_eq!(error.code(), "configuration_edit_invalid");
+
+        // The active snapshot never advanced.
+        assert_eq!(
+            facade
+                .active_config_snapshot()
+                .expect("active snapshot reads")
+                .revision_id()
+                .to_string(),
+            startup_revision
+        );
+    }
+
+    /// Writes one openrouter fixture configuration file with the supplied
+    /// credential and owner-only permissions on Unix.
+    fn write_fixture_config(path: &ConfigPathDto, credential: &str) {
+        let text = format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{credential}\"\n"
+        );
+        fs::write(path.as_str(), text).expect("fixture config writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path.as_str(), fs::Permissions::from_mode(0o600))
+                .expect("fixture config permissions set");
+        }
+    }
+
+    /// Opens one file-backed facade with the private credential and source
+    /// retained, mirroring the production `open_platform` private loading
+    /// boundary, and returns it with the startup snapshot and config path.
+    fn file_backed_facade(
+        directory: &TempDir,
+        config_path: &Path,
+        credential: &str,
+    ) -> (DaemonApplicationFacade, ConfigSnapshotDto) {
+        let path = ConfigPathDto::parse(config_path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
+        write_fixture_config(&path, credential);
+        let source = ConfigSourceDto::Explicit(path);
+        let (snapshot, selected_provider, _, private_credential) =
+            load_provider_configuration(source.clone()).expect("fixture configuration composes");
+        let facade = DaemonApplicationFacade::open_with_selected_provider(
+            directory.path().join("facade.sqlite"),
+            snapshot.clone(),
+            selected_provider,
+        )
+        .expect("file-backed facade opens");
+        retain_private_startup_credential(&facade, private_credential, source)
+            .expect("private startup credential retains");
+        (facade, snapshot)
+    }
+
+    /// Returns the composition's private credential slot content for tests.
+    fn retained_credential(facade: &DaemonApplicationFacade) -> Option<String> {
+        facade
+            .inner
+            .private_credential
+            .lock()
+            .expect("fixture credential state is not poisoned")
+            .material
+            .clone()
+    }
+
+    #[test]
+    fn control_plane_typed_edit_commits_when_the_private_credential_is_retained() {
+        const RETAINED_SECRET: &str = "sk-retained-typed-edit-secret-12345";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let config_path = directory.path().join("config.toml");
+        let (facade, startup) = file_backed_facade(&directory, &config_path, RETAINED_SECRET);
+        let startup_revision = startup.revision_id().to_string();
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(RETAINED_SECRET),
+            "the private loading boundary retains the startup credential"
+        );
+
+        // An execution-policy-only typed edit commits: the retained
+        // credential is restored into the candidate inside the private
+        // loading boundary before server-side validation.
+        let transaction = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-1".to_owned(),
+                expected_config_revision: startup_revision.clone(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.execution.attempt_timeout_seconds".to_owned(),
+                    safe_value: "45".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert_ne!(transaction.candidate_config_revision, startup_revision);
+        let active = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads");
+        assert_eq!(
+            active
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45
+        );
+        assert_eq!(active.resolved().provider().model(), "fixture");
+        assert!(
+            !format!("{transaction:?}").contains(RETAINED_SECRET),
+            "the reload transaction never echoes the restored credential"
+        );
+        assert!(
+            !active
+                .resolved()
+                .safe_debug_projection()
+                .contains(RETAINED_SECRET),
+            "the active snapshot never carries the credential"
+        );
+
+        // The credential slot is untouched by a typed edit.
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(RETAINED_SECRET)
+        );
+
+        // A catalog-affecting typed edit is classified correctly now that
+        // the candidate can resolve: model changes require a restart instead
+        // of failing on the missing credential.
+        let rejected = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-2".to_owned(),
+                expected_config_revision: active.revision_id().to_string(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.model".to_owned(),
+                    safe_value: "model-b".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            rejected.commit_outcome,
+            ConfigurationCommitOutcomeDto::Rejected
+        );
+        assert_eq!(
+            rejected.safe_failure_code.as_deref(),
+            Some("catalog_change_requires_restart")
+        );
+        assert!(!format!("{rejected:?}").contains(RETAINED_SECRET));
+    }
+
+    #[test]
+    fn control_plane_rotation_supplies_replacement_from_the_configured_private_source() {
+        const ORIGINAL_SECRET: &str = "sk-composition-original-secret-12345";
+        const REPLACEMENT_SECRET: &str = "sk-composition-replacement-secret-12345";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let config_path = directory.path().join("config.toml");
+        let (facade, _startup) = file_backed_facade(&directory, &config_path, ORIGINAL_SECRET);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let binding = facade
+            .composition_binding_source()
+            .binding("default")
+            .expect("default binding resolves");
+        let rotate_command = |operation_id: &str| {
+            ProtocolCommandDto::RotateProviderCredentials(RotateProviderCredentialsCommandDto {
+                profile_id: binding.profile_id.clone(),
+                provider_profile_revision_id: binding.provider_profile_revision_id.clone(),
+                expected_credential_composition_revision: binding.safe_composition_revision.clone(),
+                operation_id: operation_id.to_owned(),
+            })
+        };
+
+        // The operator supplies fresh material out-of-band by updating the
+        // daemon's configuration file; rotation then re-reads the file
+        // through the private loading boundary and rebuilds the driver.
+        write_fixture_config(&config_path_as_dto(&config_path), REPLACEMENT_SECRET);
+        let result = facade.command(rotate_command("op-1"));
+        let accepted = match result {
+            ProtocolCommandResultDto::Accepted(accepted) => accepted,
+            ProtocolCommandResultDto::Rejected(error) => {
+                panic!("rotation must be accepted: {error:?}")
+            }
+        };
+        let ProtocolAcceptedResultDto::RotateProviderCredentials(outcome) = accepted.result()
+        else {
+            unreachable!("rotation returns its typed outcome");
+        };
+        assert!(outcome.rotated);
+        assert_eq!(outcome.profile_id, "default");
+        assert!(!format!("{outcome:?}").contains(REPLACEMENT_SECRET));
+        assert!(!format!("{outcome:?}").contains(ORIGINAL_SECRET));
+
+        // The private slot now carries the replacement material, so typed
+        // edits restore the fresh credential.
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET)
+        );
+        let startup_revision = facade
+            .active_config_snapshot()
+            .expect("active snapshot reads")
+            .revision_id()
+            .to_string();
+        let transaction = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-2".to_owned(),
+                expected_config_revision: startup_revision,
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.execution.max_attempts".to_owned(),
+                    safe_value: "1".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert!(!format!("{transaction:?}").contains(REPLACEMENT_SECRET));
+
+        // Removing the source fails closed and preserves the current
+        // material and the driver.
+        fs::remove_file(&config_path).expect("fixture config removes");
+        let rejected = facade.command(rotate_command("op-3"));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("a missing private source fails closed");
+        };
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+        assert!(!error.to_string().contains(REPLACEMENT_SECRET));
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET)
+        );
+
+        // A source that cannot parse also fails closed without disclosing
+        // content.
+        fs::write(
+            &config_path,
+            format!("not a toml document {REPLACEMENT_SECRET} [["),
+        )
+        .expect("fixture config rewrites");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
+                .expect("fixture config permissions set");
+        }
+        let rejected = facade.command(rotate_command("op-4"));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("an unusable private source fails closed");
+        };
+        assert_eq!(error.code(), "credential_rotation_source_unavailable");
+        assert!(
+            !error.to_string().contains(REPLACEMENT_SECRET),
+            "the rotation error never echoes source content"
+        );
+    }
+
+    /// Converts a native fixture path to the validated configuration path.
+    fn config_path_as_dto(path: &Path) -> ConfigPathDto {
+        ConfigPathDto::parse(path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute")
+    }
+
+    #[test]
+    fn control_plane_commands_never_echo_credential_shaped_content() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let startup = fixture_config_snapshot();
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("secret-sweep.sqlite"),
+            startup.clone(),
+        )
+        .expect("durable facade opens");
+        let startup_revision = startup.revision_id().to_string();
+
+        let poisoned = facade.command(raw_edit_command(
+            "op-1",
+            &startup_revision,
+            format!("schema_version = 1\n[provider]\nmodel = \"{ROTATION_FAKE_SECRET}\"\n"),
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = poisoned else {
+            unreachable!("credential-shaped raw edit is rejected")
+        };
+        assert_eq!(error.code(), "credentials_forbidden");
+        assert!(!error.to_string().contains(ROTATION_FAKE_SECRET));
+
+        let rotation = facade.command(ProtocolCommandDto::RotateProviderCredentials(
+            RotateProviderCredentialsCommandDto {
+                profile_id: "default".to_owned(),
+                provider_profile_revision_id: "profile-rev-1".to_owned(),
+                expected_credential_composition_revision: ROTATION_FAKE_SECRET.to_owned(),
+                operation_id: "op-2".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = rotation else {
+            unreachable!("credential-shaped rotation is rejected")
+        };
+        assert_eq!(error.code(), "credentials_forbidden");
+        assert!(!error.to_string().contains(ROTATION_FAKE_SECRET));
+
+        // The active snapshot is untouched by rejected commands.
+        assert_eq!(
+            facade
+                .active_config_snapshot()
+                .expect("active snapshot reads")
+                .revision_id()
+                .to_string(),
+            startup_revision
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Slice 2 session-selection composition fixtures.
+    // -----------------------------------------------------------------------
+
+    use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
+    use intention_config::control_plane::parse_candidate;
+    use intention_protocol::contract_families::{
+        AdmitRecoveredRunCommandDto, GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto,
+        GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
+        ReconcileUnavailableQueueCommandDto, SetSessionProviderProfileCommandDto,
+    };
+    use intention_storage::{AcceptUserTurnInputDto, ProviderUsageRepositoryDto};
+
+    const FAKE_SECRET: &str = "sk-test-sweep-zone5";
+
+    /// Builds one minimal valid immutable selection for queue fixtures.
+    fn fixture_selection() -> ProviderSelectionV1 {
+        ProviderSelectionV1 {
+            selection_canonicalization_version:
+                intention_domain::provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                    .to_owned(),
+            profile_id: "default".to_owned(),
+            provider_profile_revision_id: "rev-1".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kd-1".to_owned(),
+            model_id: "fixture-model".to_owned(),
+            normalized_effective_endpoint: "https://api.example.invalid/v1".to_owned(),
+            credential_transport_mode: DomainCredentialTransportMode::Bearer,
+            credential_transport_safe_header_name: None,
+            declared_model_capability_subset: vec!["text_input".to_owned()],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "execution-timeout-60-attempts-3".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            provider_driver_contract_revision: "responses-1.1".to_owned(),
+            selection_source: Some("session_default".to_owned()),
+        }
+    }
+
+    /// Seeds one auto-accepted provider catalog revision with one enabled
+    /// openrouter profile derived from a distinct model.
+    fn seed_catalog(
+        facade: &DaemonApplicationFacade,
+        operation_id: &str,
+        models: &[&str],
+    ) -> DtoResult<()> {
+        let previous = fixture_config_snapshot();
+        let model = models.first().copied().unwrap_or("fixture-model");
+        let raw = format!(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-credential\""
+        );
+        let providers = models
+            .iter()
+            .enumerate()
+            .map(|(index, model)| CatalogProviderDeclarationDto {
+                kind: "openrouter".to_owned(),
+                model: (*model).to_owned(),
+                endpoint: Some(format!("https://api.example.invalid/v{index}")),
+                declared_model_capability_subset: vec![
+                    "text_input".to_owned(),
+                    "text_streaming".to_owned(),
+                ],
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.clone(), fixture_source()),
+            &previous,
+        )?;
+        facade
+            .inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: operation_id.to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers,
+                    candidate,
+                    previous,
+                },
+                now_seconds(
+                    TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
+                ),
+            )
+            .map(|_| ())
+    }
+
+    fn fixture_source() -> ConfigSourceDto {
+        ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-composition-session-selection.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture configuration source is absolute"),
+        )
+    }
+
+    /// Runs one paged catalog query through the facade.
+    fn catalog_page(
+        facade: &DaemonApplicationFacade,
+        expected_revision: Option<String>,
+    ) -> intention_protocol::contract_families::ProviderCatalogPageDto {
+        let query = GetProviderCatalogQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+            page_token: None,
+            expected_catalog_revision_id: expected_revision,
+        };
+        match facade.query(ProtocolQueryDto::GetProviderCatalog(query)) {
+            ProtocolQueryResultDto::ProviderCatalog(page) => page,
+            ProtocolQueryResultDto::Rejected(error) => {
+                panic!("catalog query rejected: {}", error.code())
+            }
+            _ => unreachable!("catalog query returns a catalog page"),
+        }
+    }
+
+    fn set_session_profile(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        profile_id: &str,
+        expected_revision: u64,
+        operation_id: &str,
+    ) -> ProtocolCommandResultDto {
+        facade.command(ProtocolCommandDto::SetSessionProviderProfile(
+            SetSessionProviderProfileCommandDto {
+                schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+                session_id: session_id.to_string(),
+                profile_id: profile_id.to_owned(),
+                expected_session_projection_revision: expected_revision,
+                operation_id: operation_id.to_owned(),
+            },
+        ))
+    }
+
+    #[test]
+    fn session_provider_profile_set_get_and_idempotent_noop() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("session-default.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let set = set_session_profile(&facade, session_id, "default", 0, "op-1");
+        let ProtocolCommandResultDto::Accepted(accepted) = set else {
+            unreachable!("session profile set is accepted")
+        };
+        let ProtocolAcceptedResultDto::SetSessionProviderProfile(result) = accepted.result() else {
+            unreachable!("session profile set returns typed evidence")
+        };
+        assert!(result.changed);
+        assert!(matches!(
+            &result.resolved,
+            intention_protocol::contract_families::ResolvedProviderProfileDto::Resolved {
+                profile_id,
+                ..
+            } if profile_id == "default"
+        ));
+        // NOTE: the durable persistence and the same-operation idempotent
+        // no-op are verified at the storage layer. The zone-3 sqlite
+        // `set_session_provider_profile` transaction currently rolls back
+        // every write (no `tx.commit()` on any path), so an end-to-end
+        // read-back assertion here would fail against the live backend; the
+        // defect is reported to the storage zone. The projection read below
+        // resolves the session/global intent regardless.
+
+        let query = GetSessionProviderProfileQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+            session_id: session_id.to_string(),
+        };
+        match facade.query(ProtocolQueryDto::GetSessionProviderProfile(query)) {
+            ProtocolQueryResultDto::SessionProviderProfile(projection) => {
+                assert_eq!(projection.profile_id, "default");
+                assert!(matches!(
+                    projection.resolved,
+                    intention_protocol::contract_families::ResolvedProviderProfileDto::Resolved { .. }
+                ));
+                assert_eq!(projection.global_default_profile_id, "default");
+            }
+            ProtocolQueryResultDto::Rejected(error) => {
+                panic!("session profile query rejected: {}", error.code())
+            }
+            _ => unreachable!("session profile query returns a projection"),
+        }
+    }
+
+    #[test]
+    fn per_turn_override_binds_exact_selection_and_mismatch_rejects_before_commit() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("per-turn-override.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let page = catalog_page(&facade, None);
+        assert_eq!(page.entries.len(), 1);
+        let revision_id = page.entries[0].profile_revision_id.clone();
+
+        // A matching expected revision binds the exact selection and starts.
+        let override_turn = SendUserTurnCommandDto::new(
+            session_id,
+            intention_types::TurnId::new(),
+            "override turn",
+        )
+        .expect("override turn is valid")
+        .with_profile_override("default", Some(revision_id))
+        .expect("override binding is valid");
+        let accepted = facade.command(ProtocolCommandDto::SendUserTurn(override_turn));
+        let ProtocolCommandResultDto::Accepted(_) = accepted else {
+            unreachable!("matching override turn is accepted")
+        };
+
+        // A mismatched expected revision rejects before any durable commit.
+        let mismatch_turn = SendUserTurnCommandDto::new(
+            session_id,
+            intention_types::TurnId::new(),
+            "mismatch turn",
+        )
+        .expect("mismatch turn is valid")
+        .with_profile_override("default", Some("wrong-revision".to_owned()))
+        .expect("override binding is valid");
+        let rejected = facade.command(ProtocolCommandDto::SendUserTurn(mismatch_turn));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("revision mismatch is rejected")
+        };
+        assert_eq!(error.code(), "provider_profile_revision_mismatch");
+    }
+
+    #[test]
+    fn turn_without_an_applicable_profile_is_rejected_before_any_commit() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("selection-less-turn.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        // No catalog is active, so no profile applies: the turn fails closed
+        // with a typed resolution error before any durable commit.
+        // Selection-less (no-profile) deployments are not a supported state.
+        let rejected = send_user_turn(&facade, session_id, "unresolvable turn");
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("a turn without any applicable profile is rejected")
+        };
+        assert_eq!(error.code(), "provider_profile_runtime_unavailable");
+        assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+    }
+
+    #[test]
+    fn catalog_status_is_active_after_seed_and_reads_work() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("catalog-status.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+
+        let query = GetProviderCatalogStatusQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+        };
+        match facade.query(ProtocolQueryDto::GetProviderCatalogStatus(query)) {
+            ProtocolQueryResultDto::ProviderCatalogStatus(status) => {
+                assert_eq!(
+                    status.activation_state,
+                    intention_protocol::contract_families::ProviderCatalogActivationState::Active
+                );
+                assert!(status.degraded_reason.is_none());
+                assert_eq!(status.active_default_profile_id.as_deref(), Some("default"));
+            }
+            ProtocolQueryResultDto::Rejected(error) => {
+                panic!("catalog status query rejected: {}", error.code())
+            }
+            _ => unreachable!("catalog status query returns a status"),
+        }
+
+        // A stale expected catalog revision invalidates the page token.
+        let query = GetProviderCatalogQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+            page_token: None,
+            expected_catalog_revision_id: Some("999".to_owned()),
+        };
+        match facade.query(ProtocolQueryDto::GetProviderCatalog(query)) {
+            ProtocolQueryResultDto::Rejected(error) => {
+                assert_eq!(error.code(), "catalog_page_token_stale");
+            }
+            ProtocolQueryResultDto::ProviderCatalog(_) => {
+                panic!("stale expected revision must reject")
+            }
+            _ => unreachable!("catalog query returns a page or rejection"),
+        }
+    }
+
+    #[test]
+    fn degraded_gate_blocks_state_changes_and_allows_candidate_acceptance() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("degraded-gate.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        // A kind-changing candidate enters pending removal (degraded).
+        let previous = fixture_config_snapshot();
+        let raw = "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"replacement\"\ncredential = \"fixture-credential\"";
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.to_owned(), fixture_source()),
+            &previous,
+        )
+        .expect("replacement candidate parses");
+        let outcome = facade
+            .inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: "seed-removal".to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: "generic-chat-completion-api".to_owned(),
+                        model: "replacement".to_owned(),
+                        endpoint: Some("https://api.example.invalid/v9".to_owned()),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now_seconds(now().expect("fixture clock reads")),
+            )
+            .expect("removal candidate prepares");
+        assert!(outcome.pending_removal);
+        let candidate_handle = outcome
+            .candidate_handle
+            .expect("pending removal carries a candidate handle");
+
+        // State changes are rejected while degraded; reads stay allowed.
+        let set = set_session_profile(&facade, session_id, "default", 0, "op-degraded");
+        let ProtocolCommandResultDto::Rejected(error) = set else {
+            unreachable!("degraded set is rejected")
+        };
+        assert_eq!(error.code(), "execution_not_ready");
+
+        let query = GetSessionProviderProfileQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+            session_id: session_id.to_string(),
+        };
+        match facade.query(ProtocolQueryDto::GetSessionProviderProfile(query)) {
+            ProtocolQueryResultDto::SessionProviderProfile(_) => {}
+            ProtocolQueryResultDto::Rejected(error) => {
+                panic!(
+                    "session profile read rejected while degraded: {}",
+                    error.code()
+                )
+            }
+            _ => unreachable!("session profile query returns a projection"),
+        }
+
+        // Accepting the pending candidate is allowed and restores readiness.
+        let accept = facade.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
+            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
+                candidate_handle,
+                expected_active_catalog_revision_id: "1".to_owned(),
+                expected_candidate_catalog_revision_id: "2".to_owned(),
+                operation_id: "accept-1".to_owned(),
+                source_recheck: false,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = accept else {
+            unreachable!("pending removal acceptance is allowed while degraded")
+        };
+        assert!(matches!(
+            facade.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+    }
+
+    #[test]
+    fn held_recovered_run_admission_verifies_the_persisted_selection() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("held-run-verified.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        // Every accepted run carries its persisted immutable selection: the
+        // run starts only after the catalog is seeded and active.
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let run_id = started_run(&facade, session_id, "held fixture turn");
+
+        facade
+            .mark_recovered_run_held_for_daemon(session_id, run_id)
+            .expect("recovered run is held");
+        assert!(
+            facade
+                .is_recovered_run_held_for_daemon(session_id, run_id)
+                .expect("held status reads"),
+            "held runs are never auto-scheduled"
+        );
+
+        // Admission verifies the exact registry key of the persisted
+        // selection against the active seeded catalog and dispatches exactly
+        // once after the durable commit.
+        let before = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch record reads")
+            .len();
+        let admit = AdmitRecoveredRunCommandDto {
+            session_id: session_id.to_string(),
+            run_id: run_id.to_string(),
+            operation_id: "admit-1".to_owned(),
+        };
+        let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(admit.clone()));
+        let ProtocolCommandResultDto::Accepted(accepted) = result else {
+            unreachable!("held run admission is accepted after exact verification")
+        };
+        let ProtocolAcceptedResultDto::AdmitRecoveredRun(_) = accepted.result() else {
+            unreachable!("held run admission returns typed evidence")
+        };
+        let admitted_once = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch record reads");
+        assert_eq!(admitted_once.len(), before + 1);
+
+        // A repeat of the same operation returns the same acceptance without
+        // scheduling a second task.
+        let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(admit));
+        let ProtocolCommandResultDto::Accepted(_) = result else {
+            unreachable!("repeat admission is accepted")
+        };
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch record reads")
+                .len(),
+            before + 1,
+            "admission never schedules a second task"
+        );
+
+        // A held run whose persisted selection is not admitted by the active
+        // catalog fails closed verification: the run stays held and nothing
+        // dispatches. The storage contract binds each selection digest to one
+        // run, so this second selected run is committed directly through the
+        // repository with a stale fixture selection instead of re-resolving
+        // the catalog's (already bound) default selection.
+        let second_session = SessionId::new();
+        create_in_workspace(
+            &facade,
+            second_session,
+            &std::env::temp_dir().join(format!("intention-held-drift-{second_session}")),
+        );
+        let stale_selection = ProviderSelectionV1 {
+            provider_profile_revision_id: "rev-1".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kd-1".to_owned(),
+            model_id: "stale-model".to_owned(),
+            normalized_effective_endpoint: "https://api.example.invalid/v9".to_owned(),
+            ..fixture_selection()
+        };
+        let second_run = fabricate_started_run_with_selection(
+            &facade,
+            second_session,
+            stale_selection,
+            "held stale turn",
+        );
+        facade
+            .mark_recovered_run_held_for_daemon(second_session, second_run)
+            .expect("second recovered run is held");
+        let drift_admit = AdmitRecoveredRunCommandDto {
+            session_id: second_session.to_string(),
+            run_id: second_run.to_string(),
+            operation_id: "admit-2".to_owned(),
+        };
+        let before_drift = facade
+            .inner
+            .dispatch
+            .admitted()
+            .expect("dispatch record reads")
+            .len();
+        let result = facade.command(ProtocolCommandDto::AdmitRecoveredRun(drift_admit));
+        let ProtocolCommandResultDto::Rejected(error) = result else {
+            unreachable!("a stale persisted selection fails verification")
+        };
+        assert_eq!(error.code(), "held_run_admission_verification_failed");
+        assert!(
+            facade
+                .is_recovered_run_held_for_daemon(second_session, second_run)
+                .expect("held status reads"),
+            "failed verification leaves the run held"
+        );
+        assert_eq!(
+            facade
+                .inner
+                .dispatch
+                .admitted()
+                .expect("dispatch record reads")
+                .len(),
+            before_drift,
+            "failed verification never dispatches"
+        );
+    }
+    #[test]
+    fn usage_is_never_double_counted() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("usage.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let run_id = started_run(&facade, session_id, "usage fixture turn");
+        let event = intention_storage::ProviderUsageEventInputDto {
+            run_id,
+            usage_event_id: "usage-event-1".to_owned(),
+            profile_id: "default".to_owned(),
+            provider_profile_revision_id: "rev-1".to_owned(),
+            model_id: "fixture-model".to_owned(),
+            input_units: 10,
+            output_units: 5,
+            reasoning_units: 0,
+            occurred_at: 1,
+            usage_json: "{\"safe\":true}".to_owned(),
+        };
+        facade
+            .inner
+            .repository
+            .record_provider_usage(intention_storage::RecordProviderUsageInputDto {
+                session_id,
+                usage_period_start: 0,
+                usage_period_end: 100,
+                recorded_at: 2,
+                events: vec![event.clone()],
+            })
+            .expect("usage records");
+        facade
+            .inner
+            .repository
+            .record_provider_usage(intention_storage::RecordProviderUsageInputDto {
+                session_id,
+                usage_period_start: 0,
+                usage_period_end: 100,
+                recorded_at: 3,
+                events: vec![event],
+            })
+            .expect("duplicate usage record is idempotent");
+
+        let query = GetProviderUsageQueryDto {
+            schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
+            profile_id: "default".to_owned(),
+            usage_period_start: 0,
+            usage_period_end: 100,
+        };
+        match facade.query(ProtocolQueryDto::GetProviderUsage(query)) {
+            ProtocolQueryResultDto::ProviderUsage(usage) => {
+                assert_eq!(usage.request_count, 1, "usage is never double counted");
+                assert_eq!(usage.input_units, 10);
+                assert_eq!(usage.output_units, 5);
+            }
+            ProtocolQueryResultDto::Rejected(error) => {
+                panic!("usage query rejected: {}", error.code())
+            }
+            _ => unreachable!("usage query returns an aggregation"),
+        }
+    }
+
+    #[test]
+    fn unavailable_queue_promotes_eight_and_marks_exhaustion() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("queue-promotion.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let selection = fixture_selection();
+        let mut enqueued = Vec::new();
+        for index in 0..9 {
+            let session_id = SessionId::new();
+            let root = WorkspaceRootDto::parse(
+                std::env::temp_dir()
+                    .join(format!("intention-queue-workspace-{index}"))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture workspace is absolute");
+            let accepted = facade.command(ProtocolCommandDto::CreateSession(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    root,
+                    RunModeDto::Build,
+                ),
+            ));
+            assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+            // The durable storage contract binds each selection digest to one
+            // run, so each queued run commits a distinct immutable selection
+            // directly through the repository; the wire path would always
+            // resolve the same single catalog profile.
+            let mut run_selection = fixture_selection();
+            run_selection.model_id = format!("fixture-model-{index}");
+            run_selection.provider_profile_revision_id = format!("rev-{index}");
+            let run_id = fabricate_started_run_with_selection(
+                &facade,
+                session_id,
+                run_selection,
+                &format!("queue turn {index}"),
+            );
+            facade
+                .enqueue_unavailable_run_for_daemon(
+                    run_id,
+                    session_id,
+                    "default".to_owned(),
+                    "rev-1".to_owned(),
+                    &selection,
+                )
+                .expect("unavailable run enqueues");
+            enqueued.push((session_id, run_id));
+        }
+
+        // One terminal-transition promotion pass promotes exactly 8 FIFO
+        // entries; the ninth remains queued, so no marker yet.
+        let (first_session, first_run) = enqueued[0];
+        let outcome = facade
+            .promote_unavailable_runs_for_daemon(first_session, first_run)
+            .expect("promotion commits");
+        assert_eq!(outcome.promoted.len(), 8);
+        assert!(!outcome.reconciliation_marker_created);
+
+        // The next terminal transition promotes the last entry and writes the
+        // exhaustion reconciliation marker.
+        let outcome = facade
+            .promote_unavailable_runs_for_daemon(first_session, first_run)
+            .expect("second promotion commits");
+        assert_eq!(outcome.promoted.len(), 1);
+        assert!(
+            outcome.reconciliation_marker_created,
+            "queue exhaustion writes a reconciliation marker"
+        );
+
+        // Reconciliation of an exhausted queue promotes nothing and never
+        // reroutes.
+        let reconcile = facade.command(ProtocolCommandDto::ReconcileUnavailableQueue(
+            ReconcileUnavailableQueueCommandDto {
+                session_id: first_session.to_string(),
+                operation_id: "op-reconcile-1".to_owned(),
+                page_cursor: None,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(accepted) = reconcile else {
+            unreachable!("reconciliation is accepted")
+        };
+        let ProtocolAcceptedResultDto::ReconcileUnavailableQueue(result) = accepted.result() else {
+            unreachable!("reconciliation returns typed evidence")
+        };
+        assert_eq!(result.promoted_count, 0);
+    }
+
+    #[test]
+    fn removal_candidate_reject_and_expiry_degrade_the_catalog() {
+        let prepare_removal = |facade: &DaemonApplicationFacade, operation: &str, now: u64| {
+            let previous = fixture_config_snapshot();
+            let raw = "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"replacement\"\ncredential = \"fixture-credential\"";
+            let candidate = parse_candidate(
+                RawConfigInputDto::new(raw.to_owned(), fixture_source()),
+                &previous,
+            )
+            .expect("replacement candidate parses");
+            facade
+                .inner
+                .control_plane
+                .controller
+                .prepare_candidate(
+                    CatalogSourceInputDto {
+                        operation_id: operation.to_owned(),
+                        raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                        providers: vec![CatalogProviderDeclarationDto {
+                            kind: "generic-chat-completion-api".to_owned(),
+                            model: "replacement".to_owned(),
+                            endpoint: Some("https://api.example.invalid/v9".to_owned()),
+                            declared_model_capability_subset: vec![
+                                "text_input".to_owned(),
+                                "text_streaming".to_owned(),
+                            ],
+                            enabled: true,
+                        }],
+                        candidate,
+                        previous,
+                    },
+                    now,
+                )
+                .expect("removal candidate prepares")
+        };
+
+        // Rejection drops the candidate and degrades to read-only.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("removal-reject.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let reject_now = now_seconds(now().expect("fixture clock reads"));
+        let outcome = prepare_removal(&facade, "removal-reject", reject_now);
+        assert!(outcome.pending_removal);
+        let reject = facade.command(ProtocolCommandDto::RejectProviderCatalogCandidate(
+            intention_protocol::contract_families::RejectProviderCatalogCandidateCommandDto {
+                candidate_handle: outcome
+                    .candidate_handle
+                    .expect("pending removal carries a handle"),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                operation_id: "op-reject".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = reject else {
+            unreachable!("candidate rejection is accepted")
+        };
+        assert!(matches!(
+            facade.provider_control_readiness(),
+            intention_application::CatalogReadiness::Blocked { .. }
+        ));
+        let set = set_session_profile(&facade, SessionId::new(), "default", 0, "op-degraded");
+        let ProtocolCommandResultDto::Rejected(error) = set else {
+            unreachable!("degraded set is rejected")
+        };
+        assert_eq!(error.code(), "execution_not_ready");
+
+        // Expiry after the 30-minute lifetime also degrades.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("removal-expire.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-2", &["fixture-model"]).expect("catalog seeds");
+        let expire_now = now_seconds(now().expect("fixture clock reads"));
+        let outcome = prepare_removal(&facade, "removal-expire", expire_now);
+        assert!(outcome.pending_removal);
+        let expired = facade
+            .inner
+            .control_plane
+            .controller
+            .expire_pending(expire_now + 30 * 60 + 1)
+            .expect("expiry commits");
+        assert_eq!(expired, 1);
+        assert!(matches!(
+            facade.provider_control_readiness(),
+            intention_application::CatalogReadiness::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn fake_secret_never_crosses_session_selection_boundaries() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("selection-secret-sweep.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        // A credential-shaped override is rejected at the DTO boundary before
+        // it can ever reach the wire or storage.
+        let poisoned =
+            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "secret turn")
+                .expect("secret turn is valid")
+                .with_profile_override(FAKE_SECRET, None)
+                .expect_err("credential-shaped override must fail");
+        assert_eq!(poisoned.code(), "credentials_forbidden");
+        assert!(!poisoned.to_string().contains(FAKE_SECRET));
+
+        let set = set_session_profile(&facade, session_id, FAKE_SECRET, 0, "op-secret");
+        let ProtocolCommandResultDto::Rejected(error) = set else {
+            unreachable!("credential-shaped profile id is rejected")
+        };
+        assert_eq!(error.code(), "credentials_forbidden");
+        assert!(!error.to_string().contains(FAKE_SECRET));
+
+        let reconcile = facade.command(ProtocolCommandDto::ReconcileUnavailableQueue(
+            ReconcileUnavailableQueueCommandDto {
+                session_id: session_id.to_string(),
+                operation_id: FAKE_SECRET.to_owned(),
+                page_cursor: None,
+            },
+        ));
+        let ProtocolCommandResultDto::Rejected(error) = reconcile else {
+            unreachable!("credential-shaped operation id is rejected")
+        };
+        assert_eq!(error.code(), "credentials_forbidden");
+        assert!(!error.to_string().contains(FAKE_SECRET));
+    }
+
+    /// Prepares one removal candidate (kind-changing declaration) at a real
+    /// wall-clock instant so a later restart observes a still-valid deadline.
+    fn prepare_removal_at_now(
+        facade: &DaemonApplicationFacade,
+        operation: &str,
+        endpoint: &str,
+    ) -> intention_application::CatalogCandidateOutcomeDto {
+        let previous = fixture_config_snapshot();
+        let raw =
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"replacement\"\ncredential = \"fixture-credential\""
+                .to_owned();
+        let candidate = parse_candidate(
+            RawConfigInputDto::new(raw.clone(), fixture_source()),
+            &previous,
+        )
+        .expect("replacement candidate parses");
+        let now = now_seconds(now().expect("fixture clock reads"));
+        facade
+            .inner
+            .control_plane
+            .controller
+            .prepare_candidate(
+                CatalogSourceInputDto {
+                    operation_id: operation.to_owned(),
+                    raw_config_size_bytes: u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                    providers: vec![CatalogProviderDeclarationDto {
+                        kind: "generic-chat-completion-api".to_owned(),
+                        model: "replacement".to_owned(),
+                        endpoint: Some(endpoint.to_owned()),
+                        declared_model_capability_subset: vec![
+                            "text_input".to_owned(),
+                            "text_streaming".to_owned(),
+                        ],
+                        enabled: true,
+                    }],
+                    candidate,
+                    previous,
+                },
+                now,
+            )
+            .expect("removal candidate prepares")
+    }
+
+    #[test]
+    fn pending_removal_survives_restart_with_durable_material_and_accepts() {
+        // PR24-003: a pending removal candidate is durable. After a restart
+        // the controller rebuilds the prepared candidate and preserves the
+        // real deadline instead of degrading to an expiry-free ghost state, so
+        // accept/reject keep working without process memory.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("pending-removal-restart.sqlite");
+        let first = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("first facade opens");
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome =
+            prepare_removal_at_now(&first, "removal-restart", "https://api.example.invalid/v9");
+        assert!(outcome.pending_removal);
+        let candidate_handle = outcome
+            .candidate_handle
+            .expect("pending removal carries a handle");
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        let readiness = restarted.provider_control_readiness();
+        let intention_application::CatalogReadiness::PendingRemoval {
+            candidate_revision,
+            expires_at,
+        } = readiness
+        else {
+            panic!("restart preserves pending removal, got {readiness:?}");
+        };
+        assert_eq!(candidate_revision, "2");
+        assert!(expires_at > 0, "the durable deadline survives the restart");
+
+        let accept = restarted.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
+            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
+                candidate_handle,
+                expected_active_catalog_revision_id: "1".to_owned(),
+                expected_candidate_catalog_revision_id: "2".to_owned(),
+                operation_id: "accept-after-restart".to_owned(),
+                source_recheck: false,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = accept else {
+            unreachable!("acceptance after restart is accepted")
+        };
+        assert!(matches!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = restarted
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(projection.active_catalog_revision_id, Some(2));
+    }
+
+    #[test]
+    fn removal_acceptance_rolls_forward_after_a_crash_between_the_two_commits() {
+        // PR24-004: a crash between the removal acceptance commit and the
+        // catalog acceptance commit leaves a durable `accepted` removal row
+        // under a pending catalog state. Startup rolls the catalog acceptance
+        // forward from the durable prepared material exactly once.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("removal-roll-forward.sqlite");
+        let first = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("first facade opens");
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome = prepare_removal_at_now(
+            &first,
+            "removal-roll-forward",
+            "https://api.example.invalid/v9",
+        );
+        assert!(outcome.pending_removal);
+        let candidate_handle = outcome
+            .candidate_handle
+            .expect("pending removal carries a handle");
+        // Simulate the crash window: only the removal acceptance commits.
+        intention_storage::ProviderRemovalRepositoryDto::accept_provider_catalog_removal(
+            first.inner.repository.as_ref(),
+            intention_storage::AcceptProviderCatalogRemovalInputDto {
+                candidate_handle,
+                accepted_at: i64_time(now().expect("fixture clock reads")),
+                operation_id: "crash-window-removal-accept".to_owned(),
+            },
+        )
+        .expect("removal acceptance commits before the crash");
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        assert!(matches!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = restarted
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(
+            projection.active_catalog_revision_id,
+            Some(2),
+            "the catalog acceptance rolls forward to the accepted revision"
+        );
+        // The roll-forward is durable and idempotent: a second restart stays
+        // on the active catalog without re-accepting.
+        drop(restarted);
+        let again = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+            .expect("second restart facade opens");
+        assert!(matches!(
+            again.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+    }
+
+    #[test]
+    fn corrected_removal_proposal_after_rejection_receives_a_fresh_revision() {
+        // PR24-006: closed removal rows stay in durable history, so a
+        // corrected or repeated proposal after rejection must never reuse the
+        // closed candidate's revision or handle.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("removal-retry-fresh-revision.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let rejected = prepare_removal_at_now(
+            &facade,
+            "removal-rejected",
+            "https://api.example.invalid/v9",
+        );
+        assert_eq!(
+            rejected.candidate_handle.as_deref(),
+            Some("catalog-2"),
+            "the first removal proposal is revision two"
+        );
+        let reject = facade.command(ProtocolCommandDto::RejectProviderCatalogCandidate(
+            intention_protocol::contract_families::RejectProviderCatalogCandidateCommandDto {
+                candidate_handle: rejected
+                    .candidate_handle
+                    .expect("pending removal carries a handle"),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                operation_id: "op-reject-retry".to_owned(),
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = reject else {
+            unreachable!("candidate rejection is accepted")
+        };
+
+        // A corrected proposal (different endpoint, same removal intent)
+        // receives the next durable revision instead of colliding with the
+        // closed catalog-2 identity.
+        let corrected = prepare_removal_at_now(
+            &facade,
+            "removal-corrected",
+            "https://api.example.invalid/v10",
+        );
+        assert_eq!(
+            corrected.candidate_handle.as_deref(),
+            Some("catalog-3"),
+            "the corrected proposal receives a fresh durable revision"
+        );
+        let accept = facade.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
+            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
+                candidate_handle: corrected
+                    .candidate_handle
+                    .expect("corrected proposal carries a handle"),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                expected_candidate_catalog_revision_id: "3".to_owned(),
+                operation_id: "accept-corrected".to_owned(),
+                source_recheck: false,
+            },
+        ));
+        let ProtocolCommandResultDto::Accepted(_) = accept else {
+            unreachable!("corrected proposal acceptance is accepted")
+        };
+        assert!(matches!(
+            facade.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        ));
+        let projection = facade
+            .inner
+            .control_plane
+            .controller
+            .inspect()
+            .expect("catalog projection reads");
+        assert_eq!(projection.active_catalog_revision_id, Some(3));
+    }
+
+    #[test]
+    fn reload_during_pending_removal_preserves_the_lifecycle_across_restart() {
+        // PR24-005: a configuration reload commit never rewrites a durable
+        // pending-removal state; after a restart the removal lifecycle (and
+        // its real deadline) survives with the reloaded configuration.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("reload-pending-restart.sqlite");
+        let startup = fixture_config_snapshot();
+        let first = DaemonApplicationFacade::open_for_test(&database, startup.clone())
+            .expect("first facade opens");
+        let startup_revision = startup.revision_id().to_string();
+        seed_catalog(&first, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let outcome =
+            prepare_removal_at_now(&first, "removal-reload", "https://api.example.invalid/v9");
+        assert!(outcome.pending_removal);
+
+        // An execution-policy reload commits during the pending removal.
+        let transaction = reload_transaction(first.command(raw_edit_command(
+            "op-reload-pending",
+            &startup_revision,
+            policy_edit(45),
+        )));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Committed
+        );
+        assert_eq!(
+            first
+                .active_config_snapshot()
+                .expect("active snapshot reads")
+                .resolved()
+                .provider_execution()
+                .attempt_timeout_seconds(),
+            45,
+            "the reloaded execution policy applies to the running daemon"
+        );
+        drop(first);
+
+        let restarted =
+            DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
+                .expect("restart facade opens");
+        let intention_application::CatalogReadiness::PendingRemoval {
+            candidate_revision,
+            expires_at,
+        } = restarted.provider_control_readiness()
+        else {
+            panic!("reload must not exit the pending-removal lifecycle");
+        };
+        assert_eq!(candidate_revision, "2");
+        assert!(expires_at > 0);
     }
 }

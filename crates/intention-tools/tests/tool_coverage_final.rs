@@ -27,13 +27,14 @@ fn exercises_plain_grep_and_envelope_fallback() {
     let (dir, service) = service();
     std::fs::write(dir.path().join("x.txt"), "é needle\nnope\n").unwrap();
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: None,
                 path: Some(path("x.txt")),
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     let ToolResult::Grep(result) = result else {

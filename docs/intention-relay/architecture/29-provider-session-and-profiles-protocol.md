@@ -8,16 +8,17 @@
 - Decision record: [`0024`](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 - Reconciliation topics: `PSS-001..008`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (session defaults, per-turn/fork overrides, unavailable-queue promotion/reconciliation, profile-keyed usage, `provider_profiles_v1` serving, pending-removal accept/reject/expiry, degraded recovery, held recovered-run admission).
 
-**Approved future architecture, documentation-only.** This document is the
-sole detailed owner for the future provider session-selection and profiles
-protocol layer: session default selection, per-turn and fork overrides,
-unavailable-queue promotion and reconciliation, profile-keyed usage,
-`provider_profiles_v1` public protocol and presentation, and held
-recovery-promoted run admission. It does not authorize a crate, implementation,
-protocol, storage migration, configuration, network connection, local process,
-or delivery scope.
+**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
+owner for the provider session-selection and profiles protocol layer: session
+default selection, per-turn and fork overrides, unavailable-queue promotion
+and reconciliation, profile-keyed usage, `provider_profiles_v1` public
+protocol and presentation, and held recovery-promoted run admission. It does
+not authorize a `responses` SDK/driver, user-kind parser, catalog database,
+profile picker/editor presentation, credential entry/keychain, health test,
+discovery, pricing, telemetry, live reload, or production behavior beyond the
+activated Slice 2 contracts.
 
 It applies to future fresh runs only. M3/M4 bytes, queue tickets, sessions,
 runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
@@ -96,6 +97,11 @@ separately by revision/model; no price, currency, or estimated cost; different
 profiles sharing all safe fields remain independent clients, selection
 identities, and usage groups.
 
+The fork override fields exist on the fork DTOs (`ForkSessionCommandDto` and
+`StartForkRunCommandDto`) and the resolution service is implemented in Slice 2,
+but the fork wire commands themselves remain Slice 4: no fork wire command is
+activated by Slice 2.
+
 ## Public protocol and presentation
 
 `provider_profiles_v1` is one additive negotiated capability for paginated
@@ -103,11 +109,10 @@ catalog reads, catalog status, session default query/command, safe per-turn and
 fork overrides, resolved-selection projections, pending-removal accept/reject,
 and explicit admission of a held recovered run. It does not imply live reload,
 configuration editing, profile testing, credential entry, or model discovery.
-Configuration editing is an accepted post-M5 future direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
-executed in Milestone 5+ through the atomic reload contract of
-[architecture 25](25-configuration-provider-control-plane.md); it is not
-activated here.
+Configuration editing is activated for M5+ Slice 2 by
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) through the
+atomic reload contract of [architecture 25](25-configuration-provider-control-plane.md);
+it is not part of `provider_profiles_v1`.
 
 A catalog list is bounded, paginated by an opaque token, sorted by stable
 `ProfileId`, carries the active `CatalogRevisionId`, and returns `has_more`; a
@@ -185,16 +190,25 @@ held; the ordinary stop path terminalizes
 
 This document depends on architectures 13, 14, 15, 16, 22, 23, 25, and 27 plus
 decisions 0001, 0003, 0008, 0014, 0015, 0020, 0022, and 0024. It does not
-define a Responses SDK/driver, user-kind parser, catalog database, wire tags,
-migrations, profile picker/editor, credential entry/keychain/rotation, health
-test, discovery, pricing, telemetry, live reload, multimodal or structured
-output, arbitrary headers, plugin drivers, remote continuation, provider-side
-parser administration, UI, Cargo, Makefile/CI, or production activation.
+define a Responses SDK/driver, user-kind parser, profile picker/editor
+presentation, credential entry/keychain, telemetry, multimodal or structured
+output, plugin drivers, or remote continuation; the catalog database, the
+single current storage schema (logical version 1),
+credential rotation, health checks, discovery, pricing, controlled
+live reload, typed header policy, and server-side parser configuration are
+activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)). UI, Cargo,
+Makefile/CI, or production activation beyond the activated Slice 2 contracts
+remain outside this document.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
-`make verify`, and Linux/Windows CI. Required evidence includes:
+`make verify`, and Linux/Windows CI.
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
+activating specification: it declares the exact test targets, the single
+current-schema storage policy, and the per-direction evidence anchors. Required
+evidence includes:
 
 - session default/override command and query fixtures with idempotency and
   `changed = false` no-op;

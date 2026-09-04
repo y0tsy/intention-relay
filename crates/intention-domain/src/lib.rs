@@ -12,6 +12,10 @@ use intention_types::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub mod canonical;
+pub mod context_projection;
+pub mod provider_catalog;
+pub mod provider_selection;
+pub mod reasoning_history;
 pub mod run_execution_meaning;
 
 mod model_facts;
@@ -20,6 +24,33 @@ pub use model_facts::{
     ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
     ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
     RunSnapshotDto, ToolResultOutcomeDto,
+};
+// The DtoResult reasoning-output bound helper lives in `model_facts`; it is
+// re-exported under this alias because `reasoning_history` already re-exports
+// the canonical `Result<(), CanonicalError>` variant under the same name.
+pub use model_facts::validate_reasoning_output_bound as validate_reasoning_fact_output_bound;
+
+pub use context_projection::{
+    ContextSourceEntryV1, ContextSourceManifestV1, ModelContextProjectionV1,
+    context_source_manifest_digest, model_context_projection_digest,
+};
+pub use provider_catalog::{
+    CredentialTransportMode, ProviderCatalogLimits, ProviderDriverContractRevisionDto,
+    ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto, ProviderProfileRevisionV1,
+    ProviderProfileTombstoneDto, provider_profile_revision_digest, validate_endpoint,
+    validate_provider_kind_id, validate_provider_kind_removal,
+    validate_provider_kind_revision_immutability, validate_safe_header_name,
+};
+pub use provider_selection::{
+    ContextPreservationCapability, ModelCapabilitySelectionV1, ModelCapabilitySetV1,
+    ModelInputCapability, ProviderSelectionV1, ReasoningCapability, StructuredOutputCapability,
+    provider_selection_digest,
+};
+pub use reasoning_history::{
+    ReasoningDeltaCategory, ReasoningDeltaDto, ReasoningHistoryBound, ReasoningHistoryManifestDto,
+    ReasoningSummaryDeltaDto, reasoning_history_manifest_digest, validate_reasoning_dialect,
+    validate_reasoning_history_available, validate_reasoning_history_compatibility,
+    validate_reasoning_output_bound,
 };
 
 /// The agent policy active for a run.
@@ -563,11 +594,17 @@ impl SessionProjectionDto {
 }
 
 /// A command requesting that the daemon accept a new user turn.
+///
+/// The per-turn provider override fields are additive: a legacy command that
+/// omits them deserializes with both absent, and the three-argument
+/// [`Self::new`] constructor keeps producing override-free commands.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SendUserTurnCommandDto {
     session_id: SessionId,
     turn_id: TurnId,
     content: String,
+    profile_override: Option<String>,
+    expected_profile_revision: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
@@ -580,10 +617,28 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
             session_id: SessionId,
             turn_id: TurnId,
             content: String,
+            #[serde(default)]
+            profile_override: Option<String>,
+            #[serde(default)]
+            expected_profile_revision: Option<String>,
         }
 
         let raw = RawSendUserTurnCommandDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)
+        let command =
+            Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)?;
+        match raw.profile_override {
+            Some(profile) => command
+                .with_profile_override(profile, raw.expected_profile_revision)
+                .map_err(de::Error::custom),
+            None if raw.expected_profile_revision.is_some() => {
+                // An expected revision without an override is invalid; the
+                // blank override drives the shared validation path.
+                command
+                    .with_profile_override("", raw.expected_profile_revision)
+                    .map_err(de::Error::custom)
+            }
+            None => Ok(command),
+        }
     }
 }
 
@@ -609,8 +664,57 @@ impl SendUserTurnCommandDto {
                 session_id,
                 turn_id,
                 content,
+                profile_override: None,
+                expected_profile_revision: None,
             })
         }
+    }
+
+    /// Binds one per-turn provider profile override to this command.
+    ///
+    /// The override names the profile that must resolve for this turn's run.
+    /// `expected_profile_revision`, when supplied, must match the resolved
+    /// profile revision before the turn is committed. Both values are
+    /// bounded to 63 characters and must be credential-free.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_profile_override_invalid` for an over-long, blank,
+    /// or control-bearing override value, or when an expected profile
+    /// revision is supplied without an override, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn with_profile_override(
+        mut self,
+        profile_id: impl Into<String>,
+        expected_profile_revision: Option<String>,
+    ) -> DtoResult<Self> {
+        let profile_override = profile_id.into();
+        if expected_profile_revision.is_some() && profile_override.is_empty() {
+            return Err(ErrorDto::validation(
+                "provider_profile_override_invalid",
+                "an expected profile revision requires a profile override",
+            ));
+        }
+        for value in [Some(&profile_override), expected_profile_revision.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if value.trim().is_empty() || value.len() > 63 || value.chars().any(char::is_control) {
+                return Err(ErrorDto::validation(
+                    "provider_profile_override_invalid",
+                    "provider profile override values are invalid",
+                ));
+            }
+            if crate::canonical::contains_credential_shape(value) {
+                return Err(ErrorDto::validation(
+                    "credentials_forbidden",
+                    "credentials are forbidden",
+                ));
+            }
+        }
+        self.profile_override = Some(profile_override);
+        self.expected_profile_revision = expected_profile_revision;
+        Ok(self)
     }
 
     /// Returns the target session identity.
@@ -629,6 +733,18 @@ impl SendUserTurnCommandDto {
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// Returns the per-turn provider profile override, if one was bound.
+    #[must_use]
+    pub fn profile_override(&self) -> Option<&str> {
+        self.profile_override.as_deref()
+    }
+
+    /// Returns the expected resolved profile revision of the override, if any.
+    #[must_use]
+    pub fn expected_profile_revision(&self) -> Option<&str> {
+        self.expected_profile_revision.as_deref()
     }
 }
 
@@ -1389,8 +1505,7 @@ impl RunStartedEventDto {
 pub struct SessionCreatedEventDto {
     project_id: ProjectId,
     session_id: SessionId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workspace_id: Option<WorkspaceId>,
+    workspace_id: WorkspaceId,
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     occurred_at: TimestampDto,
@@ -1405,8 +1520,7 @@ impl<'de> Deserialize<'de> for SessionCreatedEventDto {
         struct RawSessionCreatedEventDto {
             project_id: ProjectId,
             session_id: SessionId,
-            #[serde(default)]
-            workspace_id: Option<WorkspaceId>,
+            workspace_id: WorkspaceId,
             workspace_root: WorkspaceRootDto,
             mode: RunModeDto,
             occurred_at: TimestampDto,
@@ -1437,7 +1551,7 @@ impl SessionCreatedEventDto {
         Self {
             project_id,
             session_id,
-            workspace_id: Some(workspace_id),
+            workspace_id,
             workspace_root,
             mode,
             occurred_at,
@@ -1456,9 +1570,9 @@ impl SessionCreatedEventDto {
         self.session_id
     }
 
-    /// Returns the M3 workspace identity, or `None` for a decoded M1/M2 event.
+    /// Returns the mandatory workspace identity.
     #[must_use]
-    pub const fn workspace_id(&self) -> Option<WorkspaceId> {
+    pub const fn workspace_id(&self) -> WorkspaceId {
         self.workspace_id
     }
 

@@ -132,6 +132,14 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
+    facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 
@@ -208,7 +216,7 @@ fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("fixture result is a turn")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
