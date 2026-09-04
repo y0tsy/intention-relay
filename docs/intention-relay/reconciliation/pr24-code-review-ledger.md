@@ -1791,7 +1791,7 @@ core refactor; the remaining provider/tool/platform items are bounded by the
 same fixture requirements recorded above. No ADR 0037/0038 scope change was
 made without authority.
 
-## Repair-run status: fourth pass (final; working tree after this pass)
+## Repair-run status: fourth pass (working tree after this pass)
 
 This pass continued from the same branch with the third-pass tree and no
 commits. It implemented the remaining catalog-lifecycle durability, the
@@ -1911,3 +1911,268 @@ failure the uncommitted tree still had. Final per-finding status:
   produce decision exists in this slice; recorded in PR24-007.
 - No commits were created; all work remains in the working tree on
   `impl/m5plus-slice2-control-plane`.
+
+## Repair-run status: fifth pass (PR24-056 completion)
+
+Recorded by the fifth repair session on the same branch (working tree after
+the fourth pass plus this pass; no commits created). The controller
+explicitly chartered the private-credential-source approach for PR24-056, so
+this pass supersedes the fourth-pass PR24-056 and PR24-057 statuses only for
+the items it touched (PR24-057 itself remains open as recorded there).
+
+### Fixed in this pass
+
+- **PR24-056**: Fixed. The composition now retains a private credential
+  source and both typed configuration edit and credential rotation have real
+  production success paths through the daemon composition:
+  - The daemon's own configuration file is the configured private credential
+    source. `open_platform` retains the startup credential and its file
+    source inside the private loading boundary (`PrivateCredentialState` in
+    `crates/intention/src/lib.rs`); the state is non-serde and non-`Debug`,
+    and the source path is never disclosed.
+  - Typed configuration edit (`ApplyConfigurationEdit`) restores the retained
+    credential into the reconstructed candidate document server-side
+    (`intention-config::control_plane::restore_credential_document`, added
+    in the preceding pass) before validation, so execution-policy-only typed
+    edits commit durably; kind/model/endpoint typed edits now classify as
+    `catalog_change_requires_restart` instead of failing on the missing
+    credential. Facades without a configured source (test-support hosts)
+    keep the fail-closed `missing_provider_credential` evidence.
+  - Credential rotation (`RotateProviderCredentials`) obtains replacement
+    material by re-reading the configured configuration file through the
+    private loading boundary (`CompositionCredentialSource`), then swaps the
+    selected provider driver's private SDK client and refreshes the retained
+    material (`CompositionDriverRebuildPort` plus
+    `GenericChatDriver::rotate_credential` and
+    `OpenRouterDriver::rotate_credential`, added in the preceding pass).
+    Missing, unreadable, or unparseable sources fail closed with
+    `credential_rotation_source_unavailable`; kind-mismatched profiles and
+    test-support drivers fail closed before any swap.
+  - No credential, file content, or source path appears in a DTO, error, log,
+    digest, snapshot, projection, or durable surface: regression sweeps
+    assert secret-shaped values never appear in transaction/outcome Debug
+    output, error text, or the safe debug projection.
+- The generic-chat driver RwLock migration left one unconverted call site in
+  `execute`; it now reads through the same `current_client` seam as
+  `prepare_request` so rotation is effective for real executions.
+
+### Regression and contract evidence added
+
+- `crates/intention-config/src/lib.rs`:
+  `parse_credential_extracts_the_exact_private_value_without_echoing_it`
+  (public composition-only `parse_credential` extraction; byte-exact escaped
+  values; typed failures never echo content).
+- `crates/intention/src/lib.rs` composition fixtures:
+  `control_plane_typed_edit_commits_when_the_private_credential_is_retained`
+  (committed execution-policy edit with the restored credential, snapshot
+  advance, model-edit `catalog_change_requires_restart` classification, slot
+  unchanged, credential-free transaction/active-snapshot sweeps) and
+  `control_plane_rotation_supplies_replacement_from_the_configured_private_source`
+  (out-of-band file update then rotate succeeds with the driver rebuilt and
+  the retained material refreshed, typed edit after rotation restores the
+  replacement, file removal and unparseable source fail closed with
+  `credential_rotation_source_unavailable` without echoing content). The
+  pre-existing fail-closed tests for facades without a configured source
+  remain green unchanged.
+
+### Validation performed in this pass (focused)
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy` on `intention-config`, `intention-provider-generic-chat`,
+  `intention-provider-openrouter`, and `intention` with
+  `--all-targets --locked -- -Dwarnings`: clean.
+- `cargo test -p intention-config`, `-p intention-provider-generic-chat`,
+  `-p intention-provider-openrouter`, `-p intention` (lib), and
+  `-p intention-application --lib` / `-p intention-daemon --lib`: green.
+- Full `make verify` and the remaining workspace suites were left to the
+  later integration worker, which also owns PR24-057 and the final docs
+  consistency pass.
+- No commits were created; all work remains in the working tree on
+  `impl/m5plus-slice2-control-plane`.
+
+## Repair-run status: sixth pass (PR24-057 completion)
+
+Recorded by the sixth repair session on the same branch (working tree after
+the fifth pass plus this pass; no commits created). This pass implements
+PR24-057 (catalog option application at the composition boundary, Plan E step
+10) as chartered; PR24-056 statuses are untouched.
+
+### Fixed in this pass
+
+- **PR24-057**: Fixed. The composition now has one explicit provider-option
+  seam through which catalog-declared driver options flow into production
+  driver construction and reconstruction, instead of production construction
+  silently falling back to adapter-default options:
+  - The seam (`DeclaredProviderOptions` in `crates/intention/src/lib.rs`)
+    is the single composition-owned translation of validated, credential-free
+    profile declarations into the existing adapter option builders
+    (`OpenRouterDriverOptions` / `GenericChatDriverOptions`), reusing their
+    `with_header_policy`/`with_reasoning_effort` builders and adapter-owned
+    `build()` applicability validation. Slice 2 declarations are closed: the
+    profile's credential transport (bearer, or a descriptor-selected safe
+    header) translates to the typed header policy, and the reasoning-effort
+    slot is empty because no Slice 2 declaration surface exists (RSN-011).
+  - Startup selected-provider construction applies the seam: the startup
+    provider's closed bearer transport declaration is translated into the
+    adapter builders and applied through
+    `from_startup_material_with_options`, removing the obsolete
+    default-only adapter construction path from production composition. Both
+    adapters expose `options()` so the applied policy is observable.
+  - Catalog activation applies the seam at the composition driver factory:
+    `CompositionDriverFactory::build` preflights every profile's declared
+    options through the executing adapter's builder before the opaque handle
+    is created, so a declaration the adapter cannot apply (live `SafeHeader`
+    wire injection is not activated, EXC-057) fails the all-or-nothing
+    activation with `unsupported_safe_header_transport` instead of being
+    silently ignored.
+  - Credential-driven driver rebuild applies the seam consistently:
+    rotation keeps the options the seam applied at construction (the rebuild
+    replaces only the private SDK client), and the rebuild port preflights
+    the active profile's declared options through the seam before swapping,
+    so rotation can never silently drop or ignore declared options.
+- The adapter option structs gained minimal observability accessors
+  (`header_policy`, `reasoning_effort`, and driver `options`) and `Eq`
+  derives; behavior is unchanged.
+- Latent clippy violations (derivable `Default`, lock-guard drop tightening,
+  `Option::map_or_else`, redundant clones) in the fifth-pass code and in the
+  new seam code were fixed mechanically so the pinned 1.97 clippy
+  (`--all-targets --locked -- -Dwarnings`) stays clean.
+
+### Regression and contract evidence added
+
+- `crates/intention/src/lib.rs` composition fixtures:
+  `producible_declarations_apply_the_closed_bearer_policy_to_startup_construction`
+  (the Plan E step 10 guard: currently producible declarations map through the
+  seam to the closed bearer policy with no reasoning effort on both executing
+  adapters, and startup construction applies them instead of adapter
+  defaults), `declared_options_flow_through_construction_and_survive_credential_rebuild`
+  (a declared effort is applied at construction and retained by the
+  credential-driven rebuild), `inapplicable_declarations_fail_closed_at_the_seam_before_any_request`
+  (safe-header transport fails both adapters closed; inconsistent and
+  adapter-inapplicable declarations fail before any request), and
+  `catalog_activation_preflights_declared_options_through_the_adapter_builders`
+  (producible bearer profiles activate; safe-header declarations fail the
+  composition driver factory closed).
+
+### Validation performed in this pass (focused)
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy` on `intention-config`, `intention-provider-generic-chat`,
+  `intention-provider-openrouter`, and `intention` with
+  `--all-targets --locked -- -Dwarnings`: clean.
+- `cargo test -p intention-config`, `-p intention-provider-generic-chat`,
+  `-p intention-provider-openrouter`, and `-p intention` (lib): green
+  (59/59 composition lib tests, including the four new option-seam fixtures).
+- Honest scope note: Slice 2 catalog material cannot express non-default
+  reasoning effort or a safe-header transport (RSN-011, EXC-057), so every
+  producible declaration maps to the closed bearer/no-effort policy; the seam,
+  fail-closed behavior, and guard tests are the implementable in-slice
+  contract, and a later declaration surface flows through the same seam
+  without a second construction path. Full `make verify` and the remaining
+  workspace suites were left to the later integration worker.
+- No commits were created; all work remains in the working tree on
+  `impl/m5plus-slice2-control-plane`.
+
+## Integration verification status: final pass
+
+Recorded by the integration owner on the same branch (working tree after the
+sixth pass plus this pass; no commits created). This pass closed the
+fifth/sixth-pass handoff: end-to-end integration review of PR24-056 and
+PR24-057, the final documentation consistency pass, and the full `make
+verify` gate on the final tree. PR24-056 and PR24-057 statuses recorded in
+the fifth and sixth passes are unchanged and are now integration-verified.
+
+### Integration review performed
+
+- Typed configuration edits and credential rotation have real production
+  success paths backed by a private credential source: `open_platform`
+  retains the startup credential and its file source inside the private
+  loading boundary (`PrivateCredentialState` in `crates/intention/src/
+  lib.rs`; non-serde, non-`Debug`, source path never disclosed);
+  `ApplyConfigurationEdit` restores the retained credential into the
+  credential-free candidate server-side before validation, so
+  execution-policy-only edits commit durably and kind/model/endpoint edits
+  classify as `catalog_change_requires_restart`; `RotateProviderCredentials`
+  re-reads the daemon's own configuration file through the private loading
+  boundary and rebuilds the selected provider driver's private SDK client
+  only after the frozen-meaning checks pass. Facades without a configured
+  source (test-support hosts) keep the fail-closed
+  `missing_provider_credential` / `credential_rotation_source_unavailable`
+  evidence.
+- No credential leakage: the retained state implements no `Debug`, `Display`,
+  or serde traits; rotation errors and reload transactions never carry file
+  content, paths, or the credential; the composition fixtures sweep
+  transaction/outcome Debug output, error text, and the safe debug projection
+  for secret-shaped values.
+- Failure atomicity holds: reload/typed-edit commit-and-advance leaves no
+  partial durable change; rotation orders obtain -> frozen-meaning/preflight
+  -> driver-client swap -> retained-state refresh so a missing, unreadable,
+  unparseable, kind-mismatched, or test-support target fails closed before
+  any swap and preserves the current material and driver; the command gate
+  serializes command handlers.
+- Declared provider options flow through one explicit composition seam
+  (`DeclaredProviderOptions` in `crates/intention/src/lib.rs`) and are
+  applied at every production construction/reconstruction path: startup
+  selected-provider construction (`from_startup_material` ->
+  `from_startup_material_with_options` on both adapters), catalog activation
+  (`CompositionDriverFactory::build` preflight), and credential-driven
+  rebuild (rotation replaces only the private SDK client and preflights the
+  active profile's declarations through the seam). Producible Slice 2
+  declarations map to the closed bearer/no-effort policy (guard fixture);
+  inapplicable declarations fail closed with the adapter typed errors
+  (`unsupported_safe_header_transport`, `unsupported_reasoning_effort`);
+  adapter-level `from_startup_material` remains the adapter-test baseline
+  only, so no obsolete default-only production construction path remains.
+- Documentation, evidence register, source-of-truth matrix, and machine-
+  readable policy match the implemented behavior: architecture 22/25, ADR
+  0037, EVD-050/054/061, SL2-004/SL2-010, and the composition fixtures named
+  in EVD-050/061 all describe the verified code; no new crates, features,
+  tiers, or dependency requirements were introduced; `Cargo.lock` carries no
+  addition beyond the environmental refresh below.
+
+### Validation results (final tree)
+
+- `cargo fmt --all -- --check`: clean.
+- `cargo clippy` and `cargo check` for all feature profiles with
+  `--all-targets --locked -Dwarnings`: clean.
+- `make quick`: green (`target/pr24-make-quick-3.log`).
+- `make deps`: green after the lockfile refresh below
+  (`target/pr24-deps-1.log`).
+- `make verify`: green. The final gate run (`make verify` with `pipefail`,
+  log `target/pr24-make-verify-23.log`) exits 0 across fmt, features, check,
+  lint, test (all profiles), docs, architecture, coverage (all profiles with
+  declared-tier enforcement), deps, and quality self-test.
+- Intermediate runs recorded before green: `target/pr24-make-verify-20.log`
+  failed one timing-sensitive, unmodified `intention-storage-sqlite`
+  concurrency test
+  (`context_read_never_returns_starting_context_after_concurrent_terminalization`)
+  once under full parallel load (passes in isolation under both feature
+  profiles; same flake class recorded for verify-17);
+  `target/pr24-make-verify-21.log` failed the dependency gate on
+  environmental drift (crates.io published `interprocess` 2.4.4 after the
+  previous green head, so `cargo outdated --exit-code 1` flagged the
+  unchanged lockfile); the lockfile-only patch refresh (`Cargo.lock`:
+  `interprocess` 2.4.3 -> 2.4.4 with the deterministic `windows-sys` 0.52
+  family re-unification) and `THIRD_PARTY_NOTICES.md` regeneration were made
+  as a chore-style dependency refresh matching branch precedent, with
+  `Cargo.toml` and `deny.toml` untouched; `target/pr24-make-verify-22.log`
+  failed one process-spawning, unmodified `intention-tools` test
+  (`execute_failures_and_status_are_normalized`) once under full parallel
+  instrumented load (passes 105/105 in isolation under the same llvm-cov
+  invocation). Run 23 was recorded after the final documentation record so
+  the green log covers the exact final tree.
+- `git diff --check`: clean. No commits were created; all work remains in
+  the working tree on `impl/m5plus-slice2-control-plane`.
+
+### Final per-finding status
+
+- **PR24-056**: Fixed (fifth pass), integration-verified. Held-admission
+  producer remains wired since the fourth pass (PR24-007).
+- **PR24-057**: Fixed (sixth pass), integration-verified.
+- **Remaining (unchanged, honest)**: the unavailable-queue enqueue producer
+  stays dormant by design (no production produce decision exists in this
+  slice; PR24-007). A raw-TOML reload candidate carries an
+  operator-supplied credential whose presence is validated, but credential
+  value changes take live effect only through the file-backed private source
+  (rotation) or a daemon restart, consistent with the chartered
+  private-credential-source design; no charter change was made.

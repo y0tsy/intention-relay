@@ -91,6 +91,22 @@ credential material without altering frozen meaning:
 - credentials remain non-serde, non-`Debug`, and absent from durable/public
   surfaces under the architecture 09 redaction law.
 
+In Slice 2 the daemon's own configuration file is the configured private
+credential source. The composition captures the startup credential inside its
+private loading boundary at open and retains it in a non-serde, non-`Debug`
+in-memory slot; a rotation command re-reads the file through the same private
+loading boundary, replaces the composition's private material only when the
+frozen-meaning checks pass, and rebuilds the executing provider driver's
+private client. The rebuild keeps the driver options that the composition's
+provider-option seam applied at construction (PR24-057): rotation replaces
+only the private SDK client, and it preflights the active profile's declared
+options through the seam, so rotation can never silently drop or ignore
+declared driver options. Facades opened without a file-backed source
+(test-support hosts) have no configured source and keep the fail-closed
+`credential_rotation_source_unavailable` behavior. No credential, file
+content, or source path appears in a DTO, error, log, digest, snapshot,
+projection, or durable surface at any point.
+
 ## Provider health checks
 
 **Activated for M5+ Slice 2 by ADR 0037.**
@@ -164,6 +180,11 @@ executed in M5+ Slice 2:
 - configuration editing surfaces validated edits that fail closed when they
   cannot be applied atomically, leaving the running daemon on its recorded
   snapshot;
+- typed configuration edits reconstruct a credential-free candidate document
+  server-side and restore the composition's retained private credential into
+  it inside the private loading boundary, so the candidate validates and
+  commits without the credential ever crossing a wire, DTO, error, log,
+  digest, or durable surface;
 - edits affect fresh runs only and never expose credentials, private endpoint
   material, SDK objects, or raw provider payloads on durable/public surfaces.
 

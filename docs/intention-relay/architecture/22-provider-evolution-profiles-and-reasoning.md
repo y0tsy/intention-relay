@@ -204,6 +204,31 @@ support and fixtures. Same family/major is insufficient. Composition alone
 resolves private driver entries by exact profile revision, descriptor revision,
 and driver contract; no SDK/client/credential resource crosses a boundary.
 
+Provider option declarations flow through an explicit composition seam
+(PR24-057). The adapter option builders (`OpenRouterDriverOptions` and
+`GenericChatDriverOptions`) are additive, validated, credential-free driver
+configuration; adapter tests exercise them directly, and production drivers
+apply them only through the composition's single seam translation from
+validated profile declarations. Production driver construction and
+reconstruction apply the seam at startup selected-provider construction, at
+every catalog activation through the composition driver factory, and on
+credential-driven driver rebuilds (rotation), so an option declared by
+catalog material is never silently defaulted or ignored by the live driver.
+
+The closed Slice 2 declaration vocabulary is the profile's credential
+transport (bearer, or one descriptor-selected safe header whose complete
+value is the credential), which translates to the typed header policy, and an
+empty reasoning-effort slot (no Slice 2 declaration surface exists; RSN-011).
+Currently producible declarations therefore map to the closed bearer policy
+with no reasoning effort, and the composition guard test locks that mapping.
+A declaration the executing adapter cannot apply — live `SafeHeader` wire
+injection is not activated (EXC-057), and adapter applicability (for example
+the generic-chat maximum-effort limit) stays adapter-owned — fails closed at
+the seam with the adapter's typed error instead of silently constructing a
+default driver. Credential rotation replaces only the executing driver's
+private SDK client: the options the seam applied at construction are retained,
+and the rebuild additionally preflights the active profile's declared options.
+
 The catalog is startup-only and all-or-nothing:
 
 ```mermaid

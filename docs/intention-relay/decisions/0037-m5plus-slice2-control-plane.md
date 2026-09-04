@@ -207,10 +207,17 @@ contract surface is present at DTO level (the provider-neutral reasoning DTO
 family in `intention-model`), but the `responses` kind is not activated in
 Slice 2: its contracts are closed only, and activation is blocked until a
 complete driver exists. Raw-TOML editing is accepted server-side only, through
-the validated reload contract; credentials are never echoed. Credential
-rotation without a configured credential source fails closed with
-`credential_rotation_source_unavailable`. Catalog-affecting configuration
-changes are rejected with `catalog_change_requires_restart` in Slice 2.
+the validated reload contract; credentials are never echoed. In Slice 2 the
+daemon's own configuration file is the configured private credential source:
+the composition retains the startup credential in non-serde, non-`Debug`
+in-memory state, typed-edit candidates restore it server-side inside the
+private loading boundary, and rotation re-reads the file and rebuilds the
+provider driver only after the frozen-meaning checks pass. Rotation without a
+configured credential source (test-support hosts) fails closed with
+`credential_rotation_source_unavailable`, and no credential, file content, or
+source path crosses a DTO, error, log, digest, snapshot, or durable surface.
+Catalog-affecting configuration changes are rejected with
+`catalog_change_requires_restart` in Slice 2.
 
 ## Appendix A: Public wire-family field tables
 
