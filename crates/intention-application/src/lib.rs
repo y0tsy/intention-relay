@@ -17,8 +17,8 @@ use intention_protocol::{
     SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto, StopRunAcceptedDto,
 };
 use intention_runtime::{
-    ModelMessageDto, ModelRequestDto, ModelRoleDto, RuntimeService, RuntimeValuesDto,
-    fail_starting_run,
+    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, RuntimeService,
+    RuntimeValuesDto, fail_starting_run,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
@@ -1479,13 +1479,42 @@ fn schedule_from_context(
         messages,
         None,
         None,
-    )?;
+    )?
+    .with_tools(advertised_tool_definitions()?)?;
     ScheduleModelRunDto::new(
         context.session_id(),
         context.run_id(),
         request,
         context.safe_config().clone(),
     )
+}
+
+/// Builds the model-visible tool definitions advertised with every scheduled run.
+///
+/// Active registry descriptors surface in registry order; reserved slots
+/// without a model parameter schema stay private to the daemon.
+///
+/// # Errors
+///
+/// Returns a typed validation error when a model-visible descriptor cannot be
+/// mapped into a provider-neutral tool definition.
+fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
+    intention_tools::model_visible_descriptors()
+        .iter()
+        .map(|descriptor| {
+            let parameters_json = descriptor.model_parameters_schema().ok_or_else(|| {
+                ErrorDto::validation(
+                    "model_tool_schema_unavailable",
+                    "a model-visible tool must advertise a parameter schema",
+                )
+            })?;
+            ModelToolDefinitionDto::new(
+                descriptor.id().as_str(),
+                descriptor.description(),
+                parameters_json,
+            )
+        })
+        .collect()
 }
 
 fn result_phase_context(

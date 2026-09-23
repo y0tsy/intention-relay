@@ -53,9 +53,9 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, HeldRecoveredRunDto, HeldRunAdmissionStateDto,
     HeldRunRepositoryDto, LoadProviderCatalogPageInputDto, LoadUnavailableQueuePageInputDto,
-    PersistResolvedRunProviderSelectionInputDto, PromoteUnavailableRunsInputDto,
-    PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
-    ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
+    ModelContextMessageDto, ModelContextRoleDto, PersistResolvedRunProviderSelectionInputDto,
+    PromoteUnavailableRunsInputDto, PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto,
+    ProviderCatalogPageDto, ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
     ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto as DurableCatalogStatusDto, ProviderKindDescriptorCandidateDto,
     ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
@@ -65,8 +65,9 @@ use intention_storage::{
     RecoverUnfinishedRunsInputDto, RejectProviderCatalogCandidateInputDto,
     RejectProviderCatalogRemovalInputDto, RemoveQueuedTurnInputDto, SessionProviderDefaultDto,
     SessionProviderDefaultsRepositoryDto, SetSessionProviderProfileInputDto,
-    SetSessionProviderProfileOutcomeDto, StorageRepositoryDto, TransitionRunInputDto,
-    UnavailableQueueRepositoryDto, UnavailableQueueStateDto, UnavailableRunQueueEntryDto,
+    SetSessionProviderProfileOutcomeDto, StartingRunModelContextDto, StorageRepositoryDto,
+    TransitionRunInputDto, UnavailableQueueRepositoryDto, UnavailableQueueStateDto,
+    UnavailableRunQueueEntryDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, EventEnvelopeDto, ProjectId,
@@ -1682,6 +1683,22 @@ impl StorageRepositoryDto for FakeAppRepo {
     fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
         Err(unavailable("fixture_unused", "config storage is unused"))
     }
+
+    fn load_starting_run_model_context(
+        &self,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> DtoResult<StartingRunModelContextDto> {
+        StartingRunModelContextDto::new(
+            session_id,
+            run_id,
+            fixture_snapshot(),
+            vec![
+                ModelContextMessageDto::new(ModelContextRoleDto::User, "hello")
+                    .expect("fixture context message is valid"),
+            ],
+        )
+    }
 }
 
 impl SessionProviderDefaultsRepositoryDto for FakeAppRepo {
@@ -2004,6 +2021,40 @@ fn provider_selection_from_preserves_the_safe_header_transport() {
         Some("x-auth-header")
     );
     assert_eq!(dispatch.call_count(), 0);
+}
+
+// ============================================================================
+// schedule_starting_run tool advertisement
+// ============================================================================
+
+#[test]
+fn schedule_starting_run_advertises_every_model_visible_tool_in_registry_order() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        queued_change(session_id),
+    );
+    let schedule = ApplicationService::new(&repo)
+        .schedule_starting_run(session_id, run_id)
+        .expect("the starting run schedules");
+    let observed: Vec<&str> = schedule
+        .request()
+        .tools()
+        .iter()
+        .map(|definition| definition.name())
+        .collect();
+    let expected: Vec<&str> = intention_tools::model_visible_descriptors()
+        .iter()
+        .map(|descriptor| descriptor.id().as_str())
+        .collect();
+    assert_eq!(observed, expected);
+    assert_eq!(
+        observed,
+        ["read", "write", "edit", "execute", "glob", "grep"],
+        "only the six active tools are advertised, in registry order"
+    );
 }
 
 // ============================================================================

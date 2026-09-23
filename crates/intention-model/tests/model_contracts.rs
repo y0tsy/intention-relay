@@ -5,8 +5,8 @@
 
 use intention_model::{
     FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ProviderErrorDto, ToolCallDto,
-    UsageDto,
+    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_types::{CorrelationIdDto, RunId, ToolCallId};
 
@@ -23,6 +23,11 @@ fn request() -> ModelRequestDto {
         None,
     )
     .expect("request is valid")
+}
+
+fn tool_definition(name: &str) -> ModelToolDefinitionDto {
+    ModelToolDefinitionDto::new(name, "fixture description", r#"{"type":"object"}"#)
+        .expect("fixture tool definition is valid")
 }
 
 #[test]
@@ -418,6 +423,119 @@ fn model_request_with_messages_preserves_fields() {
     assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
     assert!(updated.messages()[1].tool_calls().is_some());
     assert!(request.with_messages(Vec::new()).is_err());
+}
+
+#[test]
+fn model_request_tools_round_trip_and_omit_the_empty_field() {
+    let without_tools = request();
+    assert!(without_tools.tools().is_empty());
+    let encoded = serde_json::to_string(&without_tools).expect("request serializes");
+    assert!(!encoded.contains("\"tools\""));
+    let decoded: ModelRequestDto =
+        serde_json::from_str(&encoded).expect("request without tools deserializes");
+    assert!(decoded.tools().is_empty());
+
+    let with_tools = without_tools
+        .with_tools(vec![
+            tool_definition("inspect_path"),
+            tool_definition("read_file"),
+        ])
+        .expect("request with tools is valid");
+    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
+    assert!(encoded.contains("\"tools\""));
+    assert!(encoded.contains("inspect_path"));
+    assert!(encoded.contains("read_file"));
+    let decoded: ModelRequestDto =
+        serde_json::from_str(&encoded).expect("request with tools deserializes");
+    assert_eq!(decoded.tools(), with_tools.tools());
+    assert_eq!(decoded, with_tools);
+}
+
+#[test]
+fn model_request_with_tools_forces_tool_call_capability() {
+    let request = request();
+    assert!(!request.requested_capabilities().tool_calls());
+    let with_tools = request
+        .with_tools(vec![tool_definition("inspect_path")])
+        .expect("request with tools is valid");
+    assert!(with_tools.requested_capabilities().tool_calls());
+    assert!(!with_tools.requested_capabilities().reasoning());
+    assert!(!with_tools.requested_capabilities().multimodal());
+    assert!(!with_tools.requested_capabilities().vendor_extensions());
+    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
+    assert!(encoded.contains("inspect_path"));
+    let cleared = with_tools
+        .with_tools(Vec::new())
+        .expect("cleared request is valid");
+    assert!(cleared.tools().is_empty());
+}
+
+#[test]
+fn model_request_with_messages_preserves_advertised_tools() {
+    let request = request()
+        .with_tools(vec![tool_definition("inspect_path")])
+        .expect("request with tools is valid");
+    let updated = request
+        .with_messages(vec![message(ModelRoleDto::User, "next")])
+        .expect("updated request is valid");
+    assert_eq!(updated.tools(), request.tools());
+}
+
+#[test]
+fn model_tool_definitions_validate_names_descriptions_and_parameters() {
+    let long_name = "a".repeat(65);
+    for name in [
+        "",
+        " ",
+        "inspect.path",
+        "inspect space",
+        "inspecté",
+        long_name.as_str(),
+    ] {
+        assert_eq!(
+            ModelToolDefinitionDto::new(name, "description", r#"{"type":"object"}"#)
+                .expect_err("invalid tool definition name must fail")
+                .code(),
+            "invalid_tool_definition_name"
+        );
+    }
+    assert_eq!(
+        ModelToolDefinitionDto::new("inspect", " ", r#"{"type":"object"}"#)
+            .expect_err("blank tool definition description must fail")
+            .code(),
+        "invalid_tool_definition_description"
+    );
+    let oversized_parameters = format!(r#"{{"padding":"{}"}}"#, "a".repeat(70_000));
+    for parameters in [
+        "",
+        "[]",
+        r#""text""#,
+        "not-json",
+        oversized_parameters.as_str(),
+    ] {
+        assert_eq!(
+            ModelToolDefinitionDto::new("inspect", "description", parameters)
+                .expect_err("invalid tool definition parameters must fail")
+                .code(),
+            "invalid_tool_definition_parameters"
+        );
+    }
+
+    let definition = tool_definition("inspect_path");
+    assert_eq!(definition.name(), "inspect_path");
+    assert_eq!(definition.description(), "fixture description");
+    assert_eq!(definition.parameters_json(), r#"{"type":"object"}"#);
+    let decoded: ModelToolDefinitionDto = serde_json::from_str(
+        &serde_json::to_string(&definition).expect("tool definition serializes"),
+    )
+    .expect("tool definition deserializes");
+    assert_eq!(decoded, definition);
+    assert!(
+        serde_json::from_str::<ModelToolDefinitionDto>(
+            r#"{"name":"inspect","description":"description","parameters_json":"{}","unexpected":true}"#
+        )
+        .is_err()
+    );
 }
 
 struct FixtureDriver(ModelCapabilitiesDto);

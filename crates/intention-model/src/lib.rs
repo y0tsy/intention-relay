@@ -324,12 +324,124 @@ impl ModelCapabilitiesDto {
     }
 }
 
+/// Maximum characters of one tool-definition name (provider function-name constraint).
+const MAX_TOOL_DEFINITION_NAME_CHARS: usize = 64;
+
+/// Maximum bytes of one tool-definition JSON parameter document.
+const MAX_TOOL_DEFINITION_PARAMETERS_BYTES: usize = 65_536;
+
+/// A validated model tool definition advertised to a provider.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ModelToolDefinitionDto {
+    name: String,
+    description: String,
+    parameters_json: String,
+}
+
+impl<'de> Deserialize<'de> for ModelToolDefinitionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawModelToolDefinitionDto {
+            name: String,
+            description: String,
+            parameters_json: String,
+        }
+
+        let raw = RawModelToolDefinitionDto::deserialize(deserializer)?;
+        Self::new(raw.name, raw.description, raw.parameters_json).map_err(de::Error::custom)
+    }
+}
+
+impl ModelToolDefinitionDto {
+    /// Creates a validated tool definition with object-shaped JSON parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the name is not an ASCII `[A-Za-z0-9_-]`
+    /// token of at most 64 characters, the description is blank, or the
+    /// parameters are empty, larger than 64 KiB, or not a JSON object.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters_json: impl Into<String>,
+    ) -> DtoResult<Self> {
+        let name = name.into();
+        let description = description.into();
+        let parameters_json = parameters_json.into();
+        if name.trim().is_empty()
+            || name.len() > MAX_TOOL_DEFINITION_NAME_CHARS
+            || !name.bytes().all(is_tool_definition_name_byte)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_definition_name",
+                "tool definition name must be an ASCII [A-Za-z0-9_-] token of at most 64 characters",
+            ));
+        }
+        if description.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_tool_definition_description",
+                "tool definition description must not be empty",
+            ));
+        }
+        if parameters_json.is_empty()
+            || parameters_json.len() > MAX_TOOL_DEFINITION_PARAMETERS_BYTES
+        {
+            return Err(invalid_tool_definition_parameters());
+        }
+        let _: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
+            serde_json::from_str(&parameters_json)
+                .map_err(|_| invalid_tool_definition_parameters())?;
+        Ok(Self {
+            name,
+            description,
+            parameters_json,
+        })
+    }
+
+    /// Returns the advertised function name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the model-facing tool description.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Returns the validated JSON object text describing the tool parameters.
+    #[must_use]
+    pub fn parameters_json(&self) -> &str {
+        &self.parameters_json
+    }
+}
+
+/// Whether `byte` is one provider function-name character (`[A-Za-z0-9_-]`).
+const fn is_tool_definition_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+/// The validation error for invalid tool-definition JSON parameters.
+fn invalid_tool_definition_parameters() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_tool_definition_parameters",
+        "tool definition parameters must be a non-empty JSON object of at most 64 KiB",
+    )
+}
+
 /// A validated provider-neutral model request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelRequestDto {
     run_id: RunId,
     model: String,
     messages: Vec<ModelMessageDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ModelToolDefinitionDto>,
     system_context: Option<String>,
     requested_capabilities: ModelRequestedCapabilitiesDto,
 }
@@ -346,20 +458,23 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
             model: String,
             messages: Vec<ModelMessageDto>,
             #[serde(default)]
+            tools: Vec<ModelToolDefinitionDto>,
+            #[serde(default)]
             system_context: Option<String>,
             #[serde(default)]
             requested_capabilities: ModelRequestedCapabilitiesDto,
         }
 
         let raw = RawModelRequestDto::deserialize(deserializer)?;
-        Self::new(
+        let request = Self::new(
             raw.run_id,
             raw.model,
             raw.messages,
             raw.system_context,
             Some(raw.requested_capabilities),
         )
-        .map_err(de::Error::custom)
+        .map_err(de::Error::custom)?;
+        request.with_tools(raw.tools).map_err(de::Error::custom)
     }
 }
 
@@ -402,6 +517,7 @@ impl ModelRequestDto {
             run_id,
             model,
             messages,
+            tools: Vec::new(),
             system_context,
             requested_capabilities: requested_capabilities.unwrap_or_default(),
         })
@@ -425,19 +541,59 @@ impl ModelRequestDto {
         &self.messages
     }
 
+    /// Returns the tool definitions advertised with this request.
+    #[must_use]
+    pub fn tools(&self) -> &[ModelToolDefinitionDto] {
+        &self.tools
+    }
+
     /// Returns a copy of this request with the model context messages replaced.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the replacement message list is empty.
     pub fn with_messages(&self, messages: Vec<ModelMessageDto>) -> DtoResult<Self> {
-        Self::new(
+        let mut request = Self::new(
             self.run_id,
             self.model.clone(),
             messages,
             self.system_context.clone(),
             Some(self.requested_capabilities),
-        )
+        )?;
+        request.tools = self.tools.clone();
+        Ok(request)
+    }
+
+    /// Returns a copy of this request with the advertised tool definitions replaced.
+    ///
+    /// A non-empty replacement forces the requested-capabilities `tool_calls`
+    /// flag to `true`, so preflight only accepts providers that can honor the
+    /// advertised tools; an empty replacement leaves the flag unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the retained request fields no longer
+    /// satisfy request validation.
+    pub fn with_tools(&self, tools: Vec<ModelToolDefinitionDto>) -> DtoResult<Self> {
+        let requested_capabilities = if tools.is_empty() {
+            self.requested_capabilities
+        } else {
+            ModelRequestedCapabilitiesDto::new(
+                self.requested_capabilities.reasoning(),
+                self.requested_capabilities.multimodal(),
+                true,
+                self.requested_capabilities.vendor_extensions(),
+            )
+        };
+        let mut request = Self::new(
+            self.run_id,
+            self.model.clone(),
+            self.messages.clone(),
+            self.system_context.clone(),
+            Some(requested_capabilities),
+        )?;
+        request.tools = tools;
+        Ok(request)
     }
 
     /// Returns optional daemon-selected system context.

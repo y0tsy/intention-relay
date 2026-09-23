@@ -17,7 +17,7 @@ use intention_domain::{
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto,
+    ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
@@ -85,6 +85,15 @@ impl ModelTimePort for ImmediateTime {
     }
 }
 
+fn tool_definition() -> ModelToolDefinitionDto {
+    ModelToolDefinitionDto::new(
+        "read",
+        "Read bounded text from a workspace file.",
+        r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+    )
+    .expect("fixture tool definition is valid")
+}
+
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
     ModelRequestDto::new(
         run_id,
@@ -94,6 +103,8 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
         None,
     )
     .expect("request is valid")
+    .with_tools(vec![tool_definition()])
+    .expect("request tool definitions are valid")
 }
 
 struct FakeRepository {
@@ -759,6 +770,11 @@ fn tool_call_executes_tool_records_result_and_completes() {
     drop(appends);
     let requests = driver.requests.borrow();
     assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].tools(),
+        requests[0].tools(),
+        "the follow-up provider round preserves the advertised tool definitions"
+    );
     assert_eq!(
         requests[1].messages(),
         vec![

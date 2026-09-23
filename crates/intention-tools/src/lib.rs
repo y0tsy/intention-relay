@@ -706,6 +706,7 @@ pub struct ToolDescriptor {
     description: &'static str,
     input_schema: Option<&'static str>,
     output_schema: Option<&'static str>,
+    model_parameters_schema: Option<&'static str>,
     descriptor_revision: u16,
     schema_version: u16,
     mutation: MutationKind,
@@ -734,6 +735,12 @@ impl ToolDescriptor {
     pub const fn output_schema(self) -> Option<&'static str> {
         self.output_schema
     }
+    /// Returns the JSON Schema describing this tool's typed model parameters,
+    /// when the tool exposes one.
+    #[must_use]
+    pub const fn model_parameters_schema(self) -> Option<&'static str> {
+        self.model_parameters_schema
+    }
     #[must_use]
     pub const fn descriptor_revision(self) -> u16 {
         self.descriptor_revision
@@ -760,6 +767,124 @@ impl ToolDescriptor {
     }
 }
 
+/// JSON Schema for the `read` tool's typed model parameters.
+pub const READ_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Workspace-relative path of the file to read."
+    }
+  },
+  "required": ["path"]
+}"#;
+
+/// JSON Schema for the `write` tool's typed model parameters.
+pub const WRITE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Workspace-relative path of the file to write."
+    },
+    "content": {
+      "type": "string",
+      "description": "Bounded text to write to the file."
+    },
+    "expected_content": {
+      "type": "string",
+      "description": "Optional guard: the write applies only while the file holds exactly this text."
+    }
+  },
+  "required": ["path", "content"]
+}"#;
+
+/// JSON Schema for the `edit` tool's typed model parameters.
+pub const EDIT_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Workspace-relative path of the file to edit."
+    },
+    "old": {
+      "type": "string",
+      "description": "Existing text to replace."
+    },
+    "new": {
+      "type": "string",
+      "description": "Replacement text."
+    },
+    "expected_content": {
+      "type": "string",
+      "description": "Optional guard: the edit applies only while the file holds exactly this text."
+    }
+  },
+  "required": ["path", "old", "new"]
+}"#;
+
+/// JSON Schema for the `execute` tool's typed model parameters.
+pub const EXECUTE_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "program": {
+      "type": "string",
+      "description": "Program to run directly, without shell interpretation."
+    },
+    "args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Arguments passed verbatim to the program."
+    }
+  },
+  "required": ["program", "args"]
+}"#;
+
+/// JSON Schema for the `glob` tool's typed model parameters.
+pub const GLOB_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "Glob pattern matched against workspace-relative paths."
+    }
+  },
+  "required": ["pattern"]
+}"#;
+
+/// JSON Schema for the `grep` tool's typed model parameters.
+pub const GREP_MODEL_PARAMETERS_SCHEMA: &str = r#"{
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "Text pattern to search for inside workspace files."
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["file", "directory", "workspace"],
+          "description": "Search scope kind."
+        },
+        "path": {
+          "type": "string",
+          "description": "Workspace-relative path required by the file and directory scope kinds."
+        }
+      },
+      "required": ["kind"]
+    },
+    "path": {
+      "type": "string",
+      "description": "Optional workspace-relative path narrowing the search."
+    }
+  },
+  "required": ["pattern"]
+}"#;
+
 /// The immutable built-in registry.
 #[must_use]
 pub const fn registry() -> [ToolDescriptor; 14] {
@@ -769,6 +894,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Read",
             input_schema: Some("ReadInput"),
             output_schema: Some("TextResult"),
+            model_parameters_schema: Some(READ_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "Read bounded text from a workspace file.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -782,6 +908,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Write",
             input_schema: Some("WriteInput"),
             output_schema: Some("WriteResult"),
+            model_parameters_schema: Some(WRITE_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "Write bounded text to a workspace file.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -795,6 +922,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Edit",
             input_schema: Some("EditInput"),
             output_schema: Some("WriteResult"),
+            model_parameters_schema: Some(EDIT_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "Apply a bounded text replacement.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -808,6 +936,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Execute",
             input_schema: Some("ExecuteInput"),
             output_schema: Some("TextResult"),
+            model_parameters_schema: Some(EXECUTE_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "Execute an explicitly bounded command.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -821,6 +950,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Glob",
             input_schema: Some("GlobInput"),
             output_schema: Some("PathsResult"),
+            model_parameters_schema: Some(GLOB_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "List workspace paths matching a pattern.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -834,6 +964,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Grep",
             input_schema: Some("GrepInput"),
             output_schema: Some("GrepResult"),
+            model_parameters_schema: Some(GREP_MODEL_PARAMETERS_SCHEMA),
             descriptor_revision: TOOL_DESCRIPTOR_REVISION,
             description: "Search bounded workspace text.",
             schema_version: TOOL_SCHEMA_VERSION,
@@ -847,6 +978,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Fetch URL",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -860,6 +992,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Ask User",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -873,6 +1006,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Todo",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -886,6 +1020,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Retrieve",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -899,6 +1034,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Plan Submit",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -912,6 +1048,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Sub-Agent",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -925,6 +1062,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "Expand",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -938,6 +1076,7 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             display_name: "MCP",
             input_schema: None,
             output_schema: None,
+            model_parameters_schema: None,
             descriptor_revision: 0,
             description: "Reserved tool slot.",
             schema_version: 0,
@@ -947,6 +1086,19 @@ pub const fn registry() -> [ToolDescriptor; 14] {
             status: ToolRegistrationStatus::Reserved,
         },
     ]
+}
+
+/// Returns the active descriptors that advertise a model-facing parameter
+/// schema, in registry order.
+#[must_use]
+pub fn model_visible_descriptors() -> Vec<ToolDescriptor> {
+    registry()
+        .into_iter()
+        .filter(|descriptor| {
+            descriptor.status() == ToolRegistrationStatus::Active
+                && descriptor.model_parameters_schema().is_some()
+        })
+        .collect()
 }
 
 /// Bounded text accepted by tool contracts.

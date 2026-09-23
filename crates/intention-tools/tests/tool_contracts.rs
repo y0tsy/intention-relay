@@ -10,7 +10,7 @@ use intention_tools::{
     GrepResult, GrepScope, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
     TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput,
     ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection, ToolService,
-    WriteInput, WriteResult, registry,
+    WriteInput, WriteResult, model_visible_descriptors, registry,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -1848,10 +1848,36 @@ fn all_descriptor_metadata_values_are_verified() {
         assert_eq!(descriptor.descriptor_revision(), TOOL_DESCRIPTOR_REVISION);
         assert!(descriptor.input_schema().is_some());
         assert!(descriptor.output_schema().is_some());
+        let schema_json = descriptor.model_parameters_schema().expect("active schema");
+        let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
+        assert!(schema.is_object());
+        assert_eq!(schema["type"], "object");
         assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
         assert_eq!(descriptor.observability_policy(), ToolPolicy::Allowed);
         assert!(!descriptor.display_name().is_empty());
         assert!(!descriptor.description().is_empty());
+    }
+}
+
+#[test]
+fn model_visible_descriptors_are_the_six_active_tools_in_registry_order() {
+    use intention_tools::ToolRegistrationStatus;
+    let expected = [
+        ToolId::Read,
+        ToolId::Write,
+        ToolId::Edit,
+        ToolId::Execute,
+        ToolId::Glob,
+        ToolId::Grep,
+    ];
+    let visible = model_visible_descriptors();
+    assert_eq!(visible.len(), expected.len());
+    for (descriptor, id) in visible.into_iter().zip(expected) {
+        assert_eq!(descriptor.id(), id);
+        assert_eq!(descriptor.status(), ToolRegistrationStatus::Active);
+        assert!(!descriptor.description().is_empty());
+        let schema = descriptor.model_parameters_schema().expect("model schema");
+        assert!(!schema.is_empty());
     }
 }
 
@@ -1879,7 +1905,112 @@ fn reserved_slots_have_no_schemas_or_revision() {
         assert_eq!(descriptor.schema_version(), 0);
         assert_eq!(descriptor.input_schema(), None);
         assert_eq!(descriptor.output_schema(), None);
+        assert_eq!(descriptor.model_parameters_schema(), None);
         assert!(descriptor.capabilities().is_empty());
+    }
+}
+
+#[test]
+fn model_parameter_schemas_agree_with_serialized_inputs() {
+    let path = WorkspaceRelativePathDto::parse("src/main.rs").expect("path");
+    let text = |value: &str| BoundedText::new(value).expect("text");
+    let fixtures = [
+        (
+            ToolId::Read,
+            &["path"][..],
+            &["path"][..],
+            serde_json::to_value(ReadInput { path: path.clone() }).expect("read fixture"),
+        ),
+        (
+            ToolId::Write,
+            &["path", "content", "expected_content"][..],
+            &["path", "content"][..],
+            serde_json::to_value(WriteInput {
+                path: path.clone(),
+                content: text("content"),
+                expected_content: Some(text("previous")),
+            })
+            .expect("write fixture"),
+        ),
+        (
+            ToolId::Edit,
+            &["path", "old", "new", "expected_content"][..],
+            &["path", "old", "new"][..],
+            serde_json::to_value(EditInput {
+                path: path.clone(),
+                old: text("old"),
+                new: text("new"),
+                expected_content: Some(text("old")),
+            })
+            .expect("edit fixture"),
+        ),
+        (
+            ToolId::Execute,
+            &["program", "args"][..],
+            &["program", "args"][..],
+            serde_json::to_value(ExecuteInput {
+                program: text("cargo"),
+                args: vec![text("test")],
+            })
+            .expect("execute fixture"),
+        ),
+        (
+            ToolId::Glob,
+            &["pattern"][..],
+            &["pattern"][..],
+            serde_json::to_value(GlobInput {
+                pattern: text("**/*.rs"),
+            })
+            .expect("glob fixture"),
+        ),
+        (
+            ToolId::Grep,
+            &["pattern", "scope", "path"][..],
+            &["pattern"][..],
+            serde_json::to_value(GrepInput {
+                pattern: text("needle"),
+                scope: Some(GrepScope::Directory { path: path.clone() }),
+                path: Some(path),
+            })
+            .expect("grep fixture"),
+        ),
+    ];
+    let visible = model_visible_descriptors();
+    assert_eq!(visible.len(), fixtures.len());
+    for descriptor in visible {
+        let fixture = fixtures
+            .iter()
+            .find(|entry| entry.0 == descriptor.id())
+            .expect("fixture for every model-visible tool");
+        let schema_json = descriptor
+            .model_parameters_schema()
+            .expect("model parameter schema");
+        let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
+        assert_eq!(schema["type"], "object");
+        let properties = schema["properties"].as_object().expect("schema properties");
+        let mut schema_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
+        schema_properties.sort_unstable();
+        let object = fixture.3.as_object().expect("serialized input object");
+        let mut serialized_keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        serialized_keys.sort_unstable();
+        let mut expected_properties = fixture.1.to_vec();
+        expected_properties.sort_unstable();
+        assert_eq!(schema_properties, expected_properties);
+        assert_eq!(serialized_keys, expected_properties);
+        let required = schema["required"]
+            .as_array()
+            .expect("schema required list")
+            .iter()
+            .map(|name| name.as_str().expect("required name"))
+            .collect::<Vec<_>>();
+        assert_eq!(required, fixture.2.to_vec());
+        for name in required {
+            assert!(
+                object.get(name).is_some_and(|value| !value.is_null()),
+                "required property {name} is absent or null in the serialized {} input",
+                descriptor.id()
+            );
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use intention_domain::{
 };
 pub use intention_model::{
     ModelCancellationSignal, ModelEventDto, ModelExecutionDriver, ModelMessageDto, ModelRequestDto,
-    ModelRoleDto, ModelStreamLifecycleDto,
+    ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
