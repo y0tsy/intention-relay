@@ -224,8 +224,10 @@ gateway accepted the tool-loop continuation that carried the round's accepted
 reasoning. The later widened run of the same day (commit `494d5d3`, local
 `make e2e-real-api`, same provider and model) drove all six advertised tools
 through their own live sessions and passed as well, so the echo satisfies the
-thinking-mode gateway on every tool-loop continuation. The run report stays in
-the gitignored `quality/reports/real-api-e2e/` and the key is never recorded.
+thinking-mode gateway on every tool-loop continuation; the same channel passed
+again after the provider SDK refresh (commit `722a8f4`). The run report stays
+in the gitignored `quality/reports/real-api-e2e/` and the key is never
+recorded.
 
 ## Research provenance
 
