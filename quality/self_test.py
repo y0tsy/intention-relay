@@ -1597,6 +1597,25 @@ def test_adr_0040_live_provider_e2e_record_exists_and_is_indexed(root: Path) -> 
         raise RuntimeError("evidence register must carry the EVD-063 row")
 
 
+def test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0041-same-run-reasoning-round-trip.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0041 must exist as the same-run reasoning round-trip record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0041](0041-same-run-reasoning-round-trip.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0041")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0041" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0041")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-064 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-064 row")
+
+
 def workflow_trigger_lines(text: str) -> list[str]:
     """Return the stripped entries of the workflow's top-level `on:` block."""
     lines = text.splitlines()
@@ -1803,6 +1822,7 @@ def main() -> None:
         test_adr_0037_slice2_ledger_exists_and_is_indexed,
         test_adr_0039_tool_advertisement_record_exists_and_is_indexed,
         test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
+        test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
         test_real_api_e2e_workflow_is_manual_only,
         test_real_api_e2e_target_is_opt_in_only,
         test_slice2_tag_registry_parity,

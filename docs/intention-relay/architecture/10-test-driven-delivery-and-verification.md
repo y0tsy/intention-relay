@@ -295,6 +295,10 @@ The following scenarios must become executable before the corresponding capabili
    capability (scenario I), the daemon executes the call through the real typed
    registry under `WorkspaceRoot`, the durable `ToolCallRecorded` and
    `ToolResultRecorded` facts commit before publication, and the run completes.
+   When the configured model runs in thinking mode, the continuation request
+   also carries the same round's accepted reasoning as `reasoning_content` on
+   the assistant tool-call message (ADR 0041); no prior-turn reasoning is
+   transferred.
 4. Restart the daemon and replay the run; verify the recorded tool call and
    result replay and are never re-executed.
 5. Verify the credential is absent from durable facts, snapshots, daemon logs,

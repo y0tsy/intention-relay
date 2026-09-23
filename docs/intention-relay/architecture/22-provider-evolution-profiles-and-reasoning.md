@@ -163,7 +163,13 @@ that cannot be represented by the Responses descriptor fails
 Chat.
 
 Generic Chat remains narrow. A divergent reasoning protocol requires a separate
-first-party descriptor or user-declared typed kind. A user kind is an immutable
+first-party descriptor or user-declared typed kind. For the ordinary production
+path, the current `generic-chat-completion-api` adapter consumes the pinned
+SDK's typed `reasoning_content` field as normalized `Primary` reasoning output
+and echoes the current round's accepted reasoning on the same-run assistant
+tool-call continuation (ADR 0041); that typed field does not widen the
+descriptor envelope, and any other or vendor-specific dialect still requires a
+separate descriptor or typed kind. A user kind is an immutable
 composition of closed binary-owned protocol parts accepted by a code-owned
 compatibility matrix. It cannot be a plugin, executable configuration, arbitrary
 driver/parser, raw HTTP/JSON template, arbitrary header map, or secret
@@ -300,7 +306,11 @@ Provider descriptors own closed request dialect and native stream normalization,
 not context sourcing. Architecture 21 alone selects safe source references,
 audience, disclosure, omissions, and model-step context. A provider cannot scan
 sessions/ancestors/siblings, construct history from current state, inject prior
-reasoning, compact content, or broaden an audience.
+reasoning, compact content, or broaden an audience. The ordinary same-run
+continuation is not prior-reasoning injection: the runtime may attach the
+current round's own accepted reasoning to the assistant tool-call message of
+that in-flight exchange as transient request state (ADR 0041); prior-run,
+cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one `RunEventCursorDto` for text, reasoning,
 summaries, tool calls, usage, and terminal facts:
@@ -379,7 +389,13 @@ reasoning output, the closed supported sets of `reasoning_effort` and
 admission. A kind descriptor declares the maximum protocol capability envelope;
 each profile explicitly declares a safe subset for its exact configured model,
 including reasoning availability, supported effort and mode values, summary
-availability, and custom-function-call availability. Model identifiers remain
+availability, and custom-function-call availability. The current ordinary
+`generic-chat-completion-api` driver declares reasoning output in its
+`ModelCapabilitiesDto` because it consumes and preserves `reasoning_content`
+(ADR 0041); that declaration is the existing driver capability contract, not a
+descriptor revision, and a future descriptor that cannot represent the selected
+model's reasoning dialect still requires its own closed capability
+declaration. Model identifiers remain
 byte-exact and are never used to infer capabilities. Preflight rejects a
 requested capability or value that is absent from either level before any
 outbound work occurs.
@@ -500,7 +516,10 @@ it never copies reasoning text into the snapshot. Each
 completed-sequence identity, final assistant-turn identity when present,
 ordered reasoning fact cursor/category/digest/size references, and the source
 descriptor's `compatibility_id`. `fork-model-context-v1` remains a text-only
-projection and does not add reasoning or summaries to ordinary model messages. A
+projection and does not add reasoning or summaries to ordinary model messages.
+The ordinary same-run continuation echo is out of scope here: it attaches only
+the current round's own reasoning to that round's assistant tool-call message
+and never adds fork or prior reasoning to ordinary messages (ADR 0041). A
 child run combines frozen references with its own completed compatible responses
 to construct its own `ReasoningHistoryManifestDto`; it never rescans the source
 or a sibling. An unavailable required reference blocks only the dependent
@@ -541,7 +560,11 @@ injection (`SafeHeader`) and provider-native live extraction beyond the
 declared paths remain not activated. The current `async-openai` core
 Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified
-private typed decoder per closed descriptor. The descriptor registry never
+private typed decoder per closed descriptor. ADR 0041 follows this clause for
+the current ordinary adapter: it keeps the pinned `async-openai` SDK and uses
+its private `byot` typed-stream seam with crate-private request and chunk
+structs, rather than assuming the core adapter's fixed types are sufficient. The
+descriptor registry never
 authorizes arbitrary network protocol handling, unbounded parsing, or provider
 SDK data outside its owner adapter.
 

@@ -530,6 +530,16 @@ inside its slice, each with its own contract, transaction, and outcome test.
   and both current adapters translate them without `tool_choice`; hermetic
   evidence is anchored at EVD-062, and this retrospective completion does not
   advance slices 3-4;
+- the ordinary same-run provider reasoning round-trip
+  ([ADR 0041](../decisions/0041-same-run-reasoning-round-trip.md)) is complete:
+  the generic Chat Completions adapter consumes typed `reasoning_content`
+  deltas as normalized `Primary` reasoning events and serializes the current
+  round's accepted reasoning on the same-run assistant tool-call continuation
+  as transient request state with no durable representation; the OpenRouter
+  adapter ignores the attachment by design, and this retrospective completion
+  does not advance slices 3-4; hermetic evidence is anchored at EVD-064, and
+  the recorded live run remains the controller's manual live-evidence
+  obligation;
 - the opt-in live-provider e2e channel
   ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additive and
   manual-only: the ignored `crates/intention-daemon/tests/real_api_e2e.rs`
@@ -537,7 +547,8 @@ inside its slice, each with its own contract, transaction, and outcome test.
   loop only under explicit opt-in, never in `make quick`, `make verify`, or CI;
   a recorded live run (date, commit, provider, model, run URL; never the key)
   is the manual live-evidence obligation, and the channel does not alter any
-  protocol, DTO, wire, storage, or blocking gate.
+  protocol, DTO, wire, storage, or blocking gate; the same recorded run also
+  covers the same-run reasoning round-trip (ADR 0041).
 
 ### Exit criteria
 

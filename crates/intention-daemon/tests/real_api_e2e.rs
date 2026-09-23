@@ -8,6 +8,12 @@
 //! replays the same run without re-executing the tool or disclosing the
 //! provider credential.
 //!
+//! When the configured model runs in thinking mode, the same tool loop also
+//! proves the ADR 0041 reasoning round trip: the gateway rejects a tool-loop
+//! continuation whose assistant tool-call message does not carry the round's
+//! accepted `reasoning_content`, so a completed live tool loop means the
+//! runtime attached that reasoning and the generic adapter serialized it.
+//!
 //! This file is the single opt-in live channel recorded by ADR 0040
 //! (`docs/intention-relay/decisions/0040-opt-in-live-provider-e2e.md`). It is
 //! never part of the hermetic gates: both tests carry `#[ignore]` and return
