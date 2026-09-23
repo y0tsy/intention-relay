@@ -739,6 +739,30 @@ impl ObservedRun {
             })
             .collect()
     }
+
+    /// Returns the failure code and the call arguments of every durable failed
+    /// result recorded for one tool, matched to its call by identity.
+    fn failed_results(&self, tool: &str) -> Vec<(&str, &str)> {
+        self.facts
+            .iter()
+            .filter_map(|result| {
+                let ModelRunFactInputDto::ToolResultRecorded {
+                    call_id,
+                    outcome: ToolResultOutcomeDto::Failed { failure },
+                } = result.input()
+                else {
+                    return None;
+                };
+                self.facts.iter().find_map(|call| {
+                    let ModelRunFactInputDto::ToolCallRecorded { call } = call.input() else {
+                        return None;
+                    };
+                    (call.name() == tool && call.call_id() == *call_id)
+                        .then_some((failure.code(), call.arguments_json()))
+                })
+            })
+            .collect()
+    }
 }
 
 /// The bounded outcome of one run-stream observation.
@@ -862,16 +886,32 @@ async fn collect_run_frames(
 }
 
 /// Drives one live turn that must record a durable succeeded call of the named
+/// tool, leaving the workspace untouched between attempts.
+async fn drive_tool_turn(host: &LiveE2eHost, tool: &str, prompt: &str) -> (SessionId, ObservedRun) {
+    drive_tool_turn_with(host, tool, prompt, &|| {}).await
+}
+
+/// Drives one live turn that must record a durable succeeded call of the named
 /// tool.
 ///
-/// The same prompt is retried within the bounded attempt budget, because a
-/// live model occasionally answers without calling the tool at all and the
-/// daemon drops a subscriber that cannot keep up with a reasoning burst; a
-/// completed turn that records the tool call with a succeeded result is
-/// accepted, and a run that does not complete fails.
-async fn drive_tool_turn(host: &LiveE2eHost, tool: &str, prompt: &str) -> (SessionId, ObservedRun) {
+/// The same prompt is retried within the bounded attempt budget, because the
+/// live channel has three acceptably lossy steps: a live model occasionally
+/// answers without calling the tool at all, it occasionally phrases a tool
+/// argument differently from the prompt so the tool rejects the call, and the
+/// daemon drops a subscriber that cannot keep up with a reasoning burst. Each
+/// of those consumes one attempt in a fresh session, and `prepare` restores
+/// the workspace state that an earlier attempt of a mutating turn may have
+/// changed. A completed turn that records the tool call with a succeeded
+/// result is accepted, and any other failure is still fatal.
+async fn drive_tool_turn_with(
+    host: &LiveE2eHost,
+    tool: &str,
+    prompt: &str,
+    prepare: &(dyn Fn() + Sync),
+) -> (SessionId, ObservedRun) {
     let mut last_gap = None;
     for attempt in 1..=TOOL_TURN_ATTEMPTS {
+        prepare();
         let session_id = SessionId::new();
         create_session(host, session_id, &format!("{tool} turn {attempt}"));
         let run_id = send_user_turn(&host.endpoint, session_id, prompt);
@@ -889,12 +929,24 @@ async fn drive_tool_turn(host: &LiveE2eHost, tool: &str, prompt: &str) -> (Sessi
                 continue;
             }
         };
-        assert_eq!(
-            observed.status(),
-            RunStatusDto::Completed,
-            "live provider {tool} turn {attempt} terminated with failure code {:?}",
-            observed.failure_code()
-        );
+        if observed.status() != RunStatusDto::Completed {
+            // A durable failed result for the tool proves the run was
+            // terminalized by the tool's own rejection of a live model
+            // argument, which is model noise; a run that fails without one is
+            // a product failure and stays fatal.
+            let rejected = observed.failed_results(tool);
+            assert!(
+                !rejected.is_empty(),
+                "live provider {tool} turn {attempt} terminated without a completed run, failure code {:?}, recorded calls {:?}",
+                observed.failure_code(),
+                observed.recorded_tool_names()
+            );
+            last_gap = Some(format!(
+                "a {tool} call was rejected with {rejected:?} (run failure {:?})",
+                observed.failure_code()
+            ));
+            continue;
+        }
         assert!(
             observed.facts_end_at_snapshot_cursor(),
             "the {tool} turn delivers one contiguous fact range ending in its terminal fact at the snapshot cursor"
@@ -964,9 +1016,10 @@ fn assert_state_directory_excludes_credential(directory: &Path, credential: &str
 /// call with a succeeded durable result for that tool: the note text for
 /// `read` and `grep`, the workspace path list for `glob`, the written bytes
 /// for `write` and `edit`, and the real child's stdout with its typed exit
-/// status for `execute`. A turn that misses those conditions consumes one
-/// bounded retry in a fresh session; a failed run or a timeout fails the test
-/// without a test-level retry.
+/// status for `execute`. A turn that misses those conditions, a turn whose
+/// tool call the tool itself rejected, and a turn whose subscriber the daemon
+/// evicted each consume one bounded attempt in a fresh session; any other
+/// failed run or a timeout fails the test.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
 async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
@@ -1065,16 +1118,26 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         "the durable write result reports the bytes it wrote"
     );
 
-    // `edit`: the real registry replaces the seeded token in place.
+    // `edit`: the real registry replaces the seeded token in place. A retry
+    // starts from the seeded file again, because a lost observation may follow
+    // an attempt whose edit already reached the workspace.
     let edited = format!("{token}-edited");
     let edited_source = edit_source.replacen(&token, &edited, 1);
-    let (edit_session, edit_run) = drive_tool_turn(
+    let reseed_edit_source = || {
+        std::fs::write(
+            host.workspace.path().join("e2e-edit-source.txt"),
+            edit_source.as_str(),
+        )
+        .expect("the edit fixture reseeds before every attempt");
+    };
+    let (edit_session, edit_run) = drive_tool_turn_with(
         &host,
         "edit",
         &format!(
             "Use the edit tool with the arguments {} to update that workspace file, then reply with exactly DONE.",
             serde_json::json!({"path": "e2e-edit-source.txt", "old": token, "new": edited})
         ),
+        &reseed_edit_source,
     )
     .await;
     let edited_bytes = std::fs::read_to_string(host.workspace.path().join("e2e-edit-source.txt"))
