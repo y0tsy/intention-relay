@@ -589,6 +589,15 @@ fn safe_error(code: &'static str) -> ProviderErrorDto {
     })
 }
 
+/// Translates one provider-neutral request into the private native SDK shape.
+///
+/// The provider-neutral assistant reasoning attachment
+/// (`ModelRequestDto::assistant_reasoning()`) is intentionally not consumed by
+/// this adapter: the pinned OpenRouter chat-completions SDK has no
+/// assistant-message reasoning echo field, and OpenRouter expresses reasoning
+/// through request-scoped options (`reasoning`, `include_reasoning`) plus
+/// response-side reasoning content. The attachment stays runtime-owned
+/// transient same-run state and never changes this native request shape.
 fn translate_request(
     request: &ModelRequestDto,
     options: &OpenRouterDriverOptions,
@@ -691,6 +700,10 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<Message> {
 
 /// Translates an assistant message, mapping locally executed tool calls back
 /// onto the OpenRouter assistant shape so the tool-result round can continue.
+///
+/// No reasoning echo is mapped onto the native assistant message: the pinned
+/// SDK message has no such field, and [`translate_request`] carries the full
+/// intentional no-op rationale for the provider-neutral attachment.
 ///
 /// # Errors
 ///
@@ -1257,5 +1270,52 @@ mod tests {
         );
         assert_eq!(wire["tools"][0]["function"]["name"], "read");
         assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn assistant_reasoning_attachment_never_changes_the_native_request() {
+        let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let run_id = RunId::new();
+        let messages = vec![
+            ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+            ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+                .expect("message is valid"),
+            ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid"),
+        ];
+        let plain = ModelRequestDto::new(run_id, "fixture-model", messages.clone(), None, None)
+            .expect("request is valid");
+        assert!(plain.assistant_reasoning().is_empty());
+        let attachment =
+            intention_model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
+                .expect("reasoning attachment is valid");
+        let attached = ModelRequestDto::new(run_id, "fixture-model", messages, None, None)
+            .expect("request is valid")
+            .with_assistant_reasoning(vec![attachment])
+            .expect("attachment is retained on the request");
+        assert_eq!(
+            attached.assistant_reasoning().len(),
+            1,
+            "the fixture must carry the attachment, otherwise the comparison is vacuous"
+        );
+
+        let plain_wire = serde_json::to_value(
+            translate_request(&plain, &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        let attached_wire = serde_json::to_value(
+            translate_request(&attached, &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+
+        assert_eq!(attached_wire, plain_wire);
+        assert!(
+            !serde_json::to_string(&attached_wire)
+                .expect("wire serializes")
+                .contains("chain of thought"),
+            "transient reasoning text must never enter the native request"
+        );
     }
 }
