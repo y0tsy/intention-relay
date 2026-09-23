@@ -81,7 +81,7 @@ The provider adapter translates native formats into canonical DTOs. It must not 
 
 ### OpenRouter
 
-`intention-provider-openrouter` uses `openrouter-rs` 0.14.0 privately.
+`intention-provider-openrouter` uses `openrouter-rs` 0.16.0 privately.
 
 It owns:
 
@@ -97,7 +97,7 @@ not expose SDK resources.
 
 ### Generic Chat Completion
 
-`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.41.3 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the typed wire. It owns:
+`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the typed wire. It owns:
 
 - generic endpoint/auth/config translation;
 - private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish, `tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error facts;

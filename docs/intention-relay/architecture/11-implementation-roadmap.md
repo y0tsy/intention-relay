@@ -310,8 +310,8 @@ M4 delivered the Tier C provider foundation and all runtime, protocol,
 scheduling, and daemon-host packages. It establishes validated provider-neutral
 DTOs and stream ordering, safe per-run execution policy in snapshots, opaque
 startup-only provider material, and private SDK-backed request/mapping
-boundaries. It selects `openrouter-rs` 0.14.0 for OpenRouter and
-`async-openai` 0.41.3 for configured-base-URL Generic Chat Completions,
+boundaries. It selects `openrouter-rs` 0.16.0 for OpenRouter and
+`async-openai` 0.42.0 for configured-base-URL Generic Chat Completions,
 without custom HTTP/SSE parsing. The generic subset is text, usage, finish, and
 function-style tool calls; reasoning, multimodal, and vendor extensions reject
 preflight. A private daemon-owned Tokio runtime executes one streaming run,

@@ -1,7 +1,8 @@
 # Reviewed direct-dependency compatibility holds for cargo-outdated.
 # The async-openai 0.41.3 upgrade removed the 0.29.3 hold and its transitive
-# RUSTSEC acknowledgements (the backoff chain is gone). The list stays empty
-# until a new reviewed hold is required.
+# RUSTSEC acknowledgements (the backoff chain is gone). The 2026-09-23 refresh
+# (openrouter-rs 0.16.0, async-openai 0.42.0, rustls 0.23.45) required no hold,
+# so the list stays empty until a new reviewed hold is required.
 
 [outdated_ignores]
 crates = []

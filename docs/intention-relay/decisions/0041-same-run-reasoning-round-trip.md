@@ -67,7 +67,7 @@ run. This record claims no date, commit, or run identifier of its own.
 
 ## Decision
 
-1. `intention-provider-generic-chat` enables the pinned `async-openai` 0.41.3
+1. `intention-provider-generic-chat` enables the pinned `async-openai` 0.42.0
    `byot` feature and drives the streaming Chat Completions call through
    `create_stream_byot` with crate-private typed request and chunk structs. The
    pinned SDK keeps HTTP, SSE, TLS, and error mapping; no custom HTTP or SSE

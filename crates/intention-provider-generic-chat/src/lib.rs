@@ -1266,6 +1266,7 @@ mod tests {
                 r#type: Some("rate_limit_exceeded".to_owned()),
                 param: None,
                 code: None,
+                misalignment: None,
             },
         });
         let permanent = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
@@ -1275,6 +1276,7 @@ mod tests {
                 r#type: Some("invalid_request_error".to_owned()),
                 param: None,
                 code: None,
+                misalignment: None,
             },
         });
         assert_eq!(
