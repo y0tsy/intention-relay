@@ -23,7 +23,8 @@ In scope is exactly one opt-in live-provider e2e channel:
   case and the negative invalid-credential case) against a real provider API
   over HTTPS;
 - one local entry point, `make e2e-real-api`, which takes the credential from
-  the process environment;
+  the process environment (a local gitignored `.env` file, loaded by the
+  target, may supply variables that are not already set);
 - one manual workflow entry point, `.github/workflows/real-api-e2e.yml`, which
   is `workflow_dispatch`-only and takes the credential from the repository
   secret `REAL_API_E2E_PROVIDER_KEY`.
@@ -52,7 +53,8 @@ blocking and hermetic suites.
    reads them, and no provider default changes because of them.
 3. Two entry points exist, and both are opt-in:
    - `make e2e-real-api` requires `INTENTION_REAL_API_KEY` and
-     `INTENTION_REAL_API_MODEL` from the environment, exports the
+     `INTENTION_REAL_API_MODEL` from the environment (or from a local gitignored
+     `.env` file loaded by the target), exports the
      `INTENTION_REAL_API_E2E=1` opt-in itself, forwards the optional provider
      kind and endpoint selectors, and runs only the ignored target;
    - `.github/workflows/real-api-e2e.yml` is manual-only (`workflow_dispatch`,
