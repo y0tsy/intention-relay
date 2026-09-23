@@ -189,7 +189,7 @@ This decision does not add:
 | Manual-only workflow | `.github/workflows/real-api-e2e.yml` (`workflow_dispatch` only; no `push`, `pull_request`, or `schedule` trigger) |
 | Local opt-in entry point | `Makefile` `e2e-real-api`, never a prerequisite of `quick`, `check`, `verify`, `ci`, or a `ci-*` alias |
 | Live tool loop, durable facts, restart replay, credential absence | `crates/intention-daemon/tests/real_api_e2e.rs` (ignored; opt-in via `INTENTION_REAL_API_E2E=1`, `INTENTION_REAL_API_KEY`, `INTENTION_REAL_API_MODEL`) |
-| Reconciliation evidence | EVD-063 (`reconciliation/evidence-register.md`, `Planned` until a live run URL is recorded) |
+| Reconciliation evidence | EVD-063 (`reconciliation/evidence-register.md`, `Verified` by the recorded local `make e2e-real-api` run) |
 
 Required gates remain `make quick`, `make verify`, `docs-check`, and the
 Linux/Windows CI matrix; the live channel is never one of them.

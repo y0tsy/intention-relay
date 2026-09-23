@@ -211,7 +211,7 @@ the opt-in manual run.
 | Capability declaration and fail-closed preflight | generic adapter capability tests; multimodal and vendor extensions still fail before outbound work |
 | OpenRouter no-op | `crates/intention-provider-openrouter/src/lib.rs` unit tests: the attachment is ignored and the request shape is unchanged |
 | Live 400 evidence and acceptance | the opt-in live run through `crates/intention-daemon/tests/real_api_e2e.rs` under ADR 0040; the controller records date, commit, provider kind, model, and the local run report or the workflow run URL |
-| Reconciliation evidence | EVD-064 (`reconciliation/evidence-register.md`, `Planned` until the hermetic gates and the controller-recorded live run); EVD-062 is supplemented because the ADR 0039 continuation now also carries reasoning |
+| Reconciliation evidence | EVD-064 (`reconciliation/evidence-register.md`, `Verified` by the hermetic gates and the recorded live runs); EVD-062 is supplemented because the ADR 0039 continuation now also carries reasoning |
 
 Required gates remain `make quick`, `make verify`, `docs-check`, and the
 Linux/Windows CI matrix; the ADR 0040 live channel remains manual and
@@ -221,8 +221,11 @@ Recorded live run (EVD-063/EVD-064): 2026-09-23, local `make e2e-real-api`,
 commit `0dc2e30`, provider `generic-chat-completion-api`, model
 `deepseek-v4.1-flash`; both ignored live tests passed, so a thinking-mode
 gateway accepted the tool-loop continuation that carried the round's accepted
-reasoning. The run report stays in the gitignored
-`quality/reports/real-api-e2e/` and the key is never recorded.
+reasoning. The later widened run of the same day (commit `494d5d3`, local
+`make e2e-real-api`, same provider and model) drove all six advertised tools
+through their own live sessions and passed as well, so the echo satisfies the
+thinking-mode gateway on every tool-loop continuation. The run report stays in
+the gitignored `quality/reports/real-api-e2e/` and the key is never recorded.
 
 ## Research provenance
 
