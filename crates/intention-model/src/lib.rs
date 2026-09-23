@@ -179,6 +179,99 @@ impl ModelMessageDto {
     }
 }
 
+/// Maximum bytes of one transient assistant-reasoning attachment.
+///
+/// 512 KiB matches the durable per-reasoning-fact bound, so a round-tripped
+/// attachment never exceeds what the durable reasoning path already accepts.
+const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
+
+/// Transient assistant reasoning attached to the tool calls of one provider
+/// response; preserved only for the same-run tool-loop continuation, never
+/// durable, never message content.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AssistantReasoningDto {
+    tool_call_ids: Vec<ToolCallId>,
+    text: String,
+}
+
+impl<'de> Deserialize<'de> for AssistantReasoningDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawAssistantReasoningDto {
+            tool_call_ids: Vec<ToolCallId>,
+            text: String,
+        }
+
+        let raw = RawAssistantReasoningDto::deserialize(deserializer)?;
+        Self::new(raw.tool_call_ids, raw.text).map_err(de::Error::custom)
+    }
+}
+
+impl AssistantReasoningDto {
+    /// Creates the reasoning attached to one provider round's tool calls.
+    ///
+    /// The text may be empty: a provider can carry the reasoning channel with
+    /// no textual content, and that presence alone must round-trip into the
+    /// continuation request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when no tool-call identity is attached, a
+    /// tool-call identity repeats, or the text exceeds 512 KiB or carries a
+    /// control character other than a line break or tab.
+    pub fn new(tool_call_ids: Vec<ToolCallId>, text: impl Into<String>) -> DtoResult<Self> {
+        let text = text.into();
+        if !valid_assistant_reasoning_tool_call_ids(&tool_call_ids) {
+            return Err(ErrorDto::validation(
+                "invalid_model_assistant_reasoning",
+                "assistant reasoning requires at least one unique tool-call identity",
+            ));
+        }
+        if text.len() > MAX_MODEL_ASSISTANT_REASONING_BYTES
+            || text.chars().any(forbidden_reasoning_text_character)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_model_assistant_reasoning_text",
+                "assistant reasoning text must be at most 512 KiB without invalid control characters",
+            ));
+        }
+        Ok(Self {
+            tool_call_ids,
+            text,
+        })
+    }
+
+    /// Returns the identities of the tool calls this reasoning belongs to.
+    #[must_use]
+    pub fn tool_call_ids(&self) -> &[ToolCallId] {
+        &self.tool_call_ids
+    }
+
+    /// Returns the reasoning text; empty means the channel carried no text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// Whether the attached tool-call identities are present and unique.
+fn valid_assistant_reasoning_tool_call_ids(tool_call_ids: &[ToolCallId]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(tool_call_ids.len());
+    !tool_call_ids.is_empty() && tool_call_ids.iter().all(|id| seen.insert(*id))
+}
+
+/// Whether `character` must be rejected in round-tripped reasoning text.
+///
+/// Line breaks and tabs are ordinary reasoning text; every other control
+/// character is transport noise that must never re-enter a provider request.
+const fn forbidden_reasoning_text_character(character: char) -> bool {
+    character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+}
+
 /// Requested model-context capabilities that require preflight support.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -442,6 +535,8 @@ pub struct ModelRequestDto {
     messages: Vec<ModelMessageDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ModelToolDefinitionDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    assistant_reasoning: Vec<AssistantReasoningDto>,
     system_context: Option<String>,
     requested_capabilities: ModelRequestedCapabilitiesDto,
 }
@@ -460,6 +555,8 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
             #[serde(default)]
             tools: Vec<ModelToolDefinitionDto>,
             #[serde(default)]
+            assistant_reasoning: Vec<AssistantReasoningDto>,
+            #[serde(default)]
             system_context: Option<String>,
             #[serde(default)]
             requested_capabilities: ModelRequestedCapabilitiesDto,
@@ -474,7 +571,11 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
             Some(raw.requested_capabilities),
         )
         .map_err(de::Error::custom)?;
-        request.with_tools(raw.tools).map_err(de::Error::custom)
+        request
+            .with_tools(raw.tools)
+            .map_err(de::Error::custom)?
+            .with_assistant_reasoning(raw.assistant_reasoning)
+            .map_err(de::Error::custom)
     }
 }
 
@@ -518,6 +619,7 @@ impl ModelRequestDto {
             model,
             messages,
             tools: Vec::new(),
+            assistant_reasoning: Vec::new(),
             system_context,
             requested_capabilities: requested_capabilities.unwrap_or_default(),
         })
@@ -547,7 +649,16 @@ impl ModelRequestDto {
         &self.tools
     }
 
+    /// Returns the transient reasoning attachments carried into the same-run
+    /// tool-loop continuation.
+    #[must_use]
+    pub fn assistant_reasoning(&self) -> &[AssistantReasoningDto] {
+        &self.assistant_reasoning
+    }
+
     /// Returns a copy of this request with the model context messages replaced.
+    ///
+    /// Advertised tools and transient reasoning attachments are preserved.
     ///
     /// # Errors
     ///
@@ -561,6 +672,7 @@ impl ModelRequestDto {
             Some(self.requested_capabilities),
         )?;
         request.tools = self.tools.clone();
+        request.assistant_reasoning = self.assistant_reasoning.clone();
         Ok(request)
     }
 
@@ -569,6 +681,7 @@ impl ModelRequestDto {
     /// A non-empty replacement forces the requested-capabilities `tool_calls`
     /// flag to `true`, so preflight only accepts providers that can honor the
     /// advertised tools; an empty replacement leaves the flag unchanged.
+    /// Transient reasoning attachments are preserved.
     ///
     /// # Errors
     ///
@@ -593,6 +706,35 @@ impl ModelRequestDto {
             Some(requested_capabilities),
         )?;
         request.tools = tools;
+        request.assistant_reasoning = self.assistant_reasoning.clone();
+        Ok(request)
+    }
+
+    /// Returns a copy of this request with the full ordered transient reasoning
+    /// attachments replaced.
+    ///
+    /// One attachment belongs to each assistant tool-call message of the
+    /// same-run tool loop; attachments are neither durable nor message content,
+    /// and later rebuilds through [`Self::with_messages`] or [`Self::with_tools`]
+    /// preserve them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the retained request fields no longer
+    /// satisfy request validation.
+    pub fn with_assistant_reasoning(
+        &self,
+        reasoning: Vec<AssistantReasoningDto>,
+    ) -> DtoResult<Self> {
+        let mut request = Self::new(
+            self.run_id,
+            self.model.clone(),
+            self.messages.clone(),
+            self.system_context.clone(),
+            Some(self.requested_capabilities),
+        )?;
+        request.tools = self.tools.clone();
+        request.assistant_reasoning = reasoning;
         Ok(request)
     }
 
@@ -627,7 +769,7 @@ pub enum ModelEventDto {
     Started,
     /// A non-empty text content delta arrived.
     TextDelta { content: String },
-    /// A non-empty reasoning delta arrived.
+    /// A reasoning delta arrived; empty content marks channel presence only.
     ReasoningDelta {
         category: ReasoningFragmentCategoryDto,
         content: String,
@@ -678,7 +820,11 @@ impl<'de> Deserialize<'de> for ModelEventDto {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ReasoningDelta { category, content } => {
-                Self::reasoning_delta_categorized(category, content).map_err(de::Error::custom)
+                if content.is_empty() {
+                    Ok(Self::reasoning_presence(category))
+                } else {
+                    Self::reasoning_delta_categorized(category, content).map_err(de::Error::custom)
+                }
             }
             RawModelEventDto::ReasoningSummaryDelta { content } => {
                 Self::reasoning_summary_delta(content).map_err(de::Error::custom)
@@ -740,6 +886,16 @@ impl ModelEventDto {
             ))
         } else {
             Ok(Self::ReasoningDelta { category, content })
+        }
+    }
+
+    /// Creates the reasoning-channel presence marker for a provider response that
+    /// carried the reasoning channel with no textual content.
+    #[must_use]
+    pub const fn reasoning_presence(category: ReasoningFragmentCategoryDto) -> Self {
+        Self::ReasoningDelta {
+            category,
+            content: String::new(),
         }
     }
 
