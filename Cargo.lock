@@ -938,6 +938,7 @@ dependencies = [
  "intention-config",
  "intention-model",
  "intention-types",
+ "serde",
  "serde_json",
 ]
 
