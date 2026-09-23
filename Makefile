@@ -82,10 +82,19 @@ quality-self-test: tools-check ## Prove isolated invalid fixtures fail their int
 quality-self-test-in-place: tools-check ## CI in-place fixture check with git-restore scoping (reuses warm Cargo artifacts).
 	$(PYTHON) quality/self_test.py --in-place
 
-e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required).
-	@if [ -z "$${INTENTION_REAL_API_KEY:-}" ] || [ -z "$${INTENTION_REAL_API_MODEL:-}" ]; then
+e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required; reads .env when present).
+	@if [ -f .env ]; then \
+	  while IFS='=' read -r name value; do \
+	    case "$$name" in INTENTION_*) ;; *) continue ;; esac; \
+	    if [ -z "$$(printenv "$$name" 2>/dev/null || true)" ]; then export "$$name=$$value"; fi; \
+	  done < .env; \
+	fi
+	if [ -z "$${INTENTION_REAL_API_KEY:-}" ] || [ -z "$${INTENTION_REAL_API_MODEL:-}" ]; then
 	  printf '%s\n' \
 	    'usage: INTENTION_REAL_API_KEY=<secret> INTENTION_REAL_API_MODEL=<model-id> make e2e-real-api' \
+	    '' \
+	    'Values come from the environment or from a local gitignored .env file' \
+	    '(explicit environment values take precedence; .env is never committed).' \
 	    '' \
 	    'Required:' \
 	    '  INTENTION_REAL_API_KEY      provider credential; secret material that is never logged or written to reports' \
