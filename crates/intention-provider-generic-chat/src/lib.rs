@@ -17,9 +17,10 @@ use async_openai::{
         ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
         ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
         ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
-        ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
-        CreateChatCompletionRequestArgs, CreateChatCompletionStreamResponse, FinishReason,
-        FunctionCall, ReasoningEffort,
+        ChatCompletionStreamResponseDelta, ChatCompletionTool, ChatCompletionTools,
+        CreateChatCompletionRequest, CreateChatCompletionRequestArgs,
+        CreateChatCompletionStreamResponse, FinishReason, FunctionCall, FunctionObject,
+        ReasoningEffort,
     },
 };
 use futures_util::{
@@ -691,10 +692,47 @@ fn translate_request(
     if let Some(effort) = options.reasoning_effort {
         args.reasoning_effort(map_reasoning_effort(effort)?);
     }
+    if !request.tools().is_empty() {
+        let tools: Vec<ChatCompletionTools> = request
+            .tools()
+            .iter()
+            .map(|tool| -> DtoResult<ChatCompletionTools> {
+                Ok(ChatCompletionTools::Function(ChatCompletionTool {
+                    function: FunctionObject {
+                        name: tool.name().to_owned(),
+                        description: Some(tool.description().to_owned()),
+                        parameters: Some(parse_parameters(tool.parameters_json())?),
+                        strict: None,
+                    },
+                }))
+            })
+            .collect::<DtoResult<_>>()?;
+        args.tools(tools);
+    }
     args.build().map_err(|_| {
         ErrorDto::validation(
             "invalid_generic_chat_request",
             "generic chat request could not be translated",
+        )
+    })
+}
+
+/// Decodes one validated tool-parameter schema into the SDK-declared type.
+///
+/// The decode target is inferred at the call site from the SDK request field,
+/// so the provider boundary never names the native JSON value type.
+///
+/// # Errors
+///
+/// Returns a validation error when the schema text cannot be decoded.
+fn parse_parameters<T>(raw: &str) -> DtoResult<T>
+where
+    T: std::str::FromStr,
+{
+    raw.parse::<T>().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_generic_chat_request",
+            "generic chat tool parameters could not be decoded",
         )
     })
 }
@@ -908,6 +946,100 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn generic_chat_advertises_tool_definitions_without_tool_choice() {
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid")
+        .with_tools(vec![
+            intention_model::ModelToolDefinitionDto::new(
+                "read_file",
+                "Reads one file",
+                r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            )
+            .expect("tool is valid"),
+            intention_model::ModelToolDefinitionDto::new(
+                "search",
+                "Searches files",
+                r#"{"type":"object","required":["query"]}"#,
+            )
+            .expect("tool is valid"),
+        ])
+        .expect("tools are valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "model": "fixture",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream_options": {"include_usage": true},
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "description": "Reads one file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "description": "Searches files",
+                            "parameters": {
+                                "type": "object",
+                                "required": ["query"],
+                            },
+                        },
+                    },
+                ],
+            })
+        );
+        assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn generic_chat_omits_tools_when_no_definitions_are_advertised() {
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "model": "fixture",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream_options": {"include_usage": true},
+            })
+        );
+        assert!(wire.get("tools").is_none());
+        assert!(wire.get("tool_choice").is_none());
     }
 
     #[test]

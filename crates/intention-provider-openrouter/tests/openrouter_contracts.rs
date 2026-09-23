@@ -15,7 +15,7 @@ use std::{
 use futures_util::{Stream, task::noop_waker_ref};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
+    ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto, ModelToolDefinitionDto,
 };
 use intention_provider_openrouter::OpenRouterDriver;
 use intention_types::RunId;
@@ -147,6 +147,20 @@ fn openrouter_driver_translates_all_text_roles_without_network_work() {
 
     driver.prepare_request(&request).expect("request prepares");
     assert_eq!(driver.prepared_request_count(), 1);
+
+    let definition = ModelToolDefinitionDto::new(
+        "read",
+        "Read a workspace file",
+        r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+    )
+    .expect("tool definition is valid");
+    let tool_request = request
+        .with_tools(vec![definition])
+        .expect("tool advertisement is valid");
+    driver
+        .prepare_request(&tool_request)
+        .expect("tool-bearing request prepares");
+    assert_eq!(driver.prepared_request_count(), 2);
 }
 
 fn collect_ready(

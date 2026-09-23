@@ -379,6 +379,12 @@ fn handle_provider_request(
     thread::sleep(Duration::from_millis(500));
     let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
     let body_text = String::from_utf8_lossy(&body);
+    if request_number == 1 {
+        assert!(
+            body_text.contains(r#""tools":["#) && body_text.contains(r#""name":"read""#),
+            "the first provider request advertises tools including read: {body_text}"
+        );
+    }
     if request_number <= 2 {
         let response = if body_text.contains("\"role\":\"tool\"") {
             text_response

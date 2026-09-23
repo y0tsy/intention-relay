@@ -154,6 +154,24 @@ fn generic_driver_translates_all_text_roles_without_network_work() {
     assert_eq!(driver.prepared_request_count(), 1);
 }
 
+#[test]
+fn generic_driver_prepares_advertised_tool_definitions_without_network_work() {
+    let mut driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
+    let request = request(ModelRequestedCapabilitiesDto::default())
+        .with_tools(vec![
+            intention_model::ModelToolDefinitionDto::new(
+                "read_file",
+                "Reads one file",
+                r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            )
+            .expect("tool is valid"),
+        ])
+        .expect("tools are valid");
+
+    driver.prepare_request(&request).expect("request prepares");
+    assert_eq!(driver.prepared_request_count(), 1);
+}
+
 fn collect_ready(
     mut stream: intention_model::ModelEventStream,
 ) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {

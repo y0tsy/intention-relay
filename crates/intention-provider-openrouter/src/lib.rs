@@ -11,6 +11,7 @@ use futures_util::{
     stream,
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
+use intention_model::ModelToolDefinitionDto;
 use intention_model::{
     AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
     ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
@@ -602,10 +603,53 @@ fn translate_request(
     let mut builder = ChatCompletionRequest::builder();
     builder.model(request.model());
     builder.messages(messages);
+    if !request.tools().is_empty() {
+        let tools = request
+            .tools()
+            .iter()
+            .map(translate_tool)
+            .collect::<DtoResult<Vec<_>>>()?;
+        builder.tools(tools);
+    }
     if let Some(effort) = options.reasoning_effort {
         builder.reasoning_effort(map_effort(effort));
     }
     builder.build().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_openrouter_request",
+            "OpenRouter request could not be translated",
+        )
+    })
+}
+
+/// Translates one advertised tool definition into the native SDK tool shape.
+///
+/// The definition's validated parameter text is decoded into the exact value
+/// type the native SDK constructor declares. No tool preference is declared:
+/// the model chooses whether and which advertised tool to call.
+///
+/// # Errors
+///
+/// Returns a safe translation error when the parameter text does not decode.
+fn translate_tool(definition: &ModelToolDefinitionDto) -> DtoResult<openrouter_rs::types::Tool> {
+    Ok(openrouter_rs::types::Tool::new(
+        definition.name(),
+        definition.description(),
+        parse_parameters(definition.parameters_json())?,
+    ))
+}
+
+/// Decodes validated JSON-object parameter text into the native SDK type.
+///
+/// The decoded type is inferred at the call site from the native constructor
+/// that consumes it, so this adapter never names a JSON value type. The
+/// definition DTO has already validated the text as a bounded JSON object.
+///
+/// # Errors
+///
+/// Returns a safe translation error when the text does not decode.
+fn parse_parameters<T: std::str::FromStr>(raw: &str) -> DtoResult<T> {
+    raw.parse().map_err(|_| {
         ErrorDto::validation(
             "invalid_openrouter_request",
             "OpenRouter request could not be translated",
@@ -985,6 +1029,53 @@ mod tests {
     }
 
     #[test]
+    fn declared_tools_are_translated_without_tool_choice() {
+        let definition = ModelToolDefinitionDto::new(
+            "read",
+            "Read a workspace file",
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        )
+        .expect("tool definition is valid");
+        let request = request()
+            .with_tools(vec![definition])
+            .expect("tool advertisement is valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+
+        assert_eq!(wire["tools"][0]["type"], "function");
+        assert_eq!(wire["tools"][0]["function"]["name"], "read");
+        assert_eq!(
+            wire["tools"][0]["function"]["description"],
+            "Read a workspace file"
+        );
+        assert_eq!(
+            wire["tools"][0]["function"]["parameters"],
+            serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            })
+        );
+        assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn requests_without_declared_tools_carry_no_tools_on_the_wire() {
+        let wire = serde_json::to_value(
+            translate_request(&request(), &OpenRouterDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+
+        assert!(wire.get("tools").is_none());
+        assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
     fn normalized_stream_emits_started_and_incomplete_error() {
         let mut stream = normalize_stream(stream::empty(), ModelCancellationSignal::new());
         assert_eq!(
@@ -1112,6 +1203,12 @@ mod tests {
     fn tool_round_two_translates_assistant_calls_and_tool_results() {
         let call = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
             .expect("fixture call is valid");
+        let definition = ModelToolDefinitionDto::new(
+            "read",
+            "Read a workspace file",
+            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+        )
+        .expect("tool definition is valid");
         let request = ModelRequestDto::new(
             RunId::new(),
             "fixture-model",
@@ -1125,7 +1222,9 @@ mod tests {
             None,
             None,
         )
-        .expect("request is valid");
+        .expect("request is valid")
+        .with_tools(vec![definition])
+        .expect("tool advertisement is valid");
 
         let wire = serde_json::to_value(
             translate_request(&request, &OpenRouterDriverOptions::default())
@@ -1156,5 +1255,7 @@ mod tests {
                 },
             ])
         );
+        assert_eq!(wire["tools"][0]["function"]["name"], "read");
+        assert!(wire.get("tool_choice").is_none());
     }
 }
