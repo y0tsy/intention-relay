@@ -319,7 +319,7 @@ coverage_tier = "adapter"
 name = "intention-daemon"
 responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
 test_target = "bootstrap, recovery, and model-execution bridge integration tests"
-test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e"]
+test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e", "real_api_e2e"]
 coverage_tier = "C"
 
 [[future_crates]]
