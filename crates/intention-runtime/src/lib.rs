@@ -10,8 +10,9 @@ use intention_domain::{
     ToolResultOutcomeDto, validate_run_status_transition,
 };
 pub use intention_model::{
-    ModelCancellationSignal, ModelEventDto, ModelExecutionDriver, ModelMessageDto, ModelRequestDto,
-    ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
+    AssistantReasoningDto, ModelCancellationSignal, ModelEventDto, ModelExecutionDriver,
+    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
+    ModelToolDefinitionDto,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
@@ -647,6 +648,7 @@ where
         } = state;
         let mut request = input.request.clone();
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
+        let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         let mut tool_round = 0u8;
         loop {
             let outcome = self
@@ -692,10 +694,17 @@ where
                 RoundOutcome::ToolCalls {
                     cursor: calls_cursor,
                     calls,
+                    reasoning,
                 } => {
                     cursor = calls_cursor;
                     tool_round += 1;
                     messages.push(ModelMessageDto::assistant_tool_calls(None, calls.clone())?);
+                    // Attachments are per-round and ordered: each assistant
+                    // tool-call message keeps the reasoning of its own round
+                    // when later rounds rebuild the continuation request.
+                    if let Some(reasoning) = reasoning {
+                        reasoning_attachments.push(reasoning);
+                    }
                     for call in calls {
                         let facts = vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
                         cursor =
@@ -767,7 +776,10 @@ where
                             }
                         }
                     }
-                    request = input.request.with_messages(messages.clone())?;
+                    request = input
+                        .request
+                        .with_messages(messages.clone())?
+                        .with_assistant_reasoning(reasoning_attachments.clone())?;
                 }
             }
         }
@@ -806,6 +818,8 @@ where
             .fuse();
         futures_util::pin_mut!(timeout);
         let mut calls: Vec<ToolCallDto> = Vec::new();
+        let mut reasoning_text = String::new();
+        let mut reasoning_channel_seen = false;
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
@@ -859,7 +873,13 @@ where
                             retryable: false,
                         });
                     }
-                    return Ok(RoundOutcome::ToolCalls { cursor, calls });
+                    let reasoning =
+                        round_reasoning_attachment(reasoning_channel_seen, reasoning_text, &calls)?;
+                    return Ok(RoundOutcome::ToolCalls {
+                        cursor,
+                        calls,
+                        reasoning,
+                    });
                 }
             };
             if let Err(error) = lifecycle.accept(&event) {
@@ -884,24 +904,33 @@ where
                     cursor = next_cursor;
                 }
                 ModelEventDto::ReasoningDelta { category, content } => {
-                    let category = match category {
-                        intention_model::ReasoningFragmentCategoryDto::Primary => {
-                            intention_domain::ReasoningDeltaCategory::Primary
-                        }
-                        intention_model::ReasoningFragmentCategoryDto::Detail => {
-                            intention_domain::ReasoningDeltaCategory::Detail
-                        }
-                    };
-                    cursor = self.append(
-                        input.session_id,
-                        input.run_id,
-                        cursor,
-                        vec![ModelRunFactInputDto::reasoning_delta_recorded_categorized(
-                            category, content,
-                        )?],
-                        None,
-                    )?;
-                    *durable_output = true;
+                    // The reasoning channel marks a presence even when it
+                    // carries no text: the continuation request must send the
+                    // channel back on the assistant tool-call message. Empty
+                    // fragments never become durable facts because the fact
+                    // constructors reject blank content.
+                    reasoning_channel_seen = true;
+                    if !content.is_empty() {
+                        reasoning_text.push_str(&content);
+                        let category = match category {
+                            intention_model::ReasoningFragmentCategoryDto::Primary => {
+                                intention_domain::ReasoningDeltaCategory::Primary
+                            }
+                            intention_model::ReasoningFragmentCategoryDto::Detail => {
+                                intention_domain::ReasoningDeltaCategory::Detail
+                            }
+                        };
+                        cursor = self.append(
+                            input.session_id,
+                            input.run_id,
+                            cursor,
+                            vec![ModelRunFactInputDto::reasoning_delta_recorded_categorized(
+                                category, content,
+                            )?],
+                            None,
+                        )?;
+                        *durable_output = true;
+                    }
                 }
                 ModelEventDto::ReasoningSummaryDelta { content } => {
                     cursor = self.append(
@@ -961,7 +990,13 @@ where
                         self.transition_completed(input.session_id, input.run_id, cursor)?;
                         return Ok(RoundOutcome::Completed { cursor });
                     }
-                    return Ok(RoundOutcome::ToolCalls { cursor, calls });
+                    let reasoning =
+                        round_reasoning_attachment(reasoning_channel_seen, reasoning_text, &calls)?;
+                    return Ok(RoundOutcome::ToolCalls {
+                        cursor,
+                        calls,
+                        reasoning,
+                    });
                 }
             }
         }
@@ -1283,7 +1318,32 @@ enum RoundOutcome {
     ToolCalls {
         cursor: RunEventCursorDto,
         calls: Vec<ToolCallDto>,
+        reasoning: Option<AssistantReasoningDto>,
     },
+}
+
+/// Builds one round's transient reasoning attachment for the tool-loop
+/// continuation.
+///
+/// The attachment is `Some` whenever the round observed the provider's
+/// reasoning channel, even when that channel carried no text: the continuation
+/// request must send the channel back on the assistant tool-call message that
+/// continues the same run. A round without the channel produces `None`.
+///
+/// # Errors
+///
+/// Returns a validation error when the round's accumulated reasoning cannot
+/// form a valid attachment.
+fn round_reasoning_attachment(
+    reasoning_channel_seen: bool,
+    text: String,
+    calls: &[ToolCallDto],
+) -> DtoResult<Option<AssistantReasoningDto>> {
+    if !reasoning_channel_seen {
+        return Ok(None);
+    }
+    let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
+    AssistantReasoningDto::new(tool_call_ids, text).map(Some)
 }
 
 const fn valid_boundary_at_or_before(value: &str, maximum: usize) -> usize {
@@ -1323,7 +1383,7 @@ mod tests {
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
     };
     use intention_model::{ModelCancellationSignal, ModelMessageDto, ModelRequestDto};
-    use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+    use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto, ToolCallId};
 
     fn fixture_input() -> ModelRunExecutionInputDto {
         let session_id = SessionId::parse("11111111-1111-4111-8111-111111111111")
@@ -1418,6 +1478,23 @@ mod tests {
         assert_eq!(
             values.occurred_at(),
             TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid")
+        );
+    }
+
+    #[test]
+    fn round_reasoning_attachment_keeps_presence_without_text() {
+        let call =
+            ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("fixture tool call is valid");
+        let attachment =
+            round_reasoning_attachment(true, String::new(), std::slice::from_ref(&call))
+                .expect("presence-only reasoning is valid")
+                .expect("the reasoning channel marks presence");
+        assert_eq!(attachment.tool_call_ids(), &[call.call_id()]);
+        assert!(attachment.text().is_empty());
+        assert!(
+            round_reasoning_attachment(false, "unused".to_owned(), std::slice::from_ref(&call))
+                .expect("an absent reasoning channel is valid")
+                .is_none()
         );
     }
 }
