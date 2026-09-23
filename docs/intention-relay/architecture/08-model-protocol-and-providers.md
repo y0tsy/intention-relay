@@ -25,7 +25,7 @@ Core DTO families:
 
 | DTO | Responsibility |
 | --- | --- |
-| `ModelRequestDto` | System context, text messages, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
+| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
 | `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
 | `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream facts. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
@@ -102,7 +102,7 @@ not expose SDK resources.
 It owns:
 
 - generic endpoint/auth/config translation;
-- private SDK request construction and fixture normalization for text, usage, finish, `tool_calls` tool-call, and error facts;
+- private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish, `tool_calls` tool-call, and error facts;
 - documented capability limitations; and
 - normalized failures.
 
@@ -111,7 +111,7 @@ private provider composition path. Provider crates continue to expose only
 provider-neutral contracts; runtime-owned execution and persistent delivery do
 not expose SDK resources.
 
-Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, usage, finish reasons, and `tool_calls` tool-call fragments; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
+Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, advertised tool definitions, usage, finish reasons, and `tool_calls` tool-call fragments; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
 
 ## Provider selection
 
@@ -128,6 +128,16 @@ through the daemon-owned registry: it records `ToolCallRecorded` before the
 local effect, persists the correlated `ToolResultRecorded`, and continues the
 provider exchange with assistant-tool-call and tool-role messages until the
 provider finishes.
+
+Ordinary production requests advertise the active registered tools: the
+request carries validated typed `ModelToolDefinitionDto` definitions built by
+`intention_tools::model_visible_descriptors()` in registry order (`read`,
+`write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces
+the requested `tool_calls` capability, so a driver that does not declare
+tool-call support fails closed at preflight with
+`unsupported_model_capability`. Both current adapters translate the
+definitions into their private SDK request and omit `tool_choice`; an empty
+advertisement preserves the previous request shape (ADR 0039).
 
 Provider drivers do not invoke local tools directly. The application builds
 the typed invocation from a provider-emitted tool call, and the daemon-owned
@@ -159,6 +169,7 @@ cancelling is durable it suppresses later provider events/errors and retries.
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
+| Tool advertisement | Model/registry/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in registry order, both adapters translate them without `tool_choice`, a driver without tool-call support fails preflight, and the advertisement survives the tool-result continuation request. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned registry executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
@@ -205,13 +216,16 @@ architecture 22 defines only their future documentation contract.
 
 ## Post-M4 tool-loop consequence
 
-M4 tool-call evidence and denial remain unchanged. A future driver may support
-`model_tool_loop_v1` only when it can translate a frozen local typed tool
-selection and complete `ModelToolExchangeDto` history into a fresh provider
-request. It never invokes a local primitive or reuses opaque remote continuation
-state. Registry and tool-loop semantics are owned by [Tool registry and direct
-Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md); provider evolution
-remains separate.
+M4 tool-call evidence and denial remain unchanged. The ordinary request-side
+advertisement of the active registered tools is active under ADR 0039 and
+creates no frozen selection; `model_tool_loop_v1`, `ModelToolExchangeDto`
+history, and Mandate tool selection remain reserved for Slice 3. A future
+driver may support `model_tool_loop_v1` only when it can translate a frozen
+local typed tool selection and complete `ModelToolExchangeDto` history into a
+fresh provider request. It never invokes a local primitive or reuses opaque
+remote continuation state. Registry and tool-loop semantics are owned by
+[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md);
+provider evolution remains separate.
 
 ## Post-M4 session branching consequence
 

@@ -173,6 +173,7 @@ following map is navigation and provenance; it does not restate their rules:
 | M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
 | M5+ Slice 2 control-plane activation | architectures 25/29/22, roadmap, quality gates | decision 0037 |
 | No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
+| Request-side tool advertisement | architecture 08, architecture 05 | decision 0039 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

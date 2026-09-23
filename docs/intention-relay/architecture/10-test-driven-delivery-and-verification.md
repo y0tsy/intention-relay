@@ -269,7 +269,9 @@ The following scenarios must become executable before the corresponding capabili
 ### I. Daemon-host tool loop
 
 1. Start the real daemon binary and connect over the local protocol.
-2. Send a user turn against a fake provider that emits a tool call.
+2. Send a user turn against a fake provider that emits a tool call; verify the
+   outgoing request advertises the six active registered tools (`read`, `write`,
+   `edit`, `execute`, `glob`, `grep`) and requests the `tool_calls` capability.
 3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
 4. Verify the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication and are streamed to the client.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.

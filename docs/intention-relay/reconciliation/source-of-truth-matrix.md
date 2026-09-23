@@ -81,6 +81,12 @@ contradiction register.
 | SL2-009 | Slice 2 acceptance requires policy, docs, evidence, and gates together: architecture.toml test targets, ADR 0037, reconciliation rows, self-tests, `make quick`/`make verify`, docs-check, and Linux/Windows CI. | Accepted | Adopt | ADR 0037; quality gates | No half-ready slice; no new CI job or Makefile target. | M5+ Slice 2 | EVD-059..060; quality/self_test.py Slice 2 tests |
 | SL2-010 | Catalog-declared provider options flow through the composition's explicit option seam and are applied by production driver construction/reconstruction (startup selected-provider construction, catalog-activation factory builds, credential-driven rebuilds); currently producible Slice 2 declarations map to the closed bearer policy with no reasoning effort, and inapplicable declarations fail closed instead of being silently defaulted or ignored. | Accepted | Adopt | ADR 0037; architecture 22/25 | No silent defaulting; no adapter-ignored advertised option policy; rotation never drops declared options. | M5+ Slice 2 | option-seam composition fixtures (`crates/intention/src/lib.rs`); EVD-061 |
 
+## M5+ retrospective completion
+
+| ID | Statement | Status | Disposition | Sources | Constraints | Milestone | Verification |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| M5R-001 | Ordinary production model requests advertise the six active registered tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) in registry order as validated typed `ModelToolDefinitionDto` values, force the requested `tool_calls` capability, and both current provider adapters translate the definitions without `tool_choice`; the advertisement is transient with no digest, wire, or storage change, and the M5+ Slice 3 tool-loop contracts and tags remain reserved (ADR 0039). | Accepted | Adopt | ADR 0039; ADR 0019; ADR 0035; architectures 02/05/07/08 | Typed DTOs only; no frozen selection/digest, no Mandate admission, no mode/risk filtering, no `tool_choice`, no parallel calls; drivers without `tool_calls` fail closed at preflight with `unsupported_model_capability`. | M5+ retrospective (not a slice) | hermetic tool-advertisement tests in the model, tools, provider, runtime, and daemon targets; EVD-062 |
+
 ## Post-M5 configuration and provider control-plane topics
 
 | Topic ID | Normative proposition | Applicability | Disposition | Primary owner | Compatibility/failure rule | Delivery bucket | Evidence status/anchor |

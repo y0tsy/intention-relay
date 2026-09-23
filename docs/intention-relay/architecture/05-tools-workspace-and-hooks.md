@@ -53,6 +53,13 @@ ToolResultDto
   timing
 ```
 
+Every active descriptor also declares `model_parameters_schema`: the code-owned
+JSON Schema text for its typed model parameters. `intention_tools::model_visible_descriptors()`
+returns exactly the active descriptors that expose such a schema, in registry
+order; the current model-visible set is `read`, `write`, `edit`, `execute`,
+`glob`, and `grep`, and reserved slots are never included. Ordinary model
+requests advertise that set as typed tool definitions (ADR 0039).
+
 The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or results.
 
 ### Execution-kind scope
@@ -112,12 +119,13 @@ flowchart LR
 
 <!-- The phases map to the typed hook lifecycle. Base tools do primitive work only. -->
 
-The model-tool loop feeds this pipeline: a provider-emitted tool call becomes
-a typed invocation built by the application, executes through the daemon-owned
-registry, and its durable result is persisted before publication and returned
-to the provider exchange as a tool-role message. Provider adapters never
-execute local tools. The runtime owns the provider continuation until the
-provider finishes.
+Ordinary model requests advertise the model-visible descriptor set as typed
+tool definitions. The model-tool loop feeds this pipeline: a provider-emitted
+tool call becomes a typed invocation built by the application, executes through
+the daemon-owned registry, and its durable result is persisted before
+publication and returned to the provider exchange as a tool-role message.
+Provider adapters never execute local tools. The runtime owns the provider
+continuation until the provider finishes.
 
 ### Tooling execution API and status rendering
 

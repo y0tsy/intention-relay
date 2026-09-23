@@ -1559,6 +1559,25 @@ def test_adr_0038_no_compatibility_record_exists_and_is_indexed(root: Path) -> N
         raise RuntimeError("reconciliation/README.md owner map must include decision 0038")
 
 
+def test_adr_0039_tool_advertisement_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0039-request-side-tool-advertisement.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0039 must exist as the request-side tool advertisement record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0039](0039-request-side-tool-advertisement.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0039")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0039" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0039")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-062 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-062 row")
+
+
 def test_slice2_tag_registry_parity(root: Path) -> None:
     adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
     text = adr.read_text(encoding="utf-8")
@@ -1708,6 +1727,7 @@ def main() -> None:
         test_supply_chain_policy_failures,
         test_secret_fixture,
         test_adr_0037_slice2_ledger_exists_and_is_indexed,
+        test_adr_0039_tool_advertisement_record_exists_and_is_indexed,
         test_slice2_tag_registry_parity,
         test_slice2_storage_schema_declared_single_live,
         test_slice2_protocol_versions_declared,

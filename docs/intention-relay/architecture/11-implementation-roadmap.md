@@ -523,7 +523,13 @@ inside its slice, each with its own contract, transaction, and outcome test.
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
   together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
-  3-4 remain.
+  3-4 remain;
+- the ordinary request-side tool advertisement (ADR 0039) is complete:
+  request construction advertises the six active registered tools in registry
+  order as validated typed definitions, forces the `tool_calls` capability,
+  and both current adapters translate them without `tool_choice`; hermetic
+  evidence is anchored at EVD-062, and this retrospective completion does not
+  advance slices 3-4.
 
 ### Exit criteria
 
