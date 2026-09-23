@@ -51,6 +51,7 @@ contradiction register.
 | TLS-001 | One daemon-owned, composition-assembled capability path is required; no second registry/gateway/authority exists. | future | Adapt | crate map | Bridge, child, kernel, MCP, and provider paths cannot bypass it. | Foundation | architecture fixture planned |
 | SEC-001 | WorkspaceRoot, modes, hooks, gateway, and audit are product controls, not OS sandboxes. | all | Adopt | principles/scope | Trusted-local OS authority remains explicit. | Foundation | documentation review |
 | QLT-001 | Later implementation requires declared owners, test targets, coverage tiers, feature treatment, architecture fixtures, and outcome evidence. | future | Adopt | TDD verification | No production activation from research alone. | Foundation | quality review |
+| QLT-002 | Exactly one opt-in, manual, non-hermetic live-provider e2e exists; it never blocks `make verify` or a required check; the key is env-injected and never logged or durably recorded. | future | Adopt | TDD verification | No live run in the blocking gate or a required status check. | Foundation | ADR 0040; EVD-063 (Planned); architecture 10 scenario J; architecture 12 |
 | RDM-001 | M4+ Foundation is documentation-only; M5-M9 are not silently renumbered or replaced. | all | Adopt | roadmap | A later roadmap decision is required for delivery changes. | Foundation | roadmap review |
 
 ## M5+ Slice 1 contract ledger

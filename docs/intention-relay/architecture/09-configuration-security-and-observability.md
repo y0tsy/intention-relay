@@ -84,7 +84,12 @@ Provider credentials may be stored in TOML in open text by explicit product deci
 - secrets are excluded from transport DTOs, domain events, run snapshots, plan frontmatter, UI DTOs, tool results, and normal logs. `execute` is trusted-local and may inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
-- test fixtures use fake credentials only.
+- hermetic test fixtures use fake credentials only; the single opt-in
+  live-provider e2e channel
+  ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) injects a real
+  credential from the environment (or a CI repository secret) into a private
+  temporary configuration file only and remains subject to every protection in
+  this section.
 
 ## Data classification
 

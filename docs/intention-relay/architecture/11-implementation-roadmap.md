@@ -529,7 +529,15 @@ inside its slice, each with its own contract, transaction, and outcome test.
   order as validated typed definitions, forces the `tool_calls` capability,
   and both current adapters translate them without `tool_choice`; hermetic
   evidence is anchored at EVD-062, and this retrospective completion does not
-  advance slices 3-4.
+  advance slices 3-4;
+- the opt-in live-provider e2e channel
+  ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additive and
+  manual-only: the ignored `crates/intention-daemon/tests/real_api_e2e.rs`
+  target and the `make e2e-real-api` entry point execute a real provider tool
+  loop only under explicit opt-in, never in `make quick`, `make verify`, or CI;
+  a recorded live run (date, commit, provider, model, run URL; never the key)
+  is the manual live-evidence obligation, and the channel does not alter any
+  protocol, DTO, wire, storage, or blocking gate.
 
 ### Exit criteria
 
@@ -645,6 +653,10 @@ not redefine the loop.
 
 - full result-oriented scenario suite from [10 TTD](10-test-driven-delivery-and-verification.md);
 - real-binary daemon-host model-tool-loop outcome test; the broader M9 scenario suite remains;
+- recorded opt-in live-provider e2e run against a real provider API
+  ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md); manual,
+  non-hermetic, never blocking) reporting date, commit, provider, model, and
+  run URL;
 - secret injection regression suite;
 - daemon restart and reconnect endurance fixtures;
 - architecture dependency/API boundary checks across all crates;

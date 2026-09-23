@@ -1578,6 +1578,80 @@ def test_adr_0039_tool_advertisement_record_exists_and_is_indexed(root: Path) ->
         raise RuntimeError("evidence register must carry the EVD-062 row")
 
 
+def test_adr_0040_live_provider_e2e_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0040-opt-in-live-provider-e2e.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0040 must exist as the opt-in live-provider e2e record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0040](0040-opt-in-live-provider-e2e.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0040")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0040" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0040")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-063 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-063 row")
+
+
+def workflow_trigger_lines(text: str) -> list[str]:
+    """Return the stripped entries of the workflow's top-level `on:` block."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.rstrip()
+        if not stripped.startswith("on:"):
+            continue
+        inline = stripped[len("on:") :].strip()
+        if inline:
+            return [inline]
+        block: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if candidate.strip() and not candidate.startswith((" ", "\t")):
+                break
+            block.append(candidate.strip())
+        return [entry for entry in block if entry]
+    return []
+
+
+def test_real_api_e2e_workflow_is_manual_only(root: Path) -> None:
+    workflow = root / ".github/workflows/real-api-e2e.yml"
+    if not workflow.is_file():
+        raise RuntimeError("the opt-in real-api-e2e workflow must exist")
+    triggers = workflow_trigger_lines(workflow.read_text(encoding="utf-8"))
+    if not any("workflow_dispatch" in trigger for trigger in triggers):
+        raise RuntimeError("the real-api-e2e workflow must declare workflow_dispatch")
+    for forbidden in ("push:", "pull_request:", "schedule:"):
+        if any(trigger.startswith(forbidden) for trigger in triggers):
+            raise RuntimeError(
+                f"the real-api-e2e workflow must not be triggered by {forbidden.rstrip(':')}"
+            )
+
+
+def test_real_api_e2e_target_is_opt_in_only(root: Path) -> None:
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    if not any(
+        line.startswith("e2e-real-api:") for line in makefile.splitlines()
+    ):
+        raise RuntimeError("the Makefile must declare the e2e-real-api target")
+    offenders: list[str] = []
+    for line in makefile.splitlines():
+        if line.startswith((" ", "\t")) or ":" not in line:
+            continue
+        target, _, prerequisites = line.partition(":")
+        target = target.strip()
+        if target in {"quick", "check", "verify", "ci"} or target.startswith("ci-"):
+            if "e2e-real-api" in prerequisites:
+                offenders.append(target)
+    if offenders:
+        raise RuntimeError(
+            "e2e-real-api must not be a prerequisite of blocking targets: "
+            + ", ".join(offenders)
+        )
+
+
 def test_slice2_tag_registry_parity(root: Path) -> None:
     adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
     text = adr.read_text(encoding="utf-8")
@@ -1728,6 +1802,9 @@ def main() -> None:
         test_secret_fixture,
         test_adr_0037_slice2_ledger_exists_and_is_indexed,
         test_adr_0039_tool_advertisement_record_exists_and_is_indexed,
+        test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
+        test_real_api_e2e_workflow_is_manual_only,
+        test_real_api_e2e_target_is_opt_in_only,
         test_slice2_tag_registry_parity,
         test_slice2_storage_schema_declared_single_live,
         test_slice2_protocol_versions_declared,
