@@ -2,10 +2,13 @@
 //!
 //! These tests spawn the real `intention-daemon` binary, drive it through the
 //! real local transport, and execute the real production model-tool loop
-//! against a live provider API over HTTPS. They prove that a real model tool
-//! call executes through the typed tool registry, that its `ToolCallRecorded`
-//! and `ToolResultRecorded` facts are durable, and that a hard daemon restart
-//! replays the same run without re-executing the tool or disclosing the
+//! against a live provider API over HTTPS. The positive test drives every
+//! advertised tool (`read`, `write`, `edit`, `execute`, `glob`, `grep`) as one
+//! live session: it proves that a real model tool call for each of them
+//! executes through the typed tool registry, that every call's
+//! `ToolCallRecorded` and `ToolResultRecorded` facts are durable, that the
+//! observed effects reach the workspace, and that a hard daemon restart
+//! replays a recorded run without re-executing the tool or disclosing the
 //! provider credential.
 //!
 //! When the configured model runs in thinking mode, the same tool loop also
@@ -93,8 +96,8 @@ const REPLAY_QUIET_WINDOW: Duration = Duration::from_secs(1);
 /// The bounded window used to observe the post-restart replay.
 const REPLAY_DEADLINE: Duration = Duration::from_secs(15);
 
-/// The maximum number of sequential live turns the tool-loop test accepts.
-const MAX_TURNS: u8 = 2;
+/// The bounded attempts one live tool turn may consume before it fails.
+const TOOL_TURN_ATTEMPTS: u8 = 2;
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -428,13 +431,13 @@ struct LiveE2eHost {
 }
 
 impl LiveE2eHost {
-    /// Creates a fresh isolated fixture, writes its provider configuration,
-    /// and spawns its first daemon process.
-    fn new(provider: &LiveProviderConfig, workspace_file: Option<(&str, &str)>) -> Self {
+    /// Creates a fresh isolated fixture, seeds the requested workspace files,
+    /// writes its provider configuration, and spawns its first daemon process.
+    fn new(provider: &LiveProviderConfig, workspace_files: &[(&str, &str)]) -> Self {
         let config_home = TempDir::new().expect("config directory exists");
         let state_home = TempDir::new().expect("state directory exists");
         let workspace = TempDir::new().expect("workspace directory exists");
-        if let Some((name, content)) = workspace_file {
+        for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
         write_config(config_home.path(), provider);
@@ -678,63 +681,55 @@ impl ObservedRun {
             })
     }
 
-    /// Reports whether any durable `read` tool call was recorded.
-    fn has_read_tool_call(&self) -> bool {
+    /// Reports whether any durable tool call for the named tool was recorded.
+    fn has_tool_call(&self, tool: &str) -> bool {
         self.facts.iter().any(|fact| {
             matches!(
                 fact.input(),
-                ModelRunFactInputDto::ToolCallRecorded { call } if call.name() == "read"
+                ModelRunFactInputDto::ToolCallRecorded { call } if call.name() == tool
             )
         })
     }
 
-    /// Reports whether any durable tool result was recorded.
-    fn has_tool_result(&self) -> bool {
-        self.facts.iter().any(|fact| {
-            matches!(
-                fact.input(),
-                ModelRunFactInputDto::ToolResultRecorded { .. }
-            )
-        })
+    /// Returns the distinct tool names recorded by durable calls, in fact order.
+    fn recorded_tool_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = Vec::new();
+        for fact in &self.facts {
+            if let ModelRunFactInputDto::ToolCallRecorded { call } = fact.input() {
+                let name = call.name();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
     }
 
-    /// Reports whether the observed run satisfies every live tool-loop
-    /// acceptance condition.
-    fn accepts_tool_loop(&self) -> bool {
-        self.status() == RunStatusDto::Completed
-            && self.facts_end_at_snapshot_cursor()
-            && matches!(
-                self.facts.last().map(ModelRunFactDto::input),
-                Some(ModelRunFactInputDto::Finished { .. })
-            )
-            && self.has_read_tool_call()
-            && self.has_tool_result()
-            && self
-                .assistant_content()
-                .to_ascii_uppercase()
-                .contains("READY")
-    }
-
-    /// Reports whether a durable `read` tool result for a recorded `read` call
-    /// succeeded with content carrying the fixture token.
-    fn read_result_carries_token(&self, token: &str) -> bool {
-        self.facts.iter().any(|result| {
-            let ModelRunFactInputDto::ToolResultRecorded {
-                call_id,
-                outcome: ToolResultOutcomeDto::Succeeded { content },
-            } = result.input()
-            else {
-                return false;
-            };
-            content.contains(token)
-                && self.facts.iter().any(|call| {
-                    matches!(
-                        call.input(),
-                        ModelRunFactInputDto::ToolCallRecorded { call }
-                            if call.name() == "read" && call.call_id() == *call_id
-                    )
-                })
-        })
+    /// Returns the succeeded durable result content of every recorded call of
+    /// one tool, matched to its call by identity.
+    fn succeeded_contents(&self, tool: &str) -> Vec<&str> {
+        self.facts
+            .iter()
+            .filter_map(|result| {
+                let ModelRunFactInputDto::ToolResultRecorded {
+                    call_id,
+                    outcome: ToolResultOutcomeDto::Succeeded { content },
+                } = result.input()
+                else {
+                    return None;
+                };
+                self.facts
+                    .iter()
+                    .any(|call| {
+                        matches!(
+                            call.input(),
+                            ModelRunFactInputDto::ToolCallRecorded { call }
+                                if call.name() == tool && call.call_id() == *call_id
+                        )
+                    })
+                    .then_some(content.as_str())
+            })
+            .collect()
     }
 }
 
@@ -819,6 +814,51 @@ async fn collect_terminal_run(
     }
 }
 
+/// Drives one live turn that must record a durable succeeded call of the named
+/// tool.
+///
+/// The same prompt is retried within the bounded attempt budget, because a
+/// live model occasionally answers without calling the tool at all; a run that
+/// does not complete, or a turn that never records the tool, fails.
+async fn drive_tool_turn(
+    host: &LiveE2eHost,
+    session_id: SessionId,
+    tool: &str,
+    prompt: &str,
+) -> ObservedRun {
+    let mut last_observed = None;
+    for attempt in 1..=TOOL_TURN_ATTEMPTS {
+        let run_id = send_user_turn(&host.endpoint, session_id, prompt);
+        let observed = collect_terminal_run(
+            &host.endpoint,
+            session_id,
+            run_id,
+            Instant::now() + TURN_DEADLINE,
+        )
+        .await;
+        assert_eq!(
+            observed.status(),
+            RunStatusDto::Completed,
+            "live provider {tool} turn {attempt} terminated with failure code {:?}",
+            observed.failure_code()
+        );
+        assert!(
+            observed.facts_end_at_snapshot_cursor(),
+            "the {tool} turn delivers one contiguous fact range ending in its terminal fact at the snapshot cursor"
+        );
+        if observed.has_tool_call(tool) && !observed.succeeded_contents(tool).is_empty() {
+            return observed;
+        }
+        last_observed = Some(observed);
+    }
+    let last = last_observed.expect("bounded tool turns observe a run");
+    panic!(
+        "the live provider did not record a succeeded {tool} call within {TOOL_TURN_ATTEMPTS} turns: calls={:?} succeeded_results={}",
+        last.recorded_tool_names(),
+        last.succeeded_contents(tool).len()
+    );
+}
+
 /// Asserts one text surface never discloses the credential value.
 ///
 /// The assertion message names only the surface label, never the credential.
@@ -859,79 +899,181 @@ fn assert_state_directory_excludes_credential(directory: &Path, credential: &str
     }
 }
 
-/// Proves the real production tool loop against a live provider, then proves
-/// the durable run replays across a hard daemon restart.
+/// Proves the real production tool loop against a live provider for every
+/// advertised tool, then proves a durable run replays across a hard daemon
+/// restart.
 ///
-/// The run is accepted only when it completed, delivered a contiguous fact
-/// suffix ending in `Finished` at the snapshot cursor, recorded a `read` tool
-/// call and a tool result, and accumulated a `READY` reply. A completed run
-/// that misses those conditions consumes the next sequential turn; a failed
-/// run or a timeout fails the test without a test-level retry.
+/// One live session drives all six active registry tools as separate turns:
+/// `read`, `glob`, `grep`, `write`, `edit`, and `execute`. A turn is accepted
+/// only when its run completed, delivered a contiguous fact range ending in
+/// the terminal fact at the snapshot cursor, and recorded a durable call with
+/// a succeeded durable result for that tool: the note text for `read` and
+/// `grep`, the workspace path list for `glob`, the written bytes for `write`
+/// and `edit`, and the real child's stdout with its typed exit status for
+/// `execute`. A turn that misses those conditions consumes one bounded retry;
+/// a failed run or a timeout fails the test without a test-level retry.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
-async fn real_provider_tool_loop_completes_and_replays_after_restart() {
+async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
     let Some(provider) = LiveProviderConfig::from_env() else {
         return;
     };
     let token = format!("real-e2e-note-{}", std::process::id());
     let note = format!("live provider tool-loop note: {token}\n");
-    let mut host = LiveE2eHost::new(&provider, Some(("e2e-note.txt", note.as_str())));
+    let edit_source = format!("editable live line: {token}\n");
+    let mut host = LiveE2eHost::new(
+        &provider,
+        &[
+            ("e2e-note.txt", note.as_str()),
+            ("e2e-edit-source.txt", edit_source.as_str()),
+        ],
+    );
     let credential = host.credential.clone();
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
 
     let session_id = SessionId::new();
     create_session(&host.endpoint, session_id, host.workspace.path());
 
-    let mut accepted: Option<(RunId, ObservedRun)> = None;
-    let mut last_observed: Option<ObservedRun> = None;
-    for attempt in 1..=MAX_TURNS {
-        let run_id = send_user_turn(
-            &host.endpoint,
-            session_id,
-            "Use the read tool with the relative path e2e-note.txt to read that workspace file, then reply with exactly READY.",
-        );
-        let observed = collect_terminal_run(
-            &host.endpoint,
-            session_id,
-            run_id,
-            Instant::now() + TURN_DEADLINE,
-        )
-        .await;
-        assert_eq!(
-            observed.status(),
-            RunStatusDto::Completed,
-            "live provider turn {attempt} terminated with failure code {:?}",
-            observed.failure_code()
-        );
-        if observed.accepts_tool_loop() {
-            accepted = Some((run_id, observed));
-            break;
-        }
-        last_observed = Some(observed);
-    }
-    let Some((run_id, observed)) = accepted else {
-        let last = last_observed.expect("two live turns are observed");
-        panic!(
-            "the live provider tool loop did not satisfy the acceptance conditions within two turns: status={:?} facts={} read_call={} tool_result={} ready_reply={}",
-            last.status(),
-            last.facts.len(),
-            last.has_read_tool_call(),
-            last.has_tool_result(),
-            last.assistant_content()
-                .to_ascii_uppercase()
-                .contains("READY")
-        );
+    // `read`: the live model reads the seeded note through the real registry.
+    let read_run = drive_tool_turn(
+        &host,
+        session_id,
+        "read",
+        &format!(
+            "Use the read tool with the arguments {} to read that workspace file, then reply with exactly READY.",
+            serde_json::json!({"path": "e2e-note.txt"})
+        ),
+    )
+    .await;
+    let read_content = read_run.succeeded_contents("read").join("\n");
+    assert!(
+        read_content.contains(&token),
+        "the durable read result carries the fixture note content, got: {read_content}"
+    );
+    assert!(
+        read_run
+            .assistant_content()
+            .to_ascii_uppercase()
+            .contains("READY"),
+        "the live model replies READY after the read tool round, got: {}",
+        read_run.assistant_content()
+    );
+
+    // `glob`: the real registry lists the workspace-relative path.
+    let glob_run = drive_tool_turn(
+        &host,
+        session_id,
+        "glob",
+        &format!(
+            "Use the glob tool with the arguments {} to list the workspace text files, then reply with exactly DONE.",
+            serde_json::json!({"pattern": "*.txt"})
+        ),
+    )
+    .await;
+    let glob_content = glob_run.succeeded_contents("glob").join("\n");
+    assert!(
+        glob_content.contains("e2e-note.txt"),
+        "the durable glob result lists the workspace text files, got: {glob_content}"
+    );
+
+    // `grep`: the real registry finds the token under the workspace scope.
+    let grep_run = drive_tool_turn(
+        &host,
+        session_id,
+        "grep",
+        &format!(
+            "Use the grep tool with the arguments {} to find the note token anywhere in the workspace, then reply with exactly DONE.",
+            serde_json::json!({"pattern": token, "scope": {"kind": "workspace"}})
+        ),
+    )
+    .await;
+    let grep_content = grep_run.succeeded_contents("grep").join("\n");
+    assert!(
+        grep_content.contains(&token),
+        "the durable grep result carries the matched note token, got: {grep_content}"
+    );
+
+    // `write`: the real registry creates the file with exactly those bytes.
+    let written = format!("written by the live provider: {token}");
+    let write_run = drive_tool_turn(
+        &host,
+        session_id,
+        "write",
+        &format!(
+            "Use the write tool with the arguments {} to create that workspace file exactly as given, then reply with exactly DONE.",
+            serde_json::json!({"path": "e2e-written.txt", "content": written})
+        ),
+    )
+    .await;
+    let written_bytes = std::fs::read_to_string(host.workspace.path().join("e2e-written.txt"))
+        .expect("the live write creates the workspace file");
+    assert!(
+        written_bytes.contains(&token) && written_bytes.contains("written by the live provider"),
+        "the live write reaches the workspace bytes, got: {written_bytes}"
+    );
+    assert_eq!(
+        write_run.succeeded_contents("write").join("\n"),
+        format!("{} bytes", written_bytes.len()),
+        "the durable write result reports the bytes it wrote"
+    );
+
+    // `edit`: the real registry replaces the seeded token in place.
+    let edited = format!("{token}-edited");
+    let edited_source = edit_source.replacen(&token, &edited, 1);
+    let edit_run = drive_tool_turn(
+        &host,
+        session_id,
+        "edit",
+        &format!(
+            "Use the edit tool with the arguments {} to update that workspace file, then reply with exactly DONE.",
+            serde_json::json!({"path": "e2e-edit-source.txt", "old": token, "new": edited})
+        ),
+    )
+    .await;
+    let edited_bytes = std::fs::read_to_string(host.workspace.path().join("e2e-edit-source.txt"))
+        .expect("the live edit rewrites the workspace file");
+    assert!(
+        edited_bytes.contains(&edited_source),
+        "the live edit replaces exactly the requested text, got: {edited_bytes}"
+    );
+    assert_eq!(
+        edit_run.succeeded_contents("edit").join("\n"),
+        format!("{} bytes", edited_bytes.len()),
+        "the durable edit result reports the replacement bytes"
+    );
+
+    // `execute`: the real registry runs a child process in the workspace.
+    let (program, args) = if cfg!(windows) {
+        ("cmd", vec!["/C".to_owned(), format!("echo {token}")])
+    } else {
+        ("sh", vec!["-c".to_owned(), format!("echo {token}")])
     };
+    let execute_run = drive_tool_turn(
+        &host,
+        session_id,
+        "execute",
+        &format!(
+            "Use the execute tool with the arguments {} to print the token with a real child process, then reply with exactly DONE.",
+            serde_json::json!({"program": program, "args": args})
+        ),
+    )
+    .await;
+    let execute_content = execute_run.succeeded_contents("execute").join("\n");
     assert!(
-        observed.read_result_carries_token(&token),
-        "a durable read tool result carries the fixture note content"
+        execute_content.contains(&token) && execute_content.contains("exit_code:0"),
+        "the durable execute result carries the child's stdout and typed success status, got: {execute_content}"
     );
-    assert!(
-        observed.facts_end_at_snapshot_cursor(),
-        "the accepted run delivers one contiguous fact range ending in the terminal fact at the snapshot cursor"
-    );
-    let facts_json = serde_json::to_string(&observed.facts).expect("durable facts serialize");
-    let pre_restart_cursor = observed.snapshot.cursor();
+
+    let runs = [
+        &read_run,
+        &glob_run,
+        &grep_run,
+        &write_run,
+        &edit_run,
+        &execute_run,
+    ];
+    let run_id = execute_run.snapshot.run_id();
+    let pre_restart_cursor = execute_run.snapshot.cursor();
 
     host.restart_daemon();
     let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
@@ -991,7 +1133,14 @@ async fn real_provider_tool_loop_completes_and_replays_after_restart() {
     )
     .expect("session snapshot serializes");
     let log_text = host.captured_log();
-    assert_excludes_credential(&facts_json, &credential, "serialized durable run facts");
+    for (index, run) in runs.iter().enumerate() {
+        let facts_json = serde_json::to_string(&run.facts).expect("durable facts serialize");
+        assert_excludes_credential(
+            &facts_json,
+            &credential,
+            &format!("turn {} durable run facts", index + 1),
+        );
+    }
     assert_excludes_credential(&session_json, &credential, "replayed session snapshot JSON");
     assert_excludes_credential(&log_text, &credential, "captured daemon log");
     assert_state_directory_excludes_credential(host.state_home.path(), &credential);
@@ -1011,7 +1160,7 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     };
     let credential = "invalid-credential-live-e2e".to_owned();
     provider.credential.clone_from(&credential);
-    let mut host = LiveE2eHost::new(&provider, None);
+    let mut host = LiveE2eHost::new(&provider, &[]);
     let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
 
     let session_id = SessionId::new();
