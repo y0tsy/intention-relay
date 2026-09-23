@@ -68,8 +68,8 @@ use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
     ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
     ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto,
-    SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto,
+    RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
@@ -97,7 +97,7 @@ const REPLAY_QUIET_WINDOW: Duration = Duration::from_secs(1);
 const REPLAY_DEADLINE: Duration = Duration::from_secs(15);
 
 /// The bounded attempts one live tool turn may consume before it fails.
-const TOOL_TURN_ATTEMPTS: u8 = 2;
+const TOOL_TURN_ATTEMPTS: u8 = 3;
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -428,6 +428,8 @@ struct LiveE2eHost {
     daemon: Option<Child>,
     endpoint: LocalEndpoint,
     log_path: PathBuf,
+    project_id: ProjectId,
+    workspace_id: WorkspaceId,
 }
 
 impl LiveE2eHost {
@@ -452,6 +454,8 @@ impl LiveE2eHost {
             daemon: Some(daemon),
             endpoint,
             log_path,
+            project_id: ProjectId::new(),
+            workspace_id: WorkspaceId::new(),
         }
     }
 
@@ -597,15 +601,19 @@ fn send_command(
 }
 
 /// Creates one Build-mode session rooted at the fixture workspace.
-fn create_session(endpoint: &LocalEndpoint, session_id: SessionId, workspace: &Path) {
+///
+/// Every session of one fixture shares its project and workspace identity:
+/// the durable workspace root is unique, so a second session over the same
+/// root must reuse the workspace identity instead of minting a new one.
+fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) {
     let created = send_command(
-        endpoint,
+        &host.endpoint,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
             CreateSessionCommandDto::new(
-                ProjectId::new(),
+                host.project_id,
                 session_id,
-                WorkspaceId::new(),
-                WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
+                host.workspace_id,
+                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
                     .expect("workspace root is absolute"),
                 RunModeDto::Build,
             ),
@@ -614,7 +622,7 @@ fn create_session(endpoint: &LocalEndpoint, session_id: SessionId, workspace: &P
     .expect("session creation is accepted");
     assert!(
         matches!(created, ProtocolCommandResultDto::Accepted(_)),
-        "the daemon accepts session creation"
+        "the daemon accepts session creation for {label}, got: {created:?}"
     );
 }
 
@@ -733,29 +741,54 @@ impl ObservedRun {
     }
 }
 
-/// Subscribes to one run and collects every delivered durable fact plus the
+/// The bounded outcome of one run-stream observation.
+enum RunObservation {
+    /// The run delivered its authoritative terminal snapshot.
+    Terminal(Box<ObservedRun>),
+    /// The connection was lost before the terminal snapshot, because the
+    /// daemon evicted this subscriber or the stream closed. The caller may
+    /// observe again.
+    Lost(String),
+}
+
+/// Subscribes to one run and collects the delivered durable facts plus the
 /// authoritative terminal snapshot.
 ///
 /// The daemon replays an empty tail on subscribe and delivers facts only as
-/// live batches while the run commits them, so a subscriber can observe a
-/// suffix of the run's facts but never a gap inside that suffix. A quiet
-/// receive window is retried until the deadline instead of failing, because a
-/// real provider can pause for several seconds inside one attempt.
+/// live batches while the run commits them, so a subscriber observes a suffix
+/// of the run's facts but never a gap inside that suffix. A real provider can
+/// pause for several seconds inside one attempt, so the whole observation is
+/// bounded by the deadline instead of by per-frame read timeouts.
 async fn collect_terminal_run(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
     run_id: RunId,
     deadline: Instant,
-) -> ObservedRun {
-    let connection = AsyncLocalClientConnection::connect(endpoint)
-        .await
-        .expect("run stream connects");
-    let (_remote, mut requests, mut frames) = connection
-        .negotiate_daemon_frames(stream_hello())
-        .await
-        .expect("run stream negotiates");
+) -> RunObservation {
+    tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        collect_run_frames(endpoint, session_id, run_id),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("run facts arrive before the deadline"))
+}
+
+/// Reads one run stream until its terminal snapshot or a lost connection.
+async fn collect_run_frames(
+    endpoint: &LocalEndpoint,
+    session_id: SessionId,
+    run_id: RunId,
+) -> RunObservation {
+    let Ok(connection) = AsyncLocalClientConnection::connect(endpoint).await else {
+        return RunObservation::Lost("the run stream connection is unavailable".to_owned());
+    };
+    let Ok((_remote, mut requests, mut frames)) =
+        connection.negotiate_daemon_frames(stream_hello()).await
+    else {
+        return RunObservation::Lost("the run stream negotiation failed".to_owned());
+    };
     let correlation_id = CorrelationIdDto::new();
-    requests
+    if requests
         .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
             local_protocol_version(),
             correlation_id,
@@ -770,17 +803,17 @@ async fn collect_terminal_run(
             ),
         ))
         .await
-        .expect("run subscription request sends");
+        .is_err()
+    {
+        return RunObservation::Lost("the run subscription request failed".to_owned());
+    }
     let mut facts = Vec::new();
     loop {
-        assert!(
-            Instant::now() < deadline,
-            "run facts arrive before the deadline"
-        );
-        let frame = match tokio::time::timeout(Duration::from_secs(1), frames.receive()).await {
-            Ok(Ok(frame)) => frame,
-            Ok(Err(error)) => panic!("run stream frame error: {}", error.code()),
-            Err(_) => continue,
+        let Ok(frame) = frames.receive().await else {
+            return RunObservation::Lost(format!(
+                "the run stream closed after {} facts",
+                facts.len()
+            ));
         };
         match frame {
             ProtocolDaemonFrameDto::Response(response) => {
@@ -792,7 +825,10 @@ async fn collect_terminal_run(
                         facts.extend(replay.tail().facts().iter().cloned());
                         let snapshot = replay.snapshot().clone();
                         if snapshot.run_projection().status().is_terminal() {
-                            return ObservedRun { facts, snapshot };
+                            return RunObservation::Terminal(Box::new(ObservedRun {
+                                facts,
+                                snapshot,
+                            }));
                         }
                     }
                     _ => panic!("run subscription reply must be a replay"),
@@ -804,11 +840,22 @@ async fn collect_terminal_run(
             ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Snapshot(frame)) => {
                 let snapshot = frame.snapshot().clone();
                 if snapshot.run_projection().status().is_terminal() {
-                    return ObservedRun { facts, snapshot };
+                    return RunObservation::Terminal(Box::new(ObservedRun { facts, snapshot }));
                 }
             }
             ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Resync(resync)) => {
-                panic!("unexpected run resync: {:?}", resync.reason());
+                // The daemon bounds every subscriber queue and evicts one that
+                // cannot keep up; a long provider reasoning burst can exceed
+                // that bound. The caller observes again instead of failing.
+                assert_eq!(
+                    resync.reason(),
+                    RunResyncReasonDto::SubscriberTooSlow,
+                    "only a slow-subscriber eviction is an expected resync"
+                );
+                return RunObservation::Lost(format!(
+                    "the daemon evicted the slow subscriber after {} facts",
+                    facts.len()
+                ));
             }
         }
     }
@@ -818,24 +865,30 @@ async fn collect_terminal_run(
 /// tool.
 ///
 /// The same prompt is retried within the bounded attempt budget, because a
-/// live model occasionally answers without calling the tool at all; a run that
-/// does not complete, or a turn that never records the tool, fails.
-async fn drive_tool_turn(
-    host: &LiveE2eHost,
-    session_id: SessionId,
-    tool: &str,
-    prompt: &str,
-) -> ObservedRun {
-    let mut last_observed = None;
+/// live model occasionally answers without calling the tool at all and the
+/// daemon drops a subscriber that cannot keep up with a reasoning burst; a
+/// completed turn that records the tool call with a succeeded result is
+/// accepted, and a run that does not complete fails.
+async fn drive_tool_turn(host: &LiveE2eHost, tool: &str, prompt: &str) -> (SessionId, ObservedRun) {
+    let mut last_gap = None;
     for attempt in 1..=TOOL_TURN_ATTEMPTS {
+        let session_id = SessionId::new();
+        create_session(host, session_id, &format!("{tool} turn {attempt}"));
         let run_id = send_user_turn(&host.endpoint, session_id, prompt);
-        let observed = collect_terminal_run(
+        let observed = match collect_terminal_run(
             &host.endpoint,
             session_id,
             run_id,
             Instant::now() + TURN_DEADLINE,
         )
-        .await;
+        .await
+        {
+            RunObservation::Terminal(observed) => *observed,
+            RunObservation::Lost(reason) => {
+                last_gap = Some(reason);
+                continue;
+            }
+        };
         assert_eq!(
             observed.status(),
             RunStatusDto::Completed,
@@ -847,15 +900,16 @@ async fn drive_tool_turn(
             "the {tool} turn delivers one contiguous fact range ending in its terminal fact at the snapshot cursor"
         );
         if observed.has_tool_call(tool) && !observed.succeeded_contents(tool).is_empty() {
-            return observed;
+            return (session_id, observed);
         }
-        last_observed = Some(observed);
+        last_gap = Some(format!(
+            "a completed run recorded calls {:?}",
+            observed.recorded_tool_names()
+        ));
     }
-    let last = last_observed.expect("bounded tool turns observe a run");
     panic!(
-        "the live provider did not record a succeeded {tool} call within {TOOL_TURN_ATTEMPTS} turns: calls={:?} succeeded_results={}",
-        last.recorded_tool_names(),
-        last.succeeded_contents(tool).len()
+        "the live provider did not record a succeeded {tool} call within {TOOL_TURN_ATTEMPTS} turns: {}",
+        last_gap.unwrap_or_else(|| "no turn was observed".to_owned())
     );
 }
 
@@ -903,15 +957,16 @@ fn assert_state_directory_excludes_credential(directory: &Path, credential: &str
 /// advertised tool, then proves a durable run replays across a hard daemon
 /// restart.
 ///
-/// One live session drives all six active registry tools as separate turns:
-/// `read`, `glob`, `grep`, `write`, `edit`, and `execute`. A turn is accepted
-/// only when its run completed, delivered a contiguous fact range ending in
-/// the terminal fact at the snapshot cursor, and recorded a durable call with
-/// a succeeded durable result for that tool: the note text for `read` and
-/// `grep`, the workspace path list for `glob`, the written bytes for `write`
-/// and `edit`, and the real child's stdout with its typed exit status for
-/// `execute`. A turn that misses those conditions consumes one bounded retry;
-/// a failed run or a timeout fails the test without a test-level retry.
+/// One live daemon drives all six active registry tools as separate live
+/// sessions: `read`, `glob`, `grep`, `write`, `edit`, and `execute`. A turn is
+/// accepted only when its run completed, delivered a contiguous fact range
+/// ending in the terminal fact at the snapshot cursor, and recorded a durable
+/// call with a succeeded durable result for that tool: the note text for
+/// `read` and `grep`, the workspace path list for `glob`, the written bytes
+/// for `write` and `edit`, and the real child's stdout with its typed exit
+/// status for `execute`. A turn that misses those conditions consumes one
+/// bounded retry in a fresh session; a failed run or a timeout fails the test
+/// without a test-level retry.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
 async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
@@ -931,13 +986,9 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     let credential = host.credential.clone();
     let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
 
-    let session_id = SessionId::new();
-    create_session(&host.endpoint, session_id, host.workspace.path());
-
     // `read`: the live model reads the seeded note through the real registry.
-    let read_run = drive_tool_turn(
+    let (read_session, read_run) = drive_tool_turn(
         &host,
-        session_id,
         "read",
         &format!(
             "Use the read tool with the arguments {} to read that workspace file, then reply with exactly READY.",
@@ -960,9 +1011,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     );
 
     // `glob`: the real registry lists the workspace-relative path.
-    let glob_run = drive_tool_turn(
+    let (glob_session, glob_run) = drive_tool_turn(
         &host,
-        session_id,
         "glob",
         &format!(
             "Use the glob tool with the arguments {} to list the workspace text files, then reply with exactly DONE.",
@@ -977,9 +1027,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     );
 
     // `grep`: the real registry finds the token under the workspace scope.
-    let grep_run = drive_tool_turn(
+    let (grep_session, grep_run) = drive_tool_turn(
         &host,
-        session_id,
         "grep",
         &format!(
             "Use the grep tool with the arguments {} to find the note token anywhere in the workspace, then reply with exactly DONE.",
@@ -995,9 +1044,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
 
     // `write`: the real registry creates the file with exactly those bytes.
     let written = format!("written by the live provider: {token}");
-    let write_run = drive_tool_turn(
+    let (write_session, write_run) = drive_tool_turn(
         &host,
-        session_id,
         "write",
         &format!(
             "Use the write tool with the arguments {} to create that workspace file exactly as given, then reply with exactly DONE.",
@@ -1020,9 +1068,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     // `edit`: the real registry replaces the seeded token in place.
     let edited = format!("{token}-edited");
     let edited_source = edit_source.replacen(&token, &edited, 1);
-    let edit_run = drive_tool_turn(
+    let (edit_session, edit_run) = drive_tool_turn(
         &host,
-        session_id,
         "edit",
         &format!(
             "Use the edit tool with the arguments {} to update that workspace file, then reply with exactly DONE.",
@@ -1048,9 +1095,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     } else {
         ("sh", vec!["-c".to_owned(), format!("echo {token}")])
     };
-    let execute_run = drive_tool_turn(
+    let (execute_session, execute_run) = drive_tool_turn(
         &host,
-        session_id,
         "execute",
         &format!(
             "Use the execute tool with the arguments {} to print the token with a real child process, then reply with exactly DONE.",
@@ -1072,8 +1118,8 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &edit_run,
         &execute_run,
     ];
-    let run_id = execute_run.snapshot.run_id();
-    let pre_restart_cursor = execute_run.snapshot.cursor();
+    let run_id = read_run.snapshot.run_id();
+    let pre_restart_cursor = read_run.snapshot.cursor();
 
     host.restart_daemon();
     let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
@@ -1082,7 +1128,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     let subscription = stream_client
         .subscribe(SubscribeRunCommandDto::new(
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
+            read_session,
             run_id,
             None,
         ))
@@ -1106,13 +1152,21 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     // A completed durable run commits no further facts. After a bounded quiet
     // window a fresh subscription still replays the identical cursor.
     tokio::time::sleep(REPLAY_QUIET_WINDOW).await;
-    let replayed = collect_terminal_run(
-        &host.endpoint,
-        session_id,
-        run_id,
-        Instant::now() + REPLAY_DEADLINE,
-    )
-    .await;
+    let mut replayed = None;
+    for _ in 1..=TOOL_TURN_ATTEMPTS {
+        if let RunObservation::Terminal(observed) = collect_terminal_run(
+            &host.endpoint,
+            read_session,
+            run_id,
+            Instant::now() + REPLAY_DEADLINE,
+        )
+        .await
+        {
+            replayed = Some(*observed);
+            break;
+        }
+    }
+    let replayed = replayed.expect("the completed run stays observable after the quiet window");
     assert!(
         replayed.facts.is_empty(),
         "the run-stream replay tail is empty by design; live batches carry facts"
@@ -1124,14 +1178,16 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         "no durable fact commits after the run completed"
     );
 
-    // Credential hygiene after the hard kill: no durable fact, snapshot, log,
-    // or state byte carries the credential value.
-    let session_json = serde_json::to_string(
-        &client
-            .session_snapshot(session_id)
-            .expect("session snapshot reads"),
-    )
-    .expect("session snapshot serializes");
+    // Credential hygiene after the hard kill: no durable fact, session
+    // snapshot, log, or state byte carries the credential value.
+    let sessions = [
+        read_session,
+        glob_session,
+        grep_session,
+        write_session,
+        edit_session,
+        execute_session,
+    ];
     let log_text = host.captured_log();
     for (index, run) in runs.iter().enumerate() {
         let facts_json = serde_json::to_string(&run.facts).expect("durable facts serialize");
@@ -1141,7 +1197,19 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             &format!("turn {} durable run facts", index + 1),
         );
     }
-    assert_excludes_credential(&session_json, &credential, "replayed session snapshot JSON");
+    for (index, session) in sessions.iter().enumerate() {
+        let session_json = serde_json::to_string(
+            &client
+                .session_snapshot(*session)
+                .expect("session snapshot reads"),
+        )
+        .expect("session snapshot serializes");
+        assert_excludes_credential(
+            &session_json,
+            &credential,
+            &format!("turn {} session snapshot JSON", index + 1),
+        );
+    }
     assert_excludes_credential(&log_text, &credential, "captured daemon log");
     assert_state_directory_excludes_credential(host.state_home.path(), &credential);
 }
@@ -1164,19 +1232,27 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
 
     let session_id = SessionId::new();
-    create_session(&host.endpoint, session_id, host.workspace.path());
+    create_session(&host, session_id, "the invalid-credential run");
     let run_id = send_user_turn(
         &host.endpoint,
         session_id,
         "Reply with the single word READY.",
     );
-    let observed = collect_terminal_run(
-        &host.endpoint,
-        session_id,
-        run_id,
-        Instant::now() + TURN_DEADLINE,
-    )
-    .await;
+    let mut observed = None;
+    for _ in 1..=TOOL_TURN_ATTEMPTS {
+        if let RunObservation::Terminal(terminal) = collect_terminal_run(
+            &host.endpoint,
+            session_id,
+            run_id,
+            Instant::now() + TURN_DEADLINE,
+        )
+        .await
+        {
+            observed = Some(*terminal);
+            break;
+        }
+    }
+    let observed = observed.expect("the rejected live run stays observable");
 
     assert_eq!(
         observed.status(),
