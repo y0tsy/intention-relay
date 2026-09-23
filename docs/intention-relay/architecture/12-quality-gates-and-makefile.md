@@ -308,7 +308,9 @@ The channel adds no blocking CI job, no required check, no coverage tier, no
 exclusion, and no dependency, so the nine required status checks and the
 `ci-*` alias list stay exactly as documented; the Slice 2 statement that Slice
 2 added no CI job or Makefile target remains true for the blocking gate. A
-recorded live run reports date, commit, provider, model, and run URL and never
+recorded live run reports date, commit, provider, model, and its run
+identifier, the workflow run URL for the manual dispatch or the gitignored
+local run report for a local `make e2e-real-api` run, and never
 the credential.
 
 ### M4 controller charter and closure record

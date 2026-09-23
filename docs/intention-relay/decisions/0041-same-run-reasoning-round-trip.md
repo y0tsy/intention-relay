@@ -217,6 +217,13 @@ Required gates remain `make quick`, `make verify`, `docs-check`, and the
 Linux/Windows CI matrix; the ADR 0040 live channel remains manual and
 non-blocking.
 
+Recorded live run (EVD-063/EVD-064): 2026-09-23, local `make e2e-real-api`,
+commit `0dc2e30`, provider `generic-chat-completion-api`, model
+`deepseek-v4.1-flash`; both ignored live tests passed, so a thinking-mode
+gateway accepted the tool-loop continuation that carried the round's accepted
+reasoning. The run report stays in the gitignored
+`quality/reports/real-api-e2e/` and the key is never recorded.
+
 ## Research provenance
 
 The reasoning directions in [`m4plus_concept.md`](../m4plus_concept.md) were

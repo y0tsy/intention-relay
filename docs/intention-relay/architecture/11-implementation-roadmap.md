@@ -545,7 +545,8 @@ inside its slice, each with its own contract, transaction, and outcome test.
   manual-only: the ignored `crates/intention-daemon/tests/real_api_e2e.rs`
   target and the `make e2e-real-api` entry point execute a real provider tool
   loop only under explicit opt-in, never in `make quick`, `make verify`, or CI;
-  a recorded live run (date, commit, provider, model, run URL; never the key)
+  a recorded live run (date, commit, provider kind, model, and its run
+  identifier; never the key)
   is the manual live-evidence obligation, and the channel does not alter any
   protocol, DTO, wire, storage, or blocking gate; the same recorded run also
   covers the same-run reasoning round-trip (ADR 0041).
