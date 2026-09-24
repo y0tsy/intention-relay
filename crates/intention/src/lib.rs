@@ -5367,7 +5367,10 @@ mod tests {
         GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
         ReconcileUnavailableQueueCommandDto, SetSessionProviderProfileCommandDto,
     };
-    use intention_storage::{AcceptUserTurnInputDto, ProviderUsageRepositoryDto};
+    use intention_storage::{
+        AcceptUserTurnInputDto, ProviderUsageRepositoryDto, SessionProviderDefaultDto,
+        SessionProviderDefaultsRepositoryDto,
+    };
 
     const FAKE_SECRET: &str = "sk-test-sweep-zone5";
 
@@ -5492,6 +5495,20 @@ mod tests {
         ))
     }
 
+    /// Reads one session's durable provider default through the storage
+    /// repository, failing when the committed row is absent.
+    fn durable_session_default(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+    ) -> SessionProviderDefaultDto {
+        facade
+            .inner
+            .repository
+            .get_session_provider_profile(session_id)
+            .expect("session provider default reads")
+            .expect("the committed session provider default is durable")
+    }
+
     #[test]
     fn session_provider_profile_set_get_and_idempotent_noop() {
         let directory = TempDir::new().expect("temporary directory exists");
@@ -5512,6 +5529,10 @@ mod tests {
             unreachable!("session profile set returns typed evidence")
         };
         assert!(result.changed);
+        assert_eq!(
+            result.resulting_projection_revision, 0,
+            "the insert path commits the initial projection revision"
+        );
         assert!(matches!(
             &result.resolved,
             intention_protocol::contract_families::ResolvedProviderProfileDto::Resolved {
@@ -5519,13 +5540,45 @@ mod tests {
                 ..
             } if profile_id == "default"
         ));
-        // NOTE: the durable persistence and the same-operation idempotent
-        // no-op are verified at the storage layer. The zone-3 sqlite
-        // `set_session_provider_profile` transaction currently rolls back
-        // every write (no `tx.commit()` on any path), so an end-to-end
-        // read-back assertion here would fail against the live backend; the
-        // defect is reported to the storage zone. The projection read below
-        // resolves the session/global intent regardless.
+        // NOTE: the zone-3 sqlite `set_session_provider_profile` commits on
+        // every path: the insert, the idempotent same-operation repeat, the
+        // same-profile touch, and the profile change all call `tx.commit()`
+        // before returning, and none returns without committing. The storage
+        // repository read-back below pins that durable commit; the projection
+        // read alone cannot catch a lost commit because an absent session row
+        // resolves to the global catalog default.
+        let durable = durable_session_default(&facade, session_id);
+        assert_eq!(durable.profile_id, "default");
+        assert_eq!(durable.projection_revision, 0);
+        assert_eq!(durable.last_operation_id, "op-1");
+
+        // The same-operation repeat is an idempotent no-op that commits
+        // without rewriting the durable row.
+        let repeated = set_session_profile(&facade, session_id, "default", 0, "op-1");
+        let ProtocolCommandResultDto::Accepted(accepted) = repeated else {
+            unreachable!("session profile repeat is accepted")
+        };
+        let ProtocolAcceptedResultDto::SetSessionProviderProfile(result) = accepted.result() else {
+            unreachable!("session profile repeat returns typed evidence")
+        };
+        assert!(!result.changed);
+        assert_eq!(result.resulting_projection_revision, 0);
+        let durable = durable_session_default(&facade, session_id);
+        assert_eq!(durable.profile_id, "default");
+        assert_eq!(durable.projection_revision, 0);
+        assert_eq!(durable.last_operation_id, "op-1");
+
+        // A stale expected revision is rejected before any write and leaves
+        // the durable row unchanged.
+        let stale = set_session_profile(&facade, session_id, "default", 1, "op-2");
+        let ProtocolCommandResultDto::Rejected(error) = stale else {
+            unreachable!("a stale expected revision is rejected")
+        };
+        assert_eq!(error.code(), "session_profile_revision_mismatch");
+        let durable = durable_session_default(&facade, session_id);
+        assert_eq!(durable.profile_id, "default");
+        assert_eq!(durable.projection_revision, 0);
+        assert_eq!(durable.last_operation_id, "op-1");
 
         let query = GetSessionProviderProfileQueryDto {
             schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
