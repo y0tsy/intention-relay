@@ -691,6 +691,18 @@ impl ToolId {
             Self::Execute => "execute",
         }
     }
+
+    /// Parses one stable wire name back into its registered identifier.
+    ///
+    /// The lookup matches `as_str` over the built-in registry, so no second
+    /// name list can disagree with the names the product advertises.
+    #[must_use]
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        registry()
+            .into_iter()
+            .map(ToolDescriptor::id)
+            .find(|id| id.as_str() == name)
+    }
 }
 impl Display for ToolId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

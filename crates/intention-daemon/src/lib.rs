@@ -28,8 +28,8 @@ use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
 use intention_tools::{
-    EditInput, ExecuteInput, GlobInput, GrepInput, ReadInput, ToolInput, ToolProjectedContent,
-    ToolResult, WriteInput,
+    EditInput, ExecuteInput, GlobInput, GrepInput, ReadInput, ToolId, ToolInput,
+    ToolProjectedContent, ToolResult, WriteInput,
 };
 #[cfg(test)]
 use intention_transport::LocalListener;
@@ -128,6 +128,8 @@ struct HostState {
     terminalizer_completed: tokio::sync::Notify,
     #[cfg(any(test, feature = "test-support"))]
     task_completed: tokio::sync::Notify,
+    #[cfg(any(test, feature = "test-support"))]
+    held_lookup_failures: AtomicUsize,
 }
 
 #[cfg(test)]
@@ -152,21 +154,44 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        held_lookup_failures: AtomicUsize::new(0),
     })
 }
 
 impl HostState {
+    /// Returns whether one run is held pending explicit admission.
+    ///
+    /// A failed lookup is surfaced as an error instead of being defaulted, so
+    /// the admission path can fail closed on the held marker.
+    fn recovered_run_held(&self, session_id: SessionId, run_id: RunId) -> DtoResult<bool> {
+        #[cfg(any(test, feature = "test-support"))]
+        if self
+            .held_lookup_failures
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ErrorDto::unavailable(
+                "injected_held_lookup_failure",
+                "a deterministic held-lookup failure was injected",
+            ));
+        }
+        self.facade
+            .is_recovered_run_held_for_daemon(session_id, run_id)
+    }
+
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
         // Recovery-promoted runs held pending explicit admission are never
         // auto-scheduled; they are admitted only through the
-        // AdmitRecoveredRun command, after which the held marker clears.
-        if self
-            .facade
-            .is_recovered_run_held_for_daemon(session_id, run_id)
-            .unwrap_or(false)
-        {
-            return;
+        // AdmitRecoveredRun command, after which the held marker clears. The
+        // marker is bypassed only on a positive `false`, so a failed lookup
+        // leaves the run held instead of scheduling it and failing it.
+        match self.recovered_run_held(session_id, run_id) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return,
         }
         // Admission and StopRun share this registry lock. Once admission begins,
         // it either registers an executor before StopRun can persist Cancelling,
@@ -447,6 +472,12 @@ impl HostState {
     #[cfg(any(test, feature = "test-support"))]
     fn inject_terminalizer_failure_once(&self) {
         self.terminalizer_failures.store(1, Ordering::Release);
+    }
+
+    /// Arms one deterministic held-lookup failure for the in-crate unit tests.
+    #[cfg(test)]
+    fn inject_held_lookup_failure_once(&self) {
+        self.held_lookup_failures.store(1, Ordering::Release);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -888,24 +919,36 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
 
 /// Decodes provider-normalized tool arguments into the typed daemon tool input.
 ///
+/// The provider tool name is resolved through the typed `ToolId`, so the names
+/// the daemon decodes are the exact names the tool registry advertises; adding
+/// a tool id without a decodable typed input is a compile error here.
+///
 /// # Errors
 ///
 /// Returns a validation error for an unknown tool id or arguments that are not
 /// valid typed input for that tool.
 fn parse_tool_input(tool_id: &str, arguments_json: &str) -> DtoResult<ToolInput> {
+    let Some(tool_id) = ToolId::from_wire_name(tool_id) else {
+        return Err(unknown_tool());
+    };
     let input = match tool_id {
-        "read" => serde_json::from_str::<ReadInput>(arguments_json).map(ToolInput::Read),
-        "write" => serde_json::from_str::<WriteInput>(arguments_json).map(ToolInput::Write),
-        "edit" => serde_json::from_str::<EditInput>(arguments_json).map(ToolInput::Edit),
-        "execute" => serde_json::from_str::<ExecuteInput>(arguments_json).map(ToolInput::Execute),
-        "glob" => serde_json::from_str::<GlobInput>(arguments_json).map(ToolInput::Glob),
-        "grep" => serde_json::from_str::<GrepInput>(arguments_json).map(ToolInput::Grep),
-        _ => {
-            return Err(ErrorDto::validation(
-                "unknown_tool",
-                "tool is not supported by the daemon",
-            ));
+        ToolId::Read => serde_json::from_str::<ReadInput>(arguments_json).map(ToolInput::Read),
+        ToolId::Write => serde_json::from_str::<WriteInput>(arguments_json).map(ToolInput::Write),
+        ToolId::Edit => serde_json::from_str::<EditInput>(arguments_json).map(ToolInput::Edit),
+        ToolId::Execute => {
+            serde_json::from_str::<ExecuteInput>(arguments_json).map(ToolInput::Execute)
         }
+        ToolId::Glob => serde_json::from_str::<GlobInput>(arguments_json).map(ToolInput::Glob),
+        ToolId::Grep => serde_json::from_str::<GrepInput>(arguments_json).map(ToolInput::Grep),
+        // Registered slots without a typed daemon input are not decodable.
+        ToolId::FetchUrl
+        | ToolId::AskUser
+        | ToolId::Todo
+        | ToolId::Retrieve
+        | ToolId::PlanSubmit
+        | ToolId::SubAgent
+        | ToolId::Expand
+        | ToolId::Mcp => return Err(unknown_tool()),
     };
     input.map_err(|_| {
         ErrorDto::validation(
@@ -913,6 +956,10 @@ fn parse_tool_input(tool_id: &str, arguments_json: &str) -> DtoResult<ToolInput>
             "tool arguments are not valid typed input",
         )
     })
+}
+
+fn unknown_tool() -> ErrorDto {
+    ErrorDto::validation("unknown_tool", "tool is not supported by the daemon")
 }
 
 /// Normalizes one typed tool result into bounded durable outcome content.
@@ -1005,6 +1052,8 @@ async fn serve_async_listener(
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        held_lookup_failures: AtomicUsize::new(0),
     });
     loop {
         let connection = listener.accept().await?;
@@ -1378,7 +1427,10 @@ pub async fn serve_test_async_connection(
         terminalizer_failure_release: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         terminalizer_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        held_lookup_failures: AtomicUsize::new(0),
     });
     serve_async_connection(connection, host).await;
 }
@@ -1405,7 +1457,10 @@ pub async fn serve_test_async_listener(
         terminalizer_failure_entered: tokio::sync::Notify::new(),
         terminalizer_failure_release: tokio::sync::Notify::new(),
         terminalizer_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        held_lookup_failures: AtomicUsize::new(0),
     });
     for _ in 0..connection_count {
         let Ok(connection) = listener.accept().await else {
@@ -1438,7 +1493,10 @@ pub async fn serve_test_async_listener_with_first_append_gate(
         terminalizer_failure_entered: tokio::sync::Notify::new(),
         terminalizer_failure_release: tokio::sync::Notify::new(),
         terminalizer_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
+        #[cfg(any(test, feature = "test-support"))]
+        held_lookup_failures: AtomicUsize::new(0),
     });
     for _ in 0..connection_count {
         let Ok(connection) = listener.accept().await else {
@@ -1481,7 +1539,10 @@ pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle
             terminalizer_failure_entered: tokio::sync::Notify::new(),
             terminalizer_failure_release: tokio::sync::Notify::new(),
             terminalizer_completed: tokio::sync::Notify::new(),
+            #[cfg(any(test, feature = "test-support"))]
             task_completed: tokio::sync::Notify::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            held_lookup_failures: AtomicUsize::new(0),
         }),
         connection_tasks: Arc::new(Mutex::new(Vec::new())),
     }
@@ -2120,6 +2181,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn held_lookup_failure_leaves_the_held_run_unadmitted_and_unterminal() {
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        facade
+            .mark_recovered_run_held_for_daemon(session_id, run_id)
+            .expect("fixture run is held for explicit admission");
+        let host = host_for_test(facade.clone());
+        host.inject_held_lookup_failure_once();
+
+        host.schedule_if_starting(session_id, run_id);
+
+        assert!(
+            host.data
+                .lock()
+                .expect("host registry remains available")
+                .tasks
+                .is_empty(),
+            "a failed held lookup never admits an executor"
+        );
+        assert_eq!(
+            facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("held run replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Starting,
+            "the held run is never terminalized by a failed lookup"
+        );
+        assert!(
+            facade
+                .is_recovered_run_held_for_daemon(session_id, run_id)
+                .expect("held status reads after the injected failure"),
+            "the run stays held for explicit admission"
+        );
+    }
+
+    #[tokio::test]
     async fn host_stop_without_an_admitted_task_terminalizes_and_cleans_the_registry() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
@@ -2492,6 +2591,40 @@ mod tests {
             ProtocolCommandResultDto::Rejected(error)
                 if error.code() != "provider_profiles_capability_required"
         ));
+    }
+
+    #[test]
+    fn daemon_tool_decoder_covers_every_advertised_model_visible_tool() {
+        let advertised = intention_tools::model_visible_descriptors();
+        for descriptor in &advertised {
+            let name = descriptor.id().as_str();
+            // Empty arguments may be rejected as invalid typed input, but an
+            // advertised name must never be rejected as an unknown tool.
+            if let Err(error) = parse_tool_input(name, "{}") {
+                assert_ne!(
+                    error.code(),
+                    "unknown_tool",
+                    "the daemon decoder rejects the advertised tool {name}"
+                );
+            }
+        }
+        let advertised_names: Vec<&str> = advertised
+            .iter()
+            .map(|descriptor| descriptor.id().as_str())
+            .collect();
+        for descriptor in intention_tools::registry() {
+            let name = descriptor.id().as_str();
+            if advertised_names.contains(&name) {
+                continue;
+            }
+            let error = parse_tool_input(name, "{}")
+                .expect_err("registered but unadvertised tools are not decodable");
+            assert_eq!(
+                error.code(),
+                "unknown_tool",
+                "the daemon decodes the unadvertised tool {name}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -1882,6 +1882,21 @@ fn model_visible_descriptors_are_the_six_active_tools_in_registry_order() {
 }
 
 #[test]
+fn wire_names_parse_back_into_their_typed_identifiers() {
+    for descriptor in registry() {
+        let id = descriptor.id();
+        assert_eq!(
+            ToolId::from_wire_name(id.as_str()),
+            Some(id),
+            "every registered wire name parses back to its identifier"
+        );
+    }
+    assert_eq!(ToolId::from_wire_name("read_workspace_file"), None);
+    assert_eq!(ToolId::from_wire_name("Read"), None);
+    assert_eq!(ToolId::from_wire_name(""), None);
+}
+
+#[test]
 fn reserved_slots_have_no_schemas_or_revision() {
     use intention_tools::ToolRegistrationStatus;
     let reserved_in_documented_order = [
