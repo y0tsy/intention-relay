@@ -580,3 +580,38 @@ fn unsupported_peer_fails_closed_at_the_negotiation_gate() {
     // provider-profiles capability before any effect.
     let _ = ProtocolVersionDto::new(1, 1);
 }
+
+#[test]
+fn invalid_fixture_projections_are_rejected_at_decode() {
+    // A projection that is structurally complete but violates its declared
+    // invariants must fail at decode instead of reaching the caller.
+    let blank_endpoint = endpoint();
+    let blank_server = start_fixture_server(
+        blank_endpoint.clone(),
+        ExpectedRequest::ConfigurationProjection,
+        FixtureReply::ConfigurationProjection(ConfigurationProjectionDto {
+            reload_status: "   ".to_owned(),
+            ..configuration_projection()
+        }),
+    );
+    let error = fixture_client(blank_endpoint)
+        .configuration_projection()
+        .expect_err("a blank reload status must not decode");
+    assert_eq!(error.code(), "invalid_local_protocol_frame");
+    blank_server.join().expect("fixture server completes");
+
+    let version_endpoint = endpoint();
+    let version_server = start_fixture_server(
+        version_endpoint.clone(),
+        ExpectedRequest::ConfigurationProjection,
+        FixtureReply::ConfigurationProjection(ConfigurationProjectionDto {
+            schema_version: "9.9".to_owned(),
+            ..configuration_projection()
+        }),
+    );
+    let error = fixture_client(version_endpoint)
+        .configuration_projection()
+        .expect_err("a non-current projection schema version must not decode");
+    assert_eq!(error.code(), "invalid_local_protocol_frame");
+    version_server.join().expect("fixture server completes");
+}

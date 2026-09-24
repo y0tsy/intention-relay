@@ -6,12 +6,18 @@
 //! Slice 2 control-plane wire contract evidence.
 
 use intention_protocol::contract_families::{
-    AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto,
-    ConfigurationEditCommandDto, ConfigurationEditOperationDto, GetProviderCatalogQueryDto,
-    GetProviderCatalogStatusQueryDto, GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
-    RawTomlEditCommandDto, ReconcileUnavailableQueueCommandDto,
-    RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
-    RotateProviderCredentialsCommandDto, SetSessionProviderProfileCommandDto,
+    AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto, ArbitraryHeaderPolicyDto,
+    ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationProjectionDto,
+    GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto, GetProviderCatalogQueryDto,
+    GetProviderCatalogStatusQueryDto, GetProviderDiscoveryStatusQueryDto,
+    GetProviderHealthEvidenceQueryDto, GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
+    ProviderCatalogActivationState, ProviderCatalogPageDto, ProviderCatalogStatusDto,
+    ProviderDiscoveryAttemptDto, ProviderHealthEvidenceDto, ProviderHealthProjectionDto,
+    ProviderReadinessDto, ProviderReasoningCatalogProjectionDto, RawTomlEditCommandDto,
+    ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateCommandDto,
+    ReloadConfigurationCommandDto, ReloadTransactionDto, ResolvedProviderProfileDto,
+    RotateProviderCredentialsCommandDto, ServerSideParserConfigDto,
+    SetSessionProviderProfileCommandDto, UsageAggregationDto,
 };
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolMessageDto,
@@ -446,4 +452,333 @@ fn control_plane_wire_never_serializes_fake_credentials() {
             );
         }
     }
+}
+
+/// The raw wire frame of one valid provider catalog entry.
+const VALID_CATALOG_ENTRY: &str = concat!(
+    r#"{"profile_id":"profile-1","profile_revision_id":"rev-1","#,
+    r#""display_name":"Provider One","enabled":true,"provider_kind_id":"responses","#,
+    r#""kind_descriptor_revision_id":"kind-rev-1","model_id":"model-1","#,
+    r#""normalized_endpoint":"https://provider.example","#,
+    r#""effective_execution_policy":"execution-policy","capability_subset":["text"],"#,
+    r#""credential_transport_mode":"safe_header","#,
+    r#""credential_transport_safe_header_name":"x-safe-header","#,
+    r#""credential_configured":true,"driver_declared_capabilities":["text"],"readiness":"ready"}"#
+);
+
+/// The raw wire frame of one valid pending-removal catalog status.
+const CATALOG_STATUS_PENDING_REMOVAL: &str = concat!(
+    r#"{"schema_version":"1.1","activation_state":"pending_removal","#,
+    r#""degraded_reason":"removal_candidate_pending","#,
+    r#""active_catalog_revision_id":"catalog-rev-1","#,
+    r#""candidate_catalog_revision_id":"catalog-rev-2","#,
+    r#""active_default_profile_id":"profile-1","#,
+    r#""removal_impact":{"affected_profile_ids":["profile-1"],"#,
+    r#""safe_impact_summary":"one profile affected"},"provider_profiles_negotiated":true}"#
+);
+
+/// The raw wire frame of one valid configuration projection.
+const CONFIGURATION_PROJECTION: &str = concat!(
+    r#"{"schema_version":"1.1","applied_config_revision_id":"config-rev-1","#,
+    r#""provider_kind":"openrouter","model_id":"model-1","credential_configured":true,"#,
+    r#""provider_execution_policy":"execution-policy","reload_status":"active"}"#
+);
+
+/// The raw wire frame of one valid usage aggregation.
+const USAGE_AGGREGATION: &str = concat!(
+    r#"{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","#,
+    r#""model_id":"model-1","request_count":12,"input_units":1000,"output_units":500,"#,
+    r#""reasoning_units":250,"usage_period_start":100,"usage_period_end":200}"#
+);
+
+/// The raw wire frame of one valid health projection with one observation.
+const HEALTH_PROJECTION: &str = concat!(
+    r#"{"provider_id":"profile-1","observations":[{"profile_id":"profile-1","#,
+    r#""provider_profile_revision_id":"rev-1","health_attempt_id":"attempt-1","#,
+    r#""check_contract_revision":"health-check-v1","observed_availability":"available","#,
+    r#""observed_at":100,"failure_category":null,"safe_diagnostic_code":null}],"#,
+    r#""safe_reason_code":null,"observed_at":100}"#
+);
+
+/// The raw wire frame of one safely rejected reload transaction.
+const RELOAD_TRANSACTION_REJECTED: &str = concat!(
+    r#"{"transaction_id":"transaction-1","previous_config_revision":"config-rev-1","#,
+    r#""candidate_config_revision":"config-rev-2","validation_result":"invalid","#,
+    r#""commit_outcome":"rejected","safe_failure_code":null,"safe_failure_detail":null}"#
+);
+
+/// The raw wire frame of one unavailable health observation without a category.
+const HEALTH_EVIDENCE_UNAVAILABLE: &str = concat!(
+    r#"{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","#,
+    r#""health_attempt_id":"attempt-1","check_contract_revision":"health-check-v1","#,
+    r#""observed_availability":"unavailable","observed_at":100,"failure_category":null,"#,
+    r#""safe_diagnostic_code":null}"#
+);
+
+/// Builds the raw wire frame of one catalog page carrying `entries`.
+fn catalog_page_wire(entries: &str) -> String {
+    format!(
+        r#"{{"schema_version":"1.1","catalog_revision_id":"catalog-rev-1","entries":[{entries}],"next_page_token":null,"has_more":false}}"#
+    )
+}
+
+/// Decodes a raw wire frame and returns the typed decode-error text.
+fn decode_error<T: serde::de::DeserializeOwned + core::fmt::Debug>(wire: &str) -> String {
+    serde_json::from_str::<T>(wire)
+        .expect_err("an invalid control-plane frame must not decode")
+        .to_string()
+}
+
+#[test]
+fn control_plane_decode_rejects_invalid_catalog_frames_with_typed_codes() {
+    // Every fixture below is raw wire text, never a typed struct, so a passing
+    // assertion proves the decode path itself enforces the invariant.
+    let blank_text = catalog_page_wire(&VALID_CATALOG_ENTRY.replace("\"Provider One\"", "\"   \""));
+    let over_long_name = "a".repeat(257);
+    let over_long_text = catalog_page_wire(
+        &VALID_CATALOG_ENTRY.replace("\"Provider One\"", &format!("\"{over_long_name}\"")),
+    );
+    let credential_shaped =
+        catalog_page_wire(&VALID_CATALOG_ENTRY.replace("\"Provider One\"", "\"sk-live-secret\""));
+    let duplicated = catalog_page_wire(&format!("{VALID_CATALOG_ENTRY},{VALID_CATALOG_ENTRY}"));
+    let higher_profile = VALID_CATALOG_ENTRY.replace("\"profile-1\"", "\"profile-2\"");
+    let unsorted = catalog_page_wire(&format!("{higher_profile},{VALID_CATALOG_ENTRY}"));
+    let valid_page = catalog_page_wire(VALID_CATALOG_ENTRY);
+    let missing_token = valid_page.replace("\"has_more\":false", "\"has_more\":true");
+    let stale_token = valid_page.replace(
+        "\"next_page_token\":null",
+        "\"next_page_token\":\"opaque-page-cursor-01\"",
+    );
+    let wrong_version =
+        valid_page.replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
+    let cases: [(&str, &str); 8] = [
+        (&blank_text, "provider_catalog_entry_invalid"),
+        (&over_long_text, "provider_catalog_entry_invalid"),
+        (&credential_shaped, "credentials_forbidden"),
+        (&duplicated, "provider_catalog_unsorted"),
+        (&unsorted, "provider_catalog_unsorted"),
+        (&missing_token, "provider_catalog_invalid"),
+        (&stale_token, "provider_catalog_invalid"),
+        (&wrong_version, "incompatible_protocol_version"),
+    ];
+    for (wire, code) in cases {
+        let error = decode_error::<ProviderCatalogPageDto>(wire);
+        assert!(error.contains(code), "expected {code} in {error}");
+    }
+}
+
+#[test]
+fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
+    let blank_reload_status = CONFIGURATION_PROJECTION.replace("\"active\"", "\"   \"");
+    let wrong_version = CONFIGURATION_PROJECTION
+        .replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
+    /// One rejection case: the raw frame, the expected error code, and its decoder.
+    type RejectionCase<'a> = (&'a str, &'static str, fn(&str) -> String);
+    let cases: [RejectionCase<'_>; 14] = [
+        (
+            &blank_reload_status,
+            "configuration_projection_invalid",
+            decode_error::<ConfigurationProjectionDto>,
+        ),
+        (
+            &wrong_version,
+            "incompatible_protocol_version",
+            decode_error::<ConfigurationProjectionDto>,
+        ),
+        (
+            RELOAD_TRANSACTION_REJECTED,
+            "configuration_reload_invalid",
+            decode_error::<ReloadTransactionDto>,
+        ),
+        (
+            HEALTH_EVIDENCE_UNAVAILABLE,
+            "provider_health_evidence_invalid",
+            decode_error::<ProviderHealthEvidenceDto>,
+        ),
+        (
+            r#"{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","model_id":"model-1","request_count":1,"input_units":1,"output_units":1,"reasoning_units":1,"usage_period_start":200,"usage_period_end":100}"#,
+            "provider_usage_invalid",
+            decode_error::<UsageAggregationDto>,
+        ),
+        (
+            r#"{"provider_kind_id":"responses","model_id":"model-1","supported_effort_levels":["low","low"],"responses_reasoning_modes":["standard"],"projection_revision":"projection-1"}"#,
+            "provider_reasoning_catalog_invalid",
+            decode_error::<ProviderReasoningCatalogProjectionDto>,
+        ),
+        (
+            r#"{"policy_revision":"policy-1","kind_descriptor_revision_id":"kind-rev-1","allowed_header_names":[]}"#,
+            "arbitrary_header_policy_invalid",
+            decode_error::<ArbitraryHeaderPolicyDto>,
+        ),
+        (
+            r#"{"operation_id":"operation-1","expected_config_revision":"config-rev-1","operations":[]}"#,
+            "configuration_edit_invalid",
+            decode_error::<ConfigurationEditCommandDto>,
+        ),
+        (
+            r#"{"vllm":{"parser_id":"   ","bounded_limits":"limits-1"}}"#,
+            "server_side_parser_invalid",
+            decode_error::<ServerSideParserConfigDto>,
+        ),
+        (
+            r#"{"kind":"resolved","data":{"profile_id":"sk-live-secret","profile_revision_id":"rev-1"}}"#,
+            "credentials_forbidden",
+            decode_error::<ResolvedProviderProfileDto>,
+        ),
+        (
+            r#"{"schema_version":"1.1","activation_state":"pending_removal","degraded_reason":null,"active_catalog_revision_id":"catalog-rev-1","candidate_catalog_revision_id":"catalog-rev-2","active_default_profile_id":null,"removal_impact":null,"provider_profiles_negotiated":true}"#,
+            "provider_catalog_status_invalid",
+            decode_error::<ProviderCatalogStatusDto>,
+        ),
+        (
+            r#"{"schema_version":"1.1","page_token":"   ","expected_catalog_revision_id":null}"#,
+            "invalid_page_token",
+            decode_error::<GetProviderCatalogQueryDto>,
+        ),
+        (
+            r#"{"attempt_id":"attempt-1","discovery_scope":"all","phase":"started","started_at":100,"safe_status":"   "}"#,
+            "provider_discovery_invalid",
+            decode_error::<ProviderDiscoveryAttemptDto>,
+        ),
+        (
+            r#"{"operation_id":"operation-1","expected_config_revision":"config-rev-1","candidate_content":"   "}"#,
+            "raw_toml_edit_invalid",
+            decode_error::<RawTomlEditCommandDto>,
+        ),
+    ];
+    for (wire, code, decode) in cases {
+        let error = decode(wire);
+        assert!(error.contains(code), "expected {code} in {error}");
+    }
+}
+
+#[test]
+fn control_plane_decode_rejects_a_non_current_schema_version_for_every_family() {
+    fn reject_flipped<T>(value: &T)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + core::fmt::Debug,
+    {
+        let wire = serde_json::to_string(value).expect("control-plane value encodes");
+        let flipped = wire.replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
+        assert_ne!(
+            wire, flipped,
+            "the encoded frame must carry the exact current schema version"
+        );
+        let error = decode_error::<T>(&flipped);
+        assert!(
+            error.contains("incompatible_protocol_version"),
+            "expected a typed version rejection in {error}"
+        );
+    }
+
+    reject_flipped(&catalog_query());
+    reject_flipped(&ProviderCatalogPageDto {
+        schema_version: "1.1".to_owned(),
+        catalog_revision_id: "catalog-rev-1".to_owned(),
+        entries: Vec::new(),
+        next_page_token: None,
+        has_more: false,
+    });
+    reject_flipped(&GetProviderCatalogStatusQueryDto {
+        schema_version: "1.1".to_owned(),
+    });
+    reject_flipped(&ProviderCatalogStatusDto {
+        schema_version: "1.1".to_owned(),
+        activation_state: ProviderCatalogActivationState::Active,
+        degraded_reason: None,
+        active_catalog_revision_id: Some("catalog-rev-1".to_owned()),
+        candidate_catalog_revision_id: None,
+        active_default_profile_id: Some("profile-1".to_owned()),
+        removal_impact: None,
+        provider_profiles_negotiated: true,
+    });
+    reject_flipped(&set_profile_command());
+    reject_flipped(&GetSessionProviderProfileQueryDto {
+        schema_version: "1.1".to_owned(),
+        session_id: "session-1".to_owned(),
+    });
+    reject_flipped(&GetProviderUsageQueryDto {
+        schema_version: "1.1".to_owned(),
+        profile_id: "profile-1".to_owned(),
+        usage_period_start: 100,
+        usage_period_end: 200,
+    });
+    reject_flipped(&GetProviderHealthEvidenceQueryDto {
+        schema_version: "1.1".to_owned(),
+        provider_id: "profile-1".to_owned(),
+    });
+    reject_flipped(&GetProviderDiscoveryStatusQueryDto {
+        schema_version: "1.1".to_owned(),
+        attempt_id: None,
+    });
+    reject_flipped(&GetPricingPolicyQueryDto {
+        schema_version: "1.1".to_owned(),
+        model_id: None,
+    });
+    reject_flipped(&GetConfigurationProjectionQueryDto {
+        schema_version: "1.1".to_owned(),
+    });
+    reject_flipped(&ConfigurationProjectionDto {
+        schema_version: "1.1".to_owned(),
+        applied_config_revision_id: "config-rev-1".to_owned(),
+        provider_kind: "openrouter".to_owned(),
+        model_id: "model-1".to_owned(),
+        credential_configured: true,
+        provider_execution_policy: "execution-policy".to_owned(),
+        reload_status: "active".to_owned(),
+    });
+}
+
+#[test]
+fn converted_control_plane_families_decode_valid_raw_frames_unchanged() {
+    let page_wire = catalog_page_wire(VALID_CATALOG_ENTRY);
+    let page: ProviderCatalogPageDto =
+        serde_json::from_str(&page_wire).expect("valid catalog page decodes");
+    assert_eq!(page.schema_version, "1.1");
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].readiness, ProviderReadinessDto::Ready);
+    assert_eq!(
+        serde_json::to_string(&page).expect("catalog page encodes"),
+        page_wire
+    );
+
+    let status: ProviderCatalogStatusDto =
+        serde_json::from_str(CATALOG_STATUS_PENDING_REMOVAL).expect("valid catalog status decodes");
+    assert_eq!(
+        status.activation_state,
+        ProviderCatalogActivationState::PendingRemoval
+    );
+    assert_eq!(
+        serde_json::to_string(&status).expect("catalog status encodes"),
+        CATALOG_STATUS_PENDING_REMOVAL
+    );
+
+    let projection: ConfigurationProjectionDto = serde_json::from_str(CONFIGURATION_PROJECTION)
+        .expect("valid configuration projection decodes");
+    assert_eq!(projection.schema_version, "1.1");
+    assert_eq!(projection.reload_status, "active");
+    assert_eq!(
+        serde_json::to_string(&projection).expect("configuration projection encodes"),
+        CONFIGURATION_PROJECTION
+    );
+
+    let usage: UsageAggregationDto =
+        serde_json::from_str(USAGE_AGGREGATION).expect("valid usage aggregation decodes");
+    assert_eq!(usage.request_count, 12);
+    assert_eq!(
+        serde_json::to_string(&usage).expect("usage aggregation encodes"),
+        USAGE_AGGREGATION
+    );
+
+    let health: ProviderHealthProjectionDto =
+        serde_json::from_str(HEALTH_PROJECTION).expect("valid health projection decodes");
+    assert_eq!(health.observations.len(), 1);
+    assert_eq!(
+        health.observations[0].check_contract_revision,
+        "health-check-v1"
+    );
+    assert_eq!(
+        serde_json::to_string(&health).expect("health projection encodes"),
+        HEALTH_PROJECTION
+    );
 }

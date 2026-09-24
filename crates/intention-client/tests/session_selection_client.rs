@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use intention_client::{DaemonLauncher, IntentionClient};
+use intention_client::{DaemonLauncher, IntentionClient, RunStreamClient};
 use intention_protocol::contract_families::{
     AcceptProviderCatalogRemovalAcceptedDto, AcceptProviderCatalogRemovalCommandDto,
     AdmitRecoveredRunAcceptedDto, AdmitRecoveredRunCommandDto, CredentialTransportMode,
@@ -31,10 +31,10 @@ use intention_protocol::contract_families::{
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandResultDto, ProtocolHelloDto,
     ProtocolMessageDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
-    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto,
+    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, SubscribeRunCommandDto,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
-use intention_types::{DtoResult, ErrorDto, SchemaVersionDto, SessionId};
+use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, RunId, SchemaVersionDto, SessionId};
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const FAKE_SECRET: &str = "sk-zone5-client-fake-secret";
@@ -623,7 +623,10 @@ fn fake_secret_commands_fail_closed_client_side() {
 
 #[test]
 fn safe_projections_decode_without_credentials() {
-    // Every fixture projection validates as credential-free at decode time.
+    // Every fixture projection is credential-free. These fixtures are built as
+    // typed values, so this asserts their validity; the same invariants are
+    // enforced at decode time by the protocol decode fixtures and by the
+    // invalid-projection client test.
     set_accepted()
         .validate()
         .expect("accepted set projection is valid");
@@ -653,4 +656,25 @@ fn safe_projections_decode_without_credentials() {
         ProviderProfileUnavailableReason::ProfileDisabled,
         ProviderProfileUnavailableReason::ProfileDisabled
     );
+}
+
+#[tokio::test]
+async fn run_stream_subscription_rejects_a_non_current_schema_version_before_sending() {
+    // No fixture listener is bound for this endpoint: the typed validation
+    // rejection proves the subscription failed on its schema version instead
+    // of reaching the transport, so no request was ever sent.
+    let client = RunStreamClient::new(endpoint(), "fixture-version-gate-client")
+        .expect("fixture run-stream client is valid");
+    let error = client
+        .subscribe(SubscribeRunCommandDto::new(
+            SchemaVersionDto::new(9, 9),
+            SessionId::new(),
+            RunId::new(),
+            None,
+        ))
+        .await
+        .err()
+        .expect("a non-current subscription schema version is rejected");
+    assert_eq!(error.code(), "incompatible_protocol_version");
+    assert_eq!(error.category(), ErrorCategoryDto::Validation);
 }

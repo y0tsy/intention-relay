@@ -2184,7 +2184,7 @@ fn set_command(
     operation_id: &str,
 ) -> SetSessionProviderProfileCommandDto {
     SetSessionProviderProfileCommandDto {
-        schema_version: "session-provider-profile-v1".to_owned(),
+        schema_version: "1.1".to_owned(),
         session_id: session_id.to_string(),
         profile_id: profile_id.to_owned(),
         expected_session_projection_revision: expected_revision,
@@ -2333,7 +2333,7 @@ fn set_passes_through_non_stale_storage_failures() {
 
 fn get_query(session_id: SessionId) -> GetSessionProviderProfileQueryDto {
     GetSessionProviderProfileQueryDto {
-        schema_version: "session-provider-profile-v1".to_owned(),
+        schema_version: "1.1".to_owned(),
         session_id: session_id.to_string(),
     }
 }
@@ -2573,7 +2573,7 @@ fn reconcile_rejects_an_invalid_command() {
 
 fn usage_query(profile_id: &str) -> GetProviderUsageQueryDto {
     GetProviderUsageQueryDto {
-        schema_version: "provider-usage-v1".to_owned(),
+        schema_version: "1.1".to_owned(),
         profile_id: profile_id.to_owned(),
         usage_period_start: 0,
         usage_period_end: 500,
@@ -2663,7 +2663,7 @@ fn by_profile_rejects_an_invalid_query() {
 
 fn catalog_query(expected_revision: Option<&str>) -> GetProviderCatalogQueryDto {
     GetProviderCatalogQueryDto {
-        schema_version: "provider-catalog-v1".to_owned(),
+        schema_version: "1.1".to_owned(),
         page_token: None,
         expected_catalog_revision_id: expected_revision.map(str::to_owned),
     }
@@ -2823,7 +2823,7 @@ fn list_profiles_rejects_a_page_entry_missing_from_the_material() {
 
 fn status_query() -> GetProviderCatalogStatusQueryDto {
     GetProviderCatalogStatusQueryDto {
-        schema_version: "provider-catalog-status-v1".to_owned(),
+        schema_version: "1.1".to_owned(),
     }
 }
 

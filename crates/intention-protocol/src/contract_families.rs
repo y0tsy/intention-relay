@@ -1,7 +1,7 @@
 //! Additive protocol contract-family DTOs.
 use intention_domain::canonical::TagRegistry;
 use intention_types::{DtoResult, ErrorDto};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 fn valid_text(value: &str, max: usize, code: &'static str) -> DtoResult<String> {
     let value = value.trim();
@@ -45,6 +45,29 @@ fn bounded<T>(items: Vec<T>, max: usize, code: &'static str) -> DtoResult<Vec<T>
 #[must_use]
 fn credential_shaped(value: &str) -> bool {
     intention_domain::canonical::credential_shaped_identifier(value)
+}
+
+/// Requires one control-plane `schema_version` text to name the current DTO
+/// schema version exactly.
+///
+/// Control-plane command, query, and projection DTOs carry the schema version
+/// as `major.minor` text rather than as a typed version, so the exact-current
+/// rule is checked here: on the wire decode path through each family's
+/// `Deserialize`, and again on daemon admission through `validate()`.
+///
+/// # Errors
+///
+/// Returns `incompatible_protocol_version` for any other value.
+fn require_current_schema_version(value: &str) -> DtoResult<()> {
+    let current = crate::CURRENT_DTO_SCHEMA_VERSION;
+    if value == format!("{}.{}", current.major(), current.minor()) {
+        Ok(())
+    } else {
+        Err(ErrorDto::validation(
+            "incompatible_protocol_version",
+            "schema version must equal the current DTO schema version",
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1641,12 +1664,35 @@ pub enum ProviderReadinessDto {
 }
 
 /// A credential-free, pageable provider catalog query.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetProviderCatalogQueryDto {
     pub schema_version: String,
     pub page_token: Option<String>,
     pub expected_catalog_revision_id: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for GetProviderCatalogQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderCatalogQueryDto {
+            schema_version: String,
+            page_token: Option<String>,
+            expected_catalog_revision_id: Option<String>,
+        }
+        let raw = RawGetProviderCatalogQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            page_token: raw.page_token,
+            expected_catalog_revision_id: raw.expected_catalog_revision_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetProviderCatalogQueryDto {
     /// Validates the bounded, credential-free catalog query fields.
     ///
@@ -1654,10 +1700,13 @@ impl GetProviderCatalogQueryDto {
     ///
     /// Returns `provider_catalog_invalid` for a blank, over-long, or
     /// control-bearing schema version or catalog revision reference,
-    /// `invalid_page_token` for a blank, over-long, or control-bearing page
-    /// token, and `credentials_forbidden` for a credential-shaped value.
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, `invalid_page_token` for a blank, over-long, or
+    /// control-bearing page token, and `credentials_forbidden` for a
+    /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         if let Some(revision) = &self.expected_catalog_revision_id {
             valid_text(revision, 256, "provider_catalog_invalid")?;
         }
@@ -1684,7 +1733,7 @@ impl GetProviderCatalogQueryDto {
 ///
 /// The entry names where credentials are transported and whether they are
 /// configured; it never carries credential material, raw payloads, or paths.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogEntryDto {
     pub profile_id: String,
     pub profile_revision_id: String,
@@ -1702,6 +1751,53 @@ pub struct ProviderCatalogEntryDto {
     pub driver_declared_capabilities: Vec<String>,
     pub readiness: ProviderReadinessDto,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogEntryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogEntryDto {
+            profile_id: String,
+            profile_revision_id: String,
+            display_name: String,
+            enabled: bool,
+            provider_kind_id: String,
+            kind_descriptor_revision_id: String,
+            model_id: String,
+            normalized_endpoint: Option<String>,
+            effective_execution_policy: String,
+            capability_subset: Vec<String>,
+            credential_transport_mode: CredentialTransportMode,
+            credential_transport_safe_header_name: Option<String>,
+            credential_configured: bool,
+            driver_declared_capabilities: Vec<String>,
+            readiness: ProviderReadinessDto,
+        }
+        let raw = RawProviderCatalogEntryDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            profile_revision_id: raw.profile_revision_id,
+            display_name: raw.display_name,
+            enabled: raw.enabled,
+            provider_kind_id: raw.provider_kind_id,
+            kind_descriptor_revision_id: raw.kind_descriptor_revision_id,
+            model_id: raw.model_id,
+            normalized_endpoint: raw.normalized_endpoint,
+            effective_execution_policy: raw.effective_execution_policy,
+            capability_subset: raw.capability_subset,
+            credential_transport_mode: raw.credential_transport_mode,
+            credential_transport_safe_header_name: raw.credential_transport_safe_header_name,
+            credential_configured: raw.credential_configured,
+            driver_declared_capabilities: raw.driver_declared_capabilities,
+            readiness: raw.readiness,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogEntryDto {
     /// Validates the bounded, credential-free catalog entry fields.
     ///
@@ -1783,7 +1879,7 @@ impl ProviderCatalogEntryDto {
 }
 
 /// A paged, profile-id-sorted provider catalog projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogPageDto {
     pub schema_version: String,
     pub catalog_revision_id: String,
@@ -1791,6 +1887,33 @@ pub struct ProviderCatalogPageDto {
     pub next_page_token: Option<String>,
     pub has_more: bool,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogPageDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogPageDto {
+            schema_version: String,
+            catalog_revision_id: String,
+            entries: Vec<ProviderCatalogEntryDto>,
+            next_page_token: Option<String>,
+            has_more: bool,
+        }
+        let raw = RawProviderCatalogPageDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            catalog_revision_id: raw.catalog_revision_id,
+            entries: raw.entries,
+            next_page_token: raw.next_page_token,
+            has_more: raw.has_more,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogPageDto {
     /// Validates the sorted, bounded, credential-free catalog page.
     ///
@@ -1799,12 +1922,14 @@ impl ProviderCatalogPageDto {
     /// Returns `provider_catalog_invalid` for a blank, over-long, or
     /// control-bearing text field, a page exceeding its 256-entry bound, or
     /// an inconsistent `has_more`/next-token pair,
-    /// `provider_catalog_unsorted` when entries are not strictly sorted by
-    /// profile id (or repeat a profile id), `invalid_page_token` for a
-    /// malformed continuation token, and `credentials_forbidden` for a
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, `provider_catalog_unsorted` when entries are not strictly
+    /// sorted by profile id (or repeat a profile id), `invalid_page_token`
+    /// for a malformed continuation token, and `credentials_forbidden` for a
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         valid_text(&self.catalog_revision_id, 256, "provider_catalog_invalid")?;
         if self.entries.len() > 256 {
             return Err(ErrorDto::validation(
@@ -1852,20 +1977,41 @@ impl ProviderCatalogPageDto {
 }
 
 /// A credential-free provider catalog status query.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetProviderCatalogStatusQueryDto {
     pub schema_version: String,
 }
+
+impl<'de> Deserialize<'de> for GetProviderCatalogStatusQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderCatalogStatusQueryDto {
+            schema_version: String,
+        }
+        let raw = RawGetProviderCatalogStatusQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetProviderCatalogStatusQueryDto {
     /// Validates the bounded status query schema version.
     ///
     /// # Errors
     ///
     /// Returns `provider_catalog_status_invalid` for a blank, over-long, or
-    /// control-bearing schema version and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// control-bearing schema version, `incompatible_protocol_version` for a
+    /// schema version other than the current one, and
+    /// `credentials_forbidden` for a credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         if credential_shaped(&self.schema_version) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -1905,11 +2051,32 @@ pub enum ProviderCatalogDegradedReason {
 }
 
 /// The safe removal impact of a pending catalog candidate.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogRemovalImpactDto {
     pub affected_profile_ids: Vec<String>,
     pub safe_impact_summary: String,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogRemovalImpactDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogRemovalImpactDto {
+            affected_profile_ids: Vec<String>,
+            safe_impact_summary: String,
+        }
+        let raw = RawProviderCatalogRemovalImpactDto::deserialize(deserializer)?;
+        let value = Self {
+            affected_profile_ids: raw.affected_profile_ids,
+            safe_impact_summary: raw.safe_impact_summary,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogRemovalImpactDto {
     /// Validates the bounded, credential-free removal impact.
     ///
@@ -1950,7 +2117,7 @@ impl ProviderCatalogRemovalImpactDto {
 }
 
 /// A credential-free provider catalog activation and degradation projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogStatusDto {
     pub schema_version: String,
     pub activation_state: ProviderCatalogActivationState,
@@ -1961,6 +2128,39 @@ pub struct ProviderCatalogStatusDto {
     pub removal_impact: Option<ProviderCatalogRemovalImpactDto>,
     pub provider_profiles_negotiated: bool,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogStatusDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogStatusDto {
+            schema_version: String,
+            activation_state: ProviderCatalogActivationState,
+            degraded_reason: Option<ProviderCatalogDegradedReason>,
+            active_catalog_revision_id: Option<String>,
+            candidate_catalog_revision_id: Option<String>,
+            active_default_profile_id: Option<String>,
+            removal_impact: Option<ProviderCatalogRemovalImpactDto>,
+            provider_profiles_negotiated: bool,
+        }
+        let raw = RawProviderCatalogStatusDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            activation_state: raw.activation_state,
+            degraded_reason: raw.degraded_reason,
+            active_catalog_revision_id: raw.active_catalog_revision_id,
+            candidate_catalog_revision_id: raw.candidate_catalog_revision_id,
+            active_default_profile_id: raw.active_default_profile_id,
+            removal_impact: raw.removal_impact,
+            provider_profiles_negotiated: raw.provider_profiles_negotiated,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogStatusDto {
     /// Validates the bounded status fields and the closed
     /// activation/degradation combinations.
@@ -1969,10 +2169,12 @@ impl ProviderCatalogStatusDto {
     ///
     /// Returns `provider_catalog_status_invalid` for a blank, over-long, or
     /// control-bearing text field, or an inconsistent activation state and
-    /// degraded reason, and `credentials_forbidden` for a credential-shaped
-    /// value.
+    /// degraded reason, `incompatible_protocol_version` for a schema version
+    /// other than the current one, and `credentials_forbidden` for a
+    /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         for value in [
             &self.active_catalog_revision_id,
             &self.candidate_catalog_revision_id,
@@ -2048,7 +2250,7 @@ pub enum ProviderProfileUnavailableReason {
 }
 
 /// The resolved disposition of a session provider profile reference.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ResolvedProviderProfileDto {
     /// The profile resolved to a concrete catalog revision.
@@ -2059,6 +2261,37 @@ pub enum ResolvedProviderProfileDto {
     /// The profile could not be resolved, with a closed reason.
     Unavailable(ProviderProfileUnavailableReason),
 }
+
+impl<'de> Deserialize<'de> for ResolvedProviderProfileDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        enum RawResolvedProviderProfileDto {
+            Resolved {
+                profile_id: String,
+                profile_revision_id: String,
+            },
+            Unavailable(ProviderProfileUnavailableReason),
+        }
+        let raw = RawResolvedProviderProfileDto::deserialize(deserializer)?;
+        let value = match raw {
+            RawResolvedProviderProfileDto::Resolved {
+                profile_id,
+                profile_revision_id,
+            } => Self::Resolved {
+                profile_id,
+                profile_revision_id,
+            },
+            RawResolvedProviderProfileDto::Unavailable(reason) => Self::Unavailable(reason),
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ResolvedProviderProfileDto {
     /// Validates the resolved profile reference.
     ///
@@ -2090,7 +2323,7 @@ impl ResolvedProviderProfileDto {
 }
 
 /// A command binding a session's durable provider profile intent.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SetSessionProviderProfileCommandDto {
     pub schema_version: String,
     pub session_id: String,
@@ -2098,14 +2331,42 @@ pub struct SetSessionProviderProfileCommandDto {
     pub expected_session_projection_revision: u64,
     pub operation_id: String,
 }
+
+impl<'de> Deserialize<'de> for SetSessionProviderProfileCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSetSessionProviderProfileCommandDto {
+            schema_version: String,
+            session_id: String,
+            profile_id: String,
+            expected_session_projection_revision: u64,
+            operation_id: String,
+        }
+        let raw = RawSetSessionProviderProfileCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            session_id: raw.session_id,
+            profile_id: raw.profile_id,
+            expected_session_projection_revision: raw.expected_session_projection_revision,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl SetSessionProviderProfileCommandDto {
     /// Validates the bounded, credential-free set command fields.
     ///
     /// # Errors
     ///
     /// Returns `set_session_provider_profile_invalid` for a blank, over-long,
-    /// or control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// or control-bearing field, `incompatible_protocol_version` for a
+    /// schema version other than the current one, and
+    /// `credentials_forbidden` for a credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [
             &self.schema_version,
@@ -2115,6 +2376,7 @@ impl SetSessionProviderProfileCommandDto {
         ] {
             valid_text(field, 256, "set_session_provider_profile_invalid")?;
         }
+        require_current_schema_version(&self.schema_version)?;
         if [
             &self.schema_version,
             &self.session_id,
@@ -2134,13 +2396,38 @@ impl SetSessionProviderProfileCommandDto {
 }
 
 /// Acceptance evidence for a session provider profile set operation.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SetSessionProviderProfileAcceptedDto {
     pub session_id: String,
     pub changed: bool,
     pub resulting_projection_revision: u64,
     pub resolved: ResolvedProviderProfileDto,
 }
+
+impl<'de> Deserialize<'de> for SetSessionProviderProfileAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSetSessionProviderProfileAcceptedDto {
+            session_id: String,
+            changed: bool,
+            resulting_projection_revision: u64,
+            resolved: ResolvedProviderProfileDto,
+        }
+        let raw = RawSetSessionProviderProfileAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            changed: raw.changed,
+            resulting_projection_revision: raw.resulting_projection_revision,
+            resolved: raw.resolved,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl SetSessionProviderProfileAcceptedDto {
     /// Validates the acceptance fields and resolved profile reference.
     ///
@@ -2162,23 +2449,46 @@ impl SetSessionProviderProfileAcceptedDto {
 }
 
 /// A query for one session's durable provider profile projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetSessionProviderProfileQueryDto {
     pub schema_version: String,
     pub session_id: String,
 }
+
+impl<'de> Deserialize<'de> for GetSessionProviderProfileQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetSessionProviderProfileQueryDto {
+            schema_version: String,
+            session_id: String,
+        }
+        let raw = RawGetSessionProviderProfileQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            session_id: raw.session_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetSessionProviderProfileQueryDto {
     /// Validates the bounded, credential-free query fields.
     ///
     /// # Errors
     ///
     /// Returns `session_provider_profile_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
+    /// control-bearing field, `incompatible_protocol_version` for a schema
+    /// version other than the current one, and `credentials_forbidden` for a
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [&self.schema_version, &self.session_id] {
             valid_text(field, 256, "session_provider_profile_invalid")?;
         }
+        require_current_schema_version(&self.schema_version)?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.session_id) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -2190,7 +2500,7 @@ impl GetSessionProviderProfileQueryDto {
 }
 
 /// The durable provider profile projection of one session.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionProviderProfileDto {
     pub session_id: String,
     pub profile_id: String,
@@ -2198,6 +2508,33 @@ pub struct SessionProviderProfileDto {
     pub session_projection_revision: u64,
     pub global_default_profile_id: String,
 }
+
+impl<'de> Deserialize<'de> for SessionProviderProfileDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionProviderProfileDto {
+            session_id: String,
+            profile_id: String,
+            resolved: ResolvedProviderProfileDto,
+            session_projection_revision: u64,
+            global_default_profile_id: String,
+        }
+        let raw = RawSessionProviderProfileDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            profile_id: raw.profile_id,
+            resolved: raw.resolved,
+            session_projection_revision: raw.session_projection_revision,
+            global_default_profile_id: raw.global_default_profile_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl SessionProviderProfileDto {
     /// Validates the durable projection fields and resolved reference.
     ///
@@ -2232,7 +2569,7 @@ impl SessionProviderProfileDto {
 }
 
 /// A command accepting the removal of a prepared catalog candidate.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AcceptProviderCatalogRemovalCommandDto {
     pub candidate_handle: String,
     pub expected_active_catalog_revision_id: String,
@@ -2240,6 +2577,33 @@ pub struct AcceptProviderCatalogRemovalCommandDto {
     pub operation_id: String,
     pub source_recheck: bool,
 }
+
+impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAcceptProviderCatalogRemovalCommandDto {
+            candidate_handle: String,
+            expected_active_catalog_revision_id: String,
+            expected_candidate_catalog_revision_id: String,
+            operation_id: String,
+            source_recheck: bool,
+        }
+        let raw = RawAcceptProviderCatalogRemovalCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            expected_active_catalog_revision_id: raw.expected_active_catalog_revision_id,
+            expected_candidate_catalog_revision_id: raw.expected_candidate_catalog_revision_id,
+            operation_id: raw.operation_id,
+            source_recheck: raw.source_recheck,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl AcceptProviderCatalogRemovalCommandDto {
     /// Validates the bounded, credential-free removal command fields.
     ///
@@ -2283,11 +2647,32 @@ impl AcceptProviderCatalogRemovalCommandDto {
 }
 
 /// Acceptance evidence for an accepted catalog removal.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AcceptProviderCatalogRemovalAcceptedDto {
     pub candidate_handle: String,
     pub active_catalog_revision_id: String,
 }
+
+impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAcceptProviderCatalogRemovalAcceptedDto {
+            candidate_handle: String,
+            active_catalog_revision_id: String,
+        }
+        let raw = RawAcceptProviderCatalogRemovalAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            active_catalog_revision_id: raw.active_catalog_revision_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl AcceptProviderCatalogRemovalAcceptedDto {
     /// Validates the bounded, credential-free acceptance fields.
     ///
@@ -2313,12 +2698,35 @@ impl AcceptProviderCatalogRemovalAcceptedDto {
 }
 
 /// A command rejecting a catalog removal candidate.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RejectProviderCatalogCandidateCommandDto {
     pub candidate_handle: String,
     pub expected_active_catalog_revision_id: String,
     pub operation_id: String,
 }
+
+impl<'de> Deserialize<'de> for RejectProviderCatalogCandidateCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRejectProviderCatalogCandidateCommandDto {
+            candidate_handle: String,
+            expected_active_catalog_revision_id: String,
+            operation_id: String,
+        }
+        let raw = RawRejectProviderCatalogCandidateCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            expected_active_catalog_revision_id: raw.expected_active_catalog_revision_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl RejectProviderCatalogCandidateCommandDto {
     /// Validates the bounded, credential-free rejection command fields.
     ///
@@ -2353,10 +2761,29 @@ impl RejectProviderCatalogCandidateCommandDto {
 }
 
 /// Acceptance evidence for a rejected catalog candidate.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RejectProviderCatalogCandidateAcceptedDto {
     pub candidate_handle: String,
 }
+
+impl<'de> Deserialize<'de> for RejectProviderCatalogCandidateAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRejectProviderCatalogCandidateAcceptedDto {
+            candidate_handle: String,
+        }
+        let raw = RawRejectProviderCatalogCandidateAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl RejectProviderCatalogCandidateAcceptedDto {
     /// Validates the bounded, credential-free acceptance field.
     ///
@@ -2385,12 +2812,35 @@ impl RejectProviderCatalogCandidateAcceptedDto {
 pub const MAX_UNAVAILABLE_QUEUE_PROMOTIONS: u64 = 8;
 
 /// A command reconciling a session's unavailable-run queue in bounded pages.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReconcileUnavailableQueueCommandDto {
     pub session_id: String,
     pub operation_id: String,
     pub page_cursor: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for ReconcileUnavailableQueueCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReconcileUnavailableQueueCommandDto {
+            session_id: String,
+            operation_id: String,
+            page_cursor: Option<String>,
+        }
+        let raw = RawReconcileUnavailableQueueCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            operation_id: raw.operation_id,
+            page_cursor: raw.page_cursor,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ReconcileUnavailableQueueCommandDto {
     /// Validates the bounded, credential-free reconciliation command fields.
     ///
@@ -2420,12 +2870,35 @@ impl ReconcileUnavailableQueueCommandDto {
 }
 
 /// Acceptance evidence for one unavailable-run queue reconciliation page.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReconcileUnavailableQueueAcceptedDto {
     pub session_id: String,
     pub page_cursor: Option<String>,
     pub promoted_count: u64,
 }
+
+impl<'de> Deserialize<'de> for ReconcileUnavailableQueueAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReconcileUnavailableQueueAcceptedDto {
+            session_id: String,
+            page_cursor: Option<String>,
+            promoted_count: u64,
+        }
+        let raw = RawReconcileUnavailableQueueAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            page_cursor: raw.page_cursor,
+            promoted_count: raw.promoted_count,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ReconcileUnavailableQueueAcceptedDto {
     /// Validates the bounded, credential-free reconciliation page.
     ///
@@ -2466,12 +2939,35 @@ impl ReconcileUnavailableQueueAcceptedDto {
 ///
 /// Admission restores the run to the session queue; it never reroutes the run
 /// to another session or provider.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AdmitRecoveredRunCommandDto {
     pub session_id: String,
     pub run_id: String,
     pub operation_id: String,
 }
+
+impl<'de> Deserialize<'de> for AdmitRecoveredRunCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAdmitRecoveredRunCommandDto {
+            session_id: String,
+            run_id: String,
+            operation_id: String,
+        }
+        let raw = RawAdmitRecoveredRunCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            run_id: raw.run_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl AdmitRecoveredRunCommandDto {
     /// Validates the bounded, credential-free admission command fields.
     ///
@@ -2498,11 +2994,32 @@ impl AdmitRecoveredRunCommandDto {
 }
 
 /// Acceptance evidence for an admitted recovered run.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AdmitRecoveredRunAcceptedDto {
     pub session_id: String,
     pub run_id: String,
 }
+
+impl<'de> Deserialize<'de> for AdmitRecoveredRunAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAdmitRecoveredRunAcceptedDto {
+            session_id: String,
+            run_id: String,
+        }
+        let raw = RawAdmitRecoveredRunAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            run_id: raw.run_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl AdmitRecoveredRunAcceptedDto {
     /// Validates the bounded, credential-free acceptance fields.
     ///
@@ -2526,21 +3043,48 @@ impl AdmitRecoveredRunAcceptedDto {
 }
 
 /// A query for one provider's usage aggregation over a period.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetProviderUsageQueryDto {
     pub schema_version: String,
     pub profile_id: String,
     pub usage_period_start: u64,
     pub usage_period_end: u64,
 }
+
+impl<'de> Deserialize<'de> for GetProviderUsageQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderUsageQueryDto {
+            schema_version: String,
+            profile_id: String,
+            usage_period_start: u64,
+            usage_period_end: u64,
+        }
+        let raw = RawGetProviderUsageQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            profile_id: raw.profile_id,
+            usage_period_start: raw.usage_period_start,
+            usage_period_end: raw.usage_period_end,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetProviderUsageQueryDto {
     /// Validates the bounded, credential-free usage query fields.
     ///
     /// # Errors
     ///
     /// Returns `provider_usage_invalid` for a blank, over-long, or
-    /// control-bearing field, or a period ending before its start, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// control-bearing field, or a period ending before its start,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         if self.usage_period_end < self.usage_period_start {
             return Err(ErrorDto::validation(
@@ -2551,6 +3095,7 @@ impl GetProviderUsageQueryDto {
         for field in [&self.schema_version, &self.profile_id] {
             valid_text(field, 256, "provider_usage_invalid")?;
         }
+        require_current_schema_version(&self.schema_version)?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.profile_id) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -2565,7 +3110,7 @@ impl GetProviderUsageQueryDto {
 ///
 /// The aggregation carries units only: request counts and input, output, and
 /// reasoning units. It never carries price, currency, or cost values.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct UsageAggregationDto {
     pub profile_id: String,
     pub provider_profile_revision_id: String,
@@ -2577,6 +3122,41 @@ pub struct UsageAggregationDto {
     pub usage_period_start: u64,
     pub usage_period_end: u64,
 }
+
+impl<'de> Deserialize<'de> for UsageAggregationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawUsageAggregationDto {
+            profile_id: String,
+            provider_profile_revision_id: String,
+            model_id: String,
+            request_count: u64,
+            input_units: u64,
+            output_units: u64,
+            reasoning_units: u64,
+            usage_period_start: u64,
+            usage_period_end: u64,
+        }
+        let raw = RawUsageAggregationDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            model_id: raw.model_id,
+            request_count: raw.request_count,
+            input_units: raw.input_units,
+            output_units: raw.output_units,
+            reasoning_units: raw.reasoning_units,
+            usage_period_start: raw.usage_period_start,
+            usage_period_end: raw.usage_period_end,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl UsageAggregationDto {
     /// Validates the bounded, credential-free usage aggregation.
     ///
@@ -2640,12 +3220,35 @@ fn validate_safe_event_fields(fields: &[&str], code: &'static str) -> DtoResult<
 }
 
 /// A provider catalog candidate was prepared for activation.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogCandidatePreparedEventDto {
     pub candidate_handle: String,
     pub candidate_catalog_revision_id: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogCandidatePreparedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogCandidatePreparedEventDto {
+            candidate_handle: String,
+            candidate_catalog_revision_id: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogCandidatePreparedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            candidate_catalog_revision_id: raw.candidate_catalog_revision_id,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogCandidatePreparedEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2663,12 +3266,35 @@ impl ProviderCatalogCandidatePreparedEventDto {
 }
 
 /// A provider catalog removal became pending.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogRemovalPendingEventDto {
     pub candidate_handle: String,
     pub removal_revision_id: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogRemovalPendingEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogRemovalPendingEventDto {
+            candidate_handle: String,
+            removal_revision_id: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogRemovalPendingEventDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            removal_revision_id: raw.removal_revision_id,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogRemovalPendingEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2686,12 +3312,35 @@ impl ProviderCatalogRemovalPendingEventDto {
 }
 
 /// A provider catalog removal candidate was rejected.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogCandidateRejectedEventDto {
     pub candidate_handle: String,
     pub safe_rejection_reason: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogCandidateRejectedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogCandidateRejectedEventDto {
+            candidate_handle: String,
+            safe_rejection_reason: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogCandidateRejectedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            safe_rejection_reason: raw.safe_rejection_reason,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogCandidateRejectedEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2709,11 +3358,32 @@ impl ProviderCatalogCandidateRejectedEventDto {
 }
 
 /// A provider catalog removal candidate expired.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogCandidateExpiredEventDto {
     pub candidate_handle: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogCandidateExpiredEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogCandidateExpiredEventDto {
+            candidate_handle: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogCandidateExpiredEventDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogCandidateExpiredEventDto {
     /// Validates the bounded, credential-free event field.
     ///
@@ -2728,12 +3398,35 @@ impl ProviderCatalogCandidateExpiredEventDto {
 }
 
 /// Activation recovery became required for the provider catalog.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogActivationRecoveryRequiredEventDto {
     pub candidate_handle: String,
     pub safe_recovery_reason: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogActivationRecoveryRequiredEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogActivationRecoveryRequiredEventDto {
+            candidate_handle: String,
+            safe_recovery_reason: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogActivationRecoveryRequiredEventDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            safe_recovery_reason: raw.safe_recovery_reason,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogActivationRecoveryRequiredEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2751,11 +3444,32 @@ impl ProviderCatalogActivationRecoveryRequiredEventDto {
 }
 
 /// Provider catalog activation recovery completed.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderCatalogRecoveryCompletedEventDto {
     pub active_catalog_revision_id: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderCatalogRecoveryCompletedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogRecoveryCompletedEventDto {
+            active_catalog_revision_id: String,
+            occurred_at: u64,
+        }
+        let raw = RawProviderCatalogRecoveryCompletedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            active_catalog_revision_id: raw.active_catalog_revision_id,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderCatalogRecoveryCompletedEventDto {
     /// Validates the bounded, credential-free event field.
     ///
@@ -2773,7 +3487,7 @@ impl ProviderCatalogRecoveryCompletedEventDto {
 }
 
 /// A session's durable provider profile changed.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SessionProviderProfileChangedEventDto {
     pub session_id: String,
     pub previous_profile_id: String,
@@ -2781,6 +3495,33 @@ pub struct SessionProviderProfileChangedEventDto {
     pub session_projection_revision: u64,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for SessionProviderProfileChangedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionProviderProfileChangedEventDto {
+            session_id: String,
+            previous_profile_id: String,
+            profile_id: String,
+            session_projection_revision: u64,
+            occurred_at: u64,
+        }
+        let raw = RawSessionProviderProfileChangedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            previous_profile_id: raw.previous_profile_id,
+            profile_id: raw.profile_id,
+            session_projection_revision: raw.session_projection_revision,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl SessionProviderProfileChangedEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2812,7 +3553,7 @@ pub enum ConfigurationOriginDto {
 }
 
 /// A command reloading daemon configuration from a candidate reference.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReloadConfigurationCommandDto {
     pub candidate_snapshot_reference: Option<String>,
     pub candidate_edit_reference: Option<String>,
@@ -2820,6 +3561,33 @@ pub struct ReloadConfigurationCommandDto {
     pub operation_id: String,
     pub origin: ConfigurationOriginDto,
 }
+
+impl<'de> Deserialize<'de> for ReloadConfigurationCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReloadConfigurationCommandDto {
+            candidate_snapshot_reference: Option<String>,
+            candidate_edit_reference: Option<String>,
+            expected_active_config_revision: String,
+            operation_id: String,
+            origin: ConfigurationOriginDto,
+        }
+        let raw = RawReloadConfigurationCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_snapshot_reference: raw.candidate_snapshot_reference,
+            candidate_edit_reference: raw.candidate_edit_reference,
+            expected_active_config_revision: raw.expected_active_config_revision,
+            operation_id: raw.operation_id,
+            origin: raw.origin,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ReloadConfigurationCommandDto {
     /// Validates the bounded, credential-free reload command fields.
     ///
@@ -2881,7 +3649,7 @@ pub enum ConfigurationCommitOutcomeDto {
 ///
 /// Configuration has no migration path under ADR 0038; the former constant
 /// `migration_result` wire field was removed with the migration wording.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReloadTransactionDto {
     pub transaction_id: String,
     pub previous_config_revision: String,
@@ -2891,6 +3659,37 @@ pub struct ReloadTransactionDto {
     pub safe_failure_code: Option<String>,
     pub safe_failure_detail: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for ReloadTransactionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReloadTransactionDto {
+            transaction_id: String,
+            previous_config_revision: String,
+            candidate_config_revision: String,
+            validation_result: ConfigurationValidationOutcomeDto,
+            commit_outcome: ConfigurationCommitOutcomeDto,
+            safe_failure_code: Option<String>,
+            safe_failure_detail: Option<String>,
+        }
+        let raw = RawReloadTransactionDto::deserialize(deserializer)?;
+        let value = Self {
+            transaction_id: raw.transaction_id,
+            previous_config_revision: raw.previous_config_revision,
+            candidate_config_revision: raw.candidate_config_revision,
+            validation_result: raw.validation_result,
+            commit_outcome: raw.commit_outcome,
+            safe_failure_code: raw.safe_failure_code,
+            safe_failure_detail: raw.safe_failure_detail,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ReloadTransactionDto {
     /// Validates the bounded, credential-free transaction fields.
     ///
@@ -2950,12 +3749,35 @@ impl ReloadTransactionDto {
 }
 
 /// A configuration reload was committed and became active.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ConfigurationReloadedEventDto {
     pub transaction_id: String,
     pub config_revision: String,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ConfigurationReloadedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationReloadedEventDto {
+            transaction_id: String,
+            config_revision: String,
+            occurred_at: u64,
+        }
+        let raw = RawConfigurationReloadedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            transaction_id: raw.transaction_id,
+            config_revision: raw.config_revision,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ConfigurationReloadedEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -2973,13 +3795,38 @@ impl ConfigurationReloadedEventDto {
 }
 
 /// A configuration reload was safely rejected.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ConfigurationReloadRejectedEventDto {
     pub transaction_id: String,
     pub safe_failure_code: String,
     pub safe_failure_detail: Option<String>,
     pub occurred_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ConfigurationReloadRejectedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationReloadRejectedEventDto {
+            transaction_id: String,
+            safe_failure_code: String,
+            safe_failure_detail: Option<String>,
+            occurred_at: u64,
+        }
+        let raw = RawConfigurationReloadRejectedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            transaction_id: raw.transaction_id,
+            safe_failure_code: raw.safe_failure_code,
+            safe_failure_detail: raw.safe_failure_detail,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ConfigurationReloadRejectedEventDto {
     /// Validates the bounded, credential-free event fields.
     ///
@@ -3002,13 +3849,38 @@ impl ConfigurationReloadRejectedEventDto {
 /// This command names the affected provider/profile identity and the expected
 /// safe composition revision only; the credential material itself is supplied
 /// out-of-band through a private channel and never appears in a DTO.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RotateProviderCredentialsCommandDto {
     pub profile_id: String,
     pub provider_profile_revision_id: String,
     pub expected_credential_composition_revision: String,
     pub operation_id: String,
 }
+
+impl<'de> Deserialize<'de> for RotateProviderCredentialsCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRotateProviderCredentialsCommandDto {
+            profile_id: String,
+            provider_profile_revision_id: String,
+            expected_credential_composition_revision: String,
+            operation_id: String,
+        }
+        let raw = RawRotateProviderCredentialsCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            expected_credential_composition_revision: raw.expected_credential_composition_revision,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl RotateProviderCredentialsCommandDto {
     /// Validates the bounded, credential-free rotation command fields.
     ///
@@ -3045,13 +3917,38 @@ impl RotateProviderCredentialsCommandDto {
 }
 
 /// The durable result of one provider credential rotation.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CredentialRotationResultDto {
     pub operation_id: String,
     pub profile_id: String,
     pub safe_credential_composition_revision: String,
     pub rotated: bool,
 }
+
+impl<'de> Deserialize<'de> for CredentialRotationResultDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawCredentialRotationResultDto {
+            operation_id: String,
+            profile_id: String,
+            safe_credential_composition_revision: String,
+            rotated: bool,
+        }
+        let raw = RawCredentialRotationResultDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            profile_id: raw.profile_id,
+            safe_credential_composition_revision: raw.safe_credential_composition_revision,
+            rotated: raw.rotated,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl CredentialRotationResultDto {
     /// Validates the bounded, credential-free rotation result fields.
     ///
@@ -3109,7 +4006,7 @@ pub enum ProviderHealthFailureCategory {
 ///
 /// The evidence records what a check observed; it never authorizes routing
 /// or admission decisions by itself.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderHealthEvidenceDto {
     pub profile_id: String,
     pub provider_profile_revision_id: String,
@@ -3120,6 +4017,39 @@ pub struct ProviderHealthEvidenceDto {
     pub failure_category: Option<ProviderHealthFailureCategory>,
     pub safe_diagnostic_code: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for ProviderHealthEvidenceDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderHealthEvidenceDto {
+            profile_id: String,
+            provider_profile_revision_id: String,
+            health_attempt_id: String,
+            check_contract_revision: String,
+            observed_availability: ProviderAvailabilityObservation,
+            observed_at: u64,
+            failure_category: Option<ProviderHealthFailureCategory>,
+            safe_diagnostic_code: Option<String>,
+        }
+        let raw = RawProviderHealthEvidenceDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            health_attempt_id: raw.health_attempt_id,
+            check_contract_revision: raw.check_contract_revision,
+            observed_availability: raw.observed_availability,
+            observed_at: raw.observed_at,
+            failure_category: raw.failure_category,
+            safe_diagnostic_code: raw.safe_diagnostic_code,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderHealthEvidenceDto {
     /// Validates the bounded, credential-free health evidence fields and the
     /// closed availability/failure combinations.
@@ -3185,7 +4115,7 @@ pub enum ProviderDiscoveryPhase {
 }
 
 /// One safe provider discovery attempt record.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderDiscoveryAttemptDto {
     pub attempt_id: String,
     pub discovery_scope: String,
@@ -3193,6 +4123,33 @@ pub struct ProviderDiscoveryAttemptDto {
     pub started_at: u64,
     pub safe_status: String,
 }
+
+impl<'de> Deserialize<'de> for ProviderDiscoveryAttemptDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderDiscoveryAttemptDto {
+            attempt_id: String,
+            discovery_scope: String,
+            phase: ProviderDiscoveryPhase,
+            started_at: u64,
+            safe_status: String,
+        }
+        let raw = RawProviderDiscoveryAttemptDto::deserialize(deserializer)?;
+        let value = Self {
+            attempt_id: raw.attempt_id,
+            discovery_scope: raw.discovery_scope,
+            phase: raw.phase,
+            started_at: raw.started_at,
+            safe_status: raw.safe_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderDiscoveryAttemptDto {
     /// Validates the bounded, credential-free attempt fields.
     ///
@@ -3222,7 +4179,7 @@ impl ProviderDiscoveryAttemptDto {
 ///
 /// Discovery records are additive observations about a model; they never make
 /// routing decisions by themselves.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderModelDiscoveryRecordDto {
     pub discovery_scope: String,
     pub model_id: String,
@@ -3230,6 +4187,33 @@ pub struct ProviderModelDiscoveryRecordDto {
     pub source_attempt_id: String,
     pub discovered_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderModelDiscoveryRecordDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderModelDiscoveryRecordDto {
+            discovery_scope: String,
+            model_id: String,
+            capability_records: Vec<String>,
+            source_attempt_id: String,
+            discovered_at: u64,
+        }
+        let raw = RawProviderModelDiscoveryRecordDto::deserialize(deserializer)?;
+        let value = Self {
+            discovery_scope: raw.discovery_scope,
+            model_id: raw.model_id,
+            capability_records: raw.capability_records,
+            source_attempt_id: raw.source_attempt_id,
+            discovered_at: raw.discovered_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderModelDiscoveryRecordDto {
     /// Validates the bounded, credential-free discovery record fields.
     ///
@@ -3288,7 +4272,7 @@ pub enum PricingClassification {
 ///
 /// The observation records a bounded numeric value for one provider kind and
 /// model; it is never an admission ceiling on its own.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PricingObservationDto {
     pub provider_kind_id: String,
     pub model_id: String,
@@ -3296,6 +4280,33 @@ pub struct PricingObservationDto {
     pub classification: PricingClassification,
     pub observed_at: u64,
 }
+
+impl<'de> Deserialize<'de> for PricingObservationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawPricingObservationDto {
+            provider_kind_id: String,
+            model_id: String,
+            bounded_numeric_value: u64,
+            classification: PricingClassification,
+            observed_at: u64,
+        }
+        let raw = RawPricingObservationDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_kind_id: raw.provider_kind_id,
+            model_id: raw.model_id,
+            bounded_numeric_value: raw.bounded_numeric_value,
+            classification: raw.classification,
+            observed_at: raw.observed_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl PricingObservationDto {
     /// Validates the bounded, credential-free observation fields.
     ///
@@ -3322,11 +4333,32 @@ impl PricingObservationDto {
 ///
 /// The query names one provider; the returned evidence records what a check
 /// observed and never authorizes routing or admission by itself.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetProviderHealthEvidenceQueryDto {
     pub schema_version: String,
     pub provider_id: String,
 }
+
+impl<'de> Deserialize<'de> for GetProviderHealthEvidenceQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderHealthEvidenceQueryDto {
+            schema_version: String,
+            provider_id: String,
+        }
+        let raw = RawGetProviderHealthEvidenceQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            provider_id: raw.provider_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetProviderHealthEvidenceQueryDto {
     /// Validates the bounded, credential-free health query fields.
     ///
@@ -3334,10 +4366,13 @@ impl GetProviderHealthEvidenceQueryDto {
     ///
     /// Returns `provider_health_invalid` for a blank, over-long, or
     /// control-bearing schema version or provider id (the provider id is
-    /// bounded at 63 characters, matching the profile id bound), and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// bounded at 63 characters, matching the profile id bound),
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_health_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         valid_text(&self.provider_id, 63, "provider_health_invalid")?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.provider_id) {
             return Err(ErrorDto::validation(
@@ -3350,21 +4385,45 @@ impl GetProviderHealthEvidenceQueryDto {
 }
 
 /// A query requesting the status of one provider discovery attempt.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetProviderDiscoveryStatusQueryDto {
     pub schema_version: String,
     pub attempt_id: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for GetProviderDiscoveryStatusQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderDiscoveryStatusQueryDto {
+            schema_version: String,
+            attempt_id: Option<String>,
+        }
+        let raw = RawGetProviderDiscoveryStatusQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            attempt_id: raw.attempt_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetProviderDiscoveryStatusQueryDto {
     /// Validates the bounded, credential-free discovery status query fields.
     ///
     /// # Errors
     ///
     /// Returns `provider_discovery_invalid` for a blank, over-long, or
-    /// control-bearing schema version or attempt reference, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// control-bearing schema version or attempt reference,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_discovery_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         if let Some(attempt_id) = &self.attempt_id {
             valid_text(attempt_id, 256, "provider_discovery_invalid")?;
         }
@@ -3384,21 +4443,45 @@ impl GetProviderDiscoveryStatusQueryDto {
 ///
 /// The projection is never an admission ceiling, quota, or reservation: it
 /// records bounded observations and their code-owned classification only.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetPricingPolicyQueryDto {
     pub schema_version: String,
     pub model_id: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for GetPricingPolicyQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetPricingPolicyQueryDto {
+            schema_version: String,
+            model_id: Option<String>,
+        }
+        let raw = RawGetPricingPolicyQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            model_id: raw.model_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetPricingPolicyQueryDto {
     /// Validates the bounded, credential-free pricing query fields.
     ///
     /// # Errors
     ///
     /// Returns `provider_pricing_query_invalid` for a blank, over-long, or
-    /// control-bearing schema version or model reference, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// control-bearing schema version or model reference,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_pricing_query_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         if let Some(model_id) = &self.model_id {
             valid_text(model_id, 63, "provider_pricing_query_invalid")?;
         }
@@ -3420,13 +4503,38 @@ impl GetPricingPolicyQueryDto {
 /// observed and creates no RunId, reason, or selection. Restoration of a
 /// provider therefore only permits reevaluation; it never routes or admits by
 /// itself.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderHealthProjectionDto {
     pub provider_id: String,
     pub observations: Vec<ProviderHealthEvidenceDto>,
     pub safe_reason_code: Option<String>,
     pub observed_at: u64,
 }
+
+impl<'de> Deserialize<'de> for ProviderHealthProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderHealthProjectionDto {
+            provider_id: String,
+            observations: Vec<ProviderHealthEvidenceDto>,
+            safe_reason_code: Option<String>,
+            observed_at: u64,
+        }
+        let raw = RawProviderHealthProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_id: raw.provider_id,
+            observations: raw.observations,
+            safe_reason_code: raw.safe_reason_code,
+            observed_at: raw.observed_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderHealthProjectionDto {
     /// Validates the bounded, credential-free health projection.
     ///
@@ -3466,13 +4574,38 @@ impl ProviderHealthProjectionDto {
 /// identities and never route traffic. Attempt status is reported through the
 /// closed [`ProviderDiscoveryPhase`]; a terminal phase means the discovery
 /// port returned or errored. No automatic continuation is ever implied.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderDiscoveryProjectionDto {
     pub attempt_id: Option<String>,
     pub phase: Option<ProviderDiscoveryPhase>,
     pub records: Vec<ProviderModelDiscoveryRecordDto>,
     pub safe_status: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for ProviderDiscoveryProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderDiscoveryProjectionDto {
+            attempt_id: Option<String>,
+            phase: Option<ProviderDiscoveryPhase>,
+            records: Vec<ProviderModelDiscoveryRecordDto>,
+            safe_status: Option<String>,
+        }
+        let raw = RawProviderDiscoveryProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            attempt_id: raw.attempt_id,
+            phase: raw.phase,
+            records: raw.records,
+            safe_status: raw.safe_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderDiscoveryProjectionDto {
     /// Validates the bounded, credential-free discovery projection.
     ///
@@ -3510,12 +4643,35 @@ impl ProviderDiscoveryProjectionDto {
 /// The projection carries bounded observations and one code-owned policy
 /// classification. It is never an admission ceiling, quota, or reservation for
 /// Mandate admission, tool admission, or scheduler eligibility.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PricingProjectionDto {
     pub observations: Vec<PricingObservationDto>,
     pub policy_classification: Option<PricingClassification>,
     pub disclaimer: Option<String>,
 }
+
+impl<'de> Deserialize<'de> for PricingProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawPricingProjectionDto {
+            observations: Vec<PricingObservationDto>,
+            policy_classification: Option<PricingClassification>,
+            disclaimer: Option<String>,
+        }
+        let raw = RawPricingProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            observations: raw.observations,
+            policy_classification: raw.policy_classification,
+            disclaimer: raw.disclaimer,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl PricingProjectionDto {
     /// Validates the bounded, credential-free pricing projection.
     ///
@@ -3548,20 +4704,41 @@ impl PricingProjectionDto {
 }
 
 /// A query requesting the safe configuration projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GetConfigurationProjectionQueryDto {
     pub schema_version: String,
 }
+
+impl<'de> Deserialize<'de> for GetConfigurationProjectionQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetConfigurationProjectionQueryDto {
+            schema_version: String,
+        }
+        let raw = RawGetConfigurationProjectionQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl GetConfigurationProjectionQueryDto {
     /// Validates the bounded, credential-free configuration projection query.
     ///
     /// # Errors
     ///
     /// Returns `configuration_projection_invalid` for a blank, over-long, or
-    /// control-bearing schema version and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// control-bearing schema version, `incompatible_protocol_version` for a
+    /// schema version other than the current one, and
+    /// `credentials_forbidden` for a credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "configuration_projection_invalid")?;
+        require_current_schema_version(&self.schema_version)?;
         if credential_shaped(&self.schema_version) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -3578,7 +4755,7 @@ impl GetConfigurationProjectionQueryDto {
 /// kind and model, whether a credential is configured (never the credential
 /// itself), the provider execution policy, and the closed reload status. It
 /// never carries raw TOML, credentials, private endpoints, or paths.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ConfigurationProjectionDto {
     pub schema_version: String,
     pub applied_config_revision_id: String,
@@ -3588,13 +4765,45 @@ pub struct ConfigurationProjectionDto {
     pub provider_execution_policy: String,
     pub reload_status: String,
 }
+
+impl<'de> Deserialize<'de> for ConfigurationProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationProjectionDto {
+            schema_version: String,
+            applied_config_revision_id: String,
+            provider_kind: String,
+            model_id: String,
+            credential_configured: bool,
+            provider_execution_policy: String,
+            reload_status: String,
+        }
+        let raw = RawConfigurationProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            applied_config_revision_id: raw.applied_config_revision_id,
+            provider_kind: raw.provider_kind,
+            model_id: raw.model_id,
+            credential_configured: raw.credential_configured,
+            provider_execution_policy: raw.provider_execution_policy,
+            reload_status: raw.reload_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ConfigurationProjectionDto {
     /// Validates the bounded, credential-free configuration projection.
     ///
     /// # Errors
     ///
     /// Returns `configuration_projection_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
+    /// control-bearing field, `incompatible_protocol_version` for a schema
+    /// version other than the current one, and `credentials_forbidden` for a
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [
@@ -3607,6 +4816,7 @@ impl ConfigurationProjectionDto {
         ] {
             valid_text(field, 256, "configuration_projection_invalid")?;
         }
+        require_current_schema_version(&self.schema_version)?;
         if [
             &self.schema_version,
             &self.applied_config_revision_id,
@@ -3632,12 +4842,35 @@ impl ConfigurationProjectionDto {
 /// The candidate content is bounded and validated free of credentials and
 /// NUL characters. Responses to this command never echo the raw candidate
 /// content back to any peer.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RawTomlEditCommandDto {
     pub operation_id: String,
     pub expected_config_revision: String,
     pub candidate_content: String,
 }
+
+impl<'de> Deserialize<'de> for RawTomlEditCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRawTomlEditCommandDto {
+            operation_id: String,
+            expected_config_revision: String,
+            candidate_content: String,
+        }
+        let raw = RawRawTomlEditCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            expected_config_revision: raw.expected_config_revision,
+            candidate_content: raw.candidate_content,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl RawTomlEditCommandDto {
     /// Validates the bounded, credential-free raw edit fields.
     ///
@@ -3682,7 +4915,7 @@ impl RawTomlEditCommandDto {
 }
 
 /// One typed, credential-free configuration edit operation.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConfigurationEditOperationDto {
     /// Sets one configuration key path to a bounded safe value.
@@ -3693,6 +4926,39 @@ pub enum ConfigurationEditOperationDto {
     /// Removes one configuration key path.
     Remove { key_path: String },
 }
+
+impl<'de> Deserialize<'de> for ConfigurationEditOperationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum RawConfigurationEditOperationDto {
+            Set {
+                key_path: String,
+                safe_value: String,
+            },
+            Remove {
+                key_path: String,
+            },
+        }
+        let raw = RawConfigurationEditOperationDto::deserialize(deserializer)?;
+        let value = match raw {
+            RawConfigurationEditOperationDto::Set {
+                key_path,
+                safe_value,
+            } => Self::Set {
+                key_path,
+                safe_value,
+            },
+            RawConfigurationEditOperationDto::Remove { key_path } => Self::Remove { key_path },
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ConfigurationEditOperationDto {
     /// Validates the bounded, credential-free operation fields.
     ///
@@ -3732,12 +4998,35 @@ impl ConfigurationEditOperationDto {
 }
 
 /// A command applying typed, credential-free configuration edits.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ConfigurationEditCommandDto {
     pub operation_id: String,
     pub expected_config_revision: String,
     pub operations: Vec<ConfigurationEditOperationDto>,
 }
+
+impl<'de> Deserialize<'de> for ConfigurationEditCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationEditCommandDto {
+            operation_id: String,
+            expected_config_revision: String,
+            operations: Vec<ConfigurationEditOperationDto>,
+        }
+        let raw = RawConfigurationEditCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            expected_config_revision: raw.expected_config_revision,
+            operations: raw.operations,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ConfigurationEditCommandDto {
     /// Validates the bounded, credential-free typed edit command.
     ///
@@ -3776,12 +5065,35 @@ impl ConfigurationEditCommandDto {
 ///
 /// The policy names allowed header names only, bound to one kind descriptor
 /// revision; it never carries header values.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ArbitraryHeaderPolicyDto {
     pub policy_revision: String,
     pub kind_descriptor_revision_id: String,
     pub allowed_header_names: Vec<String>,
 }
+
+impl<'de> Deserialize<'de> for ArbitraryHeaderPolicyDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawArbitraryHeaderPolicyDto {
+            policy_revision: String,
+            kind_descriptor_revision_id: String,
+            allowed_header_names: Vec<String>,
+        }
+        let raw = RawArbitraryHeaderPolicyDto::deserialize(deserializer)?;
+        let value = Self {
+            policy_revision: raw.policy_revision,
+            kind_descriptor_revision_id: raw.kind_descriptor_revision_id,
+            allowed_header_names: raw.allowed_header_names,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ArbitraryHeaderPolicyDto {
     /// Validates the bounded, credential-free header policy fields.
     ///
@@ -3838,7 +5150,7 @@ pub struct ProviderPreservationControlsDto {
 ///
 /// The configuration names a parser and its bounded limits only; it never
 /// carries raw JSON templates.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServerSideParserConfigDto {
     None,
@@ -3851,6 +5163,48 @@ pub enum ServerSideParserConfigDto {
         bounded_limits: String,
     },
 }
+
+impl<'de> Deserialize<'de> for ServerSideParserConfigDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum RawServerSideParserConfigDto {
+            None,
+            Vllm {
+                parser_id: String,
+                bounded_limits: String,
+            },
+            Sglang {
+                parser_id: String,
+                bounded_limits: String,
+            },
+        }
+        let raw = RawServerSideParserConfigDto::deserialize(deserializer)?;
+        let value = match raw {
+            RawServerSideParserConfigDto::None => Self::None,
+            RawServerSideParserConfigDto::Vllm {
+                parser_id,
+                bounded_limits,
+            } => Self::Vllm {
+                parser_id,
+                bounded_limits,
+            },
+            RawServerSideParserConfigDto::Sglang {
+                parser_id,
+                bounded_limits,
+            } => Self::Sglang {
+                parser_id,
+                bounded_limits,
+            },
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ServerSideParserConfigDto {
     /// Validates the bounded, credential-free parser configuration fields.
     ///
@@ -3906,7 +5260,7 @@ pub enum ResponsesReasoningMode {
 }
 
 /// A credential-free provider reasoning catalog projection.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderReasoningCatalogProjectionDto {
     pub provider_kind_id: String,
     pub model_id: String,
@@ -3914,6 +5268,33 @@ pub struct ProviderReasoningCatalogProjectionDto {
     pub responses_reasoning_modes: Vec<ResponsesReasoningMode>,
     pub projection_revision: String,
 }
+
+impl<'de> Deserialize<'de> for ProviderReasoningCatalogProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderReasoningCatalogProjectionDto {
+            provider_kind_id: String,
+            model_id: String,
+            supported_effort_levels: Vec<ReasoningEffortLevel>,
+            responses_reasoning_modes: Vec<ResponsesReasoningMode>,
+            projection_revision: String,
+        }
+        let raw = RawProviderReasoningCatalogProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_kind_id: raw.provider_kind_id,
+            model_id: raw.model_id,
+            supported_effort_levels: raw.supported_effort_levels,
+            responses_reasoning_modes: raw.responses_reasoning_modes,
+            projection_revision: raw.projection_revision,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
 impl ProviderReasoningCatalogProjectionDto {
     /// Validates the bounded, duplicate-free, credential-free projection.
     ///

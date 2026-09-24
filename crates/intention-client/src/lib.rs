@@ -736,11 +736,20 @@ impl RunStreamClient {
     ///
     /// # Errors
     ///
-    /// Returns a typed protocol, transport, or scoped-response error.
+    /// Returns a typed protocol, transport, or scoped-response error. A
+    /// subscription whose schema version is not the current DTO schema version
+    /// is rejected with `incompatible_protocol_version` before any connection
+    /// is opened or request is sent.
     pub async fn subscribe(
         &self,
         subscription: SubscribeRunCommandDto,
     ) -> DtoResult<RunStreamSubscription> {
+        if subscription.schema_version() != SCHEMA_VERSION {
+            return Err(ErrorDto::validation(
+                "incompatible_protocol_version",
+                "the run subscription schema version must equal the current DTO schema version",
+            ));
+        }
         let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
         let (remote, mut requests, mut frames) = connection
             .negotiate_daemon_frames(self.hello.clone())
@@ -766,7 +775,7 @@ impl RunStreamClient {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == remote.version()
-                    && response.message().schema_version() == subscription.schema_version() =>
+                    && response.message().schema_version() == SCHEMA_VERSION =>
             {
                 response
             }
@@ -783,7 +792,6 @@ impl RunStreamClient {
             requests,
             frames,
             daemon_version: remote.version(),
-            schema_version: subscription.schema_version(),
             reducer,
         })
     }
@@ -794,7 +802,6 @@ pub struct RunStreamSubscription {
     requests: AsyncRequestSender,
     frames: AsyncDaemonFrameReceiver,
     daemon_version: ProtocolVersionDto,
-    schema_version: SchemaVersionDto,
     reducer: RunSubscriptionReducer,
 }
 
@@ -823,7 +830,7 @@ impl RunStreamSubscription {
     /// current reducer state is retained if the reply is invalid or rejected.
     pub async fn request_replay(&mut self) -> DtoResult<()> {
         let subscription = SubscribeRunCommandDto::new(
-            self.schema_version,
+            SCHEMA_VERSION,
             self.reducer.session_id(),
             self.reducer.run_id(),
             self.reducer.last_cursor(),
@@ -832,14 +839,14 @@ impl RunStreamSubscription {
         let request = RunSubscriptionRequestEnvelopeDto::new(
             local_protocol_version(),
             correlation_id,
-            ProtocolMessageDto::new(self.schema_version, subscription),
+            ProtocolMessageDto::new(SCHEMA_VERSION, subscription),
         );
         self.requests.send_run_subscription(&request).await?;
         let response = match self.frames.receive().await? {
             ProtocolDaemonFrameDto::Response(response)
                 if response.correlation_id() == correlation_id
                     && response.protocol_version() == self.daemon_version
-                    && response.message().schema_version() == self.schema_version =>
+                    && response.message().schema_version() == SCHEMA_VERSION =>
             {
                 response
             }

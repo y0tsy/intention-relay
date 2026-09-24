@@ -121,6 +121,8 @@ M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-s
 
 Public DTO deserialization is a validation boundary. A wire decoder must deserialize into validated types or a private raw shape followed by `TryFrom`/constructor validation; derived `Deserialize` must not bypass declared non-blank, path, ID, timestamp, pagination, schema, or closed-enum invariants.
 
+The boundary rule has two parts. Structural shape is established on decode: required fields, field types, and closed enum variants. Semantic invariants are enforced on decode and again at admission: a decoder must not produce a structurally valid but semantically invalid DTO, and the admitting authority re-runs the same `validate()` before any effect because it cannot assume the producer decoded through the same boundary. The mechanism for DTOs with public fields is a private raw shape plus a manual `Deserialize` that builds the value, calls `validate()`, and maps the typed error through `de::Error::custom`, so the rejection surfaces as a typed decode error; DTOs with private fields use a validating constructor instead. Control-plane command, query, projection, and event DTOs that declare invariants beyond their field types follow this pattern, including the `schema_version` text families, whose value must equal the current DTO schema version exactly.
+
 Validation occurs at the earliest boundary that has the necessary context:
 
 1. transport validates schema version, framing, and basic DTO shape;
