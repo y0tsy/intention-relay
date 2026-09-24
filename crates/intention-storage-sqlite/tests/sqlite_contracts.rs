@@ -32,8 +32,8 @@ use intention_storage::{
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-    TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, ProjectId, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -751,6 +751,80 @@ fn workspace_identity_cannot_bind_conflicting_roots_and_unknown_tails_fail_typed
             .code(),
         "storage_record_not_found"
     );
+}
+
+#[test]
+fn second_workspace_identity_over_one_root_is_a_typed_conflict() {
+    let (_directory, store) = repository();
+    let root = workspace_root("shared-root");
+    store
+        .create_session(CreateSessionInputDto::new(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                SessionId::new(),
+                WorkspaceId::new(),
+                root.clone(),
+                RunModeDto::Build,
+            ),
+            time(1),
+        ))
+        .expect("the first workspace identity binds the root");
+    let conflict = store
+        .create_session(CreateSessionInputDto::new(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                SessionId::new(),
+                WorkspaceId::new(),
+                root,
+                RunModeDto::Build,
+            ),
+            time(2),
+        ))
+        .expect_err("a second workspace identity cannot bind the same root");
+    assert_eq!(conflict.code(), "workspace_root_conflict");
+    assert_eq!(conflict.category(), ErrorCategoryDto::Conflict);
+    assert_eq!(conflict.retry(), ErrorRetryDto::Never);
+}
+
+#[test]
+fn reused_turn_identity_across_sessions_is_a_typed_conflict() {
+    let (_directory, store) = repository();
+    let first = create(&store);
+    let turn = TurnId::new();
+    let run = RunId::new();
+    accept(&store, first, turn, run, "first");
+    let second = SessionId::new();
+    store
+        .create_session(CreateSessionInputDto::new(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                second,
+                WorkspaceId::new(),
+                workspace_root("storage-contract-second"),
+                RunModeDto::Build,
+            ),
+            time(1),
+        ))
+        .expect("the second session creates");
+    let started_conflict = store
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(second, turn, "second", run, snapshot(), time(2))
+                .expect("turn input is valid"),
+        )
+        .expect_err("the turn identity is already durable in another session");
+    assert_eq!(started_conflict.code(), "turn_identity_conflict");
+    assert_eq!(started_conflict.category(), ErrorCategoryDto::Conflict);
+    // With an active run in the second session the reused identity would take
+    // the queued path; it is rejected before that insert as well.
+    accept(&store, second, TurnId::new(), RunId::new(), "own turn");
+    let queued_conflict = store
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(second, turn, "queued second", run, snapshot(), time(3))
+                .expect("turn input is valid"),
+        )
+        .expect_err("the turn identity stays rejected for a queued turn");
+    assert_eq!(queued_conflict.code(), "turn_identity_conflict");
+    assert_eq!(queued_conflict.retry(), ErrorRetryDto::Never);
 }
 
 #[test]

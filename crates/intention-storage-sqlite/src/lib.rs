@@ -666,6 +666,26 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 [command.project_id().to_string()],
             )
             .map_err(storage_error)?;
+            // The root binding is unique in both directions: a second workspace
+            // identity bound to an already-used root must surface as the same
+            // typed conflict as the reverse identity/root mismatch, instead of
+            // a raw SQLite constraint failure that collapses into
+            // `storage_unavailable`.
+            let root_bound_to_other_identity = tx
+                .query_row(
+                    "SELECT workspace_id FROM workspace_roots WHERE workspace_root=?1",
+                    [command.workspace_root().as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some_and(|bound| bound != command.workspace_id().to_string());
+            if root_bound_to_other_identity {
+                return Err(conflict(
+                    "workspace_root_conflict",
+                    "the workspace root is already bound to a different workspace identity",
+                ));
+            }
             tx.execute("INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2) ON CONFLICT(workspace_id) DO NOTHING", sqlite::params![command.workspace_id().to_string(), command.workspace_root().as_str()]).map_err(storage_error)?;
             let stored_workspace_root: String = tx
                 .query_row(
@@ -773,6 +793,26 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )?;
                 tx.commit().map_err(storage_error)?;
                 return Ok(result);
+            }
+            // Turn and run identities are globally unique while the idempotency
+            // check above is scoped to (session_id, turn_id), so a caller-supplied
+            // TurnId already durable in another session (the daemon derives the run
+            // id from it) must surface as a typed conflict instead of a raw SQLite
+            // constraint failure that collapses into `storage_unavailable`.
+            let identity_bound = tx
+                .query_row(
+                    "SELECT 1 FROM turns WHERE proposed_run_id=?1 UNION ALL SELECT 1 FROM runs WHERE run_id=?1 LIMIT 1",
+                    [input.proposed_run_id().to_string()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if identity_bound {
+                return Err(conflict(
+                    "turn_identity_conflict",
+                    "the durable turn identity is already bound to another session",
+                ));
             }
             let sequence = sequence(&tx, session_id)?;
             Self::store_config(&tx, input.config_snapshot())?;
@@ -1173,7 +1213,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             )
             .map_err(|_| run_configuration_unavailable())?;
         drop(connection);
-        serde_json::from_str(&snapshot).map_err(|_| run_configuration_unavailable())
+        serde_json::from_str(&snapshot).map_err(codec_error)
     }
 
     fn load_tool_result(

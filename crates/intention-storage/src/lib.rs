@@ -855,8 +855,9 @@ pub trait StorageRepositoryDto {
     /// # Errors
     ///
     /// Returns `run_configuration_not_found` for unknown or cross-session run
-    /// identity, or `run_configuration_unavailable` when the persisted safe
-    /// selection cannot be loaded. Credentials, raw TOML, configuration paths,
+    /// identity, `run_configuration_unavailable` when the persisted safe
+    /// selection is absent, and `storage_decode_failed` when it is present but
+    /// cannot be decoded. Credentials, raw TOML, configuration paths,
     /// and backend resources never cross this boundary.
     fn load_run_config_snapshot(
         &self,
