@@ -410,7 +410,10 @@ ADR 0037 M3/M4 preservation wording where it references snapshots.
   `:655-660`, `merge_legacy` `:744-750`, `finish_legacy` `:739-743`, the legacy
   half of `finish()` `:605-618` and `generic_chat_conflicting_tool_call`), the
   `"function_call"` arm of `map_finish_reason` (`:776`), the
-  `FinishReason::FunctionCall` arm of `map_native_finish` (`:782-784`), the
+  SDK-bound `map_native_finish` and the `FinishReason` import it used (the
+  generic-chat wire finish reason is an open value now, mapped through
+  `map_finish_reason`, so an unlisted provider reason degrades to `Unknown`
+  instead of aborting the response), the
   deprecated-SDK fixture branches (`:1250-1251,1333-1354,1559-1560`), and the
   tests `legacy_function_fragments_complete_only_at_terminal` (`:1168-1204`),
   `conflicting_modern_and_legacy_calls_fail_without_duplicate_output`
@@ -423,8 +426,8 @@ ADR 0037 M3/M4 preservation wording where it references snapshots.
   (`reasoning_dialect_accepts_each_closed_path_and_preserves_declared_order`,
   `reasoning_dialect_rejects_unknown_paths_and_duplicates`,
   `reasoning_dialect_decoder_accepts_the_pinned_typed_delta_for_every_path`
-  `:1540-1604`). Keep `provider_reasoning_stream_invalid` (also fired by
-  OpenRouter encrypted-detail handling).
+  `:1540-1604`). Keep `provider_reasoning_stream_invalid` (fired by the
+  OpenRouter encrypted-detail handling; generic-chat no longer emits it).
 - **Generic-chat thinking options:** remove the dead thinking-activation
   builders (`with_thinking`, `with_enable_thinking`, `with_think`,
   `with_think_effort`, `with_thinking_budget`, `with_thinking_token_budget`

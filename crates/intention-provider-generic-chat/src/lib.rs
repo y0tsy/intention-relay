@@ -12,8 +12,7 @@ use async_openai::{
     error::OpenAIError,
     types::chat::{
         ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions,
-        ChatCompletionTool, ChatCompletionTools, FinishReason, FunctionCall, FunctionObject,
-        ReasoningEffort,
+        ChatCompletionTool, ChatCompletionTools, FunctionCall, FunctionObject, ReasoningEffort,
     },
 };
 use futures_util::{
@@ -491,7 +490,7 @@ where
             if let Some(reason) = choice.finish_reason
                 && self
                     .terminal_reason
-                    .replace(map_native_finish(reason))
+                    .replace(map_finish_reason(&reason))
                     .is_some()
             {
                 self.fail("generic_chat_duplicate_finish");
@@ -504,7 +503,7 @@ where
         // The provider streams the thinking channel before the answer it
         // informs, so a delta carrying both keeps that order.
         if let Some(reasoning) = delta.reasoning_content {
-            self.accept_reasoning(reasoning)?;
+            self.accept_reasoning(reasoning);
         }
         if let Some(content) = delta.content.filter(|content| !content.is_empty()) {
             self.pending
@@ -529,28 +528,23 @@ where
     /// channel; providers repeat that empty value on nearly every chunk, so it
     /// is reported at most once per stream. The fragment stays a transient
     /// reasoning fact: it is never appended to assistant text, never becomes
-    /// message content, and never enters an error payload.
-    fn accept_reasoning(&mut self, reasoning: String) -> Result<(), ()> {
-        if reasoning.is_empty() {
-            if !self.reasoning_presence_reported {
-                self.reasoning_presence_reported = true;
-                self.pending.push_back(Ok(ModelEventDto::reasoning_presence(
-                    ReasoningFragmentCategoryDto::Primary,
-                )));
-            }
-            return Ok(());
-        }
+    /// message content, and never enters an error payload. An empty value is
+    /// exactly what the normalized reasoning-delta constructor rejects, which
+    /// is why this adapter has no reasoning failure class of its own: no
+    /// provider value reaches it as a failure (PR24 P3-30).
+    fn accept_reasoning(&mut self, reasoning: String) {
         match ModelEventDto::reasoning_delta_categorized(
             ReasoningFragmentCategoryDto::Primary,
             reasoning,
         ) {
-            Ok(event) => {
-                self.pending.push_back(Ok(event));
-                Ok(())
-            }
+            Ok(event) => self.pending.push_back(Ok(event)),
             Err(_) => {
-                self.fail("generic_chat_reasoning_stream_invalid");
-                Err(())
+                if !self.reasoning_presence_reported {
+                    self.reasoning_presence_reported = true;
+                    self.pending.push_back(Ok(ModelEventDto::reasoning_presence(
+                        ReasoningFragmentCategoryDto::Primary,
+                    )));
+                }
             }
         }
     }
@@ -645,6 +639,11 @@ fn merge_constant(slot: &mut Option<String>, next: Option<String>) -> Result<(),
     Ok(())
 }
 
+/// Maps one provider finish reason onto the closed reason set.
+///
+/// The provider value stays an open string, so every unlisted reason (a
+/// vendor-specific value or an extension such as `stop_sequence`) degrades to
+/// `FinishReasonDto::Unknown` instead of aborting the response.
 fn map_finish_reason(reason: &str) -> FinishReasonDto {
     match reason {
         "stop" => FinishReasonDto::Stop,
@@ -653,16 +652,6 @@ fn map_finish_reason(reason: &str) -> FinishReasonDto {
         "content_filter" => FinishReasonDto::ContentFilter,
         "error" => FinishReasonDto::Error,
         _ => FinishReasonDto::Unknown,
-    }
-}
-
-const fn map_native_finish(reason: FinishReason) -> FinishReasonDto {
-    match reason {
-        FinishReason::Stop => FinishReasonDto::Stop,
-        FinishReason::Length => FinishReasonDto::Length,
-        FinishReason::ToolCalls => FinishReasonDto::ToolCalls,
-        FinishReason::ContentFilter => FinishReasonDto::ContentFilter,
-        FinishReason::FunctionCall => FinishReasonDto::Unknown,
     }
 }
 
@@ -681,10 +670,7 @@ fn provider_error(retryable: bool) -> DtoResult<ProviderErrorDto> {
 fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
     let retryable = match error {
         OpenAIError::Reqwest(_) | OpenAIError::StreamError(_) => true,
-        OpenAIError::ApiError(error) => matches!(
-            error.api_error.r#type.as_deref(),
-            None | Some("rate_limit_exceeded" | "server_error")
-        ),
+        OpenAIError::ApiError(error) => api_error_retryable(error),
         OpenAIError::JSONDeserialize(..)
         | OpenAIError::FileSaveError(_)
         | OpenAIError::FileReadError(_)
@@ -692,6 +678,25 @@ fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
     };
     provider_error(retryable)
         .unwrap_or_else(|_| non_retryable_error("generic_chat_provider_failure"))
+}
+
+/// Classifies one SDK API error by its authoritative HTTP status.
+///
+/// Throttling (429) and server faults (5xx) are transient; every other client
+/// rejection (4xx) is permanent, so a gateway that returns a permanent status
+/// without a `type` field is never retried to the attempt maximum. The
+/// provider's optional `type` string stays a secondary signal: it decides only
+/// a status this taxonomy does not classify by itself, and an unclassified
+/// status without a transient type stays permanent.
+fn api_error_retryable(error: &async_openai::error::ApiErrorResponse) -> bool {
+    match error.status_code.as_u16() {
+        429 | 500..=599 => true,
+        400..=499 => false,
+        _ => matches!(
+            error.api_error.r#type.as_deref(),
+            Some("rate_limit_exceeded" | "server_error")
+        ),
+    }
 }
 
 #[allow(
@@ -887,7 +892,7 @@ fn translate_assistant_message(
 )]
 mod tests {
     use super::*;
-    use intention_types::RunId;
+    use intention_types::{ErrorRetryDto, RunId};
 
     #[test]
     fn generic_chat_translates_assistant_tool_calls_and_tool_results() {
@@ -1258,42 +1263,80 @@ mod tests {
     }
 
     #[test]
-    fn native_errors_preserve_safe_retry_guidance() {
-        let rate_limited = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
-            status_code: http::StatusCode::TOO_MANY_REQUESTS,
-            api_error: async_openai::error::ApiError {
-                message: "secret provider text".to_owned(),
-                r#type: Some("rate_limit_exceeded".to_owned()),
-                param: None,
-                code: None,
-                misalignment: None,
-            },
-        });
-        let permanent = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
-            status_code: http::StatusCode::BAD_REQUEST,
-            api_error: async_openai::error::ApiError {
-                message: "secret provider text".to_owned(),
-                r#type: Some("invalid_request_error".to_owned()),
-                param: None,
-                code: None,
-                misalignment: None,
-            },
-        });
-        assert_eq!(
-            map_openai_error(&rate_limited).retry(),
-            intention_types::ErrorRetryDto::Delayed
-        );
-        assert_eq!(
-            map_openai_error(&permanent).retry(),
-            intention_types::ErrorRetryDto::Never
-        );
+    fn native_api_errors_follow_the_http_status_not_the_optional_type() {
+        // The gateway status is the authoritative retryability signal:
+        // throttling and server faults are transient, every other client
+        // rejection is permanent, whatever the provider's optional `type`
+        // string says. An untyped 400 must therefore never be retried to the
+        // attempt maximum (PR24 P2-16).
+        for (status, kind, expected) in [
+            (http::StatusCode::BAD_REQUEST, None, ErrorRetryDto::Never),
+            (
+                http::StatusCode::BAD_REQUEST,
+                Some("rate_limit_exceeded"),
+                ErrorRetryDto::Never,
+            ),
+            (
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+                ErrorRetryDto::Delayed,
+            ),
+            (
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                Some("invalid_request_error"),
+                ErrorRetryDto::Delayed,
+            ),
+            (
+                http::StatusCode::TOO_MANY_REQUESTS,
+                Some("rate_limit_exceeded"),
+                ErrorRetryDto::Delayed,
+            ),
+            // A status outside the client/server taxonomy keeps the `type`
+            // string as the secondary signal, and stays permanent without it.
+            (
+                http::StatusCode::FOUND,
+                Some("server_error"),
+                ErrorRetryDto::Delayed,
+            ),
+            (http::StatusCode::FOUND, None, ErrorRetryDto::Never),
+        ] {
+            assert_eq!(
+                map_openai_error(&api_error(status, kind)).retry(),
+                expected,
+                "status {status} with type {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_transport_errors_and_normalized_codes_never_leak_provider_text() {
         assert_eq!(
             map_openai_error(&OpenAIError::StreamError(Box::new(
                 async_openai::error::StreamError::EventStream("secret provider text".to_owned())
             )))
             .retry(),
-            intention_types::ErrorRetryDto::Delayed
+            ErrorRetryDto::Delayed
         );
+        let error = map_openai_error(&api_error(http::StatusCode::BAD_REQUEST, None));
+        assert_eq!(error.code(), "generic_chat_provider_request_rejected");
+        assert!(
+            !serde_json::to_string(&error)
+                .expect("error serializes")
+                .contains("secret provider text")
+        );
+    }
+
+    fn api_error(status: http::StatusCode, kind: Option<&str>) -> OpenAIError {
+        OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
+            status_code: status,
+            api_error: async_openai::error::ApiError {
+                message: "secret provider text".to_owned(),
+                r#type: kind.map(str::to_owned),
+                param: None,
+                code: None,
+                misalignment: None,
+            },
+        })
     }
 
     #[test]
@@ -1305,10 +1348,7 @@ mod tests {
             futures_util::stream::empty::<Result<WireChunk, OpenAIError>>(),
             ModelCancellationSignal::new(),
         );
-        state.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Stop))],
-            None,
-        ));
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
         assert!(
             state.terminal_reason.is_some(),
             "the finish reason is recorded when its chunk arrives"
@@ -1368,10 +1408,7 @@ mod tests {
 
         let mut post_finish =
             GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        post_finish.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Stop))],
-            None,
-        ));
+        post_finish.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
         post_finish.accept_chunk(chunk(vec![choice(Some("late"), None, None, None)], None));
         assert!(matches!(
             post_finish.pending.back(),
@@ -1387,10 +1424,7 @@ mod tests {
             None,
         ));
         state.accept_chunk(chunk(vec![choice(None, Some(" harder"), None, None)], None));
-        state.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Stop))],
-            None,
-        ));
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
         state.accept_chunk(chunk(
             Vec::new(),
             Some(async_openai::types::chat::CompletionUsage {
@@ -1457,15 +1491,16 @@ mod tests {
             )))
         );
         assert_eq!(state.pending.pop_front(), None);
+        assert!(
+            !state.terminal,
+            "an empty reasoning fragment marks presence and never fails the stream"
+        );
     }
 
     #[test]
     fn reasoning_after_finish_reason_fails_the_stream() {
         let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Stop))],
-            None,
-        ));
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
         state.accept_chunk(chunk(vec![choice(None, Some("late"), None, None)], None));
         assert!(matches!(
             state.pending.back(),
@@ -1515,7 +1550,7 @@ mod tests {
             None,
         ));
         state.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::ToolCalls))],
+            vec![choice(None, None, None, Some("tool_calls"))],
             None,
         ));
         state.native_ended();
@@ -1558,7 +1593,7 @@ mod tests {
         content: Option<&str>,
         reasoning_content: Option<&str>,
         tool_calls: Option<Vec<async_openai::types::chat::ChatCompletionMessageToolCallChunk>>,
-        finish_reason: Option<FinishReason>,
+        finish_reason: Option<&str>,
     ) -> wire::WireChoice {
         wire::WireChoice {
             index: 0,
@@ -1567,7 +1602,7 @@ mod tests {
                 reasoning_content: reasoning_content.map(str::to_owned),
                 tool_calls,
             },
-            finish_reason,
+            finish_reason: finish_reason.map(str::to_owned),
         }
     }
 
@@ -1589,7 +1624,7 @@ mod tests {
                         }),
                     },
                 ]),
-                Some(FinishReason::ToolCalls),
+                Some("tool_calls"),
             )],
             None,
         ));
@@ -1618,14 +1653,8 @@ mod tests {
     fn native_chunks_reject_duplicate_finish_invalid_usage_and_incomplete_tools() {
         let mut duplicate =
             GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        duplicate.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Stop))],
-            None,
-        ));
-        duplicate.accept_chunk(chunk(
-            vec![choice(None, None, None, Some(FinishReason::Length))],
-            None,
-        ));
+        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("length"))], None));
         assert!(matches!(
             duplicate.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_duplicate_finish"
@@ -1665,7 +1694,7 @@ mod tests {
                         }),
                     },
                 ]),
-                Some(FinishReason::ToolCalls),
+                Some("tool_calls"),
             )],
             None,
         ));
@@ -1759,19 +1788,71 @@ mod tests {
     }
 
     #[test]
-    fn normalized_reasoning_failures_never_carry_raw_provider_text() {
-        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        state.fail("provider_reasoning_stream_invalid");
-        let error = state
-            .pending
-            .back()
-            .expect("failure is pending")
-            .as_ref()
-            .expect_err("failure is an error");
-        assert_eq!(error.code(), "provider_reasoning_stream_invalid");
-        let encoded = serde_json::to_string(error).expect("error serializes");
-        assert!(!encoded.contains("secret provider text"));
-        assert!(!encoded.contains("fixture-credential-not-real-12345"));
+    fn unlisted_wire_finish_reasons_degrade_to_unknown_instead_of_aborting() {
+        // A gateway may answer with a reason this adapter does not know (for
+        // example `stop_sequence`, `max_tokens`, or a vendor-specific value).
+        // The chunk must decode and the response must complete with the closed
+        // `Unknown` reason instead of failing the whole response (PR24 P3-31).
+        for reason in ["stop_sequence", "max_tokens", "vendor_specific_reason"] {
+            let mut state =
+                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            state.accept_chunk(decode_chunk(&format!(
+                r#"{{"choices":[{{"index":0,"delta":{{"content":"answer"}},"finish_reason":"{reason}"}}]}}"#
+            )));
+            state.native_ended();
+
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::started())),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::text_delta("answer").expect("valid text"))),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::finished(FinishReasonDto::Unknown))),
+                "reason {reason}"
+            );
+            assert_eq!(state.pending.pop_front(), None, "reason {reason}");
+        }
+    }
+
+    #[test]
+    fn known_wire_finish_reasons_keep_their_closed_mapping() {
+        for (reason, expected) in [
+            ("stop", FinishReasonDto::Stop),
+            ("length", FinishReasonDto::Length),
+            ("tool_calls", FinishReasonDto::ToolCalls),
+            ("content_filter", FinishReasonDto::ContentFilter),
+            ("error", FinishReasonDto::Error),
+            // The closed reason set has no function-call category, so the
+            // provider value keeps degrading to `Unknown` as before.
+            ("function_call", FinishReasonDto::Unknown),
+        ] {
+            let mut state =
+                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            state.accept_chunk(decode_chunk(&format!(
+                r#"{{"choices":[{{"index":0,"delta":{{}},"finish_reason":"{reason}"}}]}}"#
+            )));
+            state.native_ended();
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::started())),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::finished(expected))),
+                "reason {reason}"
+            );
+        }
+    }
+
+    fn decode_chunk(raw: &str) -> WireChunk {
+        serde_json::from_str(raw).expect("fixture chunk decodes through the private wire type")
     }
 
     fn startup_material() -> StartupProviderMaterial {

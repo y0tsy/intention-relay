@@ -9,8 +9,7 @@
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCallChunk, ChatCompletionMessageToolCalls,
-    ChatCompletionStreamOptions, ChatCompletionTools, CompletionUsage, FinishReason,
-    ReasoningEffort,
+    ChatCompletionStreamOptions, ChatCompletionTools, CompletionUsage, ReasoningEffort,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,8 +70,12 @@ pub struct WireChoice {
     pub index: u32,
     #[serde(default)]
     pub delta: WireDelta,
+    /// The provider's finish reason stays an open string: the closed
+    /// `FinishReasonDto` mapping degrades every reason this adapter does not
+    /// know, so an unlisted provider value completes the response as
+    /// `Unknown` instead of failing chunk deserialization.
     #[serde(default)]
-    pub finish_reason: Option<FinishReason>,
+    pub finish_reason: Option<String>,
 }
 
 /// One streamed delta carried by a choice.
