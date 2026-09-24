@@ -14,6 +14,12 @@ use crate::canonical::{
 use crate::provider_selection::{MODEL_CAPABILITY_TAXONOMY_V1, ModelCapabilitySetV1};
 
 /// Maximum characters of a provider profile or user kind identifier.
+///
+/// This is the canonical identity bound. The public wire DTO admits up to
+/// [`MAX_PROVIDER_STRING_CHARS`] characters for the same identifier fields, so
+/// an identifier above this bound passes the wire contract and is rejected when
+/// the canonical record encodes or digests it. ADR 0037 Appendix A records both
+/// numbers per identifier field.
 pub const MAX_PROVIDER_ID_CHARS: usize = 63;
 /// Maximum characters of a safe header name.
 pub const MAX_SAFE_HEADER_NAME_CHARS: usize = 128;
@@ -96,7 +102,7 @@ impl ProviderCatalogLimits {
 /// Returns `CanonicalError::ProviderProfileRevisionInvalid` when the value is
 /// empty, exceeds `max_chars` characters, or carries control characters.
 pub fn validate_provider_string(value: &str, max_chars: usize) -> Result<(), CanonicalError> {
-    if value.is_empty() || value.len() > max_chars || contains_control_or_nul(value) {
+    if value.is_empty() || value.chars().count() > max_chars || contains_control_or_nul(value) {
         return Err(CanonicalError::ProviderProfileRevisionInvalid);
     }
     Ok(())
@@ -113,7 +119,7 @@ pub fn validate_provider_string(value: &str, max_chars: usize) -> Result<(), Can
 pub fn validate_provider_kind_id(kind_id: &str) -> Result<(), CanonicalError> {
     if kind_id == "openai"
         || kind_id.is_empty()
-        || kind_id.len() > MAX_PROVIDER_ID_CHARS
+        || kind_id.chars().count() > MAX_PROVIDER_ID_CHARS
         || contains_control_or_nul(kind_id)
     {
         return Err(CanonicalError::InvalidProviderKind);

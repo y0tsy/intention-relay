@@ -2101,27 +2101,65 @@ fn provider_selection_is_run_scoped_and_malformed_rows_fail_typed() {
 
 #[test]
 fn provider_selection_invalid_domain_record_fails_the_typed_load() {
-    let (_directory, store) = repository();
+    let (directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
     accept(&store, session_id, TurnId::new(), run_id, "run");
-    // An empty profile id fails ProviderSelectionV1::validate.
+    // An empty profile id fails ProviderSelectionV1::validate, so the canonical
+    // identity cannot be computed and the record is rejected at persist time.
     let mut invalid = fixture_selection();
     invalid.profile_id = String::new();
     assert!(invalid.validate().is_err());
+    assert_eq!(
+        store
+            .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
+                session_id,
+                run_id,
+                selection: invalid,
+                occurred_at: 3,
+            })
+            .expect_err("storage rejects a domain-invalid selection")
+            .code(),
+        "storage_decode_failed"
+    );
+    // A persisted row whose bytes decode structurally but violate the domain
+    // contract still fails the typed load closed.
     store
         .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
             session_id,
             run_id,
-            selection: invalid,
-            occurred_at: 3,
+            selection: fixture_selection(),
+            occurred_at: 4,
         })
-        .expect("storage persists the raw selection bytes");
-    // The typed load revalidates the domain record and fails closed.
+        .expect("resolved selection persists");
+    {
+        let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+            .expect("database reopens");
+        let stored = connection
+            .query_row(
+                "SELECT selection_json FROM resolved_run_provider_selections WHERE run_id=?1",
+                [run_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("persisted selection reads");
+        let mut record: serde_json::Value =
+            serde_json::from_str(&stored).expect("persisted selection is JSON");
+        record["profile_id"] = serde_json::Value::String(String::new());
+        connection
+            .execute(
+                "UPDATE resolved_run_provider_selections SET selection_json=?1 WHERE run_id=?2",
+                sqlite::params![
+                    serde_json::to_string(&record).expect("invalid selection encodes"),
+                    run_id.to_string()
+                ],
+            )
+            .expect("fixture writes a domain-invalid selection row");
+        drop(connection);
+    }
     assert_eq!(
         store
             .load_resolved_run_provider_selection(session_id, run_id)
-            .expect_err("invalid selection fails the typed decode")
+            .expect_err("domain-invalid selection fails the typed decode")
             .code(),
         "storage_decode_failed"
     );

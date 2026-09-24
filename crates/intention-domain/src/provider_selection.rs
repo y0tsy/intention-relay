@@ -12,8 +12,8 @@ use crate::canonical::{
     encode_utf8_list,
 };
 use crate::provider_catalog::{
-    CredentialTransportMode, validate_credential_transport, validate_endpoint,
-    validate_provider_kind_id, validate_provider_string,
+    CredentialTransportMode, MAX_PROVIDER_ID_CHARS, validate_credential_transport,
+    validate_endpoint, validate_provider_kind_id, validate_provider_string,
 };
 
 /// The closed model capability taxonomy version.
@@ -416,15 +416,18 @@ impl ProviderSelectionV1 {
     /// the endpoint carries userinfo, query, fragment, or control characters,
     /// `CanonicalError::CredentialsForbidden` when a provenance or header
     /// field carries a credential-shaped value, and
-    /// `CanonicalError::ProviderProfileRevisionInvalid` for every other
-    /// invalid selection value.
+    /// `CanonicalError::ProviderProfileRevisionInvalid` for a canonicalization
+    /// version other than [`PROVIDER_SELECTION_CANONICALIZATION_VERSION`] and
+    /// for every other invalid selection value.
     pub fn validate(&self) -> Result<(), CanonicalError> {
-        validate_provider_string(&self.selection_canonicalization_version, 256)?;
-        validate_provider_string(&self.profile_id, 63)?;
-        validate_provider_string(&self.provider_profile_revision_id, 63)?;
+        if self.selection_canonicalization_version != PROVIDER_SELECTION_CANONICALIZATION_VERSION {
+            return Err(CanonicalError::ProviderProfileRevisionInvalid);
+        }
+        validate_provider_string(&self.profile_id, MAX_PROVIDER_ID_CHARS)?;
+        validate_provider_string(&self.provider_profile_revision_id, MAX_PROVIDER_ID_CHARS)?;
         validate_provider_kind_id(&self.kind_id)?;
-        validate_provider_string(&self.kind_descriptor_revision_id, 63)?;
-        validate_provider_string(&self.model_id, 63)?;
+        validate_provider_string(&self.kind_descriptor_revision_id, MAX_PROVIDER_ID_CHARS)?;
+        validate_provider_string(&self.model_id, MAX_PROVIDER_ID_CHARS)?;
         validate_endpoint(&self.normalized_effective_endpoint)?;
         validate_credential_transport(
             self.credential_transport_mode,
@@ -457,71 +460,101 @@ impl ProviderSelectionV1 {
     /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         self.validate()?;
-        record(
-            TagRegistry::PROVIDER_SELECTION_V1,
-            1,
-            vec![
-                (
-                    1,
-                    WireType::Utf8,
-                    encode_utf8(&self.selection_canonicalization_version),
-                ),
-                (2, WireType::Utf8, encode_utf8(&self.profile_id)),
-                (
-                    3,
-                    WireType::Utf8,
-                    encode_utf8(&self.provider_profile_revision_id),
-                ),
-                (4, WireType::Utf8, encode_utf8(&self.kind_id)),
-                (
-                    5,
-                    WireType::Utf8,
-                    encode_utf8(&self.kind_descriptor_revision_id),
-                ),
-                (6, WireType::Utf8, encode_utf8(&self.model_id)),
-                (
-                    7,
-                    WireType::Utf8,
-                    encode_utf8(&self.normalized_effective_endpoint),
-                ),
-                (8, WireType::U64, self.credential_transport_mode.enc()),
-                (
-                    9,
-                    WireType::Optional,
-                    encode_optional_utf8(&self.credential_transport_safe_header_name),
-                ),
-                (
-                    10,
-                    WireType::List,
-                    encode_utf8_list(&self.declared_model_capability_subset),
-                ),
-                (
-                    11,
-                    WireType::Utf8,
-                    encode_utf8(&self.resolved_reasoning_policy),
-                ),
-                (
-                    12,
-                    WireType::Utf8,
-                    encode_utf8(&self.effective_execution_policy),
-                ),
-                (
-                    13,
-                    WireType::Utf8,
-                    encode_utf8(&self.effective_loopback_policy_or_not_applicable),
-                ),
-                (
-                    14,
-                    WireType::Utf8,
-                    encode_utf8(&self.provider_driver_contract_revision),
-                ),
-                (
-                    15,
-                    WireType::Optional,
-                    encode_optional_utf8(&self.selection_source),
-                ),
-            ],
-        )
+        let mut fields = self.identity_fields();
+        fields.push((
+            15,
+            WireType::Optional,
+            encode_optional_utf8(&self.selection_source),
+        ));
+        record(TagRegistry::PROVIDER_SELECTION_V1, 1, fields)
+    }
+
+    /// Computes this selection's canonical identity digest.
+    ///
+    /// The digest is computed over the same field table [`Self::encode`] uses,
+    /// restricted to the identity-bearing fields 1 to 14. `selection_source`
+    /// (field 15) is audit provenance, is not identity-bearing, and never
+    /// reaches the digest, so the digest bytes and the encodable bytes cannot
+    /// disagree.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation errors of [`Self::validate`], and
+    /// `CanonicalError::DuplicateOrDescendingField` or
+    /// `CanonicalError::OverLimit` only if the fixed field table were
+    /// noncanonical or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
+    pub fn identity_digest(&self) -> Result<NamespacedDigest, CanonicalError> {
+        self.validate()?;
+        let mut input = CanonicalIdentityInput::new();
+        for (number, wire_type, value) in self.identity_fields() {
+            input = input.field(number, wire_type, value)?;
+        }
+        provider_selection_digest(input)
+    }
+
+    /// Returns the identity-bearing canonical field table shared by
+    /// [`Self::encode`] and [`Self::identity_digest`].
+    ///
+    /// The table is defined once so the encoded record and its identity digest
+    /// can never disagree about field numbers, wire types, order, or values.
+    fn identity_fields(&self) -> Vec<(u32, WireType, Vec<u8>)> {
+        vec![
+            (
+                1,
+                WireType::Utf8,
+                encode_utf8(&self.selection_canonicalization_version),
+            ),
+            (2, WireType::Utf8, encode_utf8(&self.profile_id)),
+            (
+                3,
+                WireType::Utf8,
+                encode_utf8(&self.provider_profile_revision_id),
+            ),
+            (4, WireType::Utf8, encode_utf8(&self.kind_id)),
+            (
+                5,
+                WireType::Utf8,
+                encode_utf8(&self.kind_descriptor_revision_id),
+            ),
+            (6, WireType::Utf8, encode_utf8(&self.model_id)),
+            (
+                7,
+                WireType::Utf8,
+                encode_utf8(&self.normalized_effective_endpoint),
+            ),
+            (8, WireType::U64, self.credential_transport_mode.enc()),
+            (
+                9,
+                WireType::Optional,
+                encode_optional_utf8(&self.credential_transport_safe_header_name),
+            ),
+            (
+                10,
+                WireType::List,
+                encode_utf8_list(&self.declared_model_capability_subset),
+            ),
+            (
+                11,
+                WireType::Utf8,
+                encode_utf8(&self.resolved_reasoning_policy),
+            ),
+            (
+                12,
+                WireType::Utf8,
+                encode_utf8(&self.effective_execution_policy),
+            ),
+            (
+                13,
+                WireType::Utf8,
+                encode_utf8(&self.effective_loopback_policy_or_not_applicable),
+            ),
+            (
+                14,
+                WireType::Utf8,
+                encode_utf8(&self.provider_driver_contract_revision),
+            ),
+        ]
     }
 
     /// Decodes this selection from its canonical record bytes.
@@ -634,6 +667,11 @@ impl ProviderSelectionV1 {
 /// Computes the namespaced provider-selection digest over identity-bearing
 /// fields only.
 ///
+/// This is the single digest implementation behind
+/// [`ProviderSelectionV1::identity_digest`]; callers obtain the input from the
+/// record rather than rebuilding the field table, so one logical selection has
+/// exactly one identity.
+///
 /// The input is a [`CanonicalIdentityInput`] so that credentials, filesystem
 /// paths, display data, readiness, and current state supplied through the
 /// `with_*` setters are retained for provenance only and never reach the
@@ -644,7 +682,7 @@ impl ProviderSelectionV1 {
 /// Returns `CanonicalError::InvalidDigest` when the namespace is invalid, and
 /// the identity input's own encoding errors, which are impossible for a
 /// canonical field stream.
-pub fn provider_selection_digest(
+fn provider_selection_digest(
     input: CanonicalIdentityInput,
 ) -> Result<NamespacedDigest, CanonicalError> {
     Digest256::for_namespace("provider-selection", &input.encode()?)
@@ -832,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_selection_digest_excludes_non_identity_values() {
+    fn provider_selection_identity_digest_is_record_owned_and_excludes_provenance() {
         let selection = ProviderSelectionV1 {
             selection_canonicalization_version: "1".to_owned(),
             profile_id: "profile-default".to_owned(),
@@ -850,96 +888,60 @@ mod tests {
             provider_driver_contract_revision: "responses-1.0".to_owned(),
             selection_source: Some("catalog-rev-0001".to_owned()),
         };
-        let identity = CanonicalIdentityInput::new()
-            .field(
-                1,
-                WireType::Utf8,
-                encode_utf8(&selection.selection_canonicalization_version),
-            )
-            .expect("identity field accepts")
-            .field(2, WireType::Utf8, encode_utf8(&selection.profile_id))
-            .expect("identity field accepts")
-            .field(
-                3,
-                WireType::Utf8,
-                encode_utf8(&selection.provider_profile_revision_id),
-            )
-            .expect("identity field accepts")
-            .field(4, WireType::Utf8, encode_utf8(&selection.kind_id))
-            .expect("identity field accepts")
-            .field(
-                5,
-                WireType::Utf8,
-                encode_utf8(&selection.kind_descriptor_revision_id),
-            )
-            .expect("identity field accepts")
-            .field(6, WireType::Utf8, encode_utf8(&selection.model_id))
-            .expect("identity field accepts")
-            .field(
-                7,
-                WireType::Utf8,
-                encode_utf8(&selection.normalized_effective_endpoint),
-            )
-            .expect("identity field accepts")
-            .field(8, WireType::U64, selection.credential_transport_mode.enc())
-            .expect("identity field accepts")
-            .field(
-                9,
-                WireType::Optional,
-                encode_optional_utf8(&selection.credential_transport_safe_header_name),
-            )
-            .expect("identity field accepts")
-            .field(
-                10,
-                WireType::List,
-                encode_utf8_list(&selection.declared_model_capability_subset),
-            )
-            .expect("identity field accepts")
-            .field(
-                11,
-                WireType::Utf8,
-                encode_utf8(&selection.resolved_reasoning_policy),
-            )
-            .expect("identity field accepts")
-            .field(
-                12,
-                WireType::Utf8,
-                encode_utf8(&selection.effective_execution_policy),
-            )
-            .expect("identity field accepts")
-            .field(
-                13,
-                WireType::Utf8,
-                encode_utf8(&selection.effective_loopback_policy_or_not_applicable),
-            )
-            .expect("identity field accepts")
-            .field(
-                14,
-                WireType::Utf8,
-                encode_utf8(&selection.provider_driver_contract_revision),
-            )
-            .expect("identity field accepts");
-        let baseline = provider_selection_digest(identity.clone()).expect("selection digests");
+        let baseline = selection.identity_digest().expect("selection digests");
         assert_eq!(baseline.namespace, "provider-selection");
-        let with_state = provider_selection_digest(
-            identity
-                .clone()
-                .with_current_state(vec![0x01, 0x02, 0x03])
-                .with_credentials(vec![0xDE, 0xAD])
-                .with_filesystem_path(
-                    std::env::temp_dir()
-                        .join("intention-relay-selection-path")
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .with_display_data("display".to_owned())
-                .with_readiness(true),
-        )
-        .expect("excluded values keep the digest");
-        assert_eq!(with_state, baseline);
+        // The selection source is audit provenance and never identity-bearing.
+        let mut other = selection.clone();
+        other.selection_source = Some("other-catalog-rev".to_owned());
         assert_eq!(
-            baseline.digest,
-            Digest256::sha256(&identity.encode().expect("identity input encodes"))
+            other.identity_digest().expect("selection digests"),
+            baseline
         );
+        // An identity-bearing field does move the digest.
+        let mut changed = selection.clone();
+        changed.model_id = "gpt-4.1-mini".to_owned();
+        assert_ne!(
+            changed.identity_digest().expect("selection digests"),
+            baseline
+        );
+        // The digest is derived from the record's own field table, so the
+        // canonical round trip preserves identity exactly.
+        let bytes = selection.encode().expect("selection encodes");
+        let decoded = ProviderSelectionV1::decode(&bytes).expect("selection decodes");
+        assert_eq!(
+            decoded.identity_digest().expect("selection digests"),
+            baseline
+        );
+    }
+
+    #[test]
+    fn provider_selection_rejects_a_non_current_canonicalization_version() {
+        let mut selection = ProviderSelectionV1 {
+            selection_canonicalization_version: "2".to_owned(),
+            profile_id: "profile-default".to_owned(),
+            provider_profile_revision_id: "rev-0001".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
+            model_id: "gpt-4.1".to_owned(),
+            normalized_effective_endpoint: "https://api.openai.com/v1".to_owned(),
+            credential_transport_mode: CredentialTransportMode::Bearer,
+            credential_transport_safe_header_name: None,
+            declared_model_capability_subset: vec!["text_streaming".to_owned()],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "ordinary".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            provider_driver_contract_revision: "responses-1.0".to_owned(),
+            selection_source: None,
+        };
+        assert_eq!(
+            selection
+                .encode()
+                .expect_err("a non-current canonicalization version is rejected")
+                .code(),
+            "provider_profile_revision_invalid"
+        );
+        selection.selection_canonicalization_version =
+            PROVIDER_SELECTION_CANONICALIZATION_VERSION.to_owned();
+        assert!(selection.encode().is_ok());
     }
 }

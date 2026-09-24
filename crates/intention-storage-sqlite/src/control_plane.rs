@@ -1506,11 +1506,15 @@ pub fn insert_profile(
 
 /// Persists the resolved provider selection of one fresh run in the supplied
 /// transaction. The run identity owns the row: re-persisting the identical
-/// selection bytes for the same run is idempotent, and binding an already
-/// selected run to different selection bytes returns a typed
-/// `provider_selection_conflict`. The digest is a content fingerprint, not a
-/// globally unique identity: identical content may be associated with
-/// multiple run identities.
+/// selection identity for the same run is idempotent, and binding an already
+/// selected run to a different selection identity returns a typed
+/// `provider_selection_conflict`. The digest column carries the canonical
+/// domain identity digest ([`ProviderSelectionV1::identity_digest`]), so the
+/// persisted fingerprint is the domain identity rather than a hash of the
+/// persisted text; provenance such as `selection_source` is not identity
+/// bearing. The digest is a content fingerprint, not a globally unique
+/// identity: identical content may be associated with multiple run
+/// identities.
 pub fn insert_selection(
     tx: &sqlite::Transaction<'_>,
     session_id: SessionId,
@@ -1518,7 +1522,10 @@ pub fn insert_selection(
     selection: &ProviderSelectionV1,
 ) -> DtoResult<()> {
     let json = selection_json(selection).to_json();
-    let digest = record_digest(&json);
+    let digest = selection
+        .identity_digest()
+        .map_err(codec_error)?
+        .to_string();
     let existing_digest = tx
         .query_row(
             "SELECT selection_digest FROM resolved_run_provider_selections WHERE run_id=?1",

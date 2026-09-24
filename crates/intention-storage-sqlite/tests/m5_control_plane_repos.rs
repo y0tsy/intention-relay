@@ -14,8 +14,8 @@ use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     ContextPreservationCapability, CreateSessionCommandDto, CredentialTransportMode,
     ModelCapabilitySetV1, ModelInputCapability, ProviderDriverContractRevisionDto,
-    ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ReasoningCapability, RunModeDto,
-    RunStatusDto, StructuredOutputCapability, WorkspaceRootDto,
+    ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
+    ReasoningCapability, RunModeDto, RunStatusDto, StructuredOutputCapability, WorkspaceRootDto,
     canonical::contains_credential_shape, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
 use intention_storage::{
@@ -24,14 +24,14 @@ use intention_storage::{
     CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
-    LoadUnavailableQueuePageInputDto, PromoteUnavailableRunsInputDto,
-    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
-    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
-    ProviderRemovalRepositoryDto, ProviderUsageEventInputDto, ProviderUsageRepositoryDto,
-    ReconcileUnavailableQueueInputDto, RecordProviderUsageInputDto,
-    RejectProviderCatalogCandidateInputDto, RejectProviderCatalogRemovalInputDto,
-    StorageRepositoryDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
-    UnavailableQueueStateDto,
+    LoadUnavailableQueuePageInputDto, PersistResolvedRunProviderSelectionInputDto,
+    PromoteUnavailableRunsInputDto, ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto,
+    ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
+    ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
+    ProviderUsageEventInputDto, ProviderUsageRepositoryDto, ReconcileUnavailableQueueInputDto,
+    RecordProviderUsageInputDto, RejectProviderCatalogCandidateInputDto,
+    RejectProviderCatalogRemovalInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    UnavailableQueueRepositoryDto, UnavailableQueueStateDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -2436,4 +2436,75 @@ fn corrupted_durable_state_fails_typed_loads() {
         .load_provider_usage_by_revision_and_model("rev-a".to_owned(), "model-m".to_owned())
         .expect_err("bogus aggregate identity fails decode on the revision view");
     assert_eq!(error.code(), "storage_unavailable");
+}
+
+// ---------------------------------------------------------------------------
+// Resolved run provider selections: the persisted digest is the domain identity.
+// ---------------------------------------------------------------------------
+
+/// One credential-free resolved selection derived from the supplied profile.
+fn fixture_selection(profile: &ProviderProfileRevisionV1) -> ProviderSelectionV1 {
+    ProviderSelectionV1 {
+        selection_canonicalization_version: "1".to_owned(),
+        profile_id: profile.profile_id.clone(),
+        provider_profile_revision_id: profile.revision_id.clone(),
+        kind_id: profile.provider_kind_id.clone(),
+        kind_descriptor_revision_id: profile.kind_descriptor_revision_id.clone(),
+        model_id: profile.model_id.clone(),
+        normalized_effective_endpoint: profile.endpoint.clone(),
+        credential_transport_mode: profile.credential_transport_mode,
+        credential_transport_safe_header_name: None,
+        declared_model_capability_subset: vec!["text_input".to_owned()],
+        resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+        effective_execution_policy: "ordinary".to_owned(),
+        effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+        provider_driver_contract_revision: "responses-1.0".to_owned(),
+        selection_source: Some("catalog-rev-1".to_owned()),
+    }
+}
+
+#[test]
+fn persisted_selection_digest_is_the_canonical_domain_identity() {
+    let (directory, store) = repository();
+    let session_id = create(&store);
+    let run_id = RunId::new();
+    accept(&store, session_id, run_id, "run with a resolved selection");
+    let selection = fixture_selection(&fixture_profile("default", "rev-0001"));
+    store
+        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
+            session_id,
+            run_id,
+            selection: selection.clone(),
+            occurred_at: 3,
+        })
+        .expect("resolved selection persists");
+    // The persisted digest column is the canonical domain identity digest, not
+    // a hash of the persisted JSON text.
+    let connection = raw_connection(&directory);
+    let persisted: String = connection
+        .query_row(
+            "SELECT selection_digest FROM resolved_run_provider_selections WHERE run_id=?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )
+        .expect("persisted selection digest reads");
+    assert_eq!(
+        persisted,
+        selection
+            .identity_digest()
+            .expect("selection digests")
+            .to_string()
+    );
+    // Provenance is not identity: a different selection source keeps the same
+    // persisted identity for the same run, so re-persisting is idempotent.
+    let mut other_source = selection;
+    other_source.selection_source = Some("catalog-rev-2".to_owned());
+    store
+        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
+            session_id,
+            run_id,
+            selection: other_source,
+            occurred_at: 4,
+        })
+        .expect("a provenance-only change is the same identity");
 }

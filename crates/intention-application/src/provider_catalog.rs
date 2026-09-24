@@ -166,7 +166,6 @@ pub struct ProviderAdmissionDto {
     pub profile_revision_id: String,
     pub descriptor_revision_id: String,
     pub driver_contract: ProviderDriverContractRevisionDto,
-    pub selection_digest: String,
 }
 
 /// The in-memory prepared candidate retained for pending-removal acceptance.
@@ -255,8 +254,14 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an unavailable error only when the control-plane gate is
-    /// poisoned; all catalog failures degrade to a typed readiness state.
+    /// Returns `catalog_gate_unavailable` when the control-plane gate lock is
+    /// poisoned. Not every catalog failure degrades: the pending-removal row
+    /// read, the pending expiry, roll-forward acceptance, and registry
+    /// activation propagate their own error code, so a transient storage
+    /// failure aborts startup instead of yielding a readiness value. Only the
+    /// catalog-status load, an inconsistent pending state, a catalog-material
+    /// read or revision mismatch, a private-registry build failure, and the
+    /// activation-recovery material checks degrade to a typed readiness state.
     pub fn startup(&self, now: u64) -> DtoResult<CatalogStartupOutcomeDto> {
         let mut state = match self.catalog.load_provider_catalog_status() {
             Ok(state) => state,
@@ -1176,7 +1181,7 @@ where
                 endpoint: profile.endpoint.clone(),
                 private_credential_reference: private_credential_reference(&profile.revision_id),
             };
-            let dto = admission_dto(&key, &private_material.selection);
+            let dto = admission_dto(&key);
             materials.push((key.clone(), private_material));
             admissions.insert(
                 key,
@@ -1446,42 +1451,13 @@ fn selection_from_candidate(
 }
 
 /// Builds the credential-free admission DTO for one registry key.
-fn admission_dto(
-    key: &PrivateRegistryKey,
-    selection: &ProviderSelectionV1,
-) -> ProviderAdmissionDto {
+fn admission_dto(key: &PrivateRegistryKey) -> ProviderAdmissionDto {
     ProviderAdmissionDto {
         profile_id: key.profile_id.clone(),
         profile_revision_id: key.profile_revision_id.clone(),
         descriptor_revision_id: key.kind_descriptor_revision_id.clone(),
         driver_contract: key.driver_contract.clone(),
-        selection_digest: selection_digest(selection),
     }
-}
-
-/// Computes the controller-owned deterministic credential-free selection digest.
-fn selection_digest(selection: &ProviderSelectionV1) -> String {
-    let canonical = format!(
-        "ir-selection-v1|profile={}|revision={}|kind={}|kind_descriptor_revision={}|model={}|endpoint={}|transport={}|header={}|subset={}|reasoning={}|execution={}|loopback={}|contract={}|source={}",
-        selection.profile_id,
-        selection.provider_profile_revision_id,
-        selection.kind_id,
-        selection.kind_descriptor_revision_id,
-        selection.model_id,
-        selection.normalized_effective_endpoint,
-        transport_name(selection.credential_transport_mode),
-        selection
-            .credential_transport_safe_header_name
-            .as_deref()
-            .unwrap_or(""),
-        selection.declared_model_capability_subset.join(","),
-        selection.resolved_reasoning_policy,
-        selection.effective_execution_policy,
-        selection.effective_loopback_policy_or_not_applicable,
-        selection.provider_driver_contract_revision,
-        selection.selection_source.as_deref().unwrap_or(""),
-    );
-    digest_hex(Digest256::sha256(canonical.as_bytes()))
 }
 
 /// Validates that the declared capability subset is inside the descriptor
@@ -1572,14 +1548,6 @@ fn digest_hex(digest: Digest256) -> String {
 /// defaults in a later slice.
 fn default_endpoint(kind: &str) -> String {
     format!("https://{kind}.api.example.invalid/v1")
-}
-
-/// The stable transport-mode name.
-const fn transport_name(mode: CredentialTransportMode) -> &'static str {
-    match mode {
-        CredentialTransportMode::Bearer => "bearer",
-        CredentialTransportMode::SafeHeader => "safe_header",
-    }
 }
 
 /// The safe opaque removal candidate JSON (credential-free).
@@ -1743,42 +1711,49 @@ mod tests {
     }
 
     #[test]
-    fn selection_digest_is_credential_free_and_deterministic() {
-        let selection = selection_from_candidate(
-            &ProviderProfileCandidateDto {
-                profile: ProviderProfileRevisionV1 {
-                    profile_id: "default".to_owned(),
-                    revision_id: "profile-0123456789abcdef".to_owned(),
-                    provider_kind_id: "responses".to_owned(),
-                    model_id: "model-1".to_owned(),
-                    endpoint: "https://api.example.invalid/v1".to_owned(),
-                    credential_transport_mode: CredentialTransportMode::Bearer,
-                    safe_header_name: None,
-                    capability_taxonomy_revision: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
-                    reasoning_compatibility_id: None,
-                    kind_descriptor_revision_id: "kind-0123456789abcdef".to_owned(),
-                    driver_contract_revision: ProviderDriverContractRevisionDto {
-                        driver_family: "responses".to_owned(),
-                        major: 1,
-                        minor: 0,
-                    },
+    fn selection_from_candidate_is_credential_free_and_deterministic() {
+        let candidate = ProviderProfileCandidateDto {
+            profile: ProviderProfileRevisionV1 {
+                profile_id: "default".to_owned(),
+                revision_id: "profile-0123456789abcdef".to_owned(),
+                provider_kind_id: "responses".to_owned(),
+                model_id: "model-1".to_owned(),
+                endpoint: "https://api.example.invalid/v1".to_owned(),
+                credential_transport_mode: CredentialTransportMode::Bearer,
+                safe_header_name: None,
+                capability_taxonomy_revision: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+                reasoning_compatibility_id: None,
+                kind_descriptor_revision_id: "kind-0123456789abcdef".to_owned(),
+                driver_contract_revision: ProviderDriverContractRevisionDto {
+                    driver_family: "responses".to_owned(),
+                    major: 1,
+                    minor: 0,
                 },
-                declared_model_capability_subset: vec!["text_input".to_owned()],
-                resolved_reasoning_policy: RESOLVED_REASONING_POLICY.to_owned(),
-                effective_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-                effective_loopback_policy_or_not_applicable: LOOPBACK_POLICY_NOT_APPLICABLE
-                    .to_owned(),
-                display_name: None,
-                enabled: true,
-                credential_configured: false,
-                readiness: ProviderReadinessDto::Ready,
             },
-            1,
-        )
-        .expect("selection is valid");
-        let digest = selection_digest(&selection);
-        assert_eq!(digest.len(), 64);
-        assert_eq!(selection_digest(&selection), digest);
-        assert!(!digest.contains("sk-test"));
+            declared_model_capability_subset: vec!["text_input".to_owned()],
+            resolved_reasoning_policy: RESOLVED_REASONING_POLICY.to_owned(),
+            effective_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
+            effective_loopback_policy_or_not_applicable: LOOPBACK_POLICY_NOT_APPLICABLE.to_owned(),
+            display_name: None,
+            enabled: true,
+            credential_configured: false,
+            readiness: ProviderReadinessDto::Ready,
+        };
+        let selection = selection_from_candidate(&candidate, 1).expect("selection is valid");
+        let baseline = selection.identity_digest().expect("selection digests");
+        assert_eq!(
+            selection_from_candidate(&candidate, 1)
+                .expect("selection is valid")
+                .identity_digest()
+                .expect("selection digests"),
+            baseline
+        );
+        let other_revision = selection_from_candidate(&candidate, 2).expect("selection is valid");
+        // The catalog revision is provenance, not identity.
+        assert_eq!(
+            other_revision.identity_digest().expect("selection digests"),
+            baseline
+        );
+        assert!(!baseline.to_string().contains("sk-test"));
     }
 }

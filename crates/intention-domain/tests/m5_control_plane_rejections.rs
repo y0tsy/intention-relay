@@ -757,6 +757,25 @@ fn selection_rejects_malformed_and_noncanonical_framing() {
     );
 }
 
+#[test]
+fn selection_rejects_a_non_current_canonicalization_version() {
+    let tag = TagRegistry::PROVIDER_SELECTION_V1;
+    // The unchanged fixture is otherwise valid, so the only difference is the
+    // canonicalization version.
+    assert!(ProviderSelectionV1::decode(&raw_record(tag, 1, &refs(&selection_fields()))).is_ok());
+    let version_two = replace_field(
+        &selection_fields(),
+        1,
+        WireType::Utf8 as u8,
+        encode_utf8("2"),
+    );
+    assert_eq!(
+        ProviderSelectionV1::decode(&raw_record(tag, 1, &refs(&version_two)))
+            .expect_err("a non-current canonicalization version is rejected"),
+        CanonicalError::ProviderProfileRevisionInvalid
+    );
+}
+
 // ---- Reasoning history manifest (0x0209) ----
 
 #[test]

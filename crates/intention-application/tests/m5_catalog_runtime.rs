@@ -1957,7 +1957,6 @@ fn admission_lookup_requires_ready_enabled_and_unmodified_entries() {
     assert_eq!(admission.profile_revision_id, "rev-0001");
     assert_eq!(admission.descriptor_revision_id, "kind-responses-v1");
     assert_eq!(admission.driver_contract.driver_family, "responses");
-    assert_eq!(admission.selection_digest.len(), 64);
 
     let unknown = controller
         .registry_lookup(&PrivateRegistryKey {
@@ -1968,6 +1967,76 @@ fn admission_lookup_requires_ready_enabled_and_unmodified_entries() {
         })
         .expect_err("unknown keys are not admitted");
     assert_eq!(unknown.code(), "provider_admission_not_found");
+}
+
+/// Builds the public wire DTO for one profile revision with the supplied
+/// profile identifier.
+fn wire_profile_revision(
+    profile_id: &str,
+) -> intention_protocol::contract_families::ProviderProfileRevisionV1 {
+    intention_protocol::contract_families::ProviderProfileRevisionV1 {
+        profile_id: profile_id.to_owned(),
+        revision_id: "rev-0001".to_owned(),
+        provider_kind_id: "responses".to_owned(),
+        model_id: "model-a".to_owned(),
+        endpoint: ENDPOINT.to_owned(),
+        credential_transport_mode:
+            intention_protocol::contract_families::CredentialTransportMode::Bearer,
+        safe_header_name: None,
+        capability_taxonomy_revision: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+        reasoning_compatibility_id: None,
+    }
+}
+
+#[test]
+fn identifier_bounds_count_characters_at_the_wire_and_canonical_layers() {
+    let inside = "\u{e9}".repeat(63);
+    let outside = "\u{e9}".repeat(64);
+    // Inside the documented canonical bound a multi-byte identifier is accepted
+    // by the public wire DTO and by the canonical identity record, so neither
+    // layer rejects a value the document promises.
+    assert!(wire_profile_revision(&inside).validate().is_ok());
+    assert!(
+        seed_profile(
+            "responses",
+            "model-a",
+            &inside,
+            "rev-0001",
+            "kind-responses-v1"
+        )
+        .profile
+        .validate()
+        .is_ok()
+    );
+    // Just outside the canonical bound the identity record fails closed.
+    assert_eq!(
+        seed_profile(
+            "responses",
+            "model-a",
+            &outside,
+            "rev-0001",
+            "kind-responses-v1"
+        )
+        .profile
+        .validate()
+        .expect_err("the canonical identity bound rejects 64 characters")
+        .code(),
+        "provider_profile_revision_invalid"
+    );
+    // The wire bound is its own documented number: 256 characters are accepted
+    // and 257 are rejected.
+    assert!(
+        wire_profile_revision(&"\u{e9}".repeat(256))
+            .validate()
+            .is_ok()
+    );
+    assert_eq!(
+        wire_profile_revision(&"\u{e9}".repeat(257))
+            .validate()
+            .expect_err("the wire bound rejects 257 characters")
+            .code(),
+        "provider_profile_revision_invalid"
+    );
 }
 
 #[test]

@@ -242,10 +242,10 @@ Required column says otherwise. No table cell spans multiple lines.
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.profile_id | String | Yes | Up to 256 scalar values; `provider_profile_revision_invalid` otherwise |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.revision_id | String | Yes | Up to 256 scalar values |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.provider_kind_id | String | Yes | Up to 256 scalar values |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.model_id | String | Yes | Up to 256 scalar values |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.profile_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.provider_kind_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.model_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.endpoint | String | Yes | No userinfo, query, or fragment; `invalid_endpoint` otherwise |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.credential_transport_mode | CredentialTransportMode | Yes | Closed: `Bearer` or `SafeHeader` |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.safe_header_name | Option<String> | No | Up to 128 scalar values when present |
@@ -256,12 +256,12 @@ Required column says otherwise. No table cell spans multiple lines.
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.selection_canonicalization_version | String | Yes |  |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.profile_id | String | Yes |  |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.provider_profile_revision_id | String | Yes |  |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_id | String | Yes | `openai` rejected; `invalid_provider_kind` |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_descriptor_revision_id | String | Yes |  |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.model_id | String | Yes |  |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.selection_canonicalization_version | String | Yes | Closed value `1`; any other value is `provider_profile_revision_invalid`. The record identity digest is the canonical `provider-selection` digest over fields 1 to 14; `selection_source` (field 15) is outside it |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.profile_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.provider_profile_revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `openai` rejected; `invalid_provider_kind` |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_descriptor_revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.model_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.normalized_effective_endpoint | String | Yes | No userinfo, query, fragment, or control characters; `invalid_endpoint` |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.credential_transport_mode | CredentialTransportMode | Yes | Closed: `Bearer` or `SafeHeader` |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.credential_transport_safe_header_name | Option<String> | No |  |
@@ -270,7 +270,7 @@ Required column says otherwise. No table cell spans multiple lines.
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.effective_execution_policy | String | Yes |  |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.effective_loopback_policy_or_not_applicable | String | Yes |  |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.provider_driver_contract_revision | String | Yes |  |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.selection_source | Option<String> | No | Immutable provenance, outside execution digest |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.selection_source | Option<String> | No | Immutable provenance, outside the canonical identity digest and outside execution identity |
 
 ### reasoning-history-manifest-v1 (0x0209)
 

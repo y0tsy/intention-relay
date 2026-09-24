@@ -44,7 +44,6 @@ pub use provider_catalog::{
 pub use provider_selection::{
     ContextPreservationCapability, ModelCapabilitySelectionV1, ModelCapabilitySetV1,
     ModelInputCapability, ProviderSelectionV1, ReasoningCapability, StructuredOutputCapability,
-    provider_selection_digest,
 };
 pub use reasoning_history::{
     ReasoningDeltaCategory, ReasoningDeltaDto, ReasoningHistoryBound, ReasoningHistoryManifestDto,

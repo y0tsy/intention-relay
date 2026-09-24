@@ -9,7 +9,7 @@
 
 use intention_domain::canonical::{
     CanonicalError, CanonicalIdentityInput, CanonicalRecordReader, TagRegistry, TagStatus,
-    WireType, encode_optional_utf8, encode_utf8, encode_utf8_list,
+    WireType, encode_optional_utf8, encode_utf8,
 };
 use intention_domain::{
     ContextPreservationCapability, ContextSourceEntryV1, ContextSourceManifestV1,
@@ -19,8 +19,8 @@ use intention_domain::{
     ProviderProfileRevisionV1, ProviderProfileTombstoneDto, ProviderSelectionV1,
     ReasoningCapability, ReasoningHistoryBound, ReasoningHistoryManifestDto,
     StructuredOutputCapability, context_source_manifest_digest, model_context_projection_digest,
-    provider_profile_revision_digest, provider_selection_digest, reasoning_history_manifest_digest,
-    validate_endpoint, validate_provider_kind_id, validate_provider_kind_removal,
+    provider_profile_revision_digest, reasoning_history_manifest_digest, validate_endpoint,
+    validate_provider_kind_id, validate_provider_kind_removal,
     validate_provider_kind_revision_immutability, validate_safe_header_name,
 };
 use sha2::{Digest, Sha256};
@@ -873,6 +873,108 @@ fn provider_ids_are_limited_to_63_characters() {
 }
 
 #[test]
+fn provider_id_bounds_count_characters_not_bytes() {
+    // A multi-byte identifier inside the documented bound is 126 bytes but 63
+    // characters, so the profile record, the selection record, and the kind id
+    // validator must all accept it; one character more must fail closed.
+    let inside = "\u{e9}".repeat(63);
+    let outside = "\u{e9}".repeat(64);
+    assert_eq!(inside.chars().count(), 63);
+    assert_eq!(inside.len(), 126);
+
+    let mut profile = profile_revision();
+    profile.profile_id = inside.clone();
+    assert!(profile.encode().is_ok());
+    profile.profile_id = outside.clone();
+    assert_eq!(
+        profile
+            .encode()
+            .expect_err("a 64-character multi-byte profile id is rejected")
+            .code(),
+        "provider_profile_revision_invalid"
+    );
+
+    let mut selection = provider_selection();
+    selection.profile_id = inside.clone();
+    assert!(selection.encode().is_ok());
+    selection.profile_id = outside.clone();
+    assert_eq!(
+        selection
+            .encode()
+            .expect_err("a 64-character multi-byte selection id is rejected")
+            .code(),
+        "provider_profile_revision_invalid"
+    );
+
+    assert!(validate_provider_kind_id(&inside).is_ok());
+    assert_eq!(
+        validate_provider_kind_id(&outside)
+            .expect_err("a 64-character multi-byte kind id is rejected")
+            .code(),
+        "invalid_provider_kind"
+    );
+}
+
+#[test]
+fn no_competing_selection_digest_computation_exists() {
+    let sources = workspace_rust_sources();
+    assert!(
+        !sources.is_empty(),
+        "the workspace source tree must be readable"
+    );
+    // This guard necessarily names the shapes it forbids, so it skips itself.
+    let guard = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("m5_control_plane_canonical.rs");
+    let ad_hoc = "ir-selection-".to_owned() + "v1";
+    let producer = "for_namespace(\"provider-selection\"";
+    let mut offenders: Vec<String> = Vec::new();
+    let mut producers: Vec<String> = Vec::new();
+    for path in sources.into_iter().filter(|path| path != &guard) {
+        let text = std::fs::read_to_string(&path).expect("workspace source is UTF-8");
+        if text.contains(&ad_hoc) {
+            offenders.push(path.display().to_string());
+        }
+        if text.contains(producer) {
+            producers.push(path.display().to_string());
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "no ad-hoc selection digest computation may exist: {offenders:?}"
+    );
+    assert_eq!(
+        producers.len(),
+        1,
+        "exactly one canonical provider-selection digest producer must exist: {producers:?}"
+    );
+}
+
+/// Returns every `.rs` source path under the workspace `crates` directory.
+fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
+    fn collect(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, found);
+            }
+            if path.extension() == Some(std::ffi::OsStr::new("rs")) {
+                found.push(path);
+            }
+        }
+    }
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the domain crate lives under the workspace crates directory");
+    let mut found = Vec::new();
+    collect(crates, &mut found);
+    found
+}
+
+#[test]
 fn provider_profile_count_limit_is_128() {
     let frozen = ProviderCatalogLimits::frozen();
     assert_eq!(frozen.max_profiles, 128);
@@ -1142,82 +1244,6 @@ fn profile_identity_input(profile: &ProviderProfileRevisionV1) -> CanonicalIdent
         .expect("identity field accepts")
 }
 
-fn selection_identity_input(selection: &ProviderSelectionV1) -> CanonicalIdentityInput {
-    CanonicalIdentityInput::new()
-        .field(
-            1,
-            WireType::Utf8,
-            encode_utf8(&selection.selection_canonicalization_version),
-        )
-        .expect("identity field accepts")
-        .field(2, WireType::Utf8, encode_utf8(&selection.profile_id))
-        .expect("identity field accepts")
-        .field(
-            3,
-            WireType::Utf8,
-            encode_utf8(&selection.provider_profile_revision_id),
-        )
-        .expect("identity field accepts")
-        .field(4, WireType::Utf8, encode_utf8(&selection.kind_id))
-        .expect("identity field accepts")
-        .field(
-            5,
-            WireType::Utf8,
-            encode_utf8(&selection.kind_descriptor_revision_id),
-        )
-        .expect("identity field accepts")
-        .field(6, WireType::Utf8, encode_utf8(&selection.model_id))
-        .expect("identity field accepts")
-        .field(
-            7,
-            WireType::Utf8,
-            encode_utf8(&selection.normalized_effective_endpoint),
-        )
-        .expect("identity field accepts")
-        .field(
-            8,
-            WireType::U64,
-            transport_mode_bytes(selection.credential_transport_mode),
-        )
-        .expect("identity field accepts")
-        .field(
-            9,
-            WireType::Optional,
-            encode_optional_utf8(&selection.credential_transport_safe_header_name),
-        )
-        .expect("identity field accepts")
-        .field(
-            10,
-            WireType::List,
-            encode_utf8_list(&selection.declared_model_capability_subset),
-        )
-        .expect("identity field accepts")
-        .field(
-            11,
-            WireType::Utf8,
-            encode_utf8(&selection.resolved_reasoning_policy),
-        )
-        .expect("identity field accepts")
-        .field(
-            12,
-            WireType::Utf8,
-            encode_utf8(&selection.effective_execution_policy),
-        )
-        .expect("identity field accepts")
-        .field(
-            13,
-            WireType::Utf8,
-            encode_utf8(&selection.effective_loopback_policy_or_not_applicable),
-        )
-        .expect("identity field accepts")
-        .field(
-            14,
-            WireType::Utf8,
-            encode_utf8(&selection.provider_driver_contract_revision),
-        )
-        .expect("identity field accepts")
-}
-
 #[test]
 fn provider_profile_digest_excludes_credentials() {
     let profile = profile_revision();
@@ -1279,22 +1305,30 @@ fn provider_profile_digest_excludes_readiness() {
 }
 
 #[test]
-fn provider_selection_digest_excludes_current_state() {
+fn provider_selection_identity_digest_is_canonical_and_excludes_provenance() {
     let selection = provider_selection();
-    let baseline =
-        provider_selection_digest(selection_identity_input(&selection)).expect("selection digests");
+    let baseline = selection.identity_digest().expect("selection digests");
     assert_eq!(baseline.namespace, "provider-selection");
-    let with_state = provider_selection_digest(
-        selection_identity_input(&selection).with_current_state(vec![0x01, 0x02, 0x03]),
-    )
-    .expect("current state stays excluded from the digest");
-    assert_eq!(with_state, baseline);
+    // The canonical identity digest of the golden fixture record: the digest is
+    // computed over the identity fields of the same field table `encode` uses.
+    assert_eq!(
+        baseline.to_string(),
+        "provider-selection:sha256:e99b2193e8445b4c02456cee0d9013963b499dc7504d572952e9f4e0d03e19e5"
+    );
     // The selection source is provenance only and never part of the identity
     // input; changing it must not change the digest.
-    let mut other = selection;
+    let mut other = selection.clone();
     other.selection_source = Some("other-catalog-rev".to_owned());
     assert_eq!(
-        provider_selection_digest(selection_identity_input(&other)).expect("selection digests"),
+        other.identity_digest().expect("selection digests"),
+        baseline
+    );
+    // The digest is derived from the record's own field table, so the canonical
+    // round trip preserves identity exactly.
+    let bytes = selection.encode().expect("selection encodes");
+    let decoded = ProviderSelectionV1::decode(&bytes).expect("selection decodes");
+    assert_eq!(
+        decoded.identity_digest().expect("selection digests"),
         baseline
     );
 }
