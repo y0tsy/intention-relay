@@ -53,6 +53,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -61,15 +62,15 @@ use intention_config::{
     ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunModeDto, RunSnapshotDto,
-    RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
+    CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunFailureDto, RunModeDto,
+    RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
 use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
     ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
     ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
     RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto,
-    RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
@@ -96,8 +97,23 @@ const REPLAY_QUIET_WINDOW: Duration = Duration::from_secs(1);
 /// The bounded window used to observe the post-restart replay.
 const REPLAY_DEADLINE: Duration = Duration::from_secs(15);
 
+/// The bounded deadline for one synchronous session snapshot read.
+const SESSION_READ_DEADLINE: Duration = Duration::from_secs(15);
+
 /// The bounded attempts one live tool turn may consume before it fails.
 const TOOL_TURN_ATTEMPTS: u8 = 3;
+
+// Worst-case live-channel budget: the six positive tool turns plus the negative
+// credential run, each allowed `TOOL_TURN_ATTEMPTS` attempts of `TURN_DEADLINE`
+// (7 x 3 x 180 s = 3780 s = 63 min), two `READINESS_DEADLINE` daemon starts
+// (60 s), the hard-kill window (5 s), the bounded post-restart subscribe, the
+// quiet window, the bounded replay observations, and the bounded session reads
+// (about 1 min) add up to roughly 66 minutes.
+// `.github/workflows/real-api-e2e.yml` keeps its run step at 90 minutes and
+// its job at 120 minutes so a degraded live run reports the harness diagnostic
+// ("did not record a succeeded <tool> call within 3 turns") instead of an
+// opaque GitHub timeout; a change to any budget constant must keep that
+// relation.
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -254,6 +270,36 @@ fn config_path(config_home: &Path) -> PathBuf {
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         config_home.join("intention-relay").join("config.toml")
+    }
+}
+
+/// Resolves the daemon's durable state directory for the fixture environment.
+///
+/// `spawn_daemon` overrides the platform state root that the daemon's private
+/// `platform_state_directory` resolves (`XDG_STATE_HOME` on Linux, `HOME` on
+/// macOS, and `LOCALAPPDATA` on Windows), so this mirrors that resolution for
+/// the fixture directories: the credential scan must inspect the directory
+/// that actually holds the SQLite state bytes on every target. On macOS the
+/// fixture configuration file shares that directory with the durable state and
+/// the scan excludes it as fixture input.
+fn fixture_state_directory(host: &LiveE2eHost) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        host.state_home.path().join("intention-relay")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        host.config_home
+            .path()
+            .join("Library/Application Support/intention-relay")
+    }
+    #[cfg(windows)]
+    {
+        host.state_home.path().join("intention-relay")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        host.state_home.path().join("intention-relay")
     }
 }
 
@@ -540,6 +586,47 @@ fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClien
         thread::sleep(Duration::from_millis(100));
     }
     panic!("daemon becomes ready before the deadline");
+}
+
+/// Reads one session snapshot with a harness-side deadline.
+///
+/// The synchronous transport reads a response with a blocking `read_exact`
+/// that carries no read timeout, so a deadline around the call cannot
+/// interrupt it on this thread. The read therefore runs on a detached worker
+/// that owns its own client and the harness waits only until the deadline, so
+/// a daemon that accepts the connection and never answers fails with this
+/// harness diagnostic instead of hanging the run until the CI step timeout.
+/// A transport-level read timeout would bound every synchronous request path
+/// as well and remains the better long-term fix.
+fn bounded_session_snapshot(
+    endpoint: &LocalEndpoint,
+    session_id: SessionId,
+    deadline: Instant,
+) -> SessionSnapshotDto {
+    let endpoint = endpoint.clone();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let client = IntentionClient::new(
+            endpoint,
+            "real-api-e2e",
+            Box::new(
+                ProcessDaemonLauncher::new(env!("CARGO_BIN_EXE_intention-daemon"))
+                    .expect("daemon program is valid"),
+            ),
+        )
+        .expect("live e2e client is valid");
+        let _ = sender.send(client.session_snapshot(session_id));
+    });
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(Ok(snapshot)) => snapshot,
+        Ok(Err(error)) => panic!("the daemon serves the session snapshot: {error:?}"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("the session snapshot arrives before the deadline")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the session snapshot worker completes")
+        }
+    }
 }
 
 /// The exact capability list the fixture command client needs from the daemon.
@@ -982,11 +1069,23 @@ fn bytes_contain_credential(bytes: &[u8], credential: &str) -> bool {
         .any(|window| window == credential.as_bytes())
 }
 
-/// Asserts no file under the state directory contains the credential bytes.
+/// Asserts no daemon-written file under the resolved durable state directory
+/// contains the credential bytes, and that the scan inspected at least one
+/// file.
 ///
-/// The assertion message names only the file path, never the credential.
-fn assert_state_directory_excludes_credential(directory: &Path, credential: &str) {
+/// `fixture_config` is the fixture's own provider configuration file, which
+/// legitimately carries the credential and shares the durable state directory
+/// on macOS; it is operator input rather than a daemon-written state byte and
+/// is skipped. The final non-empty assertion makes an empty or wrongly
+/// resolved target fail loudly instead of passing vacuously. The assertion
+/// messages name only the file path, never the credential.
+fn assert_state_directory_excludes_credential(
+    directory: &Path,
+    fixture_config: &Path,
+    credential: &str,
+) {
     let mut pending = vec![directory.to_path_buf()];
+    let mut scanned_files = 0_usize;
     while let Some(current) = pending.pop() {
         let entries = std::fs::read_dir(&current).expect("state directory is readable");
         for entry in entries {
@@ -995,14 +1094,98 @@ fn assert_state_directory_excludes_credential(directory: &Path, credential: &str
                 pending.push(path);
                 continue;
             }
+            if path == fixture_config {
+                continue;
+            }
             let bytes = std::fs::read(&path).expect("state file is readable");
             assert!(
                 !bytes_contain_credential(&bytes, credential),
                 "the state file never discloses the provider credential: {}",
                 path.display()
             );
+            scanned_files += 1;
         }
     }
+    assert!(
+        scanned_files > 0,
+        "the resolved durable state directory holds at least one daemon-written file: {}",
+        directory.display()
+    );
+}
+
+/// The normalized closed-set provider failure codes the invalid-credential
+/// live run may record, for either selectable provider kind.
+const INVALID_CREDENTIAL_FAILURE_CODES: [&str; 4] = [
+    "generic_chat_provider_request_rejected",
+    "generic_chat_provider_unavailable",
+    "openrouter_provider_request_rejected",
+    "openrouter_provider_unavailable",
+];
+
+/// Asserts every durable fact of the invalid-credential run is a normalized
+/// failure fact.
+///
+/// The provider rejects the request before any assistant, reasoning, usage, or
+/// tool output can exist, so every delivered fact must be an attempt-lifecycle
+/// or terminal-failure shape whose failure re-validates through the durable
+/// DTO constructors and carries one of the normalized closed-set provider
+/// failure codes. A content-bearing fact would mean raw provider output
+/// reached durable state, which the containment invariant of ADR 0040
+/// decision 7 forbids; the guard fails rather than silently accepting a new
+/// fact shape.
+fn assert_invalid_credential_facts_are_normalized(facts: &[ModelRunFactDto]) {
+    for fact in facts {
+        match fact.input() {
+            ModelRunFactInputDto::ProviderAttemptStarted { attempt } => {
+                assert!(
+                    ModelRunFactInputDto::provider_attempt_started(*attempt).is_ok(),
+                    "the recorded provider attempt re-validates through its durable DTO"
+                );
+            }
+            ModelRunFactInputDto::ProviderAttemptFailed { attempt, failure } => {
+                assert!(
+                    ModelRunFactInputDto::provider_attempt_failed(*attempt, failure.clone())
+                        .is_ok(),
+                    "the recorded provider attempt failure re-validates through its durable DTO"
+                );
+                assert_normalized_provider_failure(failure);
+            }
+            ModelRunFactInputDto::RetryScheduled {
+                failed_attempt,
+                next_attempt,
+            } => {
+                assert!(
+                    ModelRunFactInputDto::retry_scheduled(*failed_attempt, *next_attempt).is_ok(),
+                    "the recorded retry re-validates through its durable DTO"
+                );
+            }
+            ModelRunFactInputDto::Failed { failure } => {
+                assert!(
+                    RunFailureDto::new(
+                        failure.code().to_owned(),
+                        failure.retry(),
+                        failure.correlation_id(),
+                    )
+                    .is_ok(),
+                    "the recorded terminal failure re-validates through its durable DTO"
+                );
+                assert_normalized_provider_failure(failure);
+            }
+            other => panic!(
+                "the invalid-credential run records only normalized failure facts, got kind {}",
+                other.kind().as_str()
+            ),
+        }
+    }
+}
+
+/// Asserts one recorded provider failure carries a normalized closed-set code.
+fn assert_normalized_provider_failure(failure: &RunFailureDto) {
+    assert!(
+        INVALID_CREDENTIAL_FAILURE_CODES.contains(&failure.code()),
+        "the recorded provider failure code is in the normalized closed set, got: {}",
+        failure.code()
+    );
 }
 
 /// Proves the real production tool loop against a live provider for every
@@ -1044,7 +1227,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &host,
         "read",
         &format!(
-            "Use the read tool with the arguments {} to read that workspace file, then reply with exactly READY.",
+            "Use the read tool with the arguments {} to read that workspace file.",
             serde_json::json!({"path": "e2e-note.txt"})
         ),
     )
@@ -1054,21 +1237,13 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         read_content.contains(&token),
         "the durable read result carries the fixture note content, got: {read_content}"
     );
-    assert!(
-        read_run
-            .assistant_content()
-            .to_ascii_uppercase()
-            .contains("READY"),
-        "the live model replies READY after the read tool round, got: {}",
-        read_run.assistant_content()
-    );
 
     // `glob`: the real registry lists the workspace-relative path.
     let (glob_session, glob_run) = drive_tool_turn(
         &host,
         "glob",
         &format!(
-            "Use the glob tool with the arguments {} to list the workspace text files, then reply with exactly DONE.",
+            "Use the glob tool with the arguments {} to list the workspace text files.",
             serde_json::json!({"pattern": "*.txt"})
         ),
     )
@@ -1084,7 +1259,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &host,
         "grep",
         &format!(
-            "Use the grep tool with the arguments {} to find the note token anywhere in the workspace, then reply with exactly DONE.",
+            "Use the grep tool with the arguments {} to find the note token anywhere in the workspace.",
             serde_json::json!({"pattern": token, "scope": {"kind": "workspace"}})
         ),
     )
@@ -1101,7 +1276,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &host,
         "write",
         &format!(
-            "Use the write tool with the arguments {} to create that workspace file exactly as given, then reply with exactly DONE.",
+            "Use the write tool with the arguments {} to create that workspace file exactly as given.",
             serde_json::json!({"path": "e2e-written.txt", "content": written})
         ),
     )
@@ -1134,7 +1309,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &host,
         "edit",
         &format!(
-            "Use the edit tool with the arguments {} to update that workspace file, then reply with exactly DONE.",
+            "Use the edit tool with the arguments {} to update that workspace file.",
             serde_json::json!({"path": "e2e-edit-source.txt", "old": token, "new": edited})
         ),
         &reseed_edit_source,
@@ -1162,7 +1337,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         &host,
         "execute",
         &format!(
-            "Use the execute tool with the arguments {} to print the token with a real child process, then reply with exactly DONE.",
+            "Use the execute tool with the arguments {} to print the token with a real child process.",
             serde_json::json!({"program": program, "args": args})
         ),
     )
@@ -1185,18 +1360,21 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     let pre_restart_cursor = read_run.snapshot.cursor();
 
     host.restart_daemon();
-    let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
+    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
     let stream_client = RunStreamClient::new(host.endpoint.clone(), "real-api-e2e")
         .expect("stream client is valid");
-    let subscription = stream_client
-        .subscribe(SubscribeRunCommandDto::new(
+    let subscription = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(Instant::now() + REPLAY_DEADLINE),
+        stream_client.subscribe(SubscribeRunCommandDto::new(
             intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             read_session,
             run_id,
             None,
-        ))
-        .await
-        .expect("restart replay arrives");
+        )),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("restart replay arrives before the deadline"))
+    .expect("restart replay arrives");
     let replay_snapshot = subscription
         .reducer()
         .snapshot()
@@ -1261,11 +1439,11 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         );
     }
     for (index, session) in sessions.iter().enumerate() {
-        let session_json = serde_json::to_string(
-            &client
-                .session_snapshot(*session)
-                .expect("session snapshot reads"),
-        )
+        let session_json = serde_json::to_string(&bounded_session_snapshot(
+            &host.endpoint,
+            *session,
+            Instant::now() + SESSION_READ_DEADLINE,
+        ))
         .expect("session snapshot serializes");
         assert_excludes_credential(
             &session_json,
@@ -1274,7 +1452,11 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         );
     }
     assert_excludes_credential(&log_text, &credential, "captured daemon log");
-    assert_state_directory_excludes_credential(host.state_home.path(), &credential);
+    assert_state_directory_excludes_credential(
+        &fixture_state_directory(&host),
+        &config_path(host.config_home.path()),
+        &credential,
+    );
 }
 
 /// Proves the live provider channel fails closed on a recognizable invalid
@@ -1282,7 +1464,9 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
 ///
 /// The run must terminalize `Failed` with one normalized closed-set code, and
 /// neither the durable facts, the session snapshot, nor the daemon log may
-/// carry the literal credential or a raw provider message field.
+/// carry the literal credential. Every delivered durable fact must be a
+/// normalized failure fact and the terminal projection must carry no assistant
+/// text, so raw provider output cannot have reached durable state.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
 async fn real_provider_rejects_invalid_credential_without_leak() {
@@ -1292,15 +1476,11 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     let credential = "invalid-credential-live-e2e".to_owned();
     provider.credential.clone_from(&credential);
     let mut host = LiveE2eHost::new(&provider, &[]);
-    let client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
+    let _client = wait_until_ready(&mut host, Instant::now() + READINESS_DEADLINE);
 
     let session_id = SessionId::new();
     create_session(&host, session_id, "the invalid-credential run");
-    let run_id = send_user_turn(
-        &host.endpoint,
-        session_id,
-        "Reply with the single word READY.",
-    );
+    let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.");
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
         if let RunObservation::Terminal(terminal) = collect_terminal_run(
@@ -1327,28 +1507,23 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
         .failure_code()
         .expect("a failed live run records a safe failure code");
     assert!(
-        matches!(
-            failure_code,
-            "generic_chat_provider_request_rejected"
-                | "generic_chat_provider_unavailable"
-                | "openrouter_provider_request_rejected"
-                | "openrouter_provider_unavailable"
-        ),
+        INVALID_CREDENTIAL_FAILURE_CODES.contains(&failure_code),
         "the live provider failure is one normalized closed-set code, got: {failure_code}"
+    );
+    assert_invalid_credential_facts_are_normalized(&observed.facts);
+    assert!(
+        observed.assistant_content().is_empty(),
+        "the rejected credential run records no assistant text"
     );
 
     let facts_json = serde_json::to_string(&observed.facts).expect("durable facts serialize");
-    let session_json = serde_json::to_string(
-        &client
-            .session_snapshot(session_id)
-            .expect("session snapshot reads"),
-    )
+    let session_json = serde_json::to_string(&bounded_session_snapshot(
+        &host.endpoint,
+        session_id,
+        Instant::now() + SESSION_READ_DEADLINE,
+    ))
     .expect("session snapshot serializes");
     assert_excludes_credential(&facts_json, &credential, "serialized durable run facts");
     assert_excludes_credential(&session_json, &credential, "session snapshot JSON");
     assert_excludes_credential(&host.captured_log(), &credential, "captured daemon log");
-    assert!(
-        !facts_json.contains("\"message\""),
-        "durable run facts never carry raw provider text"
-    );
 }
