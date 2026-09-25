@@ -858,9 +858,16 @@ fn endpoint_in_use() -> ErrorDto {
 
 /// Applies the bounded synchronous I/O timeout to one connected stream.
 ///
-/// Unix-domain sockets carry per-call read and write timeouts. Windows named
-/// pipes expose no per-call timeout, so those keep the documented blocking
-/// behavior.
+/// Unix-domain sockets carry per-call read and write timeouts. The non-Unix
+/// stub below is a recorded limitation rather than a second bound: the locked
+/// `interprocess` 2.4.4 named-pipe stream returns an unsupported error from
+/// `set_recv_timeout` and `set_send_timeout`, so on those targets only the
+/// bounded connect wait (`CONNECT_TIMEOUT`) applies and a peer that stops
+/// answering mid-frame cannot be interrupted per call. The limitation is
+/// anchored at
+/// `docs/intention-relay/architecture/03-daemon-transport-and-adapters.md`
+/// ("M2 serving and backpressure") and at repair R28 in `pr24-review-1.md`
+/// Appendix I.3; a platform with a real per-call bound replaces the stub.
 #[cfg(unix)]
 fn apply_sync_io_timeout(stream: &LocalSocketStream, timeout: Duration) -> DtoResult<()> {
     stream
@@ -869,6 +876,10 @@ fn apply_sync_io_timeout(stream: &LocalSocketStream, timeout: Duration) -> DtoRe
         .map_err(|_| unavailable("local_daemon_connection_unavailable"))
 }
 
+/// Keeps the documented non-Unix blocking behavior: the named-pipe transport
+/// cannot express a per-call read or write deadline, so this stub applies no
+/// bound (see `apply_sync_io_timeout` and architecture 03 for the recorded
+/// limitation, R28).
 #[cfg(not(unix))]
 const fn apply_sync_io_timeout(_stream: &LocalSocketStream, _timeout: Duration) -> DtoResult<()> {
     Ok(())
