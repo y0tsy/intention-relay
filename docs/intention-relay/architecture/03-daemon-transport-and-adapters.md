@@ -41,11 +41,14 @@ No TCP listener is opened in v1. This avoids treating localhost as an authentica
 
 M2 accepts each local connection in the daemon host, completes protocol hello,
 reads one request, writes its correlated response, and closes the connection.
-The request is served synchronously by its dedicated connection thread. A slow
-client therefore blocks only that thread during its blocking I/O operation; the
-1 MiB frame bound prevents unbounded message allocation. M2 does not yet define
-subscription buffering, read/write deadlines beyond the bounded connect wait,
-or eviction of slow peers. Those are later transport-hardening decisions.
+The request is served synchronously by its dedicated connection thread. Every
+synchronous connection carries a bounded read and write deadline
+(`SYNC_IO_TIMEOUT`, ten seconds), applied to client connect and listener accept
+on Unix-domain sockets; Windows named pipes keep their documented blocking
+behavior. A peer that accepts a connection and never answers therefore fails
+with a typed unavailable error instead of blocking its thread indefinitely; the
+1 MiB frame bound prevents unbounded message allocation. Subscription buffering
+and eviction of slow peers remain later transport-hardening decisions.
 
 ### M4 asynchronous transport foundation
 
@@ -65,20 +68,23 @@ The foundation preserves the 4-byte big-endian JSON frame format and its 1 MiB
 payload cap. Oversize frames are rejected before payload allocation or write as
 `local_protocol_frame_too_large`; malformed JSON is
 `invalid_local_protocol_frame`; incomplete headers, incomplete payloads, and
-closed peers are `local_daemon_connection_unavailable`. The foundation itself introduces no
-read/write deadline, runtime owner, daemon/client host loop, persistent
-subscription semantics, fan-out, queue capacity, slow-peer policy, or resync
-behavior. M3 consumers continue to use their synchronous one-request connection
-behavior unchanged.
+closed peers are `local_daemon_connection_unavailable`. The foundation itself
+introduces no read/write deadline, runtime owner, daemon/client host loop,
+persistent subscription semantics, fan-out, queue capacity, slow-peer policy,
+or resync behavior; the retained synchronous connections keep their bounded
+`SYNC_IO_TIMEOUT` read and write deadline. M3 consumers continue to use their
+synchronous one-request connection behavior unchanged.
 
 The asynchronous implementation uses the locked `interprocess` Tokio feature
 with its private local Unix-socket / Windows-named-pipe mapping. It preserves
-Unix parent mode `0700`, socket mode `0600`, listener-owned cleanup, and refusal
-to reclaim active endpoint names. Its required transport test target exercises
-real endpoint hello negotiation, ordered correlated multi-frame exchanges,
-concurrent split reader/writer roles, all framing safety outcomes, retained M3
-synchronous behavior, and Windows named-pipe multi-frame fixtures under
-`cfg(windows)`.
+Unix parent mode `0700`, socket mode `0600`, and refusal to reclaim active
+endpoint names; an identity-verified reclaim at the next bind is the only
+endpoint-removal path, a dropped listener never unlinks its endpoint, and a
+clean and an unclean exit look identical on disk. Its required transport test
+target exercises real endpoint hello negotiation, ordered correlated multi-frame
+exchanges, concurrent split reader/writer roles, all framing safety outcomes,
+retained M3 synchronous behavior, and Windows named-pipe multi-frame fixtures
+under `cfg(windows)`.
 
 ### M4 persistent run-stream host
 

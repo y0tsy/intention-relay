@@ -29,7 +29,8 @@ The following detail from
   `message.thinking`, thinking activation, `reasoning_effort`/
   `thinking_budget`/`thinking_token_budget`);
 - reasoning in branches (`inherited_reasoning_history_references`);
-- catalog lifecycle limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB raw
+- catalog lifecycle limits (256-character IDs counted as characters, 128
+  profiles, 32 kinds, 512 KiB raw
   candidate, 32 issues, 30-minute removal, 8 promotions, 32 reconciliation),
   tombstones, and the closed audit taxonomy; and
 - the normalized-reasoning-stream detail: the closed provider/model/domain/
@@ -96,7 +97,8 @@ evidence.
 5. The dialect catalog is closed and typed; no encrypted/opaque payloads, raw
    provider JSON, or generic request templates.
 6. Catalog/profile/kind rows are immutable append-only history; tombstones are
-   permanent; a tombstoned ID cannot be reintroduced.
+   append-only removal history, and a removed ID is admitted again only when a
+   later accepted catalog reintroduces it.
 7. The legacy M4 selection bridge is removed by
    [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no legacy
    selection binding is materialized for historical runs, and no synthetic

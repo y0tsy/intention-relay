@@ -65,7 +65,10 @@ that applies a validated TOML change to a running daemon:
 - an edit that cannot be applied atomically fails closed and leaves the
   running daemon on its recorded snapshot;
 - a reload candidate that changes catalog-affecting configuration is rejected
-  with `catalog_change_requires_restart` in Slice 2;
+  with `catalog_change_requires_restart` in Slice 2; the advertised recovery is
+  real: the next daemon restart re-derives the active catalog from the startup
+  document through the catalog prepare and accept path, so restarting applies
+  the change;
 - existing persisted runs, admitted runs, and recorded snapshots are never
   mutated, re-selected, or rewritten by a reload;
 - the reload command is the only activation path for a running daemon.

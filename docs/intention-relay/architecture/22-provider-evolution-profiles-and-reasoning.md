@@ -175,13 +175,14 @@ compatibility matrix. It cannot be a plugin, executable configuration, arbitrary
 driver/parser, raw HTTP/JSON template, arbitrary header map, or secret
 interpolation. Reserved first-party IDs cannot be replaced.
 
-A `ProviderProfileId` is immutable and never reused. Profile removal creates a
-permanent tombstone; rename means removal plus new identity. A display name is
-safe presentation metadata, not execution identity. Profile semantic revisions
-are append-only. A profile revision changes for its kind/descriptor, model,
-endpoint, credential transport, capability subset, reasoning/execution policy,
-or applicable loopback policy, but not credential-only replacement, display
-name, enabled state, TOML whitespace/order, source path, or capture time.
+A `ProviderProfileId` is immutable within its declared catalog. Profile removal
+creates an append-only removal-history tombstone; rename means removal plus new
+identity, and a later accepted catalog may reintroduce a removed ID. A display
+name is safe presentation metadata, not execution identity. Profile semantic
+revisions are append-only. A profile revision changes for its kind/descriptor,
+model, endpoint, credential transport, capability subset, reasoning/execution
+policy, or applicable loopback policy, but not credential-only replacement,
+display name, enabled state, TOML whitespace/order, source path, or capture time.
 
 Every profile holds one opaque literal credential in private composition state.
 The only selected transports are bearer authorization or one descriptor-selected
@@ -235,16 +236,21 @@ default driver. Credential rotation replaces only the executing driver's
 private SDK client: the options the seam applied at construction are retained,
 and the rebuild additionally preflights the active profile's declared options.
 
-The catalog is startup-only and all-or-nothing:
+The catalog is startup-only. Acceptance is all-or-nothing: the auto-accept path
+builds and pre-validates the replacement registry and its admissions map before
+the durable acceptance, so a build or validation failure leaves the durable
+catalog revision unadvanced and only a successful build commits the acceptance
+and swaps the in-memory registry and gate:
 
 ```mermaid
 flowchart LR
   T[TOML restart] --> V[Local validation]
   V --> P[Prepared candidate]
-  P -->|No removal| A[Accept durable catalog]
+  P -->|No removal| B[Build and pre-validate registry]
   P -->|Removal| W[Pending removal]
-  W -->|Accept| A
+  W -->|Accept| A[Accept durable catalog]
   W -->|Reject or expire| D[Degraded read mode]
+  B --> A
   A --> S[Exact private registry swap]
   S --> R[Fresh readiness]
   A -. crash .-> C[Activation recovery]
@@ -313,18 +319,20 @@ that in-flight exchange as transient request state (ADR 0041); prior-run,
 cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one `RunEventCursorDto` for text, reasoning,
-summaries, tool calls, usage, and terminal facts:
+summaries, tool calls, usage, and terminal facts. The provider-neutral reasoning
+DTO surface is owned by `intention-model` (ADR 0037): the closed fragment
+category and the normalized model events are:
 
 ```text
 ReasoningFragmentCategoryDto
   Primary
   Detail
 
-ReasoningDeltaDto
+ModelEventDto::ReasoningDelta
   category
   content
 
-ReasoningSummaryDeltaDto
+ModelEventDto::ReasoningSummaryDelta
   content
 ```
 
@@ -574,7 +582,7 @@ The first-scope fixed code-owned catalog limits are:
 
 | Subject | Limit | Enforcement |
 | --- | ---: | --- |
-| `ProviderProfileId` and user `ProviderKindId` length | 63 ASCII characters | Reject the field before canonical revision construction. |
+| `ProviderProfileId` and user `ProviderKindId` length | 256 characters (not bytes) | Reject the field before canonical revision construction. |
 | Validated `display_name` length | 128 Unicode scalar values after trim and NFC normalization | Reject the field before catalog-digest construction. |
 | Profiles in one catalog | 128 | Reject the candidate as oversized. |
 | User-declared kinds in one catalog | 32 | Reject the candidate as oversized. |

@@ -154,6 +154,7 @@ records the tool-call facts and appends the terminal
 ## Retry and timeout ownership
 
 - Provider crates classify native failures into `ProviderErrorDto`.
+- The Generic Chat Completion adapter derives retryability from the SDK API error's authoritative HTTP status: 429 and 5xx are transient, and every other 4xx is permanent, so a permanent client rejection without an error `type` is never retried to the attempt maximum. The SDK error's optional `type` string stays only a secondary signal: it decides a status this taxonomy does not classify by itself, and an unclassified status without a transient type stays permanent. The classification selects the normalized `generic_chat_provider_unavailable` (retryable) or `generic_chat_provider_request_rejected` (permanent) failure.
 - Runtime/application policy determines whether an error is retryable for the run.
 - Config snapshots define timeout/retry limits applied to the run.
 - A retry must produce explicit events and preserve causal relation to the originating model turn.

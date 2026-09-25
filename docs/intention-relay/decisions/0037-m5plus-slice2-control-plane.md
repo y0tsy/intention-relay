@@ -46,7 +46,7 @@ peers; unnegotiated dependent work fails closed before effect.
 
 | Capability | Status | Scope in Slice 2 |
 | --- | --- | --- |
-| `provider_profiles_v1` | ACTIVE runtime capability | Session defaults; per-turn/fork override fields on `SendUserTurnCommandDto`/`ForkSessionCommandDto`/`StartForkRunCommandDto`; unavailable-queue promotion (max 8 per terminal transition) and reconciliation (max 32 per page); profile-keyed usage; pending-removal accept/reject (30-minute lifetime); degraded recovery; held recovered-run admission (`AdmitRecoveredRunCommandDto`) |
+| `provider_profiles_v1` | ACTIVE runtime capability | Session defaults; per-turn/fork override fields on `SendUserTurnCommandDto`/`ForkSessionCommandDto`/`StartForkRunCommandDto`; unavailable-queue promotion (max 8 per terminal transition) and reconciliation (max 32 selections per page from the durable reconciliation marker; the command carries no request cursor); profile-keyed usage; pending-removal accept/reject (30-minute lifetime); degraded recovery; held recovered-run admission (`AdmitRecoveredRunCommandDto`) |
 | Control-plane surface (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | Served through the daemon facade with typed commands/queries | Reload is explicit (no watcher, polling, or auto-restart); rotation replaces private material only; health/discovery/pricing are non-authorizing evidence; raw-TOML/typed editing produces a server-side validated candidate through the reload contract |
 | Health, discovery, pricing | NON-AUTHORIZING | Create no `RunId`/reason/selection; no model-name routing; pricing is never an admission ceiling |
 
@@ -217,7 +217,14 @@ configured credential source (test-support hosts) fails closed with
 `credential_rotation_source_unavailable`, and no credential, file content, or
 source path crosses a DTO, error, log, digest, snapshot, or durable surface.
 Catalog-affecting configuration changes are rejected with
-`catalog_change_requires_restart` in Slice 2.
+`catalog_change_requires_restart` in Slice 2; the advertised recovery is real:
+the next daemon restart re-derives the active catalog from the startup document
+through the catalog prepare and accept path, so restarting applies the change.
+Catalog acceptance is all-or-nothing: the auto-accept path builds and
+pre-validates the replacement registry and its admissions map before the durable
+acceptance, a build or validation failure returns the typed error with the
+durable catalog revision unadvanced, and only a successful build commits the
+acceptance and swaps the in-memory registry and gate.
 
 ## Appendix A: Public wire-family field tables
 
@@ -242,10 +249,10 @@ Required column says otherwise. No table cell spans multiple lines.
 
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.profile_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.provider_kind_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
-| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.model_id | String | Yes | Characters, not bytes. Canonical identity bound 63; public DTO bound 256; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.profile_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.revision_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.provider_kind_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.model_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.endpoint | String | Yes | No userinfo, query, or fragment; `invalid_endpoint` otherwise |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.credential_transport_mode | CredentialTransportMode | Yes | Closed: `Bearer` or `SafeHeader` |
 | `provider-profile-revision-v1` (0x0207) | 1 | — | ProviderProfileRevisionV1.safe_header_name | Option<String> | No | Up to 128 scalar values when present |
@@ -257,11 +264,11 @@ Required column says otherwise. No table cell spans multiple lines.
 | Family | Version | Field tag | Field | Type | Required | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.selection_canonicalization_version | String | Yes | Closed value `1`; any other value is `provider_profile_revision_invalid`. The record identity digest is the canonical `provider-selection` digest over fields 1 to 14; `selection_source` (field 15) is outside it |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.profile_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.provider_profile_revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `openai` rejected; `invalid_provider_kind` |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_descriptor_revision_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
-| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.model_id | String | Yes | Characters, not bytes. Canonical identity bound 63; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.profile_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.provider_profile_revision_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_id | String | Yes | Characters, not bytes. Bound 256 characters; `openai` rejected; `invalid_provider_kind` |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.kind_descriptor_revision_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
+| `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.model_id | String | Yes | Characters, not bytes. Bound 256 characters; `provider_profile_revision_invalid` otherwise |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.normalized_effective_endpoint | String | Yes | No userinfo, query, fragment, or control characters; `invalid_endpoint` |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.credential_transport_mode | CredentialTransportMode | Yes | Closed: `Bearer` or `SafeHeader` |
 | `provider-selection-v1` (0x0208) | 1 | — | ResolvedRunProviderSelectionDto.credential_transport_safe_header_name | Option<String> | No |  |

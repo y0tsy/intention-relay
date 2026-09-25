@@ -51,8 +51,10 @@ A session copies the global `ProviderProfileId` as a durable future default;
 catalog changes never cascade. `SetSessionProviderProfileCommandDto` is
 user-initiated, idempotent, and optimistic: it takes the session, an enabled
 profile ID, the expected session projection revision, and an operation ID;
-it changes only future intent and emits `SessionProviderProfileChanged`; an
-existing-profile request is a successful `changed = false` no-op.
+it changes only future intent and publishes `SessionProviderProfileChanged`
+through the session-event boundary when the durable default changed; an
+existing-profile request is a successful `changed = false` no-op that
+publishes no event.
 `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe
 resolved entry/revision or a closed unavailability reason, the session
 projection revision, and the global default; availability is a daemon-computed
@@ -90,7 +92,9 @@ provenance, with no provider call. Unavailable promotion FIFO proceeds only
 through **8** unavailable selections per terminal transition; exhaustion writes
 a typed queue-reconciliation-needed marker. `ReconcileUnavailableQueueCommandDto`
 (user-only, idempotent) handles at most **32** currently unavailable immutable
-selections per page; it terminalizes only those, may promote the first
+selections per page; the request carries no page cursor, because the durable
+reconciliation marker is the single paging authority and its cursor is what the
+acceptance reports. It terminalizes only those, may promote the first
 available item, and never reroutes to a current default or new revision. Usage
 is keyed by exact profile identity and revision; aggregated by profile and
 separately by revision/model; no price, currency, or estimated cost; different
@@ -147,9 +151,9 @@ profile pointing to an omitted kind is invalid. Degraded mode is admin/read
 only.
 
 `AcceptProviderCatalogRemovalCommandDto` (idempotent) takes a candidate handle,
-expected active/candidate revisions, an operation ID, and a source recheck;
-it atomically accepts removals, creates tombstones, records ordered audit, and
-activates the registry. `RejectProviderCatalogCandidateCommandDto` drops the
+expected active/candidate revisions, and an operation ID; it atomically accepts
+removals, creates tombstones, records ordered audit, and activates the registry.
+`RejectProviderCatalogCandidateCommandDto` drops the
 private candidate and pending status, records `ProviderCatalogCandidateRejected`,
 and leaves degraded read-only with `removal_candidate_rejected`. At most one
 candidate exists; its lifetime is **30 minutes** from
@@ -210,11 +214,13 @@ activating specification: it declares the exact test targets, the single
 current-schema storage policy, and the per-direction evidence anchors. Required
 evidence includes:
 
-- session default/override command and query fixtures with idempotency and
-  `changed = false` no-op;
+- session default/override command and query fixtures with idempotency, a
+  `changed = false` no-op that publishes no event, and one
+  `SessionProviderProfileChanged` publication per committed change;
 - per-turn/fork override binding and mismatch-rejection fixtures;
-- unavailable-queue promotion (8 per transition), reconciliation (32 per page),
-  and no-reroute fixtures;
+- unavailable-queue promotion (8 per transition), reconciliation (32 per page)
+  with the durable marker as the single paging authority, and no-reroute
+  fixtures;
 - profile-keyed usage aggregation and no-double-count fixtures;
 - `provider_profiles_v1` pagination, catalog-status, and readiness-projection
   fixtures;

@@ -85,14 +85,22 @@ run. This record claims no date, commit, or run identifier of its own.
    snapshot content, and no message text.
 3. `intention-model` gains a transient `AssistantReasoningDto` carrying the
    current round's tool-call ids and reasoning text, which may be empty. The DTO
-   validates at least one unique tool-call identity and bounded,
-   control-character-safe text. It travels on `ModelRequestDto` as
-   `assistant_reasoning`; the runtime attaches each tool round's accepted
-   reasoning to that round's assistant tool-call message, and later same-run
-   continuation requests preserve the ordered per-round attachments. It is
-   transient request state with no durable representation: it never becomes
-   message text, durable history, a run snapshot, a canonical record, or
-   adapter-visible state, and it never enters a different run.
+   validates at least one unique tool-call identity and control-character-safe
+   text bounded at 512 KiB per attachment. The runtime bounds each round's
+   accumulated echo at that same 512 KiB per-round bound, beside the durable
+   per-fact bound of 512 KiB and the durable per-run bound of 4 MiB, which
+   remain the append authority. A round whose echo cannot become an attachment,
+   because it crossed the per-round bound or carries a control character other
+   than `\n`, `\r`, or `\t`, terminalizes as a durable typed failed run with the
+   dedicated `reasoning_attachment_unrepresentable` code instead of aborting
+   `execute` with a DTO validation error; the echo is never truncated or
+   silently omitted. It travels on `ModelRequestDto` as `assistant_reasoning`;
+   the runtime attaches each tool round's accepted reasoning to that round's
+   assistant tool-call message, and later same-run continuation requests
+   preserve the ordered per-round attachments. It is transient request state
+   with no durable representation: it never becomes message text, durable
+   history, a run snapshot, a canonical record, or adapter-visible state, and it
+   never enters a different run.
 4. The generic adapter's `ModelCapabilitiesDto` declares reasoning output
    support because reasoning output is consumed and preserved. Multimodal and
    vendor extensions still fail preflight before any outbound request is
@@ -207,7 +215,7 @@ the opt-in manual run.
 | --- | --- |
 | Transient model contract round trip | `crates/intention-model/tests/model_contracts.rs`: `assistant_reasoning_validates_tool_call_identities_and_bounded_text`, `assistant_reasoning_round_trips_and_rejects_invalid_wire_values`, `model_request_assistant_reasoning_round_trips_and_survives_rebuilds` |
 | Typed adapter wire | `crates/intention-provider-generic-chat/tests/generic_chat_contracts.rs` plus crate unit tests in `crates/intention-provider-generic-chat/src/lib.rs`: `reasoning_content` delta normalization to `Primary` `ModelEventDto::ReasoningDelta`, assistant tool-call echo serialization, and empty-channel presence-only handling, with no custom HTTP/SSE parser |
-| Runtime same-run attachment | `crates/intention-runtime/tests/m5_tool_loop.rs`: `tool_round_reasoning_is_attached_to_later_requests_in_round_order`, `empty_reasoning_channel_round_attaches_presence_without_blank_facts`; crate unit test `round_reasoning_attachment_keeps_presence_without_text` |
+| Runtime same-run attachment | `crates/intention-runtime/tests/m5_tool_loop.rs`: `tool_round_reasoning_is_attached_to_later_requests_in_round_order`, `empty_reasoning_channel_round_attaches_presence_without_blank_facts`, `reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run`, `control_character_reasoning_echo_terminalizes_as_typed_failed_run`; crate unit test `round_reasoning_attachment_keeps_presence_without_text` |
 | Capability declaration and fail-closed preflight | generic adapter capability tests; multimodal and vendor extensions still fail before outbound work |
 | OpenRouter no-op | `crates/intention-provider-openrouter/src/lib.rs` unit tests: the attachment is ignored and the request shape is unchanged |
 | Live 400 evidence and acceptance | the opt-in live run through `crates/intention-daemon/tests/real_api_e2e.rs` under ADR 0040; the controller records date, commit, provider kind, model, and the local run report or the workflow run URL |

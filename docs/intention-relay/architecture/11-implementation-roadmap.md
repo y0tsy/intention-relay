@@ -1349,7 +1349,7 @@ profile, quality-policy target, or implementation milestone.
 - `ReasoningUsageDto` absent-never-zero accounting;
 - `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
 - the closed dialect catalog and thinking activation fields;
-- catalog limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
+- catalog limits (256-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
   minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
 - the taxonomy value `model-capability-taxonomy-v1`, the
   `reasoning_input_contract` field name (superseding the concept2
