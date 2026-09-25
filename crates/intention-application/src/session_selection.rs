@@ -1083,8 +1083,8 @@ impl<'a> HeldRunService<'a> {
     /// Admission verifies the exact session/run identity and operation
     /// idempotency, requires the active catalog readiness, verifies the run's
     /// persisted immutable provider selection against the active catalog
-    /// (complete selection, exact registry key admitted, enabled, ready, not
-    /// tombstoned, and driver-compatible), commits the admission through the
+    /// (complete selection, exact registry key admitted, enabled, ready, and
+    /// driver-compatible), commits the admission through the
     /// durable held-run repository, and dispatches the supplied schedule
     /// exactly once after the commit. A repeat of the same operation returns
     /// the same acceptance without dispatching a second time. A run without a
@@ -1172,8 +1172,8 @@ impl<'a> HeldRunService<'a> {
     ///
     /// Admission requires a complete immutable selection: the run must have a
     /// persisted selection whose fields validate, whose exact registry key is
-    /// admitted by the active catalog (enabled, ready, not tombstoned), and
-    /// whose driver contract is the admitted one. Any failed verification
+    /// admitted by the active catalog (enabled, ready, and part of the current
+    /// active membership), and whose driver contract is the admitted one. Any failed verification
     /// leaves the run held and returns the closed
     /// `held_run_admission_verification_failed` error.
     ///

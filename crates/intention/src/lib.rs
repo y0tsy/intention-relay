@@ -351,8 +351,8 @@ impl ModelRunDriverHandle for CompositionCatalogDriverHandle {}
 /// The composition's catalog admission port.
 ///
 /// A profile resolves when the active catalog material names it and the
-/// controller admits its exact registry key as enabled, ready, and
-/// non-tombstoned.
+/// controller admits its exact registry key as enabled and ready in the current
+/// active membership.
 struct CompositionCatalogAdmissionPort<'a> {
     controller: &'a ProviderCatalogController<RepositoryHandle, RepositoryHandle>,
     catalog: &'a SqliteStorageRepository,

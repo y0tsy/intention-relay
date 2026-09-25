@@ -93,7 +93,7 @@ fn stream_lifecycle_accepts_reasoning_summary_deltas_like_reasoning_deltas() {
 }
 
 #[test]
-fn reasoning_effort_and_mode_are_closed_and_snake_case() {
+fn reasoning_effort_is_closed_and_snake_case() {
     for (level, wire) in [
         (ReasoningEffortLevel::None, "none"),
         (ReasoningEffortLevel::Minimal, "minimal"),
