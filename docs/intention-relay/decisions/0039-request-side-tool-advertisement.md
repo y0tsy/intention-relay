@@ -157,7 +157,7 @@ provider dependency.
 | Runtime round-2 preservation | `crates/intention-runtime/tests/m5_tool_loop.rs`: `tool_call_executes_tool_records_result_and_completes` asserts the follow-up provider round preserves the advertised tool definitions |
 | Daemon wiring | `crates/intention-daemon/tests/m5_tool_loop_wiring.rs`: `daemon_tool_executor_executes_real_read_tool_through_loop` observes every model-visible definition in registry order |
 | Real-binary HTTP body assertion | `crates/intention-daemon/tests/facade_e2e.rs`: `real_daemon_tool_loop_executes_read_and_replays_after_restart` asserts the captured first provider request body advertises tools including `read` |
-| Reconciliation evidence | EVD-062 (`reconciliation/evidence-register.md`, `Planned` until `make verify` and CI record the observed result) |
+| Reconciliation evidence | EVD-062 (`reconciliation/evidence-register.md`; `Verified` after the recorded `make verify` and CI results) |
 
 Required gates are `make quick`, `make verify`, `docs-check`, and the
 Linux/Windows CI matrix.

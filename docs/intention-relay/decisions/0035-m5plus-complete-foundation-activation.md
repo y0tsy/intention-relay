@@ -16,9 +16,13 @@ target is activated by this decision.
 ## Decision
 
 Milestone 5+ is the single activation home for the full post-M5 stack
-(architectures 25-30, ADR 0021-0034, and all detail packages) and the hard
+(architectures 25-29, ADR 0021-0034, and all detail packages) and the hard
 prerequisite of Milestones 6-9 in the roadmap dependency graph
-(`K[M5+] --> F/G/H/I`). The milestone is delivered as a pre-approved sequence
+(`K[M5+] --> F/G/H/I`). The post-M4 Mandate packages (architectures 13-21) are
+delivered by the separate Mandate-track milestones 10-12, which consume this
+milestone's foundation and whose contract records the four slices below name;
+the Mandate track does not extend the slice sequence or renumber M6-M9. The
+milestone is delivered as a pre-approved sequence
 of activating slices, all approved together as one package:
 
 1. **Contracts and versions** — the versioned protocol/schema/
@@ -62,7 +66,7 @@ inside its slice with its own contract, transaction, and outcome test.
 
 ## Rationale
 
-Every post-M5 package (architectures 25-30 and ADR 0021-0034) closes with
+Every post-M5 package (architectures 25-29 and ADR 0021-0034) closes with
 "activation remains excluded pending a later M5+ specification", and the
 post-M5 packages declare DTO, wire, storage, and quality values that M6-M9
 consume. Without a single activation home that fixes the shared contract

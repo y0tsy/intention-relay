@@ -4287,9 +4287,11 @@ one `P3-18` delivery question) and 21 P3 findings, all routed below.
 | R38 | E6 residual | Pin the private activation signature with a source guard or record the accepted limit | W3-A |
 
 Parked with owners after V2: the daemon-side incoming subscription version check,
-the 31 pre-Slice-2 invariant DTOs (R23 anchor), the typed tool-name bridge, the
+the 31 pre-Slice-2 invariant DTOs (R23 anchor; delivery owned by Milestone 9's
+decode-time enforcement closure), the typed tool-name bridge, the
 `incompatible_protocol_version` category nuance, the durable
-`SessionProviderProfileChanged` append layer (R19 anchor), and the D-09
+`SessionProviderProfileChanged` append layer (R19 anchor; owned by Milestone 6
+under the reserved declarations), and the D-09
 health-evidence follow-up (ADR 0037: populate
 `ProviderHealthEvidenceDto.provider_profile_revision_id` from the real active
 profile revision once the catalog is wired into the health path).

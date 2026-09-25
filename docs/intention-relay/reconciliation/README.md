@@ -170,7 +170,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
 | Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
 | Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
-| M5+ complete foundation activation | architectures 25-30, 23, 22, 24, roadmap | decision 0035 |
+| M5+ complete foundation activation | architectures 25-29, 23, 22, 24, roadmap | decision 0035 |
 | M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
 | M5+ Slice 2 control-plane activation | architectures 25/29/22, roadmap, quality gates | decision 0037 |
 | No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
@@ -178,6 +178,14 @@ following map is navigation and provenance; it does not restate their rules:
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
 | Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
 | Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
+
+Mandate-track delivery ownership: the post-M4 Mandate packages and their
+decisions (0001-0004, 0006-0013, 0025, 0027, and 0042) are delivered by the
+Mandate-track milestones — Milestone 10 owns the Mandate lifecycle,
+execution-meaning, and scheduler packages (architectures 13/14/16), Milestone
+11 the tool-registry, child/verifier, and bridge packages (architectures
+15/17/19), and Milestone 12 the MCP, kernel, and context packages
+(architectures 18/20/21, with the remaining architecture 22 provider work).
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,
