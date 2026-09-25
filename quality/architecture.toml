@@ -200,7 +200,7 @@ coverage_tier = "B"
 name = "intention-storage"
 responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
 test_target = "repository contract tests"
-test_targets = ["contracts", "m4_model_context", "m4_run_replay_contracts", "m4_run_safe_config"]
+test_targets = ["contracts", "m4_model_context", "m4_run_replay_contracts", "m4_run_safe_config", "opaque_json_guard"]
 coverage_tier = "B"
 
 [[future_crates]]
