@@ -25,7 +25,7 @@ use intention_application::{
 use intention_config::{
     ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto,
     RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial,
-    control_plane::{ConfigCandidateDto, restore_credential_document},
+    control_plane::{ConfigCandidateDto, render_edited_configuration, restore_credential_document},
     parse_credential,
 };
 #[cfg(test)]
@@ -53,9 +53,10 @@ use intention_protocol::{
     SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
     contract_families::{
         ConfigurationCommitOutcomeDto, ConfigurationEditCommandDto, ConfigurationEditOperationDto,
-        ConfigurationProjectionDto, ConfigurationValidationOutcomeDto,
-        ProviderAvailabilityObservation, ProviderModelDiscoveryRecordDto, RawTomlEditCommandDto,
-        ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
+        ConfigurationProjectionDto, ConfigurationReloadStatusDto,
+        ConfigurationValidationOutcomeDto, ProviderAvailabilityObservation,
+        ProviderModelDiscoveryRecordDto, RawTomlEditCommandDto, ReloadConfigurationCommandDto,
+        ReloadTransactionDto, RotateProviderCredentialsCommandDto,
     },
 };
 use intention_provider_generic_chat::{GenericChatDriver, GenericChatDriverOptions};
@@ -312,26 +313,34 @@ impl ProviderDriverFactory for CompositionDriverFactory {
 /// Resolves one catalog provider kind id into the typed provider kind.
 ///
 /// Catalog kind ids are the normalized typed kind strings, so the typed kind
-/// is the single mapping authority: an id with no typed kind fails closed
-/// instead of being routed to another adapter.
+/// is the single mapping authority [`ProviderKindDto::from_id`]: an id with
+/// no typed kind fails closed instead of being routed to another adapter.
 ///
 /// # Errors
 ///
 /// Returns `unsupported_provider_kind` when no typed provider kind matches
 /// the supplied catalog id.
 fn typed_provider_kind(kind_id: &str) -> DtoResult<ProviderKindDto> {
-    [
-        ProviderKindDto::Openrouter,
-        ProviderKindDto::GenericChatCompletionApi,
-    ]
-    .into_iter()
-    .find(|kind| kind.as_str() == kind_id)
-    .ok_or_else(|| {
+    ProviderKindDto::from_id(kind_id).ok_or_else(|| {
         ErrorDto::validation(
             "unsupported_provider_kind",
             "the provider kind has no registered adapter",
         )
     })
+}
+
+/// The deterministic endpoint the provider catalog derives for a kind whose
+/// startup declaration names none.
+///
+/// `intention-application` derives this placeholder when it builds a profile
+/// from a declaration without an endpoint, so the durable active profile
+/// carries it for an endpointless declaration. The startup comparison (D-02
+/// item 1, R17) needs the same value to stay two-directional; the
+/// derivation's private owner lives in the application crate, so this copy is
+/// pinned by `derived_default_endpoint_matches_the_catalog_derivation`, which
+/// reads the active profile's endpoint for an endpointless declaration.
+fn derived_default_endpoint(kind: &str) -> String {
+    format!("https://{kind}.api.example.invalid/v1")
 }
 
 /// Credential-free opaque handle behind the private registry.
@@ -1216,95 +1225,33 @@ fn configuration_projection(snapshot: &ConfigSnapshotDto) -> ConfigurationProjec
         model_id: snapshot.resolved().provider().model().to_owned(),
         credential_configured: snapshot.resolved().provider().credential_configured(),
         provider_execution_policy: execution_policy_string(snapshot),
-        reload_status: "active".to_owned(),
+        reload_status: ConfigurationReloadStatusDto::Active,
     }
 }
 
-/// Applies typed edit operations to the active snapshot and emits the edited
-/// candidate TOML.
+/// Maps one protocol typed-edit operation into the configuration crate's
+/// credential-free edit operation.
 ///
-/// The supported key paths are `provider.kind`, `provider.model`,
-/// `provider.endpoint`, `provider.execution.attempt_timeout_seconds`, and
-/// `provider.execution.max_attempts`. The rendered document is deliberately
-/// credential-free: the composition restores the retained private credential
-/// through the private channel before the candidate is validated through the
-/// server-side reload contract. An edited candidate that leaves the
-/// credential unset (no retained private material) fails closed with
-/// `missing_provider_credential`; the credential itself never appears in the
-/// returned text's durable or public consumers.
-///
-/// # Errors
-///
-/// Returns `configuration_edit_invalid` for an unrecognized or non-removable
-/// key path or a non-integer execution policy value.
-fn edited_configuration_toml(
-    snapshot: &ConfigSnapshotDto,
-    operations: &[ConfigurationEditOperationDto],
-) -> DtoResult<String> {
-    let mut kind = snapshot.resolved().provider().kind().as_str().to_owned();
-    let mut model = snapshot.resolved().provider().model().to_owned();
-    let mut endpoint = snapshot.resolved().provider().endpoint().map(str::to_owned);
-    let mut attempt_timeout_seconds = snapshot
-        .resolved()
-        .provider_execution()
-        .attempt_timeout_seconds();
-    let mut max_attempts = snapshot.resolved().provider_execution().max_attempts();
-    for operation in operations {
-        match operation {
-            ConfigurationEditOperationDto::Set {
-                key_path,
-                safe_value,
-            } => match key_path.as_str() {
-                "provider.kind" => kind = safe_value.clone(),
-                "provider.model" => model = safe_value.clone(),
-                "provider.endpoint" => endpoint = Some(safe_value.clone()),
-                "provider.execution.attempt_timeout_seconds" => {
-                    attempt_timeout_seconds = safe_value.parse().map_err(|_| {
-                        ErrorDto::validation(
-                            "configuration_edit_invalid",
-                            "attempt timeout seconds must be an integer",
-                        )
-                    })?;
-                }
-                "provider.execution.max_attempts" => {
-                    max_attempts = safe_value.parse().map_err(|_| {
-                        ErrorDto::validation(
-                            "configuration_edit_invalid",
-                            "max attempts must be an integer",
-                        )
-                    })?;
-                }
-                _ => {
-                    return Err(ErrorDto::validation(
-                        "configuration_edit_invalid",
-                        "unrecognized configuration key path",
-                    ));
-                }
-            },
-            ConfigurationEditOperationDto::Remove { key_path } => match key_path.as_str() {
-                "provider.endpoint" => endpoint = None,
-                _ => {
-                    return Err(ErrorDto::validation(
-                        "configuration_edit_invalid",
-                        "this configuration field cannot be removed",
-                    ));
-                }
-            },
+/// D-10 (P3-28) keeps TOML document construction owned by `intention-config`
+/// (which cannot depend on `intention-protocol`); this mapping is the only
+/// protocol-aware code left on the typed-edit path.
+fn configuration_edit_operation(
+    operation: &ConfigurationEditOperationDto,
+) -> intention_config::control_plane::ConfigurationEditOperation {
+    match operation {
+        ConfigurationEditOperationDto::Set {
+            key_path,
+            safe_value,
+        } => intention_config::control_plane::ConfigurationEditOperation::Set {
+            key_path: key_path.clone(),
+            safe_value: safe_value.clone(),
+        },
+        ConfigurationEditOperationDto::Remove { key_path } => {
+            intention_config::control_plane::ConfigurationEditOperation::Remove {
+                key_path: key_path.clone(),
+            }
         }
     }
-    let mut toml = String::new();
-    toml.push_str("schema_version = 1\n[provider]\n");
-    toml.push_str(&format!("kind = \"{kind}\"\n"));
-    toml.push_str(&format!("model = \"{model}\"\n"));
-    if let Some(endpoint) = endpoint {
-        toml.push_str(&format!("endpoint = \"{endpoint}\"\n"));
-    }
-    toml.push_str("[provider.execution]\n");
-    toml.push_str(&format!(
-        "attempt_timeout_seconds = {attempt_timeout_seconds}\n"
-    ));
-    toml.push_str(&format!("max_attempts = {max_attempts}\n"));
-    Ok(toml)
 }
 
 /// Builds the transient platform-native source of one server-side edit.
@@ -1462,13 +1409,28 @@ impl DaemonApplicationFacade {
     /// permission-checked, read, validated, persisted, or recovered.
     pub fn open_platform() -> DtoResult<Self> {
         let source = ConfigPathResolver::resolve(None)?;
+        let database = platform_database_location()?;
+        Self::open_platform_from(source, database)
+    }
+
+    /// Opens the daemon facade from an explicit configuration source and
+    /// durable database location.
+    ///
+    /// This is the single daemon-open sequence: [`Self::open_platform`]
+    /// resolves the platform locations and delegates here, and the startup
+    /// fixtures (R34) call the same sequence over fixture paths instead of
+    /// re-implementing it, so the production open path and the fixtures
+    /// cannot drift.
+    ///
+    /// # Errors
+    ///
+    /// Returns safe typed failures when the configuration cannot be loaded,
+    /// validated, retained, persisted, or recovered.
+    fn open_platform_from(source: ConfigSourceDto, database: PathBuf) -> DtoResult<Self> {
         let (config_snapshot, selected_provider, raw_toml, private_credential) =
             load_provider_configuration(source.clone())?;
-        let facade = Self::open_with_selected_provider(
-            platform_database_location()?,
-            config_snapshot,
-            selected_provider,
-        )?;
+        let facade =
+            Self::open_with_selected_provider(database, config_snapshot, selected_provider)?;
         retain_private_startup_credential(&facade, private_credential, source)?;
         // The startup document is the single source of the provider catalog
         // (D-02): on a fresh store it activates the first catalog revision and
@@ -1525,7 +1487,7 @@ impl DaemonApplicationFacade {
         };
         let raw_config_size_bytes = u64::try_from(raw_toml.len()).unwrap_or(u64::MAX);
         let state = self.inner.repository.load_provider_catalog_status()?;
-        let Some(active_revision) = state.active_catalog_revision_id else {
+        if state.active_catalog_revision_id.is_none() {
             self.prepare_catalog_candidate(CatalogSourceInputDto {
                 operation_id: "startup-catalog".to_owned(),
                 raw_config_size_bytes,
@@ -1534,22 +1496,25 @@ impl DaemonApplicationFacade {
                 previous,
             })?;
             return Ok(());
-        };
-        // D-02 item 1: compare the startup-derived declaration with the active
-        // catalog's active (default) profile declaration. A declaration that
-        // names no endpoint matches the active profile's derived endpoint: the
-        // catalog stores the deterministic placeholder for an endpointless
-        // kind, and that placeholder is not an operator declaration.
+        }
+        // D-02 item 1 / R17: compare the startup-derived effective endpoint
+        // with the active catalog's effective endpoint in both directions, so
+        // a document that drops a previously declared endpoint re-derives the
+        // catalog instead of keeping the stale declaration. A declaration
+        // that names no endpoint carries the kind's deterministic derived
+        // endpoint, which is exactly the endpoint the catalog stores for an
+        // endpointless kind.
         let active = self.active_catalog_declaration()?.ok_or_else(|| {
             ErrorDto::validation(
                 "provider_catalog_state_inconsistent",
                 "the active provider catalog has no default profile",
             )
         })?;
-        let endpoint_differs = declaration
+        let declared_endpoint = declaration
             .endpoint
-            .as_deref()
-            .is_some_and(|endpoint| endpoint != active.endpoint);
+            .clone()
+            .unwrap_or_else(|| derived_default_endpoint(&declaration.kind));
+        let endpoint_differs = declared_endpoint != active.endpoint;
         if declaration.kind == active.kind && declaration.model == active.model && !endpoint_differs
         {
             // The file already matches the durable catalog: the restart keeps
@@ -1594,9 +1559,33 @@ impl DaemonApplicationFacade {
                     "the prepared removal candidate is missing its revision",
                 )
             })?;
+            // R16 follow-up (differ-differ): the prepare call above may have
+            // adopted a durable, startup-rebuilt pending removal before it
+            // prepared this candidate. When the startup document changed
+            // again while that pending removal existed, the acceptance below
+            // must supersede the revision the adoption committed - the
+            // revision the adopted pending removal recorded as its candidate
+            // revision, which is the durable active revision now - instead of
+            // the pre-adoption revision read before the prepare. The
+            // controller would otherwise reject the acceptance once with
+            // `provider_catalog_revision_conflict`, so the open would fail
+            // and only self-heal on the next restart. A pending candidate
+            // never advances the active revision, so this read is also the
+            // pre-adoption revision when no adoption happened.
+            let acceptance_active_revision = self
+                .inner
+                .repository
+                .load_provider_catalog_status()?
+                .active_catalog_revision_id
+                .ok_or_else(|| {
+                    ErrorDto::validation(
+                        "provider_catalog_state_inconsistent",
+                        "the prepared removal candidate has no active catalog revision",
+                    )
+                })?;
             self.inner.control_plane.controller.accept_pending(
                 candidate_handle,
-                active_revision.to_string(),
+                acceptance_active_revision.to_string(),
                 candidate_revision.to_string(),
                 "startup-catalog-removal".to_owned(),
                 now_seconds(now()?),
@@ -2549,15 +2538,18 @@ impl DaemonApplicationFacade {
 
     /// Applies typed edit operations and durably commits the edited candidate.
     ///
-    /// The operations are applied to the active snapshot and validated
-    /// server-side through the reload contract. The retained private
-    /// credential is restored into the reconstructed candidate document
-    /// before parsing, so an execution-policy-only typed edit commits while
-    /// the credential never appears in a DTO, error, digest, or durable
-    /// surface. A facade that retained no private credential (test-support
-    /// opens) keeps the fail-closed behavior: an edited candidate that
-    /// leaves the credential unset is rejected with
-    /// `missing_provider_credential`.
+    /// The operations are mapped into the configuration crate's own edit
+    /// vocabulary and rendered there from the active safe snapshot as a TOML
+    /// document (D-10, `P3-28`), so this composition never renders TOML and a
+    /// value carrying TOML-significant characters is escaped by the
+    /// serializer. The rendered document is validated server-side through the
+    /// reload contract. The retained private credential is restored into the
+    /// reconstructed candidate document before parsing, so an
+    /// execution-policy-only typed edit commits while the credential never
+    /// appears in a DTO, error, digest, or durable surface. A facade that
+    /// retained no private credential (test-support opens) keeps the
+    /// fail-closed behavior: an edited candidate that leaves the credential
+    /// unset is rejected with `missing_provider_credential`.
     ///
     /// # Errors
     ///
@@ -2571,7 +2563,12 @@ impl DaemonApplicationFacade {
         let previous = binding.active_snapshot()?;
         let previous_revision = binding.active_revision()?;
         let service = ConfigurationReloadService::new(self.inner.repository.as_ref(), &binding);
-        let edited = edited_configuration_toml(&previous, &command.operations)?;
+        let operations = command
+            .operations
+            .iter()
+            .map(configuration_edit_operation)
+            .collect::<Vec<_>>();
+        let edited = render_edited_configuration(&previous, &operations)?;
         let candidate_text = self.restore_private_credential(&edited)?;
         let candidate = service.prepare(
             RawConfigInputDto::new(candidate_text, reload_edit_source()?),
@@ -2599,7 +2596,8 @@ impl DaemonApplicationFacade {
     /// # Errors
     ///
     /// Returns an unavailable error when the private credential state lock
-    /// is poisoned.
+    /// is poisoned, or the configuration crate's typed document-shape error
+    /// when the credential cannot be restored.
     fn restore_private_credential(&self, edited: &str) -> DtoResult<String> {
         let material = self
             .inner
@@ -2613,10 +2611,10 @@ impl DaemonApplicationFacade {
             })?
             .material
             .clone();
-        Ok(material.map_or_else(
-            || edited.to_owned(),
+        material.map_or_else(
+            || Ok(edited.to_owned()),
             |credential| restore_credential_document(edited, &credential),
-        ))
+        )
     }
 
     /// Rotates one provider's private credential material through the
@@ -4387,15 +4385,32 @@ mod tests {
             "unsupported_provider_kind"
         );
 
-        // The catalog-activation factory and the credential-rebuild preflight
-        // share one dispatch, so the same declaration can never select
-        // different adapters at the two construction sites.
+        // Every typed kind has exactly one factory, so the dispatch above
+        // cannot route a kind to another adapter.
+        for kind in [
+            ProviderKindDto::Openrouter,
+            ProviderKindDto::GenericChatCompletionApi,
+        ] {
+            assert_eq!(
+                CompositionDriverFactory::service(kind).kind(),
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_and_credential_paths_derive_their_option_preflight_from_the_declaration() {
+        // R33: the catalog-activation factory and the credential-rebuild path
+        // must both derive their option preflight from the profile's
+        // declaration. The factory is checked against the adapter builders'
+        // own verdict (an independent derivation, not the seam helper it
+        // calls), so a build that stopped deriving from the declaration would
+        // accept a profile the adapters cannot serve.
         for kind in [
             ProviderKindDto::Openrouter,
             ProviderKindDto::GenericChatCompletionApi,
         ] {
             let factory = CompositionDriverFactory::service(kind);
-            assert_eq!(factory.kind(), kind.as_str());
             for (transport, safe_header_name) in [
                 (DomainCredentialTransportMode::Bearer, None),
                 (
@@ -4409,16 +4424,102 @@ mod tests {
                     None,
                 )
                 .expect("the fixture declaration is well-formed");
-                let factory_outcome = factory
+                let expected = match kind {
+                    ProviderKindDto::Openrouter => declared.into_openrouter().map(|_| ()),
+                    ProviderKindDto::GenericChatCompletionApi => {
+                        declared.into_generic_chat().map(|_| ())
+                    }
+                };
+                let outcome = factory
                     .build(factory_material(kind.as_str(), transport, safe_header_name))
                     .map(|_| ());
                 assert_eq!(
-                    factory_outcome.is_ok(),
-                    declared.preflight_for_kind(kind).is_ok(),
-                    "the factory and the rebuild preflight agree for {kind}"
+                    outcome.as_ref().map_err(|error| error.code()),
+                    expected.as_ref().map_err(|error| error.code()),
+                    "the factory outcome must be the declaration's adapter verdict for {kind}"
                 );
             }
         }
+
+        // The credential-rebuild path cannot reject on a declaration in a real
+        // facade: catalog profiles are always bearer, so its preflight is
+        // structurally unobservable today. The shared derivation is therefore
+        // pinned at the source: removing the declaration composition or the
+        // preflight from either construction path fails this guard.
+        let source = include_str!("lib.rs");
+        let sections = [
+            (
+                "catalog activation",
+                implementation_section(
+                    source,
+                    "impl ProviderDriverFactory for CompositionDriverFactory {",
+                    "/// Resolves one catalog provider kind id",
+                ),
+            ),
+            (
+                "credential rebuild",
+                implementation_section(
+                    source,
+                    "impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {",
+                    "/// The composition's session-profile change publication seam",
+                ),
+            ),
+        ];
+        for (path, section) in sections {
+            assert!(
+                section.contains("DeclaredProviderOptions::from_declaration"),
+                "{path} must compose its options from the profile declaration"
+            );
+            assert!(
+                section.contains("preflight_for_kind"),
+                "{path} must preflight the declared options through the adapter builder"
+            );
+        }
+        // The needle is assembled from fragments so the guard text itself does
+        // not satisfy the search.
+        let removed_agreement = ["the factory and the rebuild", "preflight agree"].join(" ");
+        assert!(
+            !source.contains(&removed_agreement),
+            "the removed tautological agreement assertion must not reappear"
+        );
+    }
+
+    /// Returns the implementation section between two unique source markers.
+    fn implementation_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let after_start = source
+            .split_once(start)
+            .map(|(_before, rest)| rest)
+            .expect("the pinned implementation is present");
+        after_start
+            .split_once(end)
+            .map(|(section, _after)| section)
+            .expect("the pinned implementation boundary is present")
+    }
+
+    #[test]
+    fn startup_catalog_activation_signature_stays_private_and_document_bearing() {
+        // R38: `activate_startup_catalog` is deliberately private and takes
+        // the raw startup document because only the daemon-open path calls it
+        // (E6, P3-29). The repository pins such invariants with a source
+        // guard, so this test reads its own crate source with a needle
+        // assembled from fragments (the guard's own source must not satisfy
+        // the scan).
+        let source = include_str!("lib.rs");
+        let private_signature = [
+            "fn activate_startup_catalog(&self, raw_toml: &str)",
+            " -> DtoResult<()>",
+        ]
+        .concat();
+        assert_eq!(
+            source.matches(&private_signature).count(),
+            1,
+            "exactly one `{private_signature}` definition must exist"
+        );
+        let public_signature = ["pub ", "fn activate_startup_catalog"].concat();
+        assert!(
+            !source.contains(&public_signature),
+            "`activate_startup_catalog` must never become a public facade method"
+        );
     }
 
     /// Builds one startup document fixture for the catalog re-derivation tests.
@@ -4442,30 +4543,17 @@ mod tests {
         }
     }
 
-    /// Opens one facade exactly as `open_platform` does over a caller-supplied
-    /// database and startup document, without touching platform paths.
+    /// Opens one facade through the real daemon-open sequence
+    /// ([`DaemonApplicationFacade::open_platform_from`], the shared core of
+    /// `open_platform`) over caller-supplied fixture paths, so the startup
+    /// fixtures cannot drift from the production sequence (R34).
     fn open_startup_facade(database: &Path, config_path: &Path) -> DaemonApplicationFacade {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(config_path.to_string_lossy().into_owned())
                 .expect("fixture startup document path is absolute"),
         );
-        let (snapshot, selected_provider, raw_toml, private_credential) =
-            load_provider_configuration(source.clone()).expect("startup configuration composes");
-        let facade = DaemonApplicationFacade::open_with_selected_provider(
-            database,
-            snapshot,
-            selected_provider,
-        )
-        .expect("the durable facade opens");
-        retain_private_startup_credential(&facade, private_credential, source)
-            .expect("the private startup credential retains");
-        facade
-            .activate_startup_catalog(&raw_toml)
-            .expect("the startup catalog activates");
-        facade
-            .ensure_driver_kind_matches_active_catalog()
-            .expect("the executing driver kind matches the active catalog");
-        facade
+        DaemonApplicationFacade::open_platform_from(source, database.to_path_buf())
+            .expect("the daemon-open sequence composes over fixture paths")
     }
 
     /// Reads one active catalog revision and its default profile declaration.
@@ -4584,6 +4672,249 @@ mod tests {
         assert_eq!(
             second.provider_control_readiness(),
             intention_application::CatalogReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn startup_open_adopts_a_durable_pending_removal_through_the_repository() {
+        // R16 follow-up (a): the composition's real open sequence recovers a
+        // durable pending removal its own previous process left behind,
+        // instead of failing with `provider_catalog_removal_pending_exists`
+        // until the 30-minute expiry. The recovered state is read through the
+        // durable repository, never through the in-memory projection.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-adopt-pending.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        assert_eq!(active_catalog_profile(&first).0, 1);
+        let prepared = prepare_removal_at_now(
+            &first,
+            "removal-startup-adopt",
+            "https://api.example.invalid/v1",
+        );
+        assert_eq!(prepared.candidate_handle.as_deref(), Some("catalog-2"));
+        // Simulated crash: the durable pending removal survives with its
+        // deadline while the process memory does not.
+        drop(first);
+
+        // Reopening with the document the pending removal was prepared from
+        // adopts it through the normal acceptance path.
+        write_startup_document(
+            &config_path,
+            &startup_document(
+                "generic-chat-completion-api",
+                "replacement",
+                Some("https://api.example.invalid/v1"),
+            ),
+        );
+        let restarted = open_startup_facade(&database, &config_path);
+        let status = restarted
+            .inner
+            .repository
+            .load_provider_catalog_status()
+            .expect("catalog status reads");
+        assert_eq!(
+            status.status,
+            intention_storage::ProviderCatalogStatusDto::Active
+        );
+        assert_eq!(
+            status.active_catalog_revision_id,
+            Some(2),
+            "the adopted removal is the durable active revision"
+        );
+        assert_eq!(status.candidate_catalog_revision_id, None);
+        let material = restarted
+            .inner
+            .repository
+            .load_provider_catalog_material()
+            .expect("active material reads");
+        assert_eq!(material.catalog_revision_id, 2);
+        assert_eq!(material.default_profile_id.as_deref(), Some("default"));
+        assert_eq!(material.profiles.len(), 1);
+        assert_eq!(
+            material.profiles[0].profile.provider_kind_id,
+            "generic-chat-completion-api"
+        );
+        assert_eq!(material.profiles[0].profile.model_id, "replacement");
+        assert_eq!(
+            material.profiles[0].profile.endpoint,
+            "https://api.example.invalid/v1"
+        );
+        assert!(
+            restarted
+                .inner
+                .repository
+                .load_pending_removal_candidate()
+                .expect("pending removal reads")
+                .is_none(),
+            "the adopted candidate is no longer pending"
+        );
+        assert_eq!(
+            restarted
+                .inner
+                .repository
+                .load_highest_removal_candidate_revision()
+                .expect("the durable removal maximum reads"),
+            2,
+            "the adopted candidate remains the durable removal maximum"
+        );
+    }
+
+    #[test]
+    fn startup_open_accepts_a_second_change_after_adopting_a_durable_pending_removal() {
+        // R16 follow-up (b), the differ-differ case: the startup document
+        // changes again while a durable, startup-rebuilt pending removal
+        // exists. The open adopts the pending removal and then accepts the
+        // newly prepared candidate against the revision that adoption
+        // committed. Passing the pre-adoption revision would fail the open
+        // once with `provider_catalog_revision_conflict` and only self-heal on
+        // the next restart; this fixture drives the single open through
+        // `open_platform_from` and reads the settled state from the durable
+        // repository.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-adopt-second-change.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        assert_eq!(active_catalog_profile(&first).0, 1);
+        let prepared = prepare_removal_at_now(
+            &first,
+            "removal-startup-differ-differ",
+            "https://api.example.invalid/v1",
+        );
+        assert_eq!(prepared.candidate_handle.as_deref(), Some("catalog-2"));
+        drop(first);
+
+        // The document changed again before the pending removal was accepted:
+        // the declared endpoint now differs from the pending candidate's
+        // declaration, so the startup prepare adopts revision two and prepares
+        // revision three in the same call, which the open then accepts.
+        write_startup_document(
+            &config_path,
+            &startup_document(
+                "generic-chat-completion-api",
+                "replacement",
+                Some("https://api.example.invalid/v2"),
+            ),
+        );
+        let restarted = open_startup_facade(&database, &config_path);
+        let (revision, kind, model, endpoint) = active_catalog_profile(&restarted);
+        assert_eq!(
+            revision, 3,
+            "the second startup change receives its own accepted revision"
+        );
+        assert_eq!(kind, "generic-chat-completion-api");
+        assert_eq!(model, "replacement");
+        assert_eq!(endpoint, "https://api.example.invalid/v2");
+        let status = restarted
+            .inner
+            .repository
+            .load_provider_catalog_status()
+            .expect("catalog status reads");
+        assert_eq!(
+            status.status,
+            intention_storage::ProviderCatalogStatusDto::Active
+        );
+        assert_eq!(status.active_catalog_revision_id, Some(3));
+        assert_eq!(status.candidate_catalog_revision_id, None);
+        assert!(
+            restarted
+                .inner
+                .repository
+                .load_pending_removal_candidate()
+                .expect("pending removal reads")
+                .is_none(),
+            "the second candidate was accepted during the open"
+        );
+        assert_eq!(
+            restarted
+                .inner
+                .repository
+                .load_highest_removal_candidate_revision()
+                .expect("the durable removal maximum reads"),
+            3,
+            "the adopted and the accepted candidates both stay in the durable maximum"
+        );
+        assert_eq!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn restart_after_the_startup_document_drops_a_declared_endpoint_rederives() {
+        // R17 / D-02: the endpoint comparison is two-directional, so a
+        // document that drops a previously declared endpoint re-derives the
+        // active catalog instead of keeping the stale declaration.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory
+            .path()
+            .join("startup-rederive-endpoint-drop.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document(
+                "openrouter",
+                "fixture-model",
+                Some("https://api.example.invalid/v9"),
+            ),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        let (revision, _kind, _model, endpoint) = active_catalog_profile(&first);
+        assert_eq!(revision, 1);
+        assert_eq!(endpoint, "https://api.example.invalid/v9");
+        drop(first);
+
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let second = open_startup_facade(&database, &config_path);
+        let (revision, kind, model, endpoint) = active_catalog_profile(&second);
+        assert_eq!(
+            revision, 2,
+            "dropping the declared endpoint re-derives the catalog"
+        );
+        assert_eq!(kind, "openrouter");
+        assert_eq!(model, "fixture-model");
+        assert_eq!(
+            endpoint,
+            derived_default_endpoint("openrouter"),
+            "the re-derived profile carries the kind's deterministic derived endpoint"
+        );
+        drop(second);
+
+        // The reconciled endpointless declaration is a no-op on the next
+        // restart: the two-directional comparison does not churn revisions.
+        let third = open_startup_facade(&database, &config_path);
+        assert_eq!(active_catalog_profile(&third).0, 2);
+    }
+
+    #[test]
+    fn derived_default_endpoint_matches_the_catalog_derivation() {
+        // R17: the composition's comparison copy of the derived endpoint is
+        // pinned to the catalog's own derivation by reading the active profile
+        // of an endpointless declaration.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-derived-endpoint.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let facade = open_startup_facade(&database, &config_path);
+        let (_, kind, _, endpoint) = active_catalog_profile(&facade);
+        assert_eq!(
+            endpoint,
+            derived_default_endpoint(&kind),
+            "the comparison copy must match the catalog's derived endpoint"
         );
     }
 
@@ -5442,7 +5773,10 @@ mod tests {
         assert_eq!(configuration.provider_kind, "openrouter");
         assert_eq!(configuration.model_id, "fixture");
         assert!(configuration.credential_configured);
-        assert_eq!(configuration.reload_status, "active");
+        assert_eq!(
+            configuration.reload_status,
+            ConfigurationReloadStatusDto::Active
+        );
         assert_eq!(
             configuration.applied_config_revision_id,
             startup.revision_id().to_string()
@@ -5657,6 +5991,43 @@ mod tests {
             Some("catalog_change_requires_restart")
         );
         assert!(!format!("{rejected:?}").contains(RETAINED_SECRET));
+    }
+
+    #[test]
+    fn control_plane_typed_edit_escapes_wire_values_before_the_candidate_parse() {
+        // D-10 (P3-28): the document is rendered from the snapshot AST inside
+        // `intention-config`, so a wire value carrying a TOML-significant
+        // character is escaped and reaches the server-side validator. Before
+        // the change the interpolated document broke TOML parsing and reported
+        // the generic `invalid_config_toml`; the model change must instead be
+        // classified by the reload contract.
+        const RETAINED_SECRET: &str = "sk-retained-typed-edit-secret-23456";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let config_path = directory.path().join("config.toml");
+        let (facade, startup) = file_backed_facade(&directory, &config_path, RETAINED_SECRET);
+        let transaction = reload_transaction(facade.command(
+            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                operation_id: "op-1".to_owned(),
+                expected_config_revision: startup.revision_id().to_string(),
+                operations: vec![ConfigurationEditOperationDto::Set {
+                    key_path: "provider.model".to_owned(),
+                    safe_value: "model-\"quoted\"-and\\backslash".to_owned(),
+                }],
+            }),
+        ));
+        assert_eq!(
+            transaction.commit_outcome,
+            ConfigurationCommitOutcomeDto::Rejected
+        );
+        assert_eq!(
+            transaction.safe_failure_code.as_deref(),
+            Some("catalog_change_requires_restart"),
+            "the escaped value must parse and reach the catalog classification"
+        );
+        assert!(
+            !format!("{transaction:?}").contains(RETAINED_SECRET),
+            "the reload transaction never echoes the retained credential"
+        );
     }
 
     #[test]
@@ -6550,9 +6921,13 @@ mod tests {
         };
         match facade.query(ProtocolQueryDto::GetProviderUsage(query)) {
             ProtocolQueryResultDto::ProviderUsage(usage) => {
-                assert_eq!(usage.request_count, 1, "usage is never double counted");
-                assert_eq!(usage.input_units, 10);
-                assert_eq!(usage.output_units, 5);
+                assert_eq!(usage.entries.len(), 1, "one identity produced usage");
+                assert_eq!(
+                    usage.entries[0].request_count, 1,
+                    "usage is never double counted"
+                );
+                assert_eq!(usage.entries[0].input_units, 10);
+                assert_eq!(usage.entries[0].output_units, 5);
             }
             ProtocolQueryResultDto::Rejected(error) => {
                 panic!("usage query rejected: {}", error.code())
