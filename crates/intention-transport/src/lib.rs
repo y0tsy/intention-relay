@@ -23,6 +23,8 @@ use interprocess::local_socket::tokio::{
     Stream as TokioLocalSocketStream,
 };
 use interprocess::local_socket::traits::Listener as _;
+#[cfg(unix)]
+use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, PathNameType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -31,6 +33,17 @@ const FRAME_LENGTH_BYTES: usize = 4;
 const MAX_FRAME_BYTES: usize = 1_048_576;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The upper bound for one synchronous framed read or write.
+///
+/// A local request/response completes in milliseconds; the bound exists so a
+/// peer that accepts a connection and then stops answering fails with a typed
+/// unavailable error instead of blocking the caller until a CI step timeout.
+const SYNC_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The upper bound for the liveness probe that decides whether an endpoint is
+/// a stale socket or belongs to a live listener.
+const STALE_PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// A validated, private-to-the-current-user location for a local daemon endpoint.
 ///
@@ -145,16 +158,28 @@ pub struct LocalConnection {
 impl LocalConnection {
     /// Connects to the endpoint with a bounded wait.
     ///
+    /// The returned connection bounds every synchronous read and write with
+    /// the transport I/O timeout, so a peer that accepts the connection and
+    /// never answers fails with a typed unavailable error instead of blocking
+    /// the caller indefinitely.
+    ///
     /// # Errors
     ///
     /// Returns a safe typed unavailable error when the daemon endpoint cannot be
-    /// reached, rather than exposing an OS path or error string.
+    /// reached or the connection cannot be bounded, rather than exposing an OS
+    /// path or error string.
     pub fn connect(endpoint: &LocalEndpoint) -> DtoResult<Self> {
+        Self::connect_with_io_timeout(endpoint, SYNC_IO_TIMEOUT)
+    }
+
+    /// Connects to the endpoint and applies the requested synchronous I/O bound.
+    fn connect_with_io_timeout(endpoint: &LocalEndpoint, io_timeout: Duration) -> DtoResult<Self> {
         let stream = ConnectOptions::new()
             .name(endpoint.socket_name()?)
             .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
             .connect_sync()
             .map_err(|_| unavailable("local_daemon_unavailable"))?;
+        apply_sync_io_timeout(&stream, io_timeout)?;
         Ok(Self { stream })
     }
 
@@ -222,23 +247,26 @@ impl LocalConnection {
 /// A local listener that accepts framed, typed client connections.
 pub struct LocalListener {
     listener: LocalSocketListener,
-    #[cfg(unix)]
-    endpoint: LocalEndpoint,
 }
 
 impl LocalListener {
     /// Binds a user-private local endpoint.
     ///
     /// On Unix, a bind conflict from an unclean previous daemon exit is
-    /// recovered: when the endpoint path is a socket with no live listener,
-    /// the stale socket is removed and the bind is retried once. A live
-    /// listener or a non-socket path is never removed.
+    /// recovered: when the endpoint path is a socket whose bounded probe
+    /// connection is refused, the socket is removed and the bind is retried
+    /// once. A live listener (including one whose accept backlog saturates the
+    /// probe), a replaced socket, and a non-socket path are never removed.
+    ///
+    /// Dropping a listener never removes the endpoint path; reclaim at the
+    /// next bind is the only removal path, so a clean and an unclean exit look
+    /// the same on disk.
     ///
     /// # Errors
     ///
     /// Returns a safe typed error when the parent directory cannot be prepared,
     /// the endpoint is already serving another daemon, or platform IPC is
-    /// unavailable. It never removes a path that was not created by this host.
+    /// unavailable. It never removes a path that is not a stale socket.
     pub fn bind(endpoint: LocalEndpoint) -> DtoResult<Self> {
         prepare_parent_directory(&endpoint)?;
         let listener = match listener_options(&endpoint)?.create_sync() {
@@ -248,11 +276,7 @@ impl LocalListener {
                 .map_err(|_| endpoint_in_use())?,
             Err(_) => return Err(endpoint_in_use()),
         };
-        Ok(Self {
-            listener,
-            #[cfg(unix)]
-            endpoint,
-        })
+        Ok(Self { listener })
     }
 
     /// Accepts one client connection.
@@ -266,16 +290,8 @@ impl LocalListener {
             .listener
             .accept()
             .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+        apply_sync_io_timeout(&stream, SYNC_IO_TIMEOUT)?;
         Ok(LocalConnection { stream })
-    }
-}
-
-impl Drop for LocalListener {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            let _ = fs::remove_file(&self.endpoint.path);
-        }
     }
 }
 
@@ -285,16 +301,15 @@ impl Drop for LocalListener {
 /// caller supplies the runtime; this transport type never creates one.
 pub struct AsyncLocalListener {
     listener: TokioLocalSocketListener,
-    #[cfg(unix)]
-    endpoint: LocalEndpoint,
 }
 
 impl AsyncLocalListener {
     /// Binds a user-private local endpoint for asynchronous connections.
     ///
     /// On Unix, a bind conflict from an unclean previous daemon exit is
-    /// recovered exactly like [`LocalListener::bind`]: a stale socket with no
-    /// live listener is removed and the bind is retried once.
+    /// recovered exactly like [`LocalListener::bind`]: a stale socket whose
+    /// bounded probe connection is refused is removed and the bind is retried
+    /// once. Dropping the listener never removes the endpoint path.
     ///
     /// # Errors
     ///
@@ -309,11 +324,7 @@ impl AsyncLocalListener {
                 .map_err(|_| endpoint_in_use())?,
             Err(_) => return Err(endpoint_in_use()),
         };
-        Ok(Self {
-            listener,
-            #[cfg(unix)]
-            endpoint,
-        })
+        Ok(Self { listener })
     }
 
     /// Accepts one client into an asynchronous daemon-side connection.
@@ -329,15 +340,6 @@ impl AsyncLocalListener {
             .await
             .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
         Ok(AsyncLocalDaemonConnection { stream })
-    }
-}
-
-impl Drop for AsyncLocalListener {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            let _ = fs::remove_file(&self.endpoint.path);
-        }
     }
 }
 
@@ -854,38 +856,94 @@ fn endpoint_in_use() -> ErrorDto {
     .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
 }
 
-/// Reclaims a stale Unix endpoint left behind by an unclean daemon exit.
+/// Applies the bounded synchronous I/O timeout to one connected stream.
 ///
-/// A bind failure means the endpoint is in use only when a live listener
-/// answers a probe connect. When the path is a socket with no live listener,
-/// it is stale and is removed exactly once before the caller retries the
-/// bind. Live endpoints and non-socket paths are never removed.
+/// Unix-domain sockets carry per-call read and write timeouts. Windows named
+/// pipes expose no per-call timeout, so those keep the documented blocking
+/// behavior.
 #[cfg(unix)]
-fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
-    use std::os::unix::fs::FileTypeExt;
+fn apply_sync_io_timeout(stream: &LocalSocketStream, timeout: Duration) -> DtoResult<()> {
+    stream
+        .set_recv_timeout(Some(timeout))
+        .and_then(|()| stream.set_send_timeout(Some(timeout)))
+        .map_err(|_| unavailable("local_daemon_connection_unavailable"))
+}
 
-    let metadata = match fs::symlink_metadata(&endpoint.path) {
-        Ok(metadata) => metadata,
-        Err(_) => return false,
-    };
-    if !metadata.file_type().is_socket() {
-        return false;
-    }
+#[cfg(not(unix))]
+const fn apply_sync_io_timeout(_stream: &LocalSocketStream, _timeout: Duration) -> DtoResult<()> {
+    Ok(())
+}
+
+/// The filesystem identity of one Unix socket file.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// Reads the identity of one socket file, or `None` when the path is absent
+/// or is not a socket.
+#[cfg(unix)]
+fn socket_identity(path: &std::path::Path) -> Option<SocketIdentity> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let metadata = fs::symlink_metadata(path).ok()?;
+    metadata.file_type().is_socket().then(|| SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+/// Reports whether a failed probe proves that nothing is listening.
+///
+/// Only a refused connection does. A timeout (for example a live listener
+/// whose accept backlog is saturated) and every other failure are treated as
+/// "in use", so the endpoint path is left in place.
+#[cfg(unix)]
+const fn probe_failure_reports_stale(kind: std::io::ErrorKind) -> bool {
+    matches!(kind, std::io::ErrorKind::ConnectionRefused)
+}
+
+/// Probes the endpoint with a bounded connect and reports whether the
+/// connection was refused.
+#[cfg(unix)]
+fn probe_reports_stale_socket(endpoint: &LocalEndpoint) -> bool {
     let Ok(name) = endpoint.socket_name() else {
         return false;
     };
-    // A live listener completes an immediate connect; a stale socket refuses
-    // it. A short timeout bounds the probe without ever waiting on a socket
-    // that is gone.
-    let live = ConnectOptions::new()
+    ConnectOptions::new()
         .name(name)
-        .wait_mode(ConnectWaitMode::Timeout(Duration::from_millis(50)))
+        .wait_mode(ConnectWaitMode::Timeout(STALE_PROBE_TIMEOUT))
         .connect_sync()
-        .is_ok();
-    if live {
+        .err()
+        .is_some_and(|error| probe_failure_reports_stale(error.kind()))
+}
+
+/// Removes one socket file only when it still resolves to the identity that
+/// was captured before the probe.
+#[cfg(unix)]
+fn remove_socket_if_identity_unchanged(path: &std::path::Path, identity: SocketIdentity) -> bool {
+    socket_identity(path) == Some(identity) && fs::remove_file(path).is_ok()
+}
+
+/// Reclaims a stale Unix endpoint left behind by an unclean daemon exit.
+///
+/// A bind failure means the endpoint is in use unless the path is a socket
+/// whose bounded probe connection is refused. A probe that fails for any
+/// other reason is treated as "in use", never as stale. The socket is removed
+/// only when it still has the identity captured before the probe, so a path
+/// replaced while the probe ran is never removed. Reclaim at the next bind is
+/// the only removal path: no listener ever unlinks its endpoint on drop.
+#[cfg(unix)]
+fn reclaim_stale_socket(endpoint: &LocalEndpoint) -> bool {
+    let Some(identity) = socket_identity(&endpoint.path) else {
+        return false;
+    };
+    if !probe_reports_stale_socket(endpoint) {
         return false;
     }
-    fs::remove_file(&endpoint.path).is_ok()
+    remove_socket_if_identity_unchanged(&endpoint.path, identity)
 }
 
 /// On platforms without Unix sockets (notably Windows named pipes), a bind
@@ -930,7 +988,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn listener_enforces_private_permissions_and_removes_owned_socket() {
+    fn listener_enforces_private_permissions_and_leaves_its_socket_for_reclaim() {
         use std::os::unix::fs::PermissionsExt;
 
         let endpoint = endpoint();
@@ -939,7 +997,7 @@ mod tests {
             .parent()
             .expect("socket has a parent")
             .to_owned();
-        let listener = LocalListener::bind(endpoint).expect("listener binds");
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
         assert_eq!(
             fs::metadata(parent)
                 .expect("parent metadata")
@@ -958,9 +1016,12 @@ mod tests {
         );
         drop(listener);
         assert!(
-            !socket_path.exists(),
-            "listener removes only its owned socket"
+            socket_path.exists(),
+            "dropping a listener leaves its endpoint for reclaim at the next bind"
         );
+        // Reclaim at the next bind is the only removal path.
+        let reclaimed = LocalListener::bind(endpoint).expect("the left endpoint is reclaimed");
+        drop(reclaimed);
     }
 
     #[cfg(unix)]
@@ -980,8 +1041,8 @@ mod tests {
         let listener = LocalListener::bind(stale).expect("stale socket is reclaimed");
         drop(listener);
         assert!(
-            !stale_path.exists(),
-            "the reclaimed listener owns the socket"
+            stale_path.exists(),
+            "dropping a listener leaves its endpoint for the next reclaim"
         );
 
         // A live listener on the same path must never be unlinked.
@@ -1046,7 +1107,7 @@ mod tests {
             .parent()
             .expect("socket has a parent")
             .to_owned();
-        let listener = AsyncLocalListener::bind(endpoint).expect("listener binds");
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         assert_eq!(
             fs::metadata(parent)
                 .expect("parent metadata")
@@ -1065,9 +1126,147 @@ mod tests {
         );
         drop(listener);
         assert!(
-            !socket_path.exists(),
-            "listener removes only its owned socket"
+            socket_path.exists(),
+            "dropping an async listener leaves its endpoint for reclaim"
         );
+        let reclaimed = AsyncLocalListener::bind(endpoint).expect("the left endpoint is reclaimed");
+        drop(reclaimed);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_refused_probe_reports_a_stale_endpoint() {
+        assert!(probe_failure_reports_stale(
+            std::io::ErrorKind::ConnectionRefused
+        ));
+        for kind in [
+            // A saturated accept backlog on a live listener fails the probe
+            // with a timeout instead of a refusal (P2-14).
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(
+                !probe_failure_reports_stale(kind),
+                "a {kind:?} probe failure must never reclaim the endpoint"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_reports_only_a_refused_endpoint_as_stale() {
+        let live = endpoint();
+        let live_path = live.path.clone();
+        let listener =
+            std::os::unix::net::UnixListener::bind(&live_path).expect("live socket seeds");
+        assert!(
+            !probe_reports_stale_socket(&live),
+            "a live listener is never stale"
+        );
+        drop(listener);
+        assert!(
+            probe_reports_stale_socket(&live),
+            "an abandoned socket file is stale"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reclaim_refuses_a_socket_identity_that_changed_after_the_probe() {
+        let first = endpoint();
+        let first_path = first.path;
+        let abandoned =
+            std::os::unix::net::UnixListener::bind(&first_path).expect("first socket seeds");
+        let inspected = socket_identity(&first_path).expect("the inspected identity reads");
+        drop(abandoned);
+
+        // Another owner replaces the path while the reclaim holds the
+        // inspected identity, so removal must refuse the new socket.
+        let replacement = endpoint();
+        let replacement_path = replacement.path;
+        let replacement_listener = std::os::unix::net::UnixListener::bind(&replacement_path)
+            .expect("replacement socket seeds");
+        fs::rename(&replacement_path, &first_path).expect("the replacement replaces the path");
+        let replacement_identity =
+            socket_identity(&first_path).expect("the replacement identity reads");
+        assert_ne!(
+            inspected, replacement_identity,
+            "the fixture sockets have different identities"
+        );
+
+        assert!(
+            !remove_socket_if_identity_unchanged(&first_path, inspected),
+            "a socket whose identity changed is never removed"
+        );
+        assert!(
+            first_path.exists(),
+            "the replacement socket survives the identity check"
+        );
+        assert!(
+            remove_socket_if_identity_unchanged(&first_path, replacement_identity),
+            "the unchanged identity is removable"
+        );
+        assert!(
+            !first_path.exists(),
+            "the identity check removes only the inspected socket"
+        );
+        drop(replacement_listener);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_listener_never_removes_a_socket_owned_by_another_host() {
+        let owned = endpoint();
+        let owned_path = owned.path.clone();
+        let listener = LocalListener::bind(owned).expect("fixture listener binds");
+
+        // Another host takes over the endpoint path after the socket file was
+        // unlinked, exactly as in the saturated-backlog hazard (P2-14).
+        let replacement = endpoint();
+        let replacement_path = replacement.path;
+        let replacement_listener = std::os::unix::net::UnixListener::bind(&replacement_path)
+            .expect("replacement socket seeds");
+        fs::remove_file(&owned_path).expect("the old socket unlinks");
+        fs::rename(&replacement_path, &owned_path).expect("the replacement owns the endpoint");
+
+        drop(listener);
+        assert!(
+            owned_path.exists(),
+            "a dropped listener never unlinks the path it no longer owns"
+        );
+        std::os::unix::net::UnixStream::connect(&owned_path)
+            .expect("the replacement listener stays reachable");
+        drop(replacement_listener);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_silent_peer_fails_closed_within_the_bounded_sync_read_timeout() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let connection = listener.accept().expect("server accepts");
+            let _ = held.recv_timeout(Duration::from_secs(30));
+            drop(connection);
+        });
+        let mut client =
+            LocalConnection::connect_with_io_timeout(&endpoint, Duration::from_millis(100))
+                .expect("client connects");
+        let started = std::time::Instant::now();
+        let error = client
+            .receive_hello()
+            .expect_err("a silent peer must fail closed");
+        assert_eq!(error.code(), "local_daemon_connection_unavailable");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the read is bounded by the transport timeout"
+        );
+        release.send(()).expect("the server releases");
+        server.join().expect("the server thread completes");
     }
 
     #[tokio::test]

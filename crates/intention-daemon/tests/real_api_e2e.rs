@@ -109,6 +109,17 @@ const TOOL_TURN_ATTEMPTS: u8 = 3;
 // (60 s), the hard-kill window (5 s), the bounded post-restart subscribe, the
 // quiet window, the bounded replay observations, and the bounded session reads
 // (about 1 min) add up to roughly 66 minutes.
+//
+// Every synchronous command (`client.health`, `create_session`,
+// `send_user_turn`, and the session reads) is additionally bounded by the
+// transport I/O timeout: one call spends at most the transport's 500 ms
+// connect wait plus two transport read timeouts (one for the hello, one for
+// the response) of 10 s each, which is at most 20.5 s. A daemon that accepts
+// connections and never answers therefore fails the readiness deadline plus
+// one bounded health call per `wait_until_ready` (2 x (30 s + 20.5 s)) and
+// then the first bounded `create_session` or `send_user_turn` (20.5 s): the
+// harness reports its own diagnostic within about two minutes instead of
+// hanging until the CI timeout.
 // `.github/workflows/real-api-e2e.yml` keeps its run step at 90 minutes and
 // its job at 120 minutes so a degraded live run reports the harness diagnostic
 // ("did not record a succeeded <tool> call within 3 turns") instead of an
@@ -508,9 +519,11 @@ impl LiveE2eHost {
     /// Kills the current daemon and starts a fresh process with identical
     /// environment, state directories, and endpoint.
     ///
-    /// The kill is a hard kill, so the daemon cannot run its listener Drop and
-    /// its Unix socket file survives; the transport reclaims the stale socket
-    /// on the next bind, exactly like the hermetic facade fixture.
+    /// The kill is a hard kill, so the daemon cannot clean up; its Unix socket
+    /// file survives, and the transport reclaims the stale socket on the next
+    /// bind, exactly like the hermetic facade fixture. A clean daemon exit
+    /// leaves the same file now that a dropped listener never unlinks its
+    /// endpoint.
     fn restart_daemon(&mut self) {
         self.kill_daemon();
         self.daemon = Some(spawn_daemon(
@@ -590,14 +603,12 @@ fn wait_until_ready(host: &mut LiveE2eHost, deadline: Instant) -> IntentionClien
 
 /// Reads one session snapshot with a harness-side deadline.
 ///
-/// The synchronous transport reads a response with a blocking `read_exact`
-/// that carries no read timeout, so a deadline around the call cannot
-/// interrupt it on this thread. The read therefore runs on a detached worker
-/// that owns its own client and the harness waits only until the deadline, so
-/// a daemon that accepts the connection and never answers fails with this
-/// harness diagnostic instead of hanging the run until the CI step timeout.
-/// A transport-level read timeout would bound every synchronous request path
-/// as well and remains the better long-term fix.
+/// The synchronous transport bounds every read and write with its own I/O
+/// timeout, so the call itself cannot block forever; this helper adds the
+/// tighter harness deadline on top of it. The read runs on a worker that owns
+/// its own client and the harness waits only until the deadline, so a daemon
+/// that accepts the connection and never answers fails with this harness
+/// diagnostic instead of hanging the run until the CI step timeout.
 fn bounded_session_snapshot(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
@@ -973,28 +984,36 @@ async fn collect_run_frames(
 }
 
 /// Drives one live turn that must record a durable succeeded call of the named
-/// tool, leaving the workspace untouched between attempts.
-async fn drive_tool_turn(host: &LiveE2eHost, tool: &str, prompt: &str) -> (SessionId, ObservedRun) {
-    drive_tool_turn_with(host, tool, prompt, &|| {}).await
+/// tool and reach the durable effect `effect` requires, leaving the workspace
+/// untouched between attempts.
+async fn drive_tool_turn(
+    host: &LiveE2eHost,
+    tool: &str,
+    prompt: &str,
+    effect: &(dyn Fn(&ObservedRun) -> bool + Sync),
+) -> (SessionId, ObservedRun) {
+    drive_tool_turn_with(host, tool, prompt, &|| {}, effect).await
 }
 
 /// Drives one live turn that must record a durable succeeded call of the named
-/// tool.
+/// tool and reach the durable effect `effect` requires.
 ///
 /// The same prompt is retried within the bounded attempt budget, because the
 /// live channel has three acceptably lossy steps: a live model occasionally
 /// answers without calling the tool at all, it occasionally phrases a tool
-/// argument differently from the prompt so the tool rejects the call, and the
-/// daemon drops a subscriber that cannot keep up with a reasoning burst. Each
-/// of those consumes one attempt in a fresh session, and `prepare` restores
-/// the workspace state that an earlier attempt of a mutating turn may have
-/// changed. A completed turn that records the tool call with a succeeded
-/// result is accepted, and any other failure is still fatal.
+/// argument differently from the prompt so the tool rejects the call or the
+/// durable effect does not match, and the daemon drops a subscriber that
+/// cannot keep up with a reasoning burst. Each of those consumes one attempt
+/// in a fresh session, and `prepare` restores the workspace state that an
+/// earlier attempt of a mutating turn may have changed. A completed turn whose
+/// durable facts satisfy `effect` is accepted, and any other failure is still
+/// fatal.
 async fn drive_tool_turn_with(
     host: &LiveE2eHost,
     tool: &str,
     prompt: &str,
     prepare: &(dyn Fn() + Sync),
+    effect: &(dyn Fn(&ObservedRun) -> bool + Sync),
 ) -> (SessionId, ObservedRun) {
     let mut last_gap = None;
     for attempt in 1..=TOOL_TURN_ATTEMPTS {
@@ -1039,7 +1058,13 @@ async fn drive_tool_turn_with(
             "the {tool} turn delivers one contiguous fact range ending in its terminal fact at the snapshot cursor"
         );
         if observed.has_tool_call(tool) && !observed.succeeded_contents(tool).is_empty() {
-            return (session_id, observed);
+            if effect(&observed) {
+                return (session_id, observed);
+            }
+            last_gap = Some(format!(
+                "a completed run recorded a succeeded {tool} call whose durable effect was not observed"
+            ));
+            continue;
         }
         last_gap = Some(format!(
             "a completed run recorded calls {:?}",
@@ -1122,8 +1147,8 @@ const INVALID_CREDENTIAL_FAILURE_CODES: [&str; 4] = [
     "openrouter_provider_unavailable",
 ];
 
-/// Asserts every durable fact of the invalid-credential run is a normalized
-/// failure fact.
+/// Asserts the invalid-credential run delivered a non-empty set of durable
+/// facts and that every one of them is a normalized failure fact.
 ///
 /// The provider rejects the request before any assistant, reasoning, usage, or
 /// tool output can exist, so every delivered fact must be an attempt-lifecycle
@@ -1132,8 +1157,13 @@ const INVALID_CREDENTIAL_FAILURE_CODES: [&str; 4] = [
 /// failure codes. A content-bearing fact would mean raw provider output
 /// reached durable state, which the containment invariant of ADR 0040
 /// decision 7 forbids; the guard fails rather than silently accepting a new
-/// fact shape.
+/// fact shape. The non-empty requirement keeps the invariant from passing
+/// vacuously when the terminal snapshot carries no delivered facts.
 fn assert_invalid_credential_facts_are_normalized(facts: &[ModelRunFactDto]) {
+    assert!(
+        !facts.is_empty(),
+        "the invalid-credential run delivers at least one durable normalized failure fact"
+    );
     for fact in facts {
         match fact.input() {
             ModelRunFactInputDto::ProviderAttemptStarted { attempt } => {
@@ -1196,13 +1226,16 @@ fn assert_normalized_provider_failure(failure: &RunFailureDto) {
 /// sessions: `read`, `glob`, `grep`, `write`, `edit`, and `execute`. A turn is
 /// accepted only when its run completed, delivered a contiguous fact range
 /// ending in the terminal fact at the snapshot cursor, and recorded a durable
-/// call with a succeeded durable result for that tool: the note text for
-/// `read` and `grep`, the workspace path list for `glob`, the written bytes
-/// for `write` and `edit`, and the real child's stdout with its typed exit
-/// status for `execute`. A turn that misses those conditions, a turn whose
-/// tool call the tool itself rejected, and a turn whose subscriber the daemon
-/// evicted each consume one bounded attempt in a fresh session; any other
-/// failed run or a timeout fails the test.
+/// call with a succeeded durable result that reached the turn's required
+/// effect: the note text for `read` and `grep`, the workspace path list for
+/// `glob`, the written bytes for `write` and `edit`, and the real child's
+/// stdout with its typed exit status for `execute`. Every effect check runs
+/// inside the bounded attempt budget, so a valid-but-different provider
+/// argument consumes an attempt instead of failing the completed run. A turn
+/// that misses those conditions, a turn whose tool call the tool itself
+/// rejected, and a turn whose subscriber the daemon evicted each consume one
+/// bounded attempt in a fresh session; any other failed run or a timeout fails
+/// the test.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
 async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_restart() {
@@ -1230,13 +1263,9 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the read tool with the arguments {} to read that workspace file.",
             serde_json::json!({"path": "e2e-note.txt"})
         ),
+        &|run| run.succeeded_contents("read").join("\n").contains(&token),
     )
     .await;
-    let read_content = read_run.succeeded_contents("read").join("\n");
-    assert!(
-        read_content.contains(&token),
-        "the durable read result carries the fixture note content, got: {read_content}"
-    );
 
     // `glob`: the real registry lists the workspace-relative path.
     let (glob_session, glob_run) = drive_tool_turn(
@@ -1246,13 +1275,13 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the glob tool with the arguments {} to list the workspace text files.",
             serde_json::json!({"pattern": "*.txt"})
         ),
+        &|run| {
+            run.succeeded_contents("glob")
+                .join("\n")
+                .contains("e2e-note.txt")
+        },
     )
     .await;
-    let glob_content = glob_run.succeeded_contents("glob").join("\n");
-    assert!(
-        glob_content.contains("e2e-note.txt"),
-        "the durable glob result lists the workspace text files, got: {glob_content}"
-    );
 
     // `grep`: the real registry finds the token under the workspace scope.
     let (grep_session, grep_run) = drive_tool_turn(
@@ -1262,16 +1291,13 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the grep tool with the arguments {} to find the note token anywhere in the workspace.",
             serde_json::json!({"pattern": token, "scope": {"kind": "workspace"}})
         ),
+        &|run| run.succeeded_contents("grep").join("\n").contains(&token),
     )
     .await;
-    let grep_content = grep_run.succeeded_contents("grep").join("\n");
-    assert!(
-        grep_content.contains(&token),
-        "the durable grep result carries the matched note token, got: {grep_content}"
-    );
 
     // `write`: the real registry creates the file with exactly those bytes.
     let written = format!("written by the live provider: {token}");
+    let written_file = host.workspace.path().join("e2e-written.txt");
     let (write_session, write_run) = drive_tool_turn(
         &host,
         "write",
@@ -1279,19 +1305,17 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the write tool with the arguments {} to create that workspace file exactly as given.",
             serde_json::json!({"path": "e2e-written.txt", "content": written})
         ),
+        &|run| {
+            let Ok(written_bytes) = std::fs::read_to_string(&written_file) else {
+                return false;
+            };
+            written_bytes.contains(&token)
+                && written_bytes.contains("written by the live provider")
+                && run.succeeded_contents("write").join("\n")
+                    == format!("{} bytes", written_bytes.len())
+        },
     )
     .await;
-    let written_bytes = std::fs::read_to_string(host.workspace.path().join("e2e-written.txt"))
-        .expect("the live write creates the workspace file");
-    assert!(
-        written_bytes.contains(&token) && written_bytes.contains("written by the live provider"),
-        "the live write reaches the workspace bytes, got: {written_bytes}"
-    );
-    assert_eq!(
-        write_run.succeeded_contents("write").join("\n"),
-        format!("{} bytes", written_bytes.len()),
-        "the durable write result reports the bytes it wrote"
-    );
 
     // `edit`: the real registry replaces the seeded token in place. A retry
     // starts from the seeded file again, because a lost observation may follow
@@ -1305,6 +1329,7 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
         )
         .expect("the edit fixture reseeds before every attempt");
     };
+    let edited_file = host.workspace.path().join("e2e-edit-source.txt");
     let (edit_session, edit_run) = drive_tool_turn_with(
         &host,
         "edit",
@@ -1313,19 +1338,16 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             serde_json::json!({"path": "e2e-edit-source.txt", "old": token, "new": edited})
         ),
         &reseed_edit_source,
+        &|run| {
+            let Ok(edited_bytes) = std::fs::read_to_string(&edited_file) else {
+                return false;
+            };
+            edited_bytes.contains(&edited_source)
+                && run.succeeded_contents("edit").join("\n")
+                    == format!("{} bytes", edited_bytes.len())
+        },
     )
     .await;
-    let edited_bytes = std::fs::read_to_string(host.workspace.path().join("e2e-edit-source.txt"))
-        .expect("the live edit rewrites the workspace file");
-    assert!(
-        edited_bytes.contains(&edited_source),
-        "the live edit replaces exactly the requested text, got: {edited_bytes}"
-    );
-    assert_eq!(
-        edit_run.succeeded_contents("edit").join("\n"),
-        format!("{} bytes", edited_bytes.len()),
-        "the durable edit result reports the replacement bytes"
-    );
 
     // `execute`: the real registry runs a child process in the workspace.
     let (program, args) = if cfg!(windows) {
@@ -1340,13 +1362,12 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             "Use the execute tool with the arguments {} to print the token with a real child process.",
             serde_json::json!({"program": program, "args": args})
         ),
+        &|run| {
+            let content = run.succeeded_contents("execute").join("\n");
+            content.contains(&token) && content.contains("exit_code:0")
+        },
     )
     .await;
-    let execute_content = execute_run.succeeded_contents("execute").join("\n");
-    assert!(
-        execute_content.contains(&token) && execute_content.contains("exit_code:0"),
-        "the durable execute result carries the child's stdout and typed success status, got: {execute_content}"
-    );
 
     let runs = [
         &read_run,
@@ -1464,9 +1485,10 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
 ///
 /// The run must terminalize `Failed` with one normalized closed-set code, and
 /// neither the durable facts, the session snapshot, nor the daemon log may
-/// carry the literal credential. Every delivered durable fact must be a
-/// normalized failure fact and the terminal projection must carry no assistant
-/// text, so raw provider output cannot have reached durable state.
+/// carry the literal credential. The run must deliver at least one durable
+/// fact, every delivered durable fact must be a normalized failure fact, and
+/// the terminal projection must carry no assistant text, so raw provider
+/// output cannot have reached durable state.
 #[tokio::test]
 #[ignore = "opt-in live-provider e2e; see ADR 0040; run via make e2e-real-api"]
 async fn real_provider_rejects_invalid_credential_without_leak() {
@@ -1481,6 +1503,10 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
     let session_id = SessionId::new();
     create_session(&host, session_id, "the invalid-credential run");
     let run_id = send_user_turn(&host.endpoint, session_id, "Reply with a short greeting.");
+    // A subscriber that attaches after the run terminalized receives the
+    // empty replay tail, and an empty delivered fact set would make the
+    // normalized-fact invariant vacuous. Observe again until the run delivers
+    // its durable failure facts within the bounded budget.
     let mut observed = None;
     for _ in 1..=TOOL_TURN_ATTEMPTS {
         if let RunObservation::Terminal(terminal) = collect_terminal_run(
@@ -1491,11 +1517,16 @@ async fn real_provider_rejects_invalid_credential_without_leak() {
         )
         .await
         {
+            if terminal.facts.is_empty() {
+                continue;
+            }
             observed = Some(*terminal);
             break;
         }
     }
-    let observed = observed.expect("the rejected live run stays observable");
+    let observed = observed.expect(
+        "the rejected live run delivers its durable normalized failure facts within the bounded budget",
+    );
 
     assert_eq!(
         observed.status(),
