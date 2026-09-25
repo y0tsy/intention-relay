@@ -8,12 +8,13 @@
 use intention_protocol::contract_families::{
     AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto, ArbitraryHeaderPolicyDto,
     ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationProjectionDto,
-    GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto, GetProviderCatalogQueryDto,
-    GetProviderCatalogStatusQueryDto, GetProviderDiscoveryStatusQueryDto,
-    GetProviderHealthEvidenceQueryDto, GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto,
-    ProviderCatalogActivationState, ProviderCatalogPageDto, ProviderCatalogStatusDto,
-    ProviderDiscoveryAttemptDto, ProviderHealthEvidenceDto, ProviderHealthProjectionDto,
-    ProviderReadinessDto, ProviderReasoningCatalogProjectionDto, RawTomlEditCommandDto,
+    ConfigurationReloadStatusDto, GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto,
+    GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto,
+    GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto,
+    GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto, ProviderCatalogActivationState,
+    ProviderCatalogPageDto, ProviderCatalogStatusDto, ProviderDiscoveryAttemptDto,
+    ProviderHealthEvidenceDto, ProviderHealthProjectionDto, ProviderReadinessDto,
+    ProviderReasoningCatalogProjectionDto, ProviderUsageAggregationsDto, RawTomlEditCommandDto,
     ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateCommandDto,
     ReloadConfigurationCommandDto, ReloadTransactionDto, ResolvedProviderProfileDto,
     RotateProviderCredentialsCommandDto, ServerSideParserConfigDto,
@@ -237,26 +238,28 @@ fn control_plane_acceptance_and_query_results_round_trip_through_wire_payloads()
                 global_default_profile_id: "profile-default".to_owned(),
             },
         ),
-        ProtocolQueryResultDto::ProviderUsage(
-            intention_protocol::contract_families::UsageAggregationDto {
-                profile_id: "profile-1".to_owned(),
-                provider_profile_revision_id: "rev-1".to_owned(),
-                model_id: "model-1".to_owned(),
-                request_count: 12,
-                input_units: 1000,
-                output_units: 500,
-                reasoning_units: 250,
-                usage_period_start: 100,
-                usage_period_end: 200,
-            },
-        ),
+        ProtocolQueryResultDto::ProviderUsage(ProviderUsageAggregationsDto {
+            entries: vec![
+                intention_protocol::contract_families::UsageAggregationDto {
+                    profile_id: "profile-1".to_owned(),
+                    provider_profile_revision_id: "rev-1".to_owned(),
+                    model_id: "model-1".to_owned(),
+                    request_count: 12,
+                    input_units: 1000,
+                    output_units: 500,
+                    reasoning_units: 250,
+                    usage_period_start: 100,
+                    usage_period_end: 200,
+                },
+            ],
+        }),
         ProtocolQueryResultDto::ProviderHealthEvidence(
             intention_protocol::contract_families::ProviderHealthProjectionDto {
                 provider_id: "profile-1".to_owned(),
                 observations: vec![
                     intention_protocol::contract_families::ProviderHealthEvidenceDto {
-                        profile_id: "profile-1".to_owned(),
-                        provider_profile_revision_id: "rev-1".to_owned(),
+                        provider_id: "profile-1".to_owned(),
+                        provider_profile_revision_id: Some("rev-1".to_owned()),
                         health_attempt_id: "attempt-1".to_owned(),
                         check_contract_revision: "health-check-v1".to_owned(),
                         observed_availability:
@@ -316,7 +319,7 @@ fn control_plane_acceptance_and_query_results_round_trip_through_wire_payloads()
                 model_id: "model-1".to_owned(),
                 credential_configured: true,
                 provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-                reload_status: "active".to_owned(),
+                reload_status: ConfigurationReloadStatusDto::Active,
             },
         ),
     ];
@@ -357,6 +360,50 @@ fn removed_control_plane_request_fields_are_absent_from_the_wire() {
     assert!(
         accept.get("source_recheck").is_none(),
         "the removal acceptance request must not carry a source recheck: {accept}"
+    );
+}
+
+#[test]
+fn the_health_evidence_profile_revision_is_optional_and_never_fabricated() {
+    // D-09 (P3-20): the profile revision stays absent until the catalog
+    // binding is genuinely wired into the health path, and a synthesized
+    // `health-profile-*` identity is never produced.
+    let absent = ProviderHealthEvidenceDto {
+        provider_id: "profile-1".to_owned(),
+        provider_profile_revision_id: None,
+        health_attempt_id: "attempt-1".to_owned(),
+        check_contract_revision: "health-check-v1".to_owned(),
+        observed_availability:
+            intention_protocol::contract_families::ProviderAvailabilityObservation::Available,
+        observed_at: 100,
+        failure_category: None,
+        safe_diagnostic_code: None,
+    };
+    let wire = serde_json::to_value(&absent).expect("health evidence serializes");
+    assert!(
+        wire.get("provider_profile_revision_id")
+            .is_some_and(serde_json::Value::is_null),
+        "an absent profile revision must stay an explicit null on the wire: {wire}"
+    );
+    let decoded: ProviderHealthEvidenceDto =
+        serde_json::from_value(wire).expect("health evidence decodes");
+    assert_eq!(decoded, absent);
+    let present = ProviderHealthEvidenceDto {
+        provider_profile_revision_id: Some("rev-1".to_owned()),
+        ..absent.clone()
+    };
+    assert!(present.validate().is_ok(), "a present revision stays valid");
+    let blank = ProviderHealthEvidenceDto {
+        provider_profile_revision_id: Some(String::new()),
+        ..absent
+    };
+    assert!(
+        blank
+            .validate()
+            .expect_err("a blank profile revision must not validate")
+            .to_string()
+            .contains("provider_health_evidence_invalid"),
+        "a present but blank revision reports the typed health-evidence code"
     );
 }
 
@@ -419,16 +466,20 @@ fn control_plane_wire_never_serializes_fake_credentials() {
         ))
         .expect("accepted result serializes"),
         serde_json::to_value(ProtocolQueryResultDto::ProviderUsage(
-            intention_protocol::contract_families::UsageAggregationDto {
-                profile_id: "profile-1".to_owned(),
-                provider_profile_revision_id: "rev-1".to_owned(),
-                model_id: "model-1".to_owned(),
-                request_count: 1,
-                input_units: 1,
-                output_units: 1,
-                reasoning_units: 1,
-                usage_period_start: 100,
-                usage_period_end: 200,
+            ProviderUsageAggregationsDto {
+                entries: vec![
+                    intention_protocol::contract_families::UsageAggregationDto {
+                        profile_id: "profile-1".to_owned(),
+                        provider_profile_revision_id: "rev-1".to_owned(),
+                        model_id: "model-1".to_owned(),
+                        request_count: 1,
+                        input_units: 1,
+                        output_units: 1,
+                        reasoning_units: 1,
+                        usage_period_start: 100,
+                        usage_period_end: 200,
+                    },
+                ],
             },
         ))
         .expect("query result serializes"),
@@ -463,7 +514,7 @@ fn control_plane_wire_never_serializes_fake_credentials() {
                 model_id: "model-1".to_owned(),
                 credential_configured: true,
                 provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-                reload_status: "active".to_owned(),
+                reload_status: ConfigurationReloadStatusDto::Active,
             },
         ))
         .expect("query result serializes"),
@@ -516,9 +567,16 @@ const USAGE_AGGREGATION: &str = concat!(
     r#""reasoning_units":250,"usage_period_start":100,"usage_period_end":200}"#
 );
 
+/// The raw wire frame of one valid usage aggregation set.
+const USAGE_AGGREGATIONS: &str = concat!(
+    r#"{"entries":[{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","#,
+    r#""model_id":"model-1","request_count":12,"input_units":1000,"output_units":500,"#,
+    r#""reasoning_units":250,"usage_period_start":100,"usage_period_end":200}]}"#
+);
+
 /// The raw wire frame of one valid health projection with one observation.
 const HEALTH_PROJECTION: &str = concat!(
-    r#"{"provider_id":"profile-1","observations":[{"profile_id":"profile-1","#,
+    r#"{"provider_id":"profile-1","observations":[{"provider_id":"profile-1","#,
     r#""provider_profile_revision_id":"rev-1","health_attempt_id":"attempt-1","#,
     r#""check_contract_revision":"health-check-v1","observed_availability":"available","#,
     r#""observed_at":100,"failure_category":null,"safe_diagnostic_code":null}],"#,
@@ -534,7 +592,7 @@ const RELOAD_TRANSACTION_REJECTED: &str = concat!(
 
 /// The raw wire frame of one unavailable health observation without a category.
 const HEALTH_EVIDENCE_UNAVAILABLE: &str = concat!(
-    r#"{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","#,
+    r#"{"provider_id":"profile-1","provider_profile_revision_id":"rev-1","#,
     r#""health_attempt_id":"attempt-1","check_contract_revision":"health-check-v1","#,
     r#""observed_availability":"unavailable","observed_at":100,"failure_category":null,"#,
     r#""safe_diagnostic_code":null}"#
@@ -594,7 +652,9 @@ fn control_plane_decode_rejects_invalid_catalog_frames_with_typed_codes() {
 
 #[test]
 fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
-    let blank_reload_status = CONFIGURATION_PROJECTION.replace("\"active\"", "\"   \"");
+    // D-14 (P3-08): the reload status is a closed enum, so an unknown wire
+    // value is rejected at decode with the family's typed code.
+    let unknown_reload_status = CONFIGURATION_PROJECTION.replace("\"active\"", "\"stale\"");
     let wrong_version = CONFIGURATION_PROJECTION
         .replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
     // The `major.minor` shape check runs before the version comparison, so a
@@ -605,7 +665,11 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
         r#"{"schema_version":"banana","page_token":null,"expected_catalog_revision_id":null}"#;
     /// One rejection case: the raw frame, the expected error code, and its decoder.
     type RejectionCase<'a> = (&'a str, &'static str, fn(&str) -> String);
-    let cases: [RejectionCase<'_>; 16] = [
+    // The usage set is strictly sorted by identity, so the same entry under a
+    // higher revision first is rejected at decode.
+    let higher_revision_entry = USAGE_AGGREGATION.replace("\"rev-1\"", "\"rev-2\"");
+    let unsorted_usage = format!(r#"{{"entries":[{higher_revision_entry},{USAGE_AGGREGATION}]}}"#);
+    let cases: [RejectionCase<'_>; 17] = [
         (
             malformed_command_version,
             "set_session_provider_profile_invalid",
@@ -617,7 +681,7 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
             decode_error::<GetProviderCatalogQueryDto>,
         ),
         (
-            &blank_reload_status,
+            &unknown_reload_status,
             "configuration_projection_invalid",
             decode_error::<ConfigurationProjectionDto>,
         ),
@@ -640,6 +704,11 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
             r#"{"profile_id":"profile-1","provider_profile_revision_id":"rev-1","model_id":"model-1","request_count":1,"input_units":1,"output_units":1,"reasoning_units":1,"usage_period_start":200,"usage_period_end":100}"#,
             "provider_usage_invalid",
             decode_error::<UsageAggregationDto>,
+        ),
+        (
+            &unsorted_usage,
+            "provider_usage_unsorted",
+            decode_error::<ProviderUsageAggregationsDto>,
         ),
         (
             r#"{"provider_kind_id":"responses","model_id":"model-1","supported_effort_levels":["low","low"],"responses_reasoning_modes":["standard"],"projection_revision":"projection-1"}"#,
@@ -792,7 +861,7 @@ fn control_plane_decode_rejects_a_non_current_schema_version_for_every_family() 
         model_id: "model-1".to_owned(),
         credential_configured: true,
         provider_execution_policy: "execution-policy".to_owned(),
-        reload_status: "active".to_owned(),
+        reload_status: ConfigurationReloadStatusDto::Active,
     });
 }
 
@@ -823,7 +892,20 @@ fn converted_control_plane_families_decode_valid_raw_frames_unchanged() {
     let projection: ConfigurationProjectionDto = serde_json::from_str(CONFIGURATION_PROJECTION)
         .expect("valid configuration projection decodes");
     assert_eq!(projection.schema_version, "1.1");
-    assert_eq!(projection.reload_status, "active");
+    assert_eq!(
+        projection.reload_status,
+        ConfigurationReloadStatusDto::Active
+    );
+    // The closed reload status round-trips through its exact wire value; the
+    // vocabulary has a single live value today.
+    let reload_status = ConfigurationReloadStatusDto::Active;
+    let encoded = serde_json::to_string(&reload_status).expect("reload status encodes");
+    assert_eq!(encoded, "\"active\"");
+    assert_eq!(
+        serde_json::from_str::<ConfigurationReloadStatusDto>(&encoded)
+            .expect("reload status decodes"),
+        reload_status
+    );
     assert_eq!(
         serde_json::to_string(&projection).expect("configuration projection encodes"),
         CONFIGURATION_PROJECTION
@@ -835,6 +917,15 @@ fn converted_control_plane_families_decode_valid_raw_frames_unchanged() {
     assert_eq!(
         serde_json::to_string(&usage).expect("usage aggregation encodes"),
         USAGE_AGGREGATION
+    );
+
+    let usage_set: ProviderUsageAggregationsDto =
+        serde_json::from_str(USAGE_AGGREGATIONS).expect("valid usage aggregation set decodes");
+    assert_eq!(usage_set.entries.len(), 1);
+    assert_eq!(usage_set.entries[0].request_count, 12);
+    assert_eq!(
+        serde_json::to_string(&usage_set).expect("usage aggregation set encodes"),
+        USAGE_AGGREGATIONS
     );
 
     let health: ProviderHealthProjectionDto =

@@ -2440,7 +2440,9 @@ mod tests {
             ));
         }
         // Baseline health stays readable without the capability, and a
-        // negotiated gated command reaches dispatch instead of the gate.
+        // negotiated gated command reaches dispatch instead of the capability
+        // gate: the fixture facade has no active catalog, so dispatch rejects
+        // the profile resolution with exactly `catalog_not_ready`.
         assert!(matches!(
             gated_query_result(&facade, &[], &ProtocolQueryDto::GetDaemonHealth),
             ProtocolQueryResultDto::DaemonHealth(_)
@@ -2452,7 +2454,7 @@ mod tests {
                 &gated_command,
             ),
             ProtocolCommandResultDto::Rejected(error)
-                if error.code() != "provider_profiles_capability_required"
+                if error.code() == "catalog_not_ready"
         ));
     }
 

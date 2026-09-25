@@ -3221,6 +3221,93 @@ impl UsageAggregationDto {
     }
 }
 
+/// The maximum (provider profile revision, model) identities in one usage
+/// aggregation set.
+pub const MAX_PROVIDER_USAGE_IDENTITIES: usize = 128;
+
+/// The bounded per-identity provider usage aggregation of one profile period.
+///
+/// The set carries one entry per `(provider_profile_revision_id, model_id)`
+/// identity, strictly sorted by revision and model id. A total is therefore
+/// never attributed to an identity that did not produce it, and the durable
+/// row order never changes the result. It carries units only: request counts
+/// and input, output, and reasoning units, never price, currency, or cost
+/// values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderUsageAggregationsDto {
+    pub entries: Vec<UsageAggregationDto>,
+}
+
+impl<'de> Deserialize<'de> for ProviderUsageAggregationsDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderUsageAggregationsDto {
+            entries: Vec<UsageAggregationDto>,
+        }
+        let raw = RawProviderUsageAggregationsDto::deserialize(deserializer)?;
+        let value = Self {
+            entries: raw.entries,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderUsageAggregationsDto {
+    /// Validates the bounded, strictly sorted, credential-free set.
+    ///
+    /// Every entry must carry the same profile and period: the set projects
+    /// one profile period.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_usage_invalid` for an empty or over-limit set or an
+    /// entry of another profile or period, `provider_usage_unsorted` for
+    /// identities that are not strictly sorted by revision and model id, and
+    /// the per-entry errors of `UsageAggregationDto::validate`.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.entries.is_empty() {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "a usage aggregation set must carry at least one identity",
+            ));
+        }
+        if self.entries.len() > MAX_PROVIDER_USAGE_IDENTITIES {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "a usage aggregation set must not exceed its identity bound",
+            ));
+        }
+        for window in self.entries.windows(2) {
+            let previous = (&window[0].provider_profile_revision_id, &window[0].model_id);
+            let current = (&window[1].provider_profile_revision_id, &window[1].model_id);
+            if previous >= current {
+                return Err(ErrorDto::validation(
+                    "provider_usage_unsorted",
+                    "usage aggregation identities must be strictly sorted by revision and model id",
+                ));
+            }
+        }
+        let first = &self.entries[0];
+        for entry in &self.entries {
+            entry.validate()?;
+            if entry.profile_id != first.profile_id
+                || entry.usage_period_start != first.usage_period_start
+                || entry.usage_period_end != first.usage_period_end
+            {
+                return Err(ErrorDto::validation(
+                    "provider_usage_invalid",
+                    "a usage aggregation set must carry one profile and one period",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Optional reasoning token usage for one provider observation.
 ///
 /// An absent token count means the provider did not report that count; it
@@ -4030,11 +4117,15 @@ pub enum ProviderHealthFailureCategory {
 /// One non-authorizing provider health evidence observation.
 ///
 /// The evidence records what a check observed; it never authorizes routing
-/// or admission decisions by itself.
+/// or admission decisions by itself. `provider_id` carries the provider
+/// identity the observation belongs to (not a profile identity), and
+/// `provider_profile_revision_id` stays absent until the catalog binding is
+/// genuinely wired into the health path; a synthesized identity is never
+/// fabricated.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderHealthEvidenceDto {
-    pub profile_id: String,
-    pub provider_profile_revision_id: String,
+    pub provider_id: String,
+    pub provider_profile_revision_id: Option<String>,
     pub health_attempt_id: String,
     pub check_contract_revision: String,
     pub observed_availability: ProviderAvailabilityObservation,
@@ -4050,8 +4141,8 @@ impl<'de> Deserialize<'de> for ProviderHealthEvidenceDto {
     {
         #[derive(Deserialize)]
         struct RawProviderHealthEvidenceDto {
-            profile_id: String,
-            provider_profile_revision_id: String,
+            provider_id: String,
+            provider_profile_revision_id: Option<String>,
             health_attempt_id: String,
             check_contract_revision: String,
             observed_availability: ProviderAvailabilityObservation,
@@ -4061,7 +4152,7 @@ impl<'de> Deserialize<'de> for ProviderHealthEvidenceDto {
         }
         let raw = RawProviderHealthEvidenceDto::deserialize(deserializer)?;
         let value = Self {
-            profile_id: raw.profile_id,
+            provider_id: raw.provider_id,
             provider_profile_revision_id: raw.provider_profile_revision_id,
             health_attempt_id: raw.health_attempt_id,
             check_contract_revision: raw.check_contract_revision,
@@ -4085,7 +4176,8 @@ impl ProviderHealthEvidenceDto {
     /// control-bearing field, a failure category or diagnostic code on an
     /// `Available` observation, or a missing failure category on an
     /// `Unavailable` observation, and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// credential-shaped value. An absent profile revision is valid and stays
+    /// absent; when present it is validated like the other text fields.
     pub fn validate(&self) -> DtoResult<()> {
         let availability_valid = match self.observed_availability {
             ProviderAvailabilityObservation::Available => {
@@ -4101,22 +4193,26 @@ impl ProviderHealthEvidenceDto {
             ));
         }
         for field in [
-            &self.profile_id,
-            &self.provider_profile_revision_id,
+            &self.provider_id,
             &self.health_attempt_id,
             &self.check_contract_revision,
         ] {
             valid_text(field, 256, "provider_health_evidence_invalid")?;
         }
+        if let Some(revision) = &self.provider_profile_revision_id {
+            valid_text(revision, 256, "provider_health_evidence_invalid")?;
+        }
         if let Some(code) = &self.safe_diagnostic_code {
             valid_text(code, 128, "provider_health_evidence_invalid")?;
         }
         let mut fields: Vec<&str> = vec![
-            &self.profile_id,
-            &self.provider_profile_revision_id,
+            &self.provider_id,
             &self.health_attempt_id,
             &self.check_contract_revision,
         ];
+        if let Some(revision) = &self.provider_profile_revision_id {
+            fields.push(revision);
+        }
         if let Some(code) = &self.safe_diagnostic_code {
             fields.push(code);
         }
@@ -4776,6 +4872,35 @@ impl GetConfigurationProjectionQueryDto {
     }
 }
 
+/// The closed reload status of the applied configuration projection.
+///
+/// The vocabulary is a closed enum validated by serde: `active` is the only
+/// status the current production path produces, an unknown wire value is
+/// rejected at decode with `configuration_projection_invalid`, and a consumer
+/// can match the status exhaustively (D-14, `P3-08`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationReloadStatusDto {
+    /// The applied configuration is the active one.
+    Active,
+}
+
+impl<'de> Deserialize<'de> for ConfigurationReloadStatusDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "active" => Ok(Self::Active),
+            _ => Err(de::Error::custom(ErrorDto::validation(
+                "configuration_projection_invalid",
+                "the configuration reload status is not a recognized value",
+            ))),
+        }
+    }
+}
+
 /// A safe projection of the applied daemon configuration.
 ///
 /// The projection carries the applied config revision, the resolved provider
@@ -4790,7 +4915,7 @@ pub struct ConfigurationProjectionDto {
     pub model_id: String,
     pub credential_configured: bool,
     pub provider_execution_policy: String,
-    pub reload_status: String,
+    pub reload_status: ConfigurationReloadStatusDto,
 }
 
 impl<'de> Deserialize<'de> for ConfigurationProjectionDto {
@@ -4806,7 +4931,7 @@ impl<'de> Deserialize<'de> for ConfigurationProjectionDto {
             model_id: String,
             credential_configured: bool,
             provider_execution_policy: String,
-            reload_status: String,
+            reload_status: ConfigurationReloadStatusDto,
         }
         let raw = RawConfigurationProjectionDto::deserialize(deserializer)?;
         let value = Self {
@@ -4826,6 +4951,9 @@ impl<'de> Deserialize<'de> for ConfigurationProjectionDto {
 impl ConfigurationProjectionDto {
     /// Validates the bounded, credential-free configuration projection.
     ///
+    /// The closed `reload_status` vocabulary is validated by its own serde
+    /// implementation, so an unknown status never reaches this method.
+    ///
     /// # Errors
     ///
     /// Returns `configuration_projection_invalid` for a blank, over-long, or
@@ -4840,7 +4968,6 @@ impl ConfigurationProjectionDto {
             &self.provider_kind,
             &self.model_id,
             &self.provider_execution_policy,
-            &self.reload_status,
         ] {
             valid_text(field, 256, "configuration_projection_invalid")?;
         }
@@ -4851,7 +4978,6 @@ impl ConfigurationProjectionDto {
             &self.provider_kind,
             &self.model_id,
             &self.provider_execution_policy,
-            &self.reload_status,
         ]
         .iter()
         .any(|value| credential_shaped(value))
@@ -7921,8 +8047,8 @@ mod tests {
 
     fn health_evidence() -> ProviderHealthEvidenceDto {
         ProviderHealthEvidenceDto {
-            profile_id: "profile-1".to_owned(),
-            provider_profile_revision_id: "rev-1".to_owned(),
+            provider_id: "profile-1".to_owned(),
+            provider_profile_revision_id: Some("rev-1".to_owned()),
             health_attempt_id: "attempt-1".to_owned(),
             check_contract_revision: "check-1".to_owned(),
             observed_availability: ProviderAvailabilityObservation::Available,
@@ -8510,6 +8636,72 @@ mod tests {
                 .expect_err("credential-shaped model id is rejected")
                 .code(),
             "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_usage_aggregation_sets_are_sorted_and_bounded() {
+        let entry = usage_aggregation();
+        let mut second = usage_aggregation();
+        second.model_id = "model-2".to_owned();
+        let valid = ProviderUsageAggregationsDto {
+            entries: vec![entry.clone(), second.clone()],
+        };
+        assert!(valid.validate().is_ok());
+        round_trip(&valid);
+
+        // Identities must be strictly sorted by revision and model id.
+        let unsorted = ProviderUsageAggregationsDto {
+            entries: vec![second, entry.clone()],
+        };
+        assert_eq!(
+            unsorted
+                .validate()
+                .expect_err("unsorted identities are rejected")
+                .code(),
+            "provider_usage_unsorted"
+        );
+
+        // An empty set carries no identity and is rejected.
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: Vec::new()
+            }
+            .validate()
+            .expect_err("an empty set is rejected")
+            .code(),
+            "provider_usage_invalid"
+        );
+
+        // The set projects exactly one profile and one period.
+        let mut other_profile = usage_aggregation();
+        other_profile.model_id = "model-2".to_owned();
+        other_profile.profile_id = "profile-2".to_owned();
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: vec![entry, other_profile],
+            }
+            .validate()
+            .expect_err("a mixed-profile set is rejected")
+            .code(),
+            "provider_usage_invalid"
+        );
+
+        // The identity bound is enforced before any entry is projected.
+        let mut over_limit = Vec::new();
+        for index in 0..=MAX_PROVIDER_USAGE_IDENTITIES {
+            let mut bounded = usage_aggregation();
+            bounded.model_id = format!("model-{index:04}");
+            over_limit.push(bounded);
+        }
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: over_limit
+            }
+            .validate()
+            .expect_err("an over-limit set is rejected")
+            .code(),
+            "provider_usage_invalid"
         );
     }
 

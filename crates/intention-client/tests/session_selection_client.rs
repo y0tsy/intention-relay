@@ -23,9 +23,10 @@ use intention_protocol::contract_families::{
     GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto, GetProviderUsageQueryDto,
     ProviderCatalogActivationState, ProviderCatalogEntryDto, ProviderCatalogPageDto,
     ProviderCatalogStatusDto, ProviderProfileUnavailableReason, ProviderReadinessDto,
-    ReconcileUnavailableQueueAcceptedDto, ReconcileUnavailableQueueCommandDto,
-    RejectProviderCatalogCandidateAcceptedDto, RejectProviderCatalogCandidateCommandDto,
-    ResolvedProviderProfileDto, SessionProviderProfileDto, SetSessionProviderProfileAcceptedDto,
+    ProviderUsageAggregationsDto, ReconcileUnavailableQueueAcceptedDto,
+    ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
+    RejectProviderCatalogCandidateCommandDto, ResolvedProviderProfileDto,
+    SessionProviderProfileDto, SetSessionProviderProfileAcceptedDto,
     SetSessionProviderProfileCommandDto, UsageAggregationDto,
 };
 use intention_protocol::{
@@ -65,7 +66,7 @@ enum FixtureReply {
     AcceptProviderCatalogRemoval(AcceptProviderCatalogRemovalAcceptedDto),
     RejectProviderCatalogCandidate(RejectProviderCatalogCandidateAcceptedDto),
     AdmitRecoveredRun(AdmitRecoveredRunAcceptedDto),
-    Usage(UsageAggregationDto),
+    Usage(ProviderUsageAggregationsDto),
     CommandRejected(ErrorDto),
     QueryRejected(ErrorDto),
 }
@@ -341,17 +342,19 @@ fn admission_accepted() -> AdmitRecoveredRunAcceptedDto {
     }
 }
 
-fn usage() -> UsageAggregationDto {
-    UsageAggregationDto {
-        profile_id: "default".to_owned(),
-        provider_profile_revision_id: "rev-0123456789abcdef".to_owned(),
-        model_id: "fixture-model".to_owned(),
-        request_count: 3,
-        input_units: 30,
-        output_units: 15,
-        reasoning_units: 0,
-        usage_period_start: 0,
-        usage_period_end: 100,
+fn usage() -> ProviderUsageAggregationsDto {
+    ProviderUsageAggregationsDto {
+        entries: vec![UsageAggregationDto {
+            profile_id: "default".to_owned(),
+            provider_profile_revision_id: "rev-0123456789abcdef".to_owned(),
+            model_id: "fixture-model".to_owned(),
+            request_count: 3,
+            input_units: 30,
+            output_units: 15,
+            reasoning_units: 0,
+            usage_period_start: 0,
+            usage_period_end: 100,
+        }],
     }
 }
 
@@ -538,8 +541,9 @@ fn provider_usage_issues_the_exact_query_variant() {
                     usage_period_end: 100,
                 })
                 .expect("client query decodes the usage aggregation");
-            assert_eq!(result.request_count, 3);
-            assert_eq!(result.input_units, 30);
+            assert_eq!(result.entries.len(), 1);
+            assert_eq!(result.entries[0].request_count, 3);
+            assert_eq!(result.entries[0].input_units, 30);
         },
     );
 }

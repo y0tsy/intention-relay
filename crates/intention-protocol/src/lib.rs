@@ -11,11 +11,12 @@ use crate::contract_families::{
     GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto,
     GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto, PricingProjectionDto,
     ProviderCatalogPageDto, ProviderCatalogStatusDto, ProviderDiscoveryProjectionDto,
-    ProviderHealthProjectionDto, RawTomlEditCommandDto, ReconcileUnavailableQueueAcceptedDto,
-    ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
-    RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto, ReloadTransactionDto,
-    RotateProviderCredentialsCommandDto, SessionProviderProfileDto,
-    SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto, UsageAggregationDto,
+    ProviderHealthProjectionDto, ProviderUsageAggregationsDto, RawTomlEditCommandDto,
+    ReconcileUnavailableQueueAcceptedDto, ReconcileUnavailableQueueCommandDto,
+    RejectProviderCatalogCandidateAcceptedDto, RejectProviderCatalogCandidateCommandDto,
+    ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
+    SessionProviderProfileDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto,
 };
 use intention_domain::{
     CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, ModelRunFactDto,
@@ -1364,8 +1365,8 @@ pub enum ProtocolQueryResultDto {
     ProviderCatalogStatus(ProviderCatalogStatusDto),
     /// The durable provider profile projection of one session.
     SessionProviderProfile(SessionProviderProfileDto),
-    /// A provider usage aggregation for one period.
-    ProviderUsage(UsageAggregationDto),
+    /// The bounded per-identity provider usage aggregations for one period.
+    ProviderUsage(ProviderUsageAggregationsDto),
     /// Non-authorizing provider health evidence (control plane).
     ProviderHealthEvidence(ProviderHealthProjectionDto),
     /// The status of one provider discovery attempt (control plane).
@@ -2108,9 +2109,10 @@ mod tests {
         use crate::contract_families::{
             AcceptProviderCatalogRemovalAcceptedDto, AdmitRecoveredRunAcceptedDto,
             GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto, GetProviderUsageQueryDto,
-            GetSessionProviderProfileQueryDto, ReconcileUnavailableQueueAcceptedDto,
-            RejectProviderCatalogCandidateAcceptedDto, ReloadTransactionDto,
-            ResolvedProviderProfileDto, SetSessionProviderProfileAcceptedDto, UsageAggregationDto,
+            GetSessionProviderProfileQueryDto, ProviderUsageAggregationsDto,
+            ReconcileUnavailableQueueAcceptedDto, RejectProviderCatalogCandidateAcceptedDto,
+            ReloadTransactionDto, ResolvedProviderProfileDto, SetSessionProviderProfileAcceptedDto,
+            UsageAggregationDto,
         };
         let queries = vec![
             ProtocolQueryDto::GetProviderCatalog(GetProviderCatalogQueryDto {
@@ -2236,16 +2238,18 @@ mod tests {
                     global_default_profile_id: "profile-default".to_owned(),
                 },
             ),
-            ProtocolQueryResultDto::ProviderUsage(UsageAggregationDto {
-                profile_id: "profile-1".to_owned(),
-                provider_profile_revision_id: "rev-1".to_owned(),
-                model_id: "model-1".to_owned(),
-                request_count: 12,
-                input_units: 1000,
-                output_units: 500,
-                reasoning_units: 250,
-                usage_period_start: 100,
-                usage_period_end: 200,
+            ProtocolQueryResultDto::ProviderUsage(ProviderUsageAggregationsDto {
+                entries: vec![UsageAggregationDto {
+                    profile_id: "profile-1".to_owned(),
+                    provider_profile_revision_id: "rev-1".to_owned(),
+                    model_id: "model-1".to_owned(),
+                    request_count: 12,
+                    input_units: 1000,
+                    output_units: 500,
+                    reasoning_units: 250,
+                    usage_period_start: 100,
+                    usage_period_end: 200,
+                }],
             }),
         ];
         for result in query_results {
@@ -2676,8 +2680,8 @@ mod tests {
             ProtocolQueryResultDto::ProviderHealthEvidence(ProviderHealthProjectionDto {
                 provider_id: "profile-1".to_owned(),
                 observations: vec![ProviderHealthEvidenceDto {
-                    profile_id: "profile-1".to_owned(),
-                    provider_profile_revision_id: "rev-1".to_owned(),
+                    provider_id: "profile-1".to_owned(),
+                    provider_profile_revision_id: Some("rev-1".to_owned()),
                     health_attempt_id: "attempt-1".to_owned(),
                     check_contract_revision: "health-check-v1".to_owned(),
                     observed_availability: ProviderAvailabilityObservation::Available,
@@ -2721,7 +2725,7 @@ mod tests {
                     model_id: "model-1".to_owned(),
                     credential_configured: true,
                     provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-                    reload_status: "active".to_owned(),
+                    reload_status: crate::contract_families::ConfigurationReloadStatusDto::Active,
                 },
             ),
         ];
@@ -2773,7 +2777,7 @@ mod tests {
     #[test]
     fn health_discovery_pricing_and_projection_dtos_validate_fail_closed() {
         use crate::contract_families::{
-            ConfigurationProjectionDto, GetPricingPolicyQueryDto,
+            ConfigurationProjectionDto, ConfigurationReloadStatusDto, GetPricingPolicyQueryDto,
             GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto,
             PricingProjectionDto, ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto,
             ProviderHealthProjectionDto,
@@ -2814,8 +2818,8 @@ mod tests {
         let projection = ProviderHealthProjectionDto {
             provider_id: "profile-1".to_owned(),
             observations: vec![crate::contract_families::ProviderHealthEvidenceDto {
-                profile_id: "profile-1".to_owned(),
-                provider_profile_revision_id: "rev-1".to_owned(),
+                provider_id: "profile-1".to_owned(),
+                provider_profile_revision_id: Some("rev-1".to_owned()),
                 health_attempt_id: "attempt-1".to_owned(),
                 check_contract_revision: "health-check-v1".to_owned(),
                 observed_availability: ProviderAvailabilityObservation::Available,
@@ -2839,7 +2843,7 @@ mod tests {
             model_id: "sk-test-sweep".to_owned(),
             credential_configured: true,
             provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-            reload_status: "active".to_owned(),
+            reload_status: ConfigurationReloadStatusDto::Active,
         };
         assert_eq!(
             configuration

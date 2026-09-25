@@ -16,6 +16,8 @@
 //! durable append and the subscriber delivery are owned by the port's
 //! implementation outside this crate.
 
+use std::collections::BTreeMap;
+
 use intention_domain::{
     CredentialTransportMode as DomainCredentialTransportMode, ProviderSelectionV1,
     SendUserTurnCommandDto, canonical::CanonicalError,
@@ -27,7 +29,7 @@ use intention_protocol::contract_families::{
     GetSessionProviderProfileQueryDto, MAX_UNAVAILABLE_QUEUE_PROMOTIONS,
     ProviderCatalogActivationState, ProviderCatalogDegradedReason, ProviderCatalogEntryDto,
     ProviderCatalogPageDto, ProviderCatalogStatusDto, ProviderProfileUnavailableReason,
-    ProviderReadinessDto, ReconcileUnavailableQueueAcceptedDto,
+    ProviderReadinessDto, ProviderUsageAggregationsDto, ReconcileUnavailableQueueAcceptedDto,
     ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
     RejectProviderCatalogCandidateCommandDto, ResolvedProviderProfileDto,
     ResolvedRunProviderSelectionDto, SessionProviderProfileChangedEventDto,
@@ -677,22 +679,40 @@ impl<'a> UsageService<'a> {
 
     /// Loads the usage aggregation of one provider profile over a period.
     ///
+    /// The result carries one aggregation per
+    /// `(provider_profile_revision_id, model_id)` identity that produced
+    /// in-period usage, strictly sorted by that identity, so no total is
+    /// attributed to an identity that did not produce it and the durable row
+    /// order never changes the result (P2-12, option A).
+    ///
     /// # Errors
     ///
     /// Returns the typed query validation or durable storage error.
-    pub fn by_profile(&self, query: GetProviderUsageQueryDto) -> DtoResult<UsageAggregationDto> {
+    pub fn by_profile(
+        &self,
+        query: GetProviderUsageQueryDto,
+    ) -> DtoResult<ProviderUsageAggregationsDto> {
         query.validate()?;
         let aggregates = self
             .usage
             .load_provider_usage_by_profile(query.profile_id.clone())?;
-        aggregate_usage(&query, aggregates)
+        let projection = ProviderUsageAggregationsDto {
+            entries: aggregate_usage(&query, aggregates)?,
+        };
+        projection.validate()?;
+        Ok(projection)
     }
 
     /// Loads the usage aggregation of one profile revision and model.
     ///
+    /// The durable query selects exactly one
+    /// `(provider_profile_revision_id, model_id)` identity, so the result is
+    /// the single aggregation of that identity.
+    ///
     /// # Errors
     ///
-    /// Returns the typed query validation or durable storage error.
+    /// Returns the typed query validation or durable storage error, or
+    /// `provider_usage_invalid` when the identity has no in-period usage.
     pub fn by_revision_and_model(
         &self,
         query: &GetProviderUsageQueryDto,
@@ -703,47 +723,62 @@ impl<'a> UsageService<'a> {
         let aggregates = self
             .usage
             .load_provider_usage_by_revision_and_model(provider_profile_revision_id, model_id)?;
-        aggregate_usage(query, aggregates)
+        let mut entries = aggregate_usage(query, aggregates)?;
+        match entries.pop() {
+            Some(aggregation) if entries.is_empty() => Ok(aggregation),
+            _ => Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "the usage aggregation must carry exactly one identity",
+            )),
+        }
     }
 }
 
-/// Aggregates one period's durable usage aggregates into one projection.
+/// Aggregates one period's durable usage aggregates into one projection per
+/// `(provider_profile_revision_id, model_id)` identity.
+///
+/// Each entry sums only the rows of its own identity, and the entries are
+/// strictly sorted by identity, so the durable row order never influences any
+/// reported field (P2-12, option A). Out-of-period rows are dropped.
 fn aggregate_usage(
     query: &GetProviderUsageQueryDto,
     aggregates: Vec<intention_storage::ProviderUsageAggregateDto>,
-) -> DtoResult<UsageAggregationDto> {
-    let mut request_count = 0_u64;
-    let mut input_units = 0_u64;
-    let mut output_units = 0_u64;
-    let mut reasoning_units = 0_u64;
-    let mut revision = String::new();
-    let mut model = String::new();
+) -> DtoResult<Vec<UsageAggregationDto>> {
+    let mut by_identity: BTreeMap<(String, String), (u64, u64, u64, u64)> = BTreeMap::new();
     for aggregate in aggregates {
         if aggregate.usage_period_start < i64_time(query.usage_period_start)
             || aggregate.usage_period_end > i64_time(query.usage_period_end)
         {
             continue;
         }
-        request_count = request_count.saturating_add(aggregate.request_count);
-        input_units = input_units.saturating_add(aggregate.input_units);
-        output_units = output_units.saturating_add(aggregate.output_units);
-        reasoning_units = reasoning_units.saturating_add(aggregate.reasoning_units);
-        revision = aggregate.provider_profile_revision_id;
-        model = aggregate.model_id;
+        let totals = by_identity
+            .entry((aggregate.provider_profile_revision_id, aggregate.model_id))
+            .or_default();
+        totals.0 = totals.0.saturating_add(aggregate.request_count);
+        totals.1 = totals.1.saturating_add(aggregate.input_units);
+        totals.2 = totals.2.saturating_add(aggregate.output_units);
+        totals.3 = totals.3.saturating_add(aggregate.reasoning_units);
     }
-    let aggregation = UsageAggregationDto {
-        profile_id: query.profile_id.clone(),
-        provider_profile_revision_id: revision,
-        model_id: model,
-        request_count,
-        input_units,
-        output_units,
-        reasoning_units,
-        usage_period_start: query.usage_period_start,
-        usage_period_end: query.usage_period_end,
-    };
-    aggregation.validate()?;
-    Ok(aggregation)
+    by_identity
+        .into_iter()
+        .map(
+            |((revision, model), (request_count, input_units, output_units, reasoning_units))| {
+                let aggregation = UsageAggregationDto {
+                    profile_id: query.profile_id.clone(),
+                    provider_profile_revision_id: revision,
+                    model_id: model,
+                    request_count,
+                    input_units,
+                    output_units,
+                    reasoning_units,
+                    usage_period_start: query.usage_period_start,
+                    usage_period_end: query.usage_period_end,
+                };
+                aggregation.validate()?;
+                Ok(aggregation)
+            },
+        )
+        .collect()
 }
 
 /// The provider catalog read service.

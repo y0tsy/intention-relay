@@ -451,10 +451,13 @@ impl ProviderHealthService {
     /// Runs one non-authorizing health check and projects its evidence.
     ///
     /// The attempt id is a deterministic hash of the provider identity and
-    /// check time; the check-contract revision is `health-check-v1`. An
-    /// `Unavailable` probe maps to the closed service-unavailable category
-    /// with a safe diagnostic code; a probe error maps to an `Unknown`
-    /// observation carrying the probe's typed code.
+    /// check time; the check-contract revision is `health-check-v1`. The
+    /// catalog-owned `provider_profile_revision_id` stays absent because the
+    /// catalog binding is not wired into the health path: no identity-shaped
+    /// placeholder is ever fabricated. An `Unavailable` probe maps to the
+    /// closed service-unavailable category with a safe diagnostic code; a
+    /// probe error maps to an `Unknown` observation carrying the probe's
+    /// typed code.
     ///
     /// # Errors
     ///
@@ -495,8 +498,8 @@ impl ProviderHealthService {
                 ),
             };
         let evidence = ProviderHealthEvidenceDto {
-            profile_id: provider_id.clone(),
-            provider_profile_revision_id: deterministic_profile_revision(&provider_id),
+            provider_id: provider_id.clone(),
+            provider_profile_revision_id: None,
             health_attempt_id,
             check_contract_revision: HEALTH_CHECK_CONTRACT_REVISION.to_owned(),
             observed_availability: availability,
@@ -709,22 +712,6 @@ fn deterministic_attempt_id(label: &str, now: u64, family: &str) -> String {
         hex.push_str(&format!("{byte:02x}"));
     }
     format!("{family}-{hex}")
-}
-
-/// Computes the deterministic profile-revision placeholder for health evidence.
-///
-/// Profile revision identity is owned by the catalog runtime; until the
-/// catalog is wired into the health path, the evidence records a deterministic
-/// placeholder derived from the provider identity so the evidence DTO remains
-/// complete and stable across checks.
-#[must_use]
-fn deterministic_profile_revision(provider_id: &str) -> String {
-    let digest = Digest256::sha256(provider_id.as_bytes()).bytes();
-    let mut hex = String::with_capacity(16);
-    for byte in digest.iter().take(8) {
-        hex.push_str(&format!("{byte:02x}"));
-    }
-    format!("health-profile-{hex}")
 }
 
 #[cfg(test)]

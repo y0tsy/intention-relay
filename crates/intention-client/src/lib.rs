@@ -30,12 +30,11 @@ use intention_protocol::{
         GetProviderHealthEvidenceQueryDto, GetProviderUsageQueryDto,
         GetSessionProviderProfileQueryDto, PricingProjectionDto, ProviderCatalogPageDto,
         ProviderCatalogStatusDto, ProviderDiscoveryProjectionDto, ProviderHealthProjectionDto,
-        RawTomlEditCommandDto, ReconcileUnavailableQueueAcceptedDto,
+        ProviderUsageAggregationsDto, RawTomlEditCommandDto, ReconcileUnavailableQueueAcceptedDto,
         ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
         RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto,
         ReloadTransactionDto, RotateProviderCredentialsCommandDto, SessionProviderProfileDto,
         SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto,
-        UsageAggregationDto,
     },
 };
 use intention_transport::{
@@ -566,7 +565,7 @@ impl IntentionClient {
         }
     }
 
-    /// Queries one provider's usage aggregation over a period.
+    /// Queries one provider's per-identity usage aggregation over a period.
     ///
     /// # Errors
     ///
@@ -574,7 +573,7 @@ impl IntentionClient {
     pub fn provider_usage(
         &self,
         query: GetProviderUsageQueryDto,
-    ) -> DtoResult<UsageAggregationDto> {
+    ) -> DtoResult<ProviderUsageAggregationsDto> {
         query.validate()?;
         let response = self.request(ProtocolRequestPayloadDto::Query(
             ProtocolQueryDto::GetProviderUsage(query),

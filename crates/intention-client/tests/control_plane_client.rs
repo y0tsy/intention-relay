@@ -20,12 +20,12 @@ use std::thread;
 use intention_client::{DaemonLauncher, IntentionClient};
 use intention_protocol::contract_families::{
     ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationProjectionDto,
-    CredentialRotationResultDto, GetPricingPolicyQueryDto, GetProviderCatalogStatusQueryDto,
-    GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto, PricingObservationDto,
-    PricingProjectionDto, ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto,
-    ProviderHealthEvidenceDto, ProviderHealthProjectionDto, ProviderModelDiscoveryRecordDto,
-    RawTomlEditCommandDto, ReloadConfigurationCommandDto, ReloadTransactionDto,
-    RotateProviderCredentialsCommandDto,
+    ConfigurationReloadStatusDto, CredentialRotationResultDto, GetPricingPolicyQueryDto,
+    GetProviderCatalogStatusQueryDto, GetProviderDiscoveryStatusQueryDto,
+    GetProviderHealthEvidenceQueryDto, PricingObservationDto, PricingProjectionDto,
+    ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto, ProviderHealthEvidenceDto,
+    ProviderHealthProjectionDto, ProviderModelDiscoveryRecordDto, RawTomlEditCommandDto,
+    ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
 };
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandResultDto, ProtocolHelloDto,
@@ -247,8 +247,8 @@ fn health_projection() -> ProviderHealthProjectionDto {
     ProviderHealthProjectionDto {
         provider_id: "default".to_owned(),
         observations: vec![ProviderHealthEvidenceDto {
-            profile_id: "default".to_owned(),
-            provider_profile_revision_id: "health-profile-0123456789abcdef".to_owned(),
+            provider_id: "default".to_owned(),
+            provider_profile_revision_id: None,
             health_attempt_id:
                 "health-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             check_contract_revision: "health-check-v1".to_owned(),
@@ -304,7 +304,7 @@ fn configuration_projection() -> ConfigurationProjectionDto {
         model_id: "model-a".to_owned(),
         credential_configured: true,
         provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
-        reload_status: "active".to_owned(),
+        reload_status: ConfigurationReloadStatusDto::Active,
     }
 }
 
@@ -423,6 +423,12 @@ fn control_plane_queries_decode_safe_projections() {
         health.observations[0].check_contract_revision,
         "health-check-v1"
     );
+    assert!(
+        health.observations[0]
+            .provider_profile_revision_id
+            .is_none(),
+        "the health path reports no profile revision and fabricates none"
+    );
     assert!(!format!("{health:?}").contains(FAKE_SECRET));
     health_server.join().expect("fixture server completes");
 
@@ -473,7 +479,10 @@ fn control_plane_queries_decode_safe_projections() {
     assert_eq!(configuration.provider_kind, "openrouter");
     assert_eq!(configuration.model_id, "model-a");
     assert!(configuration.credential_configured);
-    assert_eq!(configuration.reload_status, "active");
+    assert_eq!(
+        configuration.reload_status,
+        ConfigurationReloadStatusDto::Active
+    );
     assert!(!format!("{configuration:?}").contains(FAKE_SECRET));
     configuration_server
         .join()
@@ -612,19 +621,21 @@ fn client_hello_advertises_and_requires_provider_profiles_v1() {
 #[test]
 fn invalid_fixture_projections_are_rejected_at_decode() {
     // A projection that is structurally complete but violates its declared
-    // invariants must fail at decode instead of reaching the caller.
-    let blank_endpoint = endpoint();
+    // invariants must fail at decode instead of reaching the caller. The
+    // reload status is a closed enum (D-14), so an unknown status cannot be
+    // constructed here; the protocol decode rejection covers that wire case.
+    let blank_policy = endpoint();
     let blank_server = start_fixture_server(
-        blank_endpoint.clone(),
+        blank_policy.clone(),
         ExpectedRequest::ConfigurationProjection,
         FixtureReply::ConfigurationProjection(ConfigurationProjectionDto {
-            reload_status: "   ".to_owned(),
+            provider_execution_policy: "   ".to_owned(),
             ..configuration_projection()
         }),
     );
-    let error = fixture_client(blank_endpoint)
+    let error = fixture_client(blank_policy)
         .configuration_projection()
-        .expect_err("a blank reload status must not decode");
+        .expect_err("a blank provider execution policy must not decode");
     assert_eq!(error.code(), "invalid_local_protocol_frame");
     blank_server.join().expect("fixture server completes");
 

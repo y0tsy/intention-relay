@@ -54,9 +54,9 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, HeldRecoveredRunDto, HeldRunAdmissionStateDto,
     HeldRunRepositoryDto, LoadProviderCatalogPageInputDto, LoadUnavailableQueuePageInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, PersistResolvedRunProviderSelectionInputDto,
-    PromoteUnavailableRunsInputDto, PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto,
-    ProviderCatalogPageDto, ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
+    ModelContextMessageDto, ModelContextRoleDto, PromoteUnavailableRunsInputDto,
+    PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
+    ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
     ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto,
     ProviderCatalogSafeProjectionDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto as DurableCatalogStatusDto, ProviderKindDescriptorCandidateDto,
@@ -1580,16 +1580,6 @@ impl FakeSelections {
 }
 
 impl ProviderSelectionRepositoryDto for FakeSelections {
-    fn persist_resolved_run_provider_selection(
-        &self,
-        input: PersistResolvedRunProviderSelectionInputDto,
-    ) -> DtoResult<()> {
-        self.selections
-            .borrow_mut()
-            .insert((input.session_id, input.run_id), input.selection);
-        Ok(())
-    }
-
     fn load_resolved_run_provider_selection(
         &self,
         session_id: SessionId,
@@ -2683,9 +2673,11 @@ fn by_profile_aggregates_in_period_aggregates_only() {
     usage.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
     usage.seed_aggregate("default", "rev-0001", "model-a", 600, 700);
     usage.seed_aggregate("other", "rev-0001", "model-a", 100, 200);
-    let aggregation = UsageService::new(&usage)
+    let projection = UsageService::new(&usage)
         .by_profile(usage_query("default"))
         .expect("aggregation succeeds");
+    assert_eq!(projection.entries.len(), 1);
+    let aggregation = &projection.entries[0];
     assert_eq!(aggregation.request_count, 5);
     assert_eq!(aggregation.input_units, 10);
     assert_eq!(aggregation.output_units, 20);
@@ -2695,9 +2687,54 @@ fn by_profile_aggregates_in_period_aggregates_only() {
 }
 
 #[test]
+fn by_profile_projects_one_aggregation_per_revision_and_model_identity() {
+    // Two identities produced in-period usage. The projection must carry each
+    // identity's own totals instead of labelling the whole sum with whichever
+    // durable row happened to be last (D-04, option A).
+    let usage = FakeUsage::new();
+    usage.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
+    usage.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
+    usage.seed_aggregate("default", "rev-0002", "model-b", 100, 200);
+    usage.seed_aggregate("default", "rev-0003", "model-c", 600, 700);
+    let projection = UsageService::new(&usage)
+        .by_profile(usage_query("default"))
+        .expect("aggregation succeeds");
+    assert_eq!(projection.entries.len(), 2, "one entry per identity");
+    let first = &projection.entries[0];
+    assert_eq!(first.provider_profile_revision_id, "rev-0001");
+    assert_eq!(first.model_id, "model-a");
+    assert_eq!(first.request_count, 10);
+    assert_eq!(first.input_units, 20);
+    assert_eq!(first.output_units, 40);
+    assert_eq!(first.reasoning_units, 60);
+    let second = &projection.entries[1];
+    assert_eq!(second.provider_profile_revision_id, "rev-0002");
+    assert_eq!(second.model_id, "model-b");
+    assert_eq!(second.request_count, 5);
+    assert_eq!(second.input_units, 10);
+    for entry in &projection.entries {
+        assert_eq!(entry.profile_id, "default");
+        assert_eq!(entry.usage_period_start, 0);
+        assert_eq!(entry.usage_period_end, 500);
+    }
+
+    // The durable row order never changes the result: the same rows seeded in
+    // the opposite order project an equal set.
+    let reversed = FakeUsage::new();
+    reversed.seed_aggregate("default", "rev-0003", "model-c", 600, 700);
+    reversed.seed_aggregate("default", "rev-0002", "model-b", 100, 200);
+    reversed.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
+    reversed.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
+    let reversed_projection = UsageService::new(&reversed)
+        .by_profile(usage_query("default"))
+        .expect("aggregation succeeds");
+    assert_eq!(projection, reversed_projection);
+}
+
+#[test]
 fn by_profile_rejects_an_aggregation_with_no_in_period_entries() {
-    // With no aggregates the projection carries blank revision/model fields,
-    // which the closed aggregation DTO validation rejects.
+    // With no aggregates the projection carries no identity, which the closed
+    // aggregation-set validation rejects.
     let usage = FakeUsage::new();
     let error = UsageService::new(&usage)
         .by_profile(usage_query("default"))

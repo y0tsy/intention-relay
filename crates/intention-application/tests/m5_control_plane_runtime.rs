@@ -8,9 +8,13 @@
 //! Every service is exercised through fake ports with the same trait shapes
 //! the composition root implements. The fake-secret sweep proves that private
 //! credential material never appears in any service DTO `Debug` output or
-//! error, and the non-authorizing tests prove health, discovery, and pricing
-//! produce projections only: they never create a `RunId`, reason, lifecycle
-//! event, scheduler candidate, or selection/routing decision.
+//! error. The non-authorizing tests pin the acceptance property structurally
+//! rather than by scanning `Debug` output for forbidden words: the health,
+//! discovery, and pricing services are fieldless values (no storage handle,
+//! repository, catalog binding, or scheduler can be attached), the projection
+//! patterns name every field (an authority-bearing field stops the target from
+//! compiling), and each typed vocabulary is matched exhaustively (a new
+//! variant must be handled rather than defaulted).
 
 use std::cell::RefCell;
 use std::sync::Mutex;
@@ -25,9 +29,11 @@ use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_protocol::contract_families::{
-    CredentialRotationResultDto, PricingObservationDto, PricingProjectionDto,
-    ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto, ProviderHealthProjectionDto,
-    ProviderModelDiscoveryRecordDto, RotateProviderCredentialsCommandDto,
+    ConfigurationProjectionDto, ConfigurationReloadStatusDto, CredentialRotationResultDto,
+    PricingClassification, PricingObservationDto, PricingProjectionDto,
+    ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto, ProviderHealthFailureCategory,
+    ProviderHealthProjectionDto, ProviderModelDiscoveryRecordDto,
+    RotateProviderCredentialsCommandDto,
 };
 use intention_storage::{CommitConfigurationReloadInputDto, ConfigurationReloadRepositoryDto};
 use intention_types::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
@@ -471,58 +477,157 @@ fn rotation_without_a_credential_source_fails_closed() {
 
 #[test]
 fn health_check_projects_evidence_without_touching_any_run_or_selection_state() {
-    let probe = FakeHealthProbe::new(Ok(ProviderAvailabilityObservation::Available));
-    let projection: ProviderHealthProjectionDto = ProviderHealthService
-        .check("default".to_owned(), &probe, 100)
-        .expect("health check projects");
-    assert_eq!(probe.calls(), ["default"]);
-    assert_eq!(projection.provider_id, "default");
-    assert_eq!(projection.observations.len(), 1);
-    projection.validate().expect("projection is valid");
-    // The projection is closed and non-authorizing: it carries no run,
-    // reason, or selection identity, and the service invoked only the probe
-    // port (never any storage, runtime, or catalog API).
-    let debug = format!("{projection:?}");
-    for forbidden in ["run_id", "selection", "mandate", "scheduler", "lifecycle"] {
+    // Structural: the health service is a fieldless value, so no storage
+    // handle, repository, catalog binding, or scheduler can be attached to
+    // this path. Adding such a field changes this binding and fails the
+    // build instead of passing a string scan.
+    let service: ProviderHealthService = ProviderHealthService;
+    let cases = [
+        (
+            FakeHealthProbe::new(Ok(ProviderAvailabilityObservation::Available)),
+            ProviderAvailabilityObservation::Available,
+            None,
+            None,
+        ),
+        (
+            FakeHealthProbe::new(Ok(ProviderAvailabilityObservation::Unavailable)),
+            ProviderAvailabilityObservation::Unavailable,
+            Some("provider_health_unavailable"),
+            Some("provider_health_unavailable"),
+        ),
+        (
+            FakeHealthProbe::new(Err(ErrorDto::unavailable(
+                "provider_health_probe_unavailable",
+                "fixture probe cannot complete",
+            ))),
+            ProviderAvailabilityObservation::Unknown,
+            Some("provider_health_probe_unavailable"),
+            Some("provider_health_probe_unavailable"),
+        ),
+    ];
+    for (probe, availability, diagnostic_code, reason_code) in cases {
+        let projection: ProviderHealthProjectionDto = service
+            .check("default".to_owned(), &probe, 100)
+            .expect("health check projects");
+        // The only dependency the service consulted is the probe port, and it
+        // received the provider identity alone: no credential-bearing port or
+        // authority-bearing port participates in this path.
+        assert_eq!(probe.calls(), ["default"]);
+        projection.validate().expect("projection is valid");
+
+        // Structural: the pattern names every projection field, so a new
+        // authority-bearing field (run identity, selection, candidate,
+        // mandate, admission) stops this target from compiling instead of
+        // slipping past a list of forbidden `Debug` substrings.
+        let ProviderHealthProjectionDto {
+            provider_id,
+            observations,
+            safe_reason_code,
+            observed_at,
+        } = &projection;
+        assert_eq!(provider_id, "default");
+        assert_eq!(observed_at, &100);
+        assert_eq!(safe_reason_code.as_deref(), reason_code);
+        assert_eq!(observations.len(), 1);
+
+        let evidence = &observations[0];
+        assert_eq!(evidence.provider_id, "default");
+        assert_eq!(evidence.check_contract_revision, "health-check-v1");
+        assert_eq!(evidence.observed_at, 100);
+        assert_eq!(evidence.observed_availability, availability);
+        assert_eq!(evidence.safe_diagnostic_code.as_deref(), diagnostic_code);
+        // D-09 / P3-20: the catalog-owned profile revision is structurally
+        // absent because the catalog binding is not wired into the health
+        // path. The assertion is the absence of the typed optional value, not
+        // a scan for a placeholder pattern, so a reintroduced synthesized
+        // identity (`health-profile-<hex>`) fails here.
         assert!(
-            !debug.contains(forbidden),
-            "health projection must not reference {forbidden}"
+            evidence.provider_profile_revision_id.is_none(),
+            "health evidence must not fabricate a provider profile revision identity"
         );
+
+        // The typed observation vocabulary is matched exhaustively: a new
+        // availability observation must be handled here rather than
+        // defaulted, and each arm pins the closed evidence combination.
+        match evidence.observed_availability {
+            ProviderAvailabilityObservation::Available => {
+                assert!(evidence.failure_category.is_none());
+                assert!(evidence.safe_diagnostic_code.is_none());
+            }
+            ProviderAvailabilityObservation::Unavailable => {
+                assert_eq!(
+                    evidence.failure_category,
+                    Some(ProviderHealthFailureCategory::ServiceUnavailable)
+                );
+                assert_eq!(
+                    evidence.safe_diagnostic_code.as_deref(),
+                    Some("provider_health_unavailable")
+                );
+            }
+            ProviderAvailabilityObservation::Unknown => {
+                assert!(evidence.failure_category.is_none());
+            }
+        }
     }
-    assert!(!debug.contains(FAKE_SECRET));
 }
 
 #[test]
 fn discovery_records_are_additive_and_never_route() {
-    let port = FakeDiscoveryPort::new(Ok(vec![
+    // Structural: the discovery service is a fieldless value, so no
+    // selection, routing, admission, or storage dependency can be attached
+    // to this path; adding one fails the build.
+    let service: ProviderDiscoveryService = ProviderDiscoveryService;
+    let discovered = vec![
         discovery_record("gpt-4o"),
         discovery_record("o3"),
         discovery_record("codex-1"),
-    ]));
-    let projection: ProviderDiscoveryProjectionDto = ProviderDiscoveryService
+    ];
+    let port = FakeDiscoveryPort::new(Ok(discovered.clone()));
+    let projection: ProviderDiscoveryProjectionDto = service
         .start(DiscoveryScopeDto::AllModels, &port, 100)
         .expect("discovery starts");
-    assert_eq!(
-        projection.phase,
-        Some(intention_protocol::contract_families::ProviderDiscoveryPhase::Terminal)
-    );
-    assert_eq!(projection.records.len(), 3);
-    let debug = format!("{projection:?}");
-    // Model identities are data: the service returns the records only and
-    // never changes any selection or routing state.
-    assert!(debug.contains("gpt-4o"));
-    assert!(!debug.contains("selection"));
-    assert!(!debug.contains("run_id"));
     projection.validate().expect("projection is valid");
+    assert_eq!(port.calls(), ["all"]);
 
-    let status = ProviderDiscoveryService
+    // Structural: the pattern names every projection field, so a new
+    // authority-bearing field stops this target from compiling instead of
+    // slipping past a list of forbidden `Debug` substrings.
+    let ProviderDiscoveryProjectionDto {
+        attempt_id,
+        phase,
+        records,
+        safe_status,
+    } = &projection;
+    assert!(attempt_id.as_deref().is_some_and(|id| !id.is_empty()));
+    assert_eq!(safe_status.as_deref(), Some("completed"));
+    // Model identities are data: every record returns exactly as the port
+    // produced it, so no model name is dropped, reordered, or routed.
+    assert_eq!(records, &discovered);
+
+    // The phase is the typed closed vocabulary, matched exhaustively: a new
+    // phase must be handled here rather than defaulted.
+    let phase = phase.expect("a started attempt reports its phase");
+    assert_eq!(
+        phase,
+        intention_protocol::contract_families::ProviderDiscoveryPhase::Terminal
+    );
+    match phase {
+        intention_protocol::contract_families::ProviderDiscoveryPhase::Terminal => {}
+        intention_protocol::contract_families::ProviderDiscoveryPhase::BeforeStart
+        | intention_protocol::contract_families::ProviderDiscoveryPhase::Started => {
+            unreachable!("a started discovery attempt is always terminal")
+        }
+    }
+
+    let status = service
         .status(
-            projection.attempt_id.expect("attempt id is present"),
+            attempt_id.clone().expect("attempt id is present"),
             &port,
             200,
         )
         .expect("status projects");
     assert!(status.records.is_empty());
+    assert_eq!(status.phase, None);
     assert_eq!(
         status.safe_status.as_deref(),
         Some("attempt_state_unavailable")
@@ -536,50 +641,76 @@ fn discovery_records_are_additive_and_never_route() {
 
 #[test]
 fn pricing_projection_never_gates_admission_or_eligibility() {
-    let service = PricingPolicyService;
+    // Structural: the pricing service is a fieldless value, so no mandate,
+    // scheduler, quota, or storage dependency can be attached to this path;
+    // adding one fails the build.
+    let service: PricingPolicyService = PricingPolicyService;
+    let observation = |provider_kind_id: &str, model_id: &str, bounded_numeric_value: u64| {
+        PricingObservationDto {
+            provider_kind_id: provider_kind_id.to_owned(),
+            model_id: model_id.to_owned(),
+            bounded_numeric_value,
+            classification: PricingClassification::ProductPolicy,
+            observed_at: 1,
+        }
+    };
     let projection: PricingProjectionDto = service.project(vec![
-        PricingObservationDto {
-            provider_kind_id: "openrouter".to_owned(),
-            model_id: "model-a".to_owned(),
-            bounded_numeric_value: 0,
-            classification:
-                intention_protocol::contract_families::PricingClassification::ProductPolicy,
-            observed_at: 1,
-        },
-        PricingObservationDto {
-            provider_kind_id: "openrouter".to_owned(),
-            model_id: "model-b".to_owned(),
-            bounded_numeric_value: 42,
-            classification:
-                intention_protocol::contract_families::PricingClassification::ProductPolicy,
-            observed_at: 1,
-        },
+        observation("openrouter", "model-a", 0),
+        observation("openrouter", "model-b", 42),
     ]);
-    assert_eq!(projection.observations.len(), 2);
-    assert_eq!(
-        projection.observations[0].classification,
-        intention_protocol::contract_families::PricingClassification::IntrinsicRepresentationBound
-    );
-    assert_eq!(
-        projection.observations[1].classification,
-        intention_protocol::contract_families::PricingClassification::CapacityObservation
-    );
-    assert!(projection.disclaimer.is_some());
     projection.validate().expect("projection is valid");
-    let debug = format!("{projection:?}");
-    for forbidden in [
-        "run_id",
-        "mandate",
-        "selection",
-        "ceiling",
-        "eligibility",
-        "scheduler",
-    ] {
-        assert!(
-            !debug.contains(forbidden),
-            "pricing projection must not carry {forbidden}"
-        );
+
+    // Structural: the pattern names every projection field, so a new
+    // authority-bearing field (admission ceiling, eligibility, reservation)
+    // stops this target from compiling instead of slipping past a list of
+    // forbidden `Debug` substrings.
+    let PricingProjectionDto {
+        observations,
+        policy_classification,
+        disclaimer,
+    } = &projection;
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        policy_classification,
+        &Some(PricingClassification::CapacityObservation)
+    );
+    assert!(disclaimer.is_some());
+
+    // The classification is code-owned and typed: each typed classification
+    // is matched exhaustively, so a new variant must be handled here rather
+    // than defaulted.
+    let expected = [
+        (
+            0_u64,
+            PricingClassification::IntrinsicRepresentationBound,
+            "intrinsic_representation_bound",
+        ),
+        (
+            42_u64,
+            PricingClassification::CapacityObservation,
+            "capacity_observation",
+        ),
+    ];
+    for (observation, (bounded_numeric_value, classification, label)) in
+        observations.iter().zip(expected)
+    {
+        assert_eq!(observation.bounded_numeric_value, bounded_numeric_value);
+        assert_eq!(observation.classification, classification);
+        let typed = match observation.classification {
+            PricingClassification::IntrinsicRepresentationBound => "intrinsic_representation_bound",
+            PricingClassification::CapacityObservation => "capacity_observation",
+            PricingClassification::ProductPolicy => "product_policy",
+        };
+        assert_eq!(typed, label);
     }
+
+    // A different provider kind and model identity with the same bounded
+    // value classifies identically, so no model name reaches the policy.
+    let renamed = service.project(vec![observation("another-kind", "renamed-model", 42)]);
+    assert_eq!(
+        renamed.observations[0].classification, observations[1].classification,
+        "a model identity must not influence the code-owned classification"
+    );
 }
 
 #[test]
@@ -658,4 +789,55 @@ fn fake_secret_never_appears_in_any_service_dto_or_error() {
             "service DTO Debug output must never expose the fake secret"
         );
     }
+}
+
+/// Consumes the applied-configuration projection through the closed typed
+/// reload-status vocabulary (D-14, `P3-08`).
+///
+/// The vocabulary is matched exhaustively: adding a status variant makes this
+/// fixture stop compiling until the new status is handled deliberately, which
+/// is the property an unchecked status string never provided.
+#[test]
+fn configuration_projection_carries_the_closed_typed_reload_status() {
+    let schema_version = format!(
+        "{}.{}",
+        intention_protocol::CURRENT_DTO_SCHEMA_VERSION.major(),
+        intention_protocol::CURRENT_DTO_SCHEMA_VERSION.minor()
+    );
+    let projection = ConfigurationProjectionDto {
+        schema_version: schema_version.clone(),
+        applied_config_revision_id: "revision-1".to_owned(),
+        provider_kind: "openrouter".to_owned(),
+        model_id: "model-a".to_owned(),
+        credential_configured: true,
+        provider_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
+        reload_status: ConfigurationReloadStatusDto::Active,
+    };
+    projection.validate().expect("fixture projection is valid");
+
+    // Structural: the pattern names every field of the projection, so a new
+    // authority-bearing field stops this target from compiling instead of
+    // slipping past a list of forbidden `Debug` substrings.
+    let ConfigurationProjectionDto {
+        schema_version: projected_schema_version,
+        applied_config_revision_id,
+        provider_kind,
+        model_id,
+        credential_configured,
+        provider_execution_policy,
+        reload_status,
+    } = &projection;
+    assert_eq!(projected_schema_version, &schema_version);
+    assert_eq!(applied_config_revision_id, "revision-1");
+    assert_eq!(provider_kind, "openrouter");
+    assert_eq!(model_id, "model-a");
+    assert!(*credential_configured);
+    assert_eq!(provider_execution_policy, "execution-timeout-30-attempts-2");
+
+    // The typed status is the only reload status the producer sets, and the
+    // match is exhaustive over the closed vocabulary.
+    match reload_status {
+        ConfigurationReloadStatusDto::Active => {}
+    }
+    assert_eq!(reload_status, &ConfigurationReloadStatusDto::Active);
 }
