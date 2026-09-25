@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use intention_application::session_selection::SessionProviderProfileChangePort;
 use intention_application::{
     ApplicationService, CatalogAdmissionPort, CatalogProviderDeclarationDto, CatalogReadService,
     CatalogReadiness, CatalogSourceInputDto, ControlPlaneReadinessPort, DegradedModeService,
@@ -42,7 +43,7 @@ use intention_protocol::contract_families::{
     ProviderCatalogDegradedReason, ProviderProfileUnavailableReason,
     ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
     RejectProviderCatalogCandidateCommandDto, ResolvedProviderProfileDto,
-    SetSessionProviderProfileCommandDto,
+    SessionProviderProfileChangedEventDto, SetSessionProviderProfileCommandDto,
 };
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
@@ -56,7 +57,8 @@ use intention_storage::{
     ModelContextMessageDto, ModelContextRoleDto, PersistResolvedRunProviderSelectionInputDto,
     PromoteUnavailableRunsInputDto, PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto,
     ProviderCatalogPageDto, ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
-    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
+    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto,
+    ProviderCatalogSafeProjectionDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto as DurableCatalogStatusDto, ProviderKindDescriptorCandidateDto,
     ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
     ProviderSelectionRepositoryDto, ProviderUsageAggregateDto, ProviderUsageRepositoryDto,
@@ -292,6 +294,26 @@ fn safe_header_profile(profile_id: &str, revision: &str) -> ResolvedProfileDto {
     profile.credential_transport_mode = CredentialTransportMode::SafeHeader;
     profile.credential_transport_safe_header_name = Some("x-auth-header".to_owned());
     profile
+}
+
+/// A placeholder safe projection for the in-memory catalog fake; the fake's
+/// consumers read the typed record's presence, not its values.
+const fn safe_projection_stub() -> ProviderCatalogSafeProjectionDto {
+    ProviderCatalogSafeProjectionDto {
+        credential_transport_mode: DomainCredentialTransportMode::Bearer,
+        credential_transport_safe_header_name: None,
+        declared_model_capability_subset: Vec::new(),
+        effective_execution_policy: String::new(),
+        effective_loopback_policy_or_not_applicable: String::new(),
+        kind_descriptor_revision_id: String::new(),
+        kind_id: String::new(),
+        model_id: String::new(),
+        normalized_effective_endpoint: String::new(),
+        profile_id: String::new(),
+        profile_revision_id: String::new(),
+        provider_driver_contract_revision: String::new(),
+        resolved_reasoning_policy: String::new(),
+    }
 }
 
 /// A valid persisted immutable provider selection for one run.
@@ -648,7 +670,7 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
                 enabled: profile.enabled,
                 credential_configured: profile.credential_configured,
                 readiness: profile.readiness,
-                safe_projection_json: String::new(),
+                safe_projection: safe_projection_stub(),
             })
             .collect::<Vec<_>>();
         let limit = usize::try_from(input.limit).unwrap_or(usize::MAX);
@@ -822,7 +844,7 @@ impl ProviderRemovalRepositoryDto for &FakeCatalog {
                 expires_at,
                 source_recheck: input.source_recheck,
                 status: ProviderCatalogRemovalStatusDto::Pending,
-                candidate_json: input.candidate_json,
+                evidence: input.evidence,
                 operation_id: Some(input.operation_id),
                 completed_at: None,
             });
@@ -1154,6 +1176,21 @@ impl SessionProviderDefaultsRepositoryDto for FakeDefaults {
     }
 }
 
+#[derive(Default)]
+struct FakeProfileEvents {
+    published: RefCell<Vec<SessionProviderProfileChangedEventDto>>,
+}
+
+impl SessionProviderProfileChangePort for FakeProfileEvents {
+    fn publish_session_provider_profile_changed(
+        &self,
+        event: SessionProviderProfileChangedEventDto,
+    ) -> DtoResult<()> {
+        self.published.borrow_mut().push(event);
+        Ok(())
+    }
+}
+
 struct FakeAdmissionPort {
     profiles: RefCell<HashMap<String, DtoResult<ResolvedProfileDto>>>,
     verify_registry_key_fails: bool,
@@ -1269,7 +1306,7 @@ impl FakeQueue {
             promotion_attempts: 0,
             state: UnavailableQueueStateDto::Queued,
             last_operation_id: None,
-            selection_json: String::new(),
+            selection: selection(profile_id, "responses"),
         });
     }
 }
@@ -1289,7 +1326,7 @@ impl UnavailableQueueRepositoryDto for FakeQueue {
             promotion_attempts: 0,
             state: UnavailableQueueStateDto::Queued,
             last_operation_id: Some(input.operation_id),
-            selection_json: input.selection_json,
+            selection: input.selection,
         });
         Ok(())
     }
@@ -1964,10 +2001,11 @@ fn provider_selection_from_maps_domain_validation_failure_to_provider_profile_re
     let defaults = FakeDefaults::new();
     let repo = FakeAppRepo::new(catalog, defaults, queued_change(session_id));
     let dispatch = FakeDispatch::new();
-    // The resolved profile id passes the protocol bound but violates the
-    // canonical domain 63-character bound, so the failure is raised by the
-    // durable selection validation inside provider_selection_from.
-    let over_long = "p".repeat(100);
+    // The resolved profile id passes the protocol shape checks but violates
+    // the canonical domain 256-character bound (D-13), so the failure is
+    // raised by the durable selection validation inside
+    // provider_selection_from.
+    let over_long = "p".repeat(257);
     let port = FakeAdmissionPort::with("default", Ok(resolved_profile(&over_long, "rev-0001")));
     let turn = SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
         .expect("fixture command is valid")
@@ -2203,6 +2241,7 @@ fn set_binds_a_new_session_default_and_reports_changed() {
         .set(
             set_command(SessionId::new(), "default", 0, "op-bind"),
             &port,
+            &FakeProfileEvents::default(),
             1_000,
         )
         .expect("binding succeeds");
@@ -2225,16 +2264,52 @@ fn set_same_profile_is_an_idempotent_no_op() {
     let catalog = seeded_catalog();
     let readiness = FakeReadinessPort::new(CatalogReadiness::Ready);
     let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let events = FakeProfileEvents::default();
     let service = SessionProfileService::new(&defaults, &catalog, &readiness);
     let accepted = service
         .set(
             set_command(session_id, "default", 0, "op-same"),
             &port,
+            &events,
             1_000,
         )
         .expect("same-profile set succeeds");
     assert!(!accepted.changed);
     assert_eq!(accepted.resulting_projection_revision, 0);
+    assert!(
+        events.published.borrow().is_empty(),
+        "a no-op default change must not publish an event"
+    );
+}
+
+#[test]
+fn set_publishes_session_provider_profile_changed_on_a_committed_change() {
+    let session_id = SessionId::new();
+    let defaults = FakeDefaults::new();
+    defaults.seed(session_id, "previous", 3);
+    let catalog = seeded_catalog();
+    let readiness = FakeReadinessPort::new(CatalogReadiness::Ready);
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let events = FakeProfileEvents::default();
+    let service = SessionProfileService::new(&defaults, &catalog, &readiness);
+    let accepted = service
+        .set(
+            set_command(session_id, "default", 3, "op-event"),
+            &port,
+            &events,
+            1_000,
+        )
+        .expect("default change succeeds");
+    assert!(accepted.changed);
+    assert_eq!(accepted.resulting_projection_revision, 4);
+    let published = events.published.borrow();
+    assert_eq!(published.len(), 1, "exactly one change event is published");
+    let event = &published[0];
+    assert_eq!(event.session_id, session_id.to_string());
+    assert_eq!(event.previous_profile_id, "previous");
+    assert_eq!(event.profile_id, "default");
+    assert_eq!(event.session_projection_revision, 4);
+    assert_eq!(event.occurred_at, 1_000);
 }
 
 #[test]
@@ -2250,6 +2325,7 @@ fn set_rejects_while_the_control_plane_is_degraded() {
         .set(
             set_command(SessionId::new(), "default", 0, "op-degraded"),
             &port,
+            &FakeProfileEvents::default(),
             1_000,
         )
         .expect_err("degraded set is rejected");
@@ -2269,6 +2345,7 @@ fn set_rejects_a_stale_expected_projection_revision() {
         .set(
             set_command(session_id, "default", 0, "op-stale"),
             &port,
+            &FakeProfileEvents::default(),
             1_000,
         )
         .expect_err("stale expected revision is rejected");
@@ -2285,7 +2362,7 @@ fn set_rejects_an_invalid_command() {
     let mut command = set_command(SessionId::new(), "default", 0, "op-invalid");
     command.session_id.clear();
     let error = service
-        .set(command, &port, 1_000)
+        .set(command, &port, &FakeProfileEvents::default(), 1_000)
         .expect_err("blank session id is rejected");
     assert_eq!(error.code(), "set_session_provider_profile_invalid");
 }
@@ -2307,6 +2384,7 @@ fn set_passes_through_admission_port_failures() {
         .set(
             set_command(SessionId::new(), "default", 0, "op-admission"),
             &port,
+            &FakeProfileEvents::default(),
             1_000,
         )
         .expect_err("admission failure passes through");
@@ -2325,6 +2403,7 @@ fn set_passes_through_non_stale_storage_failures() {
         .set(
             set_command(SessionId::new(), "default", 0, "op-storage"),
             &port,
+            &FakeProfileEvents::default(),
             1_000,
         )
         .expect_err("non-stale storage failures pass through");
@@ -2514,7 +2593,6 @@ fn reconcile_command(
     ReconcileUnavailableQueueCommandDto {
         session_id: session_id.to_string(),
         operation_id: operation_id.to_owned(),
-        page_cursor: None,
     }
 }
 
@@ -2959,7 +3037,6 @@ fn accept_command(handle: &str) -> AcceptProviderCatalogRemovalCommandDto {
         expected_active_catalog_revision_id: "1".to_owned(),
         expected_candidate_catalog_revision_id: "2".to_owned(),
         operation_id: "op-accept".to_owned(),
-        source_recheck: true,
     }
 }
 

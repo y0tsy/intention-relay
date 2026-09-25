@@ -47,18 +47,41 @@ fn credential_shaped(value: &str) -> bool {
     intention_domain::canonical::credential_shaped_identifier(value)
 }
 
-/// Requires one control-plane `schema_version` text to name the current DTO
-/// schema version exactly.
+/// Whether one control-plane `schema_version` text is a `major.minor`
+/// decimal version with no other text.
+fn schema_version_shape_valid(value: &str) -> bool {
+    let mut components = value.split('.');
+    let major = components.next().unwrap_or_default();
+    let minor = components.next().unwrap_or_default();
+    components.next().is_none()
+        && !major.is_empty()
+        && !minor.is_empty()
+        && major.bytes().all(|byte| byte.is_ascii_digit())
+        && minor.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Requires one control-plane `schema_version` text to be a `major.minor`
+/// decimal version naming the current DTO schema version exactly.
 ///
 /// Control-plane command, query, and projection DTOs carry the schema version
 /// as `major.minor` text rather than as a typed version, so the exact-current
 /// rule is checked here: on the wire decode path through each family's
-/// `Deserialize`, and again on daemon admission through `validate()`.
+/// `Deserialize`, and again on daemon admission through `validate()`. The
+/// `major.minor` shape is checked before the version comparison, so malformed
+/// text fails with the calling family's own `code` instead of the version
+/// error.
 ///
 /// # Errors
 ///
-/// Returns `incompatible_protocol_version` for any other value.
-fn require_current_schema_version(value: &str) -> DtoResult<()> {
+/// Returns `code` for a value that is not a `major.minor` decimal version and
+/// `incompatible_protocol_version` for a version other than the current one.
+fn require_current_schema_version(value: &str, code: &'static str) -> DtoResult<()> {
+    if !schema_version_shape_valid(value) {
+        return Err(ErrorDto::validation(
+            code,
+            "schema version text is malformed",
+        ));
+    }
     let current = crate::CURRENT_DTO_SCHEMA_VERSION;
     if value == format!("{}.{}", current.major(), current.minor()) {
         Ok(())
@@ -1698,15 +1721,16 @@ impl GetProviderCatalogQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_catalog_invalid` for a blank, over-long, or
-    /// control-bearing schema version or catalog revision reference,
+    /// Returns `provider_catalog_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, or for a blank,
+    /// over-long, or control-bearing catalog revision reference,
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, `invalid_page_token` for a blank, over-long, or
     /// control-bearing page token, and `credentials_forbidden` for a
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_invalid")?;
         if let Some(revision) = &self.expected_catalog_revision_id {
             valid_text(revision, 256, "provider_catalog_invalid")?;
         }
@@ -1919,9 +1943,10 @@ impl ProviderCatalogPageDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_catalog_invalid` for a blank, over-long, or
-    /// control-bearing text field, a page exceeding its 256-entry bound, or
-    /// an inconsistent `has_more`/next-token pair,
+    /// Returns `provider_catalog_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, a blank, over-long,
+    /// or control-bearing text field, a page exceeding its 256-entry bound,
+    /// or an inconsistent `has_more`/next-token pair,
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, `provider_catalog_unsorted` when entries are not strictly
     /// sorted by profile id (or repeat a profile id), `invalid_page_token`
@@ -1929,7 +1954,7 @@ impl ProviderCatalogPageDto {
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_invalid")?;
         valid_text(&self.catalog_revision_id, 256, "provider_catalog_invalid")?;
         if self.entries.len() > 256 {
             return Err(ErrorDto::validation(
@@ -2005,13 +2030,14 @@ impl GetProviderCatalogStatusQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_catalog_status_invalid` for a blank, over-long, or
-    /// control-bearing schema version, `incompatible_protocol_version` for a
-    /// schema version other than the current one, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// Returns `provider_catalog_status_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_status_invalid")?;
         if credential_shaped(&self.schema_version) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -2167,14 +2193,15 @@ impl ProviderCatalogStatusDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_catalog_status_invalid` for a blank, over-long, or
+    /// Returns `provider_catalog_status_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, a blank, over-long, or
     /// control-bearing text field, or an inconsistent activation state and
     /// degraded reason, `incompatible_protocol_version` for a schema version
     /// other than the current one, and `credentials_forbidden` for a
     /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_status_invalid")?;
         for value in [
             &self.active_catalog_revision_id,
             &self.candidate_catalog_revision_id,
@@ -2364,9 +2391,10 @@ impl SetSessionProviderProfileCommandDto {
     /// # Errors
     ///
     /// Returns `set_session_provider_profile_invalid` for a blank, over-long,
-    /// or control-bearing field, `incompatible_protocol_version` for a
-    /// schema version other than the current one, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// or control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [
             &self.schema_version,
@@ -2376,7 +2404,10 @@ impl SetSessionProviderProfileCommandDto {
         ] {
             valid_text(field, 256, "set_session_provider_profile_invalid")?;
         }
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(
+            &self.schema_version,
+            "set_session_provider_profile_invalid",
+        )?;
         if [
             &self.schema_version,
             &self.session_id,
@@ -2481,14 +2512,15 @@ impl GetSessionProviderProfileQueryDto {
     /// # Errors
     ///
     /// Returns `session_provider_profile_invalid` for a blank, over-long, or
-    /// control-bearing field, `incompatible_protocol_version` for a schema
-    /// version other than the current one, and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [&self.schema_version, &self.session_id] {
             valid_text(field, 256, "session_provider_profile_invalid")?;
         }
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "session_provider_profile_invalid")?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.session_id) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -2575,7 +2607,6 @@ pub struct AcceptProviderCatalogRemovalCommandDto {
     pub expected_active_catalog_revision_id: String,
     pub expected_candidate_catalog_revision_id: String,
     pub operation_id: String,
-    pub source_recheck: bool,
 }
 
 impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalCommandDto {
@@ -2589,7 +2620,6 @@ impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalCommandDto {
             expected_active_catalog_revision_id: String,
             expected_candidate_catalog_revision_id: String,
             operation_id: String,
-            source_recheck: bool,
         }
         let raw = RawAcceptProviderCatalogRemovalCommandDto::deserialize(deserializer)?;
         let value = Self {
@@ -2597,7 +2627,6 @@ impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalCommandDto {
             expected_active_catalog_revision_id: raw.expected_active_catalog_revision_id,
             expected_candidate_catalog_revision_id: raw.expected_candidate_catalog_revision_id,
             operation_id: raw.operation_id,
-            source_recheck: raw.source_recheck,
         };
         value.validate().map_err(de::Error::custom)?;
         Ok(value)
@@ -2812,11 +2841,14 @@ impl RejectProviderCatalogCandidateAcceptedDto {
 pub const MAX_UNAVAILABLE_QUEUE_PROMOTIONS: u64 = 8;
 
 /// A command reconciling a session's unavailable-run queue in bounded pages.
+///
+/// The command carries no page cursor: the durable reconciliation marker is
+/// the single paging authority, and the marker's cursor is reported on the
+/// acceptance.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReconcileUnavailableQueueCommandDto {
     pub session_id: String,
     pub operation_id: String,
-    pub page_cursor: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for ReconcileUnavailableQueueCommandDto {
@@ -2828,13 +2860,11 @@ impl<'de> Deserialize<'de> for ReconcileUnavailableQueueCommandDto {
         struct RawReconcileUnavailableQueueCommandDto {
             session_id: String,
             operation_id: String,
-            page_cursor: Option<String>,
         }
         let raw = RawReconcileUnavailableQueueCommandDto::deserialize(deserializer)?;
         let value = Self {
             session_id: raw.session_id,
             operation_id: raw.operation_id,
-            page_cursor: raw.page_cursor,
         };
         value.validate().map_err(de::Error::custom)?;
         Ok(value)
@@ -2847,19 +2877,13 @@ impl ReconcileUnavailableQueueCommandDto {
     /// # Errors
     ///
     /// Returns `unavailable_queue_invalid` for a blank, over-long, or
-    /// control-bearing field, `invalid_page_token` for a malformed page
-    /// cursor, and `credentials_forbidden` for a credential-shaped value.
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [&self.session_id, &self.operation_id] {
             valid_text(field, 256, "unavailable_queue_invalid")?;
         }
-        if let Some(cursor) = &self.page_cursor {
-            valid_text(cursor, 1024, "invalid_page_token")?;
-        }
-        if credential_shaped(&self.session_id)
-            || credential_shaped(&self.operation_id)
-            || self.page_cursor.as_deref().is_some_and(credential_shaped)
-        {
+        if credential_shaped(&self.session_id) || credential_shaped(&self.operation_id) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
                 "credentials are forbidden",
@@ -3081,7 +3105,8 @@ impl GetProviderUsageQueryDto {
     /// # Errors
     ///
     /// Returns `provider_usage_invalid` for a blank, over-long, or
-    /// control-bearing field, or a period ending before its start,
+    /// control-bearing field, a non-decimal schema version, or a period
+    /// ending before its start,
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, and `credentials_forbidden` for a credential-shaped
     /// value.
@@ -3095,7 +3120,7 @@ impl GetProviderUsageQueryDto {
         for field in [&self.schema_version, &self.profile_id] {
             valid_text(field, 256, "provider_usage_invalid")?;
         }
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_usage_invalid")?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.profile_id) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -4364,15 +4389,16 @@ impl GetProviderHealthEvidenceQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_health_invalid` for a blank, over-long, or
-    /// control-bearing schema version or provider id (the provider id is
+    /// Returns `provider_health_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, or a provider id (the
+    /// provider id is
     /// bounded at 63 characters, matching the profile id bound),
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, and `credentials_forbidden` for a credential-shaped
     /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_health_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_health_invalid")?;
         valid_text(&self.provider_id, 63, "provider_health_invalid")?;
         if credential_shaped(&self.schema_version) || credential_shaped(&self.provider_id) {
             return Err(ErrorDto::validation(
@@ -4416,14 +4442,14 @@ impl GetProviderDiscoveryStatusQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_discovery_invalid` for a blank, over-long, or
-    /// control-bearing schema version or attempt reference,
+    /// Returns `provider_discovery_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version or attempt reference,
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, and `credentials_forbidden` for a credential-shaped
     /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_discovery_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_discovery_invalid")?;
         if let Some(attempt_id) = &self.attempt_id {
             valid_text(attempt_id, 256, "provider_discovery_invalid")?;
         }
@@ -4474,14 +4500,14 @@ impl GetPricingPolicyQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `provider_pricing_query_invalid` for a blank, over-long, or
-    /// control-bearing schema version or model reference,
+    /// Returns `provider_pricing_query_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version or model reference,
     /// `incompatible_protocol_version` for a schema version other than the
     /// current one, and `credentials_forbidden` for a credential-shaped
     /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "provider_pricing_query_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "provider_pricing_query_invalid")?;
         if let Some(model_id) = &self.model_id {
             valid_text(model_id, 63, "provider_pricing_query_invalid")?;
         }
@@ -4732,13 +4758,14 @@ impl GetConfigurationProjectionQueryDto {
     ///
     /// # Errors
     ///
-    /// Returns `configuration_projection_invalid` for a blank, over-long, or
-    /// control-bearing schema version, `incompatible_protocol_version` for a
-    /// schema version other than the current one, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// Returns `configuration_projection_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         valid_text(&self.schema_version, 64, "configuration_projection_invalid")?;
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "configuration_projection_invalid")?;
         if credential_shaped(&self.schema_version) {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -4802,9 +4829,10 @@ impl ConfigurationProjectionDto {
     /// # Errors
     ///
     /// Returns `configuration_projection_invalid` for a blank, over-long, or
-    /// control-bearing field, `incompatible_protocol_version` for a schema
-    /// version other than the current one, and `credentials_forbidden` for a
-    /// credential-shaped value.
+    /// control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
     pub fn validate(&self) -> DtoResult<()> {
         for field in [
             &self.schema_version,
@@ -4816,7 +4844,7 @@ impl ConfigurationProjectionDto {
         ] {
             valid_text(field, 256, "configuration_projection_invalid")?;
         }
-        require_current_schema_version(&self.schema_version)?;
+        require_current_schema_version(&self.schema_version, "configuration_projection_invalid")?;
         if [
             &self.schema_version,
             &self.applied_config_revision_id,
@@ -7767,7 +7795,6 @@ mod tests {
             expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
             expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
             operation_id: "operation-1".to_owned(),
-            source_recheck: true,
         }
     }
 
@@ -7783,7 +7810,6 @@ mod tests {
         ReconcileUnavailableQueueCommandDto {
             session_id: "session-1".to_owned(),
             operation_id: "operation-1".to_owned(),
-            page_cursor: Some("opaque-page-cursor-01".to_owned()),
         }
     }
 
@@ -8393,10 +8419,6 @@ mod tests {
         let reconcile = reconcile_queue_command();
         assert!(reconcile.validate().is_ok());
         round_trip(&reconcile);
-        let mut reconcile_no_cursor = reconcile;
-        reconcile_no_cursor.page_cursor = None;
-        assert!(reconcile_no_cursor.validate().is_ok());
-        round_trip(&reconcile_no_cursor);
 
         // The 8-promotion boundary is enforced on reconciliation pages.
         assert!(reconcile_queue_accepted().validate().is_ok());

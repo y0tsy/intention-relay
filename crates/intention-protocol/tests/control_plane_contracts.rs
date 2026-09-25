@@ -57,7 +57,6 @@ fn control_plane_commands_and_queries_round_trip_through_wire_envelopes() {
             expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
             expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
             operation_id: "operation-1".to_owned(),
-            source_recheck: true,
         }),
         ProtocolCommandDto::RejectProviderCatalogCandidate(
             RejectProviderCatalogCandidateCommandDto {
@@ -69,7 +68,6 @@ fn control_plane_commands_and_queries_round_trip_through_wire_envelopes() {
         ProtocolCommandDto::ReconcileUnavailableQueue(ReconcileUnavailableQueueCommandDto {
             session_id: "session-1".to_owned(),
             operation_id: "operation-1".to_owned(),
-            page_cursor: Some("opaque-page-cursor-01".to_owned()),
         }),
         ProtocolCommandDto::AdmitRecoveredRun(AdmitRecoveredRunCommandDto {
             session_id: "session-1".to_owned(),
@@ -336,6 +334,33 @@ fn control_plane_acceptance_and_query_results_round_trip_through_wire_payloads()
 }
 
 #[test]
+fn removed_control_plane_request_fields_are_absent_from_the_wire() {
+    // D-11 (P2-04): the durable reconciliation marker is the single paging
+    // authority, so the request no longer carries a page cursor.
+    let reconcile = serde_json::to_value(ReconcileUnavailableQueueCommandDto {
+        session_id: "session-1".to_owned(),
+        operation_id: "operation-1".to_owned(),
+    })
+    .expect("reconciliation command serializes");
+    assert!(
+        reconcile.get("page_cursor").is_none(),
+        "the reconciliation request must not carry a page cursor: {reconcile}"
+    );
+    // P3-17: the removal acceptance command never consumed `source_recheck`.
+    let accept = serde_json::to_value(AcceptProviderCatalogRemovalCommandDto {
+        candidate_handle: "candidate-1".to_owned(),
+        expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
+        expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
+        operation_id: "operation-1".to_owned(),
+    })
+    .expect("removal acceptance command serializes");
+    assert!(
+        accept.get("source_recheck").is_none(),
+        "the removal acceptance request must not carry a source recheck: {accept}"
+    );
+}
+
+#[test]
 fn golden_hello_fixtures_remain_decodable_at_the_current_version() {
     // The Slice 2 control-plane surface is additive: the committed M3/M4/M5
     // hello goldens must keep decoding identically at protocol 1.1.
@@ -572,9 +597,25 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
     let blank_reload_status = CONFIGURATION_PROJECTION.replace("\"active\"", "\"   \"");
     let wrong_version = CONFIGURATION_PROJECTION
         .replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
+    // The `major.minor` shape check runs before the version comparison, so a
+    // non-decimal schema version fails with the family's own text-shape error
+    // code instead of `incompatible_protocol_version`.
+    let malformed_command_version = r#"{"schema_version":"banana","session_id":"session-1","profile_id":"profile-1","expected_session_projection_revision":7,"operation_id":"operation-1"}"#;
+    let malformed_query_version =
+        r#"{"schema_version":"banana","page_token":null,"expected_catalog_revision_id":null}"#;
     /// One rejection case: the raw frame, the expected error code, and its decoder.
     type RejectionCase<'a> = (&'a str, &'static str, fn(&str) -> String);
-    let cases: [RejectionCase<'_>; 14] = [
+    let cases: [RejectionCase<'_>; 16] = [
+        (
+            malformed_command_version,
+            "set_session_provider_profile_invalid",
+            decode_error::<SetSessionProviderProfileCommandDto>,
+        ),
+        (
+            malformed_query_version,
+            "provider_catalog_invalid",
+            decode_error::<GetProviderCatalogQueryDto>,
+        ),
         (
             &blank_reload_status,
             "configuration_projection_invalid",
@@ -654,20 +695,46 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
 
 #[test]
 fn control_plane_decode_rejects_a_non_current_schema_version_for_every_family() {
+    /// Rejects a same-major next-minor version and a next-major version for
+    /// one family, and pins every encoded fixture to the exact current
+    /// version so a version bump cannot pass silently.
     fn reject_flipped<T>(value: &T)
     where
         T: serde::Serialize + serde::de::DeserializeOwned + core::fmt::Debug,
     {
+        let current = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
+        let current_text = format!("{}.{}", current.major(), current.minor());
         let wire = serde_json::to_string(value).expect("control-plane value encodes");
-        let flipped = wire.replace("\"schema_version\":\"1.1\"", "\"schema_version\":\"9.9\"");
-        assert_ne!(
-            wire, flipped,
-            "the encoded frame must carry the exact current schema version"
+        let current_field = format!("\"schema_version\":\"{current_text}\"");
+        assert!(
+            wire.contains(&current_field),
+            "the encoded frame must carry the exact current schema version {current_text}"
         );
-        let error = decode_error::<T>(&flipped);
+        // A same-major, next-minor version is rejected: there is no prefix or
+        // major-only tolerance. The fixture also stays loud on a version
+        // bump: when the current minor advances, this exact value becomes the
+        // current version and the rejection assertion fails instead of
+        // testing a stale mismatch.
+        let next_minor = format!(
+            "\"schema_version\":\"{}.{}\"",
+            current.major(),
+            current.minor() + 1
+        );
+        let error = decode_error::<T>(&wire.replace(&current_field, &next_minor));
         assert!(
             error.contains("incompatible_protocol_version"),
-            "expected a typed version rejection in {error}"
+            "expected a typed same-major version rejection in {error}"
+        );
+        // A different-major version is rejected too.
+        let next_major = format!(
+            "\"schema_version\":\"{}.{}\"",
+            current.major() + 1,
+            current.minor()
+        );
+        let error = decode_error::<T>(&wire.replace(&current_field, &next_major));
+        assert!(
+            error.contains("incompatible_protocol_version"),
+            "expected a typed different-major version rejection in {error}"
         );
     }
 

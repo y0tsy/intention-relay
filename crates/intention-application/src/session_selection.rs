@@ -8,10 +8,13 @@
 //! driver handle, credential, SDK resource, or raw configuration crosses a
 //! public boundary.
 //!
-//! Durable event-stream append for control-plane events (for example
-//! `SessionProviderProfileChangedEventDto`) is not yet exposed by the storage
-//! surface; the services construct the protocol event DTOs where applicable
-//! and the durable append is a later storage zone.
+//! Control-plane events are constructed by the service that commits the
+//! change and published through a DTO-only boundary port: for example,
+//! `SessionProfileService::set` publishes one
+//! `SessionProviderProfileChangedEventDto` through
+//! `SessionProviderProfileChangePort` when the durable default changed. The
+//! durable append and the subscriber delivery are owned by the port's
+//! implementation outside this crate.
 
 use intention_domain::{
     CredentialTransportMode as DomainCredentialTransportMode, ProviderSelectionV1,
@@ -27,8 +30,9 @@ use intention_protocol::contract_families::{
     ProviderReadinessDto, ReconcileUnavailableQueueAcceptedDto,
     ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
     RejectProviderCatalogCandidateCommandDto, ResolvedProviderProfileDto,
-    ResolvedRunProviderSelectionDto, SessionProviderProfileDto,
-    SetSessionProviderProfileAcceptedDto, SetSessionProviderProfileCommandDto, UsageAggregationDto,
+    ResolvedRunProviderSelectionDto, SessionProviderProfileChangedEventDto,
+    SessionProviderProfileDto, SetSessionProviderProfileAcceptedDto,
+    SetSessionProviderProfileCommandDto, UsageAggregationDto,
 };
 use intention_storage::{
     AdmitHeldRecoveredRunInputDto, HeldRunAdmissionStateDto, HeldRunRepositoryDto,
@@ -240,6 +244,24 @@ pub trait ControlPlaneReadinessPort {
     fn readiness(&self) -> DtoResult<CatalogReadiness>;
 }
 
+/// Publishes one committed session provider-profile change.
+///
+/// The service constructs the typed protocol event after the durable default
+/// commits and hands it to this port; the implementation owns the durable
+/// append and the subscriber notification. No credential, path, or private
+/// handle crosses this boundary.
+pub trait SessionProviderProfileChangePort {
+    /// Publishes one committed session provider-profile change.
+    ///
+    /// # Errors
+    ///
+    /// Returns the port's typed publication error.
+    fn publish_session_provider_profile_changed(
+        &self,
+        event: SessionProviderProfileChangedEventDto,
+    ) -> DtoResult<()>;
+}
+
 /// The degraded-mode gate: rejects provider state changes while degraded.
 pub struct DegradedModeService;
 
@@ -415,23 +437,31 @@ impl<'a> SessionProfileService<'a> {
     /// `session_profile_revision_mismatch` before any write. The operation is
     /// idempotent by operation identity, and a same-profile request is a
     /// `changed = false` no-op that never rewrites existing runs or queued
-    /// turns.
+    /// turns. A committed change publishes exactly one
+    /// `SessionProviderProfileChangedEventDto` through the change port; a
+    /// no-op publishes nothing.
     ///
     /// # Errors
     ///
     /// Returns `execution_not_ready` while degraded, the admission port's
     /// typed resolution error, `session_profile_revision_mismatch` for a stale
-    /// expected revision, or the durable storage error.
+    /// expected revision, the durable storage error, or the change port's
+    /// typed publication error.
     pub fn set(
         &self,
         command: SetSessionProviderProfileCommandDto,
         port: &impl CatalogAdmissionPort,
+        events: &impl SessionProviderProfileChangePort,
         now: u64,
     ) -> DtoResult<SetSessionProviderProfileAcceptedDto> {
         command.validate()?;
         DegradedModeService.assert_execution_ready(&self.readiness.readiness()?)?;
         let session_id = SessionId::parse(&command.session_id)?;
         let resolved = port.resolve_enabled_profile(&command.profile_id)?;
+        let previous_profile_id = self
+            .defaults
+            .get_session_provider_profile(session_id)?
+            .map_or_else(|| PROFILE_UNSET.to_owned(), |default| default.profile_id);
         let outcome = self
             .defaults
             .set_session_provider_profile(SetSessionProviderProfileInputDto {
@@ -451,6 +481,17 @@ impl<'a> SessionProfileService<'a> {
                     error
                 }
             })?;
+        if outcome.changed {
+            let event = SessionProviderProfileChangedEventDto {
+                session_id: command.session_id.clone(),
+                previous_profile_id,
+                profile_id: command.profile_id.clone(),
+                session_projection_revision: outcome.projection_revision,
+                occurred_at: now,
+            };
+            event.validate()?;
+            events.publish_session_provider_profile_changed(event)?;
+        }
         Ok(SetSessionProviderProfileAcceptedDto {
             session_id: command.session_id,
             changed: outcome.changed,
