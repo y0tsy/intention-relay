@@ -542,6 +542,18 @@ fn send_command(
     }
 }
 
+/// Sends one typed protocol command with an explicit capability advertisement.
+fn send_command_with_hello(
+    endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
+    command: ProtocolCommandDto,
+) -> DtoResult<ProtocolCommandResultDto> {
+    match send_payload(endpoint, hello, ProtocolRequestPayloadDto::Command(command))? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
+        _ => Err(invalid_response()),
+    }
+}
+
 /// Sends one typed protocol query with an explicit capability advertisement.
 fn send_query(
     endpoint: &LocalEndpoint,
@@ -778,6 +790,25 @@ fn real_daemon_control_plane_gate_accepts_the_client_capability_advertisement() 
     .expect("the real daemon answers the gated query");
     match rejected {
         ProtocolQueryResultDto::Rejected(error) => {
+            assert_eq!(error.code(), "provider_profiles_capability_required");
+        }
+        other => panic!("a peer without the capability must be rejected, got {other:?}"),
+    }
+
+    // The same gate rejects a gated command from a baseline peer before any
+    // effect, through the same negotiated request path the positive command
+    // above uses.
+    let rejected = send_command_with_hello(
+        &host.endpoint,
+        baseline_hello(),
+        ProtocolCommandDto::ReconcileUnavailableQueue(ReconcileUnavailableQueueCommandDto {
+            session_id: session_id.to_string(),
+            operation_id: "op-w2b-reconcile-baseline".to_owned(),
+        }),
+    )
+    .expect("the real daemon answers the gated command");
+    match rejected {
+        ProtocolCommandResultDto::Rejected(error) => {
             assert_eq!(error.code(), "provider_profiles_capability_required");
         }
         other => panic!("a peer without the capability must be rejected, got {other:?}"),

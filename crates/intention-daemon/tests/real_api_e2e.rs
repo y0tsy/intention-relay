@@ -47,7 +47,8 @@
 #![allow(
     clippy::expect_used,
     clippy::panic,
-    reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences for precise diagnostics."
+    clippy::print_stderr,
+    reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
 )]
 
 use std::path::{Path, PathBuf};
@@ -100,31 +101,43 @@ const REPLAY_DEADLINE: Duration = Duration::from_secs(15);
 /// The bounded deadline for one synchronous session snapshot read.
 const SESSION_READ_DEADLINE: Duration = Duration::from_secs(15);
 
+/// The bounded window that proves a killed daemon process has exited before
+/// the harness continues.
+const KILL_DEADLINE: Duration = Duration::from_secs(5);
+
 /// The bounded attempts one live tool turn may consume before it fails.
 const TOOL_TURN_ATTEMPTS: u8 = 3;
 
-// Worst-case live-channel budget: the six positive tool turns plus the negative
-// credential run, each allowed `TOOL_TURN_ATTEMPTS` attempts of `TURN_DEADLINE`
-// (7 x 3 x 180 s = 3780 s = 63 min), two `READINESS_DEADLINE` daemon starts
-// (60 s), the hard-kill window (5 s), the bounded post-restart subscribe, the
-// quiet window, the bounded replay observations, and the bounded session reads
-// (about 1 min) add up to roughly 66 minutes.
+// Worst-case live-channel budget: 4912 seconds (about 82 minutes), recomputed
+// from the constants above, the bounded synchronous transport calls, and the
+// harness structure:
+// - 7 tool runs (the six positive tool turns plus the negative credential
+//   run) x `TOOL_TURN_ATTEMPTS` 3 attempts x `TURN_DEADLINE` 180 s = 3780 s;
+// - the bounded `create_session` and `send_user_turn` of every attempt:
+//   21 attempts x 2 calls x 20.5 s = 861 s;
+// - three `READINESS_DEADLINE` daemon starts (3 x 30 s = 90 s);
+// - three `KILL_DEADLINE` windows (3 x 5 s = 15 s);
+// - the bounded post-restart subscribe (15 s), the quiet window (1 s), the
+//   bounded replay observations (3 x 15 s = 45 s), and the seven bounded
+//   session snapshots (7 x 15 s = 105 s).
 //
 // Every synchronous command (`client.health`, `create_session`,
 // `send_user_turn`, and the session reads) is additionally bounded by the
-// transport I/O timeout: one call spends at most the transport's 500 ms
-// connect wait plus two transport read timeouts (one for the hello, one for
-// the response) of 10 s each, which is at most 20.5 s. A daemon that accepts
-// connections and never answers therefore fails the readiness deadline plus
-// one bounded health call per `wait_until_ready` (2 x (30 s + 20.5 s)) and
-// then the first bounded `create_session` or `send_user_turn` (20.5 s): the
-// harness reports its own diagnostic within about two minutes instead of
-// hanging until the CI timeout.
-// `.github/workflows/real-api-e2e.yml` keeps its run step at 90 minutes and
-// its job at 120 minutes so a degraded live run reports the harness diagnostic
-// ("did not record a succeeded <tool> call within 3 turns") instead of an
-// opaque GitHub timeout; a change to any budget constant must keep that
-// relation.
+// transport I/O timeout: one call spends at most `CONNECT_TIMEOUT` 500 ms plus
+// two `SYNC_IO_TIMEOUT` reads (one for the hello, one for the response) of
+// 10 s each, which is at most 20.5 s. A daemon that accepts connections and
+// never answers therefore fails the readiness deadline plus one bounded health
+// call per `wait_until_ready` and then the first bounded `create_session` or
+// `send_user_turn`: the harness reports its own diagnostic within about two
+// minutes instead of hanging until the CI timeout.
+//
+// `.github/workflows/real-api-e2e.yml` gives the run step 120 minutes and the
+// job 150 minutes: the 82-minute worst case leaves a 38-minute step margin for
+// the build, and the job keeps a 30-minute overhead above the step. A degraded
+// live run reports the harness diagnostic ("did not record a succeeded <tool>
+// call within 3 turns") instead of an opaque GitHub timeout; a change to any
+// budget constant must keep that relation, and `quality/self_test.py`
+// (`test_real_api_e2e_budget_matches_workflow_timeouts`) recomputes it.
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -534,21 +547,40 @@ impl LiveE2eHost {
         ));
     }
 
+    /// Kills the current daemon process within the bounded kill window.
+    ///
+    /// The first signal normally reaps the child on the first poll. When it
+    /// does not, the hard kill is retried and the fallback reap is bounded by
+    /// the same deadline, so a process that never becomes reapable produces
+    /// this harness diagnostic instead of hanging the live pass until the CI
+    /// timeout.
     fn kill_daemon(&mut self) {
         let Some(mut child) = self.daemon.take() else {
             return;
         };
+        let deadline = Instant::now() + KILL_DEADLINE;
         let _ = child.kill();
-        let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             if child.try_wait().ok().flatten().is_some() {
-                let _ = child.wait();
                 return;
             }
             thread::sleep(Duration::from_millis(20));
         }
         let _ = child.kill();
-        let _ = child.wait();
+        while Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        // `LiveE2eHost::drop` runs this on the unwind path too, where a panic
+        // would abort the process and hide the original failure.
+        let diagnostic = "the daemon process exits within the bounded kill window";
+        if std::thread::panicking() {
+            eprintln!("real-api-e2e: {diagnostic}");
+        } else {
+            panic!("{diagnostic}");
+        }
     }
 
     /// Returns the captured daemon stdout/stderr text.
@@ -1296,21 +1328,31 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
     .await;
 
     // `write`: the real registry creates the file with exactly those bytes.
+    // Every attempt removes the target first and the effect requires the
+    // exact bytes, so neither a stale artifact from an earlier attempt nor a
+    // run that wrote elsewhere can satisfy the turn.
     let written = format!("written by the live provider: {token}");
     let written_file = host.workspace.path().join("e2e-written.txt");
-    let (write_session, write_run) = drive_tool_turn(
+    let reseed_written_file = || match std::fs::remove_file(&written_file) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            panic!("the write fixture target is removed before every attempt: {error}")
+        }
+    };
+    let (write_session, write_run) = drive_tool_turn_with(
         &host,
         "write",
         &format!(
             "Use the write tool with the arguments {} to create that workspace file exactly as given.",
             serde_json::json!({"path": "e2e-written.txt", "content": written})
         ),
+        &reseed_written_file,
         &|run| {
             let Ok(written_bytes) = std::fs::read_to_string(&written_file) else {
                 return false;
             };
-            written_bytes.contains(&token)
-                && written_bytes.contains("written by the live provider")
+            written_bytes == written
                 && run.succeeded_contents("write").join("\n")
                     == format!("{} bytes", written_bytes.len())
         },

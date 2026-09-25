@@ -40,11 +40,12 @@ jobs:
   e2e:
     name: real-api-e2e
     runs-on: ubuntu-24.04
-    # Covers the 90-minute live-run step plus checkout, cache restore, tool
+    # Covers the 120-minute live-run step plus checkout, cache restore, tool
     # installation, and report upload. This job timeout and the run step
     # timeout must stay above the worst-case harness budget documented next to
-    # the timing constants in crates/intention-daemon/tests/real_api_e2e.rs.
-    timeout-minutes: 120
+    # the timing constants in crates/intention-daemon/tests/real_api_e2e.rs;
+    # quality/self_test.py binds all four values.
+    timeout-minutes: 150
     env:
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: "0"
@@ -93,10 +94,12 @@ jobs:
 
       - name: Run real provider API end-to-end tests
         # Worst-case harness budget: six positive tool turns plus the negative
-        # credential run, each up to three 180-second attempts, two 30-second
-        # daemon starts, and the bounded replay and session-read windows come
-        # to about 66 minutes; the rest of this step covers the build.
-        timeout-minutes: 90
+        # credential run, each up to three 180-second attempts, the bounded
+        # synchronous session calls, three 30-second daemon starts, and the
+        # bounded replay, kill, and session-read windows come to about 82
+        # minutes; the rest of this step covers the build. quality/self_test.py
+        # recomputes the budget against this timeout and the job timeout.
+        timeout-minutes: 120
         env:
           INTENTION_REAL_API_KEY: ${{ secrets.REAL_API_E2E_PROVIDER_KEY }}
         run: make e2e-real-api

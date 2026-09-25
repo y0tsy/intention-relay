@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -1449,6 +1450,107 @@ def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
         raise RuntimeError("coverage runner must check a workspace aggregate with the metadata snapshot")
 
 
+def test_coverage_daemon_profile_normalization(root: Path) -> None:
+    """Equivalent daemon profiles collapse; distinct tuples still get reports."""
+    namespace = {
+        "__file__": str(root / "quality/run_coverage.py"),
+        "__name__": "quality.run_coverage",
+    }
+    exec((root / "quality/run_coverage.py").read_text(encoding="utf-8"), namespace)
+    captured: list[tuple[str, str, list[str]]] = []
+    payload = json.dumps(
+        {
+            "packages": [
+                {
+                    "name": crate,
+                    "manifest_path": str(root / "crates" / crate / "Cargo.toml"),
+                }
+                for crate in ("intention-types", "intention-daemon")
+            ],
+        }
+    )
+
+    class FakeCompleted:
+        def __init__(self, returncode: int, stdout: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run_command(command: list[str], **kwargs: object) -> FakeCompleted:
+        if command[:2] == ["cargo", "metadata"]:
+            return FakeCompleted(0, payload)
+        captured.append(
+            (str(kwargs.get("crate", "")), str(kwargs.get("profile", "")), list(command))
+        )
+        return FakeCompleted(0)
+
+    namespace["run_command"] = fake_run_command
+    features = root / "quality" / "features.toml"
+    snapshot = namespace["metadata_snapshot_path"](root)
+    prior_snapshot = snapshot.read_bytes() if snapshot.is_file() else None
+    previous_argv = sys.argv
+    sys.argv = ["quality/run_coverage.py"]
+    try:
+        with modified(features):
+            # An enabled critical combination carries a genuinely distinct
+            # flag tuple: every crate the daemon normalization does not cover
+            # must still run it under its own report name, so widening the
+            # normalization to drop it fails this fixture.
+            features.write_text(
+                features.read_text(encoding="utf-8")
+                + '\n[[critical_combinations]]\nname = "extra"\n'
+                + 'features = ["intention-provider-openrouter"]\n'
+                + "enabled = true\n",
+                encoding="utf-8",
+            )
+            namespace["main"]()
+    finally:
+        if prior_snapshot is None:
+            snapshot.unlink(missing_ok=True)
+        else:
+            snapshot.write_bytes(prior_snapshot)
+        sys.argv = previous_argv
+    collects: dict[str, dict[str, list[str]]] = {}
+    for crate, profile, command in captured:
+        if command[:1] == ["cargo"]:
+            collects.setdefault(crate, {})[profile] = command
+    daemon = collects.get("intention-daemon", {})
+    if set(daemon) != {"default"}:
+        raise RuntimeError(
+            f"equivalent daemon profiles must collapse to the first report: {sorted(daemon)}"
+        )
+    daemon_command = daemon["default"]
+    if "--all-features" not in daemon_command or "--no-default-features" in daemon_command:
+        raise RuntimeError(
+            "the surviving daemon report must carry the normalized all-features tuple: "
+            f"{daemon_command!r}"
+        )
+    if str(root / "quality" / "reports" / "coverage-default-intention-daemon.json") not in daemon_command:
+        raise RuntimeError(
+            f"daemon equivalence must keep the first, default report name: {daemon_command!r}"
+        )
+    other = collects.get("intention-types", {})
+    if set(other) != {"default", "no_default", "all", "critical-extra"}:
+        raise RuntimeError(
+            f"distinct coverage tuples must still produce their own reports: {sorted(other)}"
+        )
+    distinct_flags = {
+        "default": [],
+        "no_default": ["--no-default-features"],
+        "all": ["--all-features"],
+        "critical-extra": ["--features", "intention-provider-openrouter"],
+    }
+    for profile, flags in distinct_flags.items():
+        command = other[profile]
+        report = root / "quality" / "reports" / f"coverage-{profile}-intention-types.json"
+        if str(report) not in command:
+            raise RuntimeError(f"{profile} must keep its own report path: {command!r}")
+        for flag in flags:
+            if flag not in command:
+                raise RuntimeError(
+                    f"{profile} must run with its declared flag {flag!r}: {command!r}"
+                )
+
+
 def test_metrics_manifest_start_clears_stale_events(root: Path) -> None:
     reports = root / "quality" / "reports"
     reports.mkdir(parents=True, exist_ok=True)
@@ -1671,6 +1773,123 @@ def test_real_api_e2e_target_is_opt_in_only(root: Path) -> None:
         )
 
 
+def rust_duration_constant(source: str, name: str, unit: str) -> int:
+    """Return one Rust `Duration` constant declared from an integer literal."""
+    marker = f"const {name}: Duration = Duration::from_{unit}("
+    start = source.find(marker)
+    if start < 0:
+        raise RuntimeError(f"the source must declare {name}")
+    remainder = source[start + len(marker):]
+    end = remainder.find(")")
+    if end < 0:
+        raise RuntimeError(f"the {name} declaration is malformed")
+    literal = remainder[:end].strip()
+    if not literal.isdigit():
+        raise RuntimeError(f"the {name} declaration is not an integer literal: {literal!r}")
+    return int(literal)
+
+
+def rust_u8_constant(source: str, name: str) -> int:
+    """Return one Rust `u8` constant declared from an integer literal."""
+    match = re.search(rf"const {name}: u8 = (\d+);", source)
+    if match is None:
+        raise RuntimeError(f"the source must declare {name}")
+    return int(match.group(1))
+
+
+def real_api_e2e_timeouts(workflow_text: str) -> tuple[int, int]:
+    """Return the live workflow's (run step, job) `timeout-minutes` values."""
+    run_step_name = "Run real provider API end-to-end tests"
+    in_run_step = False
+    step_timeout = None
+    job_timeout = None
+    for line in workflow_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- name:"):
+            in_run_step = run_step_name in stripped
+        if not stripped.startswith("timeout-minutes:"):
+            continue
+        value_text = stripped.split(":", 1)[1].strip()
+        if not value_text.isdigit():
+            raise RuntimeError(f"a workflow timeout-minutes value is not an integer: {stripped!r}")
+        if in_run_step:
+            step_timeout = int(value_text)
+        elif job_timeout is None:
+            job_timeout = int(value_text)
+    if step_timeout is None or job_timeout is None:
+        raise RuntimeError("the real-api-e2e workflow must declare its run step and job timeouts")
+    return step_timeout, job_timeout
+
+
+def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
+    """The declared live-harness budget stays under the workflow timeouts.
+
+    The worst case is recomputed from the harness timing constants, the
+    transport's bounded synchronous-call cost, and the structural counts of
+    both live tests. The declared budget comment and the workflow's step and
+    job timeouts must keep the same relation, so a change to any budget
+    constant or to either timeout fails until the relation is restored.
+    """
+    harness = (root / "crates/intention-daemon/tests/real_api_e2e.rs").read_text(encoding="utf-8")
+    declared = re.search(r"Worst-case live-channel budget: (\d+) seconds", harness)
+    if declared is None:
+        raise RuntimeError("the harness must declare its worst-case live-channel budget in seconds")
+    transport = (root / "crates/intention-transport/src/lib.rs").read_text(encoding="utf-8")
+    turn_deadline = rust_duration_constant(harness, "TURN_DEADLINE", "secs")
+    readiness_deadline = rust_duration_constant(harness, "READINESS_DEADLINE", "secs")
+    replay_quiet_window = rust_duration_constant(harness, "REPLAY_QUIET_WINDOW", "secs")
+    replay_deadline = rust_duration_constant(harness, "REPLAY_DEADLINE", "secs")
+    session_read_deadline = rust_duration_constant(harness, "SESSION_READ_DEADLINE", "secs")
+    kill_deadline = rust_duration_constant(harness, "KILL_DEADLINE", "secs")
+    attempts = rust_u8_constant(harness, "TOOL_TURN_ATTEMPTS")
+    connect_millis = rust_duration_constant(transport, "CONNECT_TIMEOUT", "millis")
+    sync_io_seconds = rust_duration_constant(transport, "SYNC_IO_TIMEOUT", "secs")
+    # Structural counts of the two live tests: six advertised tool turns plus
+    # the negative credential run, one readiness wait per test plus the
+    # post-restart restart, one bounded kill window per daemon start and test
+    # drop, two synchronous calls per attempt, and one snapshot read per
+    # session.
+    tool_runs = 7
+    readiness_waits = 3
+    kill_windows = 3
+    synchronous_calls_per_attempt = 2
+    session_snapshots = 7
+    synchronous_call_millis = connect_millis + 2 * sync_io_seconds * 1_000
+    worst_case_millis = (
+        tool_runs * attempts * turn_deadline * 1_000
+        + tool_runs * attempts * synchronous_calls_per_attempt * synchronous_call_millis
+        + readiness_waits * readiness_deadline * 1_000
+        + kill_windows * kill_deadline * 1_000
+        + replay_deadline * 1_000
+        + replay_quiet_window * 1_000
+        + attempts * replay_deadline * 1_000
+        + session_snapshots * session_read_deadline * 1_000
+    )
+    if worst_case_millis != int(declared.group(1)) * 1_000:
+        raise RuntimeError(
+            "the declared live-channel budget must equal the recomputed worst case: "
+            f"declared {declared.group(1)} s, recomputed {worst_case_millis // 1_000} s"
+        )
+    workflow = (root / ".github/workflows/real-api-e2e.yml").read_text(encoding="utf-8")
+    step_timeout, job_timeout = real_api_e2e_timeouts(workflow)
+    worst_case_minutes = -(-worst_case_millis // 60_000)
+    # The step must keep at least 30 minutes above the worst case for the
+    # build, and the job at least 30 minutes above the step for checkout,
+    # cache restore, tool installation, and report upload.
+    minimum_step_margin = 30
+    minimum_job_overhead = 30
+    if step_timeout < worst_case_minutes + minimum_step_margin:
+        raise RuntimeError(
+            "the live-run step timeout must cover the worst-case budget plus the build "
+            f"margin: {step_timeout} < {worst_case_minutes} + {minimum_step_margin}"
+        )
+    if job_timeout < step_timeout + minimum_job_overhead:
+        raise RuntimeError(
+            "the live job timeout must cover the step plus its overhead: "
+            f"{job_timeout} < {step_timeout} + {minimum_job_overhead}"
+        )
+
+
 def test_slice2_tag_registry_parity(root: Path) -> None:
     adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
     text = adr.read_text(encoding="utf-8")
@@ -1726,12 +1945,13 @@ def test_slice2_test_targets_declared(root: Path) -> None:
         "m5_control_plane_config",
         "m5_catalog_runtime",
         "m5_control_plane_runtime",
+        "m5_session_selection",
         "control_plane_client",
         "session_selection_client",
         "m6_reasoning_surface",
         "sqlite_contracts",
     ):
-        if target not in text:
+        if f"tests/{target}.rs" not in text:
             raise RuntimeError(f"ADR 0037 must declare the test target {target!r}")
 
 
@@ -1816,6 +2036,7 @@ def main() -> None:
         test_coverage_metadata_invalid_snapshot,
         test_coverage_metadata_escape_rejected,
         test_coverage_metadata_collected_once_and_forwarded,
+        test_coverage_daemon_profile_normalization,
         test_missing_feature_profile,
         test_supply_chain_policy_failures,
         test_secret_fixture,
@@ -1825,6 +2046,7 @@ def main() -> None:
         test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
         test_real_api_e2e_workflow_is_manual_only,
         test_real_api_e2e_target_is_opt_in_only,
+        test_real_api_e2e_budget_matches_workflow_timeouts,
         test_slice2_tag_registry_parity,
         test_slice2_storage_schema_declared_single_live,
         test_slice2_protocol_versions_declared,

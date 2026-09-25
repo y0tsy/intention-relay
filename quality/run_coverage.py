@@ -108,6 +108,13 @@ def main() -> None:
         if not combinations:
             raise ValueError(f"coverage profile {arguments.profile!r} is not configured")
 
+    # `cargo llvm-cov` merges every profile data file left in
+    # target/llvm-cov-target, so data from an interrupted run mixes
+    # instrumentation from an older build into the merge. The report then
+    # counts regions whose counts were never merged, and a crate can appear
+    # tens of points below its real coverage. Run `make
+    # coverage-artifacts-clean` after interrupting a coverage pass; the
+    # Makefile does it after a passing pass.
     REPORTS.mkdir(parents=True, exist_ok=True)
     # Collect the locked workspace metadata snapshot once; every checker
     # invocation below receives the same snapshot so source-root resolution
