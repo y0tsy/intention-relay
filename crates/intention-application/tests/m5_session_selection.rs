@@ -39,11 +39,13 @@ use intention_protocol::contract_families::{
     AcceptProviderCatalogRemovalAcceptedDto, AcceptProviderCatalogRemovalCommandDto,
     AdmitRecoveredRunAcceptedDto, AdmitRecoveredRunCommandDto, CredentialTransportMode,
     GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto, GetProviderUsageQueryDto,
-    GetSessionProviderProfileQueryDto, ProviderCatalogActivationState,
-    ProviderCatalogDegradedReason, ProviderProfileUnavailableReason,
+    GetSessionProviderProfileQueryDto, MAX_PROVIDER_USAGE_IDENTITIES,
+    ProviderCatalogActivationState, ProviderCatalogDegradedReason,
+    ProviderProfileUnavailableReason, ProviderUsageAggregationsDto,
     ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateAcceptedDto,
     RejectProviderCatalogCandidateCommandDto, ResolvedProviderProfileDto,
     SessionProviderProfileChangedEventDto, SetSessionProviderProfileCommandDto,
+    UsageAggregationDto,
 };
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
@@ -2522,10 +2524,53 @@ fn get_maps_catalog_not_ready_to_catalog_not_active() {
 }
 
 #[test]
-fn get_maps_tombstoned_profiles_to_disabled() {
-    assert_eq!(
-        unavailable_reason("provider_profile_tombstoned"),
-        Some(ProviderProfileUnavailableReason::ProfileDisabled)
+fn the_removed_admission_tombstone_code_stays_out_of_the_workspace() {
+    // R36: the tombstoned-profile admission error had no remaining producer
+    // once the catalog's admission authority became the current active
+    // membership, so its application-side mappings were deleted. This guard
+    // fails if the removed vocabulary returns anywhere under `crates`, and it
+    // fails closed when a scanned subtree cannot be read. The needle is
+    // assembled at runtime so this fixture is not its own match.
+    let needle = concat!("provider_profile_", "tombstoned");
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the application crate lives under the workspace crates directory");
+    let mut scanned = 0_usize;
+    let mut unreadable: Vec<String> = Vec::new();
+    let mut pending = vec![crates.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            unreadable.push(directory.display().to_string());
+            continue;
+        };
+        for entry in entries {
+            let path = entry
+                .expect("the crate surface entry must be readable")
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            scanned += 1;
+            let text =
+                std::fs::read_to_string(&path).expect("the crate surface source must be UTF-8");
+            assert!(
+                !text.contains(needle),
+                "the removed admission error code must not return: {}",
+                path.display()
+            );
+        }
+    }
+    assert!(
+        unreadable.is_empty(),
+        "the removed-vocabulary guard fails closed: these subtrees must be readable: {unreadable:?}"
+    );
+    assert!(
+        scanned >= 100,
+        "the removed-vocabulary guard must scan the workspace crates (scanned {scanned})"
     );
 }
 
@@ -2770,6 +2815,68 @@ fn by_profile_rejects_an_invalid_query() {
         .by_profile(query)
         .expect_err("inverted period is rejected");
     assert_eq!(error.code(), "provider_usage_invalid");
+}
+
+#[test]
+fn by_profile_rejects_more_identities_than_the_usage_set_bound() {
+    // R54 (D-04 residual): the closed aggregation set is bounded at
+    // `MAX_PROVIDER_USAGE_IDENTITIES` identities. A period that produced more
+    // distinct identities must fail closed instead of projecting an over-limit
+    // set.
+    let usage = FakeUsage::new();
+    for index in 0..=MAX_PROVIDER_USAGE_IDENTITIES {
+        usage.seed_aggregate("default", &format!("rev-{index:04}"), "model-a", 100, 200);
+    }
+    let error = UsageService::new(&usage)
+        .by_profile(usage_query("default"))
+        .expect_err("an over-limit identity set is rejected");
+    assert_eq!(error.code(), "provider_usage_invalid");
+}
+
+#[test]
+fn an_aggregation_set_rejects_a_duplicate_identity() {
+    // R54 (D-04 residual): the strict identity order rejects an equal pair, so
+    // a duplicate identity can never be projected as two entries that each
+    // carry a partial total.
+    let entry = usage_aggregation("default", "rev-0001", "model-a");
+    let set = ProviderUsageAggregationsDto {
+        entries: vec![entry.clone(), entry],
+    };
+    let error = set
+        .validate()
+        .expect_err("a duplicate identity is rejected");
+    assert_eq!(error.code(), "provider_usage_unsorted");
+}
+
+#[test]
+fn an_aggregation_set_rejects_unsorted_entries() {
+    // R54 (D-04 residual): identities must be strictly sorted by revision and
+    // model id, so a projection that reports durable row order is rejected
+    // instead of becoming the published set.
+    let set = ProviderUsageAggregationsDto {
+        entries: vec![
+            usage_aggregation("default", "rev-0002", "model-b"),
+            usage_aggregation("default", "rev-0001", "model-a"),
+        ],
+    };
+    let error = set
+        .validate()
+        .expect_err("unsorted identities are rejected");
+    assert_eq!(error.code(), "provider_usage_unsorted");
+}
+
+fn usage_aggregation(profile_id: &str, revision: &str, model: &str) -> UsageAggregationDto {
+    UsageAggregationDto {
+        profile_id: profile_id.to_owned(),
+        provider_profile_revision_id: revision.to_owned(),
+        model_id: model.to_owned(),
+        request_count: 5,
+        input_units: 10,
+        output_units: 20,
+        reasoning_units: 30,
+        usage_period_start: 100,
+        usage_period_end: 200,
+    }
 }
 
 // ============================================================================

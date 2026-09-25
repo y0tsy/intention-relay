@@ -1375,13 +1375,15 @@ fn pending_removal_creation_carries_a_thirty_minute_expiry() {
 }
 
 #[test]
-fn startup_rebuilds_a_pending_removal_candidate_and_acceptance_succeeds() {
-    // PR24-003: after a restart the controller rebuilds the prepared
-    // candidate from durable rows and preserves the real deadline, so
-    // accept/reject work without process memory.
+fn startup_adopts_a_rebuilt_pending_removal_from_durable_rows() {
+    // PR24-003 + R40: the pending removal is durable and the restart is the
+    // operator act the pending state waits for. `startup()` rebuilds the
+    // candidate from durable rows - the dropped controller's process memory
+    // is gone - and adopts it through the normal acceptance path, so the
+    // platform opens `Ready` instead of gated on a crash residue.
     let fake = seeded_catalog();
     let (_, outcome) = removal_controller(&fake, 1_000);
-    let handle = outcome.candidate_handle.expect("removal handle exists");
+    assert_eq!(outcome.candidate_handle.as_deref(), Some("catalog-2"));
 
     let restarted = fake.build_controller(vec![
         responses_factory(Arc::new(AtomicUsize::new(0))),
@@ -1389,85 +1391,12 @@ fn startup_rebuilds_a_pending_removal_candidate_and_acceptance_succeeds() {
     ]);
     let startup = restarted
         .startup(2_000)
-        .expect("startup rebuilds the pending removal");
+        .expect("startup adopts the durable pending removal");
     assert_eq!(
         startup.readiness,
-        intention_application::CatalogReadiness::PendingRemoval {
-            candidate_revision: "2".to_owned(),
-            expires_at: 1_000 + 30 * 60,
-        }
-    );
-    assert_eq!(startup.active_catalog_revision_id, Some(1));
-    let accepted = restarted
-        .accept_pending(
-            handle,
-            "1".to_owned(),
-            "2".to_owned(),
-            "op-after-restart".to_owned(),
-            2_100,
-        )
-        .expect("acceptance works from the rebuilt candidate");
-    assert_eq!(accepted.catalog_revision_id, 2);
-    assert!(matches!(
-        restarted.inspect().expect("inspect succeeds").readiness,
-        intention_application::CatalogReadiness::Ready
-    ));
-}
-
-#[test]
-fn startup_adopts_a_rebuilt_pending_removal_instead_of_blocking_the_open() {
-    // R16 (D-02 residual): a durable pending removal is the crash residue of
-    // the previous process's own startup reconcile. Re-opening with the same
-    // startup document adopts it through the normal acceptance path instead
-    // of returning `provider_catalog_removal_pending_exists` until the
-    // 30-minute expiry.
-    let fake = seeded_catalog();
-    let (_, outcome) = removal_controller(&fake, 1_000);
-    assert_eq!(outcome.candidate_handle.as_deref(), Some("catalog-2"));
-    // Simulated crash: the controller is dropped with the durable pending
-    // removal row still pending.
-    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
-    let startup = restarted
-        .startup(2_000)
-        .expect("startup rebuilds the pending removal");
-    assert!(matches!(
-        startup.readiness,
-        intention_application::CatalogReadiness::PendingRemoval { .. }
-    ));
-
-    // The reconciliation re-proposes exactly the startup document.
-    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
-    let adopted = restarted
-        .prepare_candidate(
-            source(
-                "op-removal",
-                1_024,
-                vec![declaration(
-                    "generic-chat-completion-api",
-                    "model-b",
-                    Some(ENDPOINT),
-                    true,
-                )],
-                candidate(
-                    "generic-chat-completion-api",
-                    "model-b",
-                    ENDPOINT,
-                    &previous,
-                ),
-                previous,
-            ),
-            2_100,
-        )
-        .expect("the rebuilt pending removal is adopted, not rejected as a conflict");
-    assert!(
-        !adopted.changed,
-        "the adopted candidate already is the proposal"
-    );
-    assert!(!adopted.pending_removal);
-    assert_eq!(
-        adopted.readiness,
         intention_application::CatalogReadiness::Ready
     );
+    assert_eq!(startup.active_catalog_revision_id, Some(2));
 
     // The durable state follows the adoption: the candidate is accepted, the
     // previous kind is tombstoned, and the active catalog is the candidate.
@@ -1495,12 +1424,28 @@ fn startup_adopts_a_rebuilt_pending_removal_instead_of_blocking_the_open() {
         .expect("the adopted removal candidate exists");
     assert_eq!(removal_status, ProviderCatalogRemovalStatusDto::Accepted);
 
-    // A same-process pending candidate still awaits the operator: only a
-    // startup-rebuilt candidate is adopted.
-    let fresh = seeded_catalog();
-    let (fresh_controller, _) = removal_controller(&fresh, 1_000);
+    // The adoption is durable: a second restart stays on the adopted revision
+    // instead of rebuilding the same residue again.
+    drop(restarted);
+    let again = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let second = again.startup(3_000).expect("the second restart succeeds");
+    assert_eq!(
+        second.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+    assert_eq!(second.active_catalog_revision_id, Some(2));
+}
+
+#[test]
+fn a_same_process_pending_removal_still_waits_for_the_explicit_resolution() {
+    // R40: only the startup path resolves a durable crash residue. A pending
+    // removal prepared in this process still awaits the explicit accept or
+    // reject, so a later candidate keeps the conflict and rejection stays a
+    // working resolution path.
+    let fake = seeded_catalog();
+    let (controller, _) = removal_controller(&fake, 1_000);
     let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
-    let error = fresh_controller
+    let error = controller
         .prepare_candidate(
             source(
                 "op-removal-2",
@@ -1523,6 +1468,121 @@ fn startup_adopts_a_rebuilt_pending_removal_instead_of_blocking_the_open() {
         )
         .expect_err("a same-process pending candidate still conflicts");
     assert_eq!(error.code(), "provider_catalog_removal_pending_exists");
+    controller
+        .reject_pending(
+            "catalog-2".to_owned(),
+            "op-reject-in-process".to_owned(),
+            1_200,
+        )
+        .expect("the explicit rejection resolves the in-process candidate");
+    assert_eq!(
+        controller.inspect().expect("inspect succeeds").readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "removal_candidate_rejected".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn the_two_change_sequence_observes_the_intermediate_adoption() {
+    // R53 (differ-differ): the two-change sequence is one startup adoption of
+    // the durable pending removal followed by one second change prepared on
+    // top of the revision that adoption committed. The fixture observes the
+    // intermediate adoption itself - the durable removal row and the baseline
+    // the second candidate records - so a regression that skipped the
+    // adoption and prepared the second change directly against revision one
+    // fails here instead of passing on final-state assertions alone.
+    let fake = seeded_catalog();
+    let (_, first) = removal_controller(&fake, 1_000);
+    assert_eq!(first.candidate_handle.as_deref(), Some("catalog-2"));
+    // Simulated crash: only the durable pending removal survives.
+    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let startup = restarted
+        .startup(2_000)
+        .expect("startup adopts the durable pending removal");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+    assert_eq!(
+        startup.active_catalog_revision_id,
+        Some(2),
+        "the adoption is the intermediate step of the two-change sequence"
+    );
+    let adopted_status = fake
+        .state
+        .borrow()
+        .removal_candidates
+        .iter()
+        .find(|candidate| candidate.candidate_handle == "catalog-2")
+        .map(|candidate| candidate.status)
+        .expect("the adopted removal candidate exists");
+    assert_eq!(adopted_status, ProviderCatalogRemovalStatusDto::Accepted);
+
+    // The second change is prepared against the adopted catalog: the source
+    // comparison snapshot is the pre-removal declaration, so the changed kind
+    // classification records one new removal candidate on top of revision
+    // two.
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let second = restarted
+        .prepare_candidate(
+            source(
+                "op-second-change",
+                1_024,
+                vec![declaration(
+                    "generic-chat-completion-api",
+                    "model-c",
+                    Some(ENDPOINT),
+                    true,
+                )],
+                candidate(
+                    "generic-chat-completion-api",
+                    "model-c",
+                    ENDPOINT,
+                    &previous,
+                ),
+                previous,
+            ),
+            2_100,
+        )
+        .expect("the second change prepares on top of the adopted revision");
+    assert!(second.pending_removal);
+    assert_eq!(second.catalog_revision_id, Some(3));
+    assert_eq!(second.candidate_handle.as_deref(), Some("catalog-3"));
+    let second_candidate = fake
+        .state
+        .borrow()
+        .removal_candidates
+        .iter()
+        .find(|candidate| candidate.candidate_handle == "catalog-3")
+        .cloned()
+        .expect("the second removal candidate exists");
+    assert_eq!(
+        second_candidate.active_catalog_revision_id, 2,
+        "the second change is prepared on the revision the adoption committed"
+    );
+    let state = (&fake)
+        .load_provider_catalog_status()
+        .expect("status loads");
+    assert_eq!(state.status, ProviderCatalogStatusDto::PendingRemoval);
+    assert_eq!(state.active_catalog_revision_id, Some(2));
+    assert_eq!(state.candidate_catalog_revision_id, Some(3));
+
+    // The explicit acceptance completes the sequence on the new revision.
+    let accepted = restarted
+        .accept_pending(
+            "catalog-3".to_owned(),
+            "2".to_owned(),
+            "3".to_owned(),
+            "op-second-change-accept".to_owned(),
+            2_200,
+        )
+        .expect("the second candidate accepts on top of the adopted revision");
+    assert_eq!(accepted.catalog_revision_id, 3);
+    assert_eq!(
+        restarted.inspect().expect("inspect succeeds").readiness,
+        intention_application::CatalogReadiness::Ready
+    );
 }
 
 #[test]

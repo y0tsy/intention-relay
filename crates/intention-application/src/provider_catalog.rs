@@ -186,13 +186,6 @@ pub(crate) struct PreparedCandidate {
     pub(crate) default_profile_id: String,
     pub(crate) removed_profile_ids: Vec<String>,
     pub(crate) removed_kind_ids: Vec<String>,
-    /// Whether `startup()` rebuilt this candidate from durable rows.
-    ///
-    /// Only such a candidate is the crash residue of the previous process's
-    /// own proposal; the startup reconcile adopts it through the normal
-    /// acceptance path instead of returning
-    /// `provider_catalog_removal_pending_exists` until its deadline (R16).
-    pub(crate) rebuilt_from_durable: bool,
 }
 
 /// One admission-context entry paired with the private registry.
@@ -326,9 +319,11 @@ where
     ///
     /// Pending removal is durable: startup drives expiry from the durable
     /// deadline, rolls forward an already-accepted removal whose catalog
-    /// acceptance never committed (PR24-004), and otherwise rebuilds the
-    /// prepared candidate and its real deadline from durable rows so
-    /// accept/reject never depend on process memory (PR24-003).
+    /// acceptance never committed (PR24-004), and otherwise adopts the
+    /// candidate rebuilt from durable rows through the normal acceptance path
+    /// (R40), so a crash residue is always resolved here instead of leaving
+    /// the platform gated. The startup-document reconcile that follows
+    /// re-derives the catalog from the current document.
     ///
     /// # Errors
     ///
@@ -336,10 +331,10 @@ where
     /// lock is poisoned. Every other failure degrades to a typed readiness
     /// value instead of aborting startup: a storage failure while reading the
     /// pending-removal row, expiring it, rolling an accepted removal forward,
-    /// or activating the rebuilt registry is reported through
-    /// `blocked(error.code())`, and catalog-material, registry-build, and
-    /// activation-recovery failures keep their documented `Blocked` or
-    /// `ActivationRecoveryRequired` degradation.
+    /// adopting the rebuilt candidate, or activating the rebuilt registry is
+    /// reported through `blocked(error.code())`, and catalog-material,
+    /// registry-build, and activation-recovery failures keep their documented
+    /// `Blocked` or `ActivationRecoveryRequired` degradation.
     pub fn startup(&self, now: u64) -> DtoResult<CatalogStartupOutcomeDto> {
         let mut state = match self.catalog.load_provider_catalog_status() {
             Ok(state) => state,
@@ -405,14 +400,12 @@ where
             Ok(_) => return self.blocked("catalog_state_inconsistent"),
             Err(error) => return self.blocked(error.code()),
         };
-        let (built, admissions) = match self.build_registry_from_material(&material) {
-            Ok(built) => built,
-            Err(error) => return self.blocked(error.code()),
-        };
-        // Rebuild the prepared candidate (when one is still pending) from the
-        // durable candidate material so a later accept/reject works after a
-        // restart, and preserve the real durable deadline in readiness.
-        let (readiness, prepared) = if let Some(pending) = &pending_rebuild {
+        if let Some(pending) = &pending_rebuild {
+            // R40: the durable pending removal is resolved here, before the
+            // startup-document reconcile runs, so a crash residue can never
+            // leave the platform gated. The candidate is rebuilt from durable
+            // rows (never from process memory) and adopted through the normal
+            // acceptance path.
             let candidate_material = match self.catalog.load_prepared_catalog_material() {
                 Ok(candidate_material)
                     if candidate_material.catalog_revision_id
@@ -424,7 +417,6 @@ where
                     return self.blocked("catalog_state_inconsistent_candidate_material");
                 }
             };
-            let deadline = u64::try_from(pending.expires_at).unwrap_or(0);
             let rebuilt = PreparedCandidate {
                 candidate_handle: pending.candidate_handle.clone(),
                 catalog_revision_id: pending.candidate_catalog_revision_id,
@@ -433,31 +425,52 @@ where
                 default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
                 removed_profile_ids: pending.removed_profile_ids.clone(),
                 removed_kind_ids: pending.removed_kind_ids.clone(),
-                rebuilt_from_durable: true,
             };
-            (
-                CatalogReadiness::PendingRemoval {
-                    candidate_revision: pending.candidate_catalog_revision_id.to_string(),
-                    expires_at: deadline,
-                },
-                Some(rebuilt),
-            )
-        } else {
-            (CatalogReadiness::Ready, None)
+            return self.adopt_rebuilt_pending_removal(&rebuilt, now);
+        }
+        let (built, admissions) = match self.build_registry_from_material(&material) {
+            Ok(built) => built,
+            Err(error) => return self.blocked(error.code()),
         };
         self.gate.run_exclusive(|gate| {
-            gate.readiness = readiness;
+            gate.readiness = CatalogReadiness::Ready;
             gate.applied_revision = Some(active);
             gate.active_default_profile_id = material.default_profile_id.clone();
             gate.candidate_catalog_revision_id = state.candidate_catalog_revision_id;
             gate.degraded_reason = state.degraded_reason.clone();
-            gate.prepared = prepared;
+            gate.prepared = None;
             Ok(())
         })?;
         if let Err(error) = self.activate_registry(built, admissions) {
             return self.blocked(error.code());
         }
         self.startup_outcome()
+    }
+
+    /// Adopts one durable pending removal rebuilt at startup (R40).
+    ///
+    /// The restart is the operator act the pending state waits for, so a
+    /// rebuilt pending removal is adopted through the normal acceptance path
+    /// instead of leaving readiness `PendingRemoval` and opening the platform
+    /// gated on a crash residue. The replacement registry and every fallible
+    /// activation precondition are resolved before the durable acceptance, and
+    /// only the infallible swap follows it (R41). The startup-document
+    /// reconcile that runs after this returns re-derives the catalog from the
+    /// current document, so a document that changed again or was reverted
+    /// while the process was down still wins.
+    fn adopt_rebuilt_pending_removal(
+        &self,
+        prepared: &PreparedCandidate,
+        now: u64,
+    ) -> DtoResult<CatalogStartupOutcomeDto> {
+        let operation_id = format!("startup-adopt-{}", prepared.candidate_handle);
+        let accepted = self.gate.run_exclusive(|gate| {
+            self.commit_prepared_acceptance(gate, prepared, operation_id, now)
+        });
+        match accepted {
+            Ok(_) => self.startup_outcome(),
+            Err(error) => self.blocked(error.code()),
+        }
     }
 
     /// Rolls forward one removal acceptance whose catalog acceptance never
@@ -630,11 +643,11 @@ where
     /// pending-removal state with a 30-minute expiry; any other candidate is
     /// auto-accepted and its private registry is activated.
     ///
-    /// A pending removal that `startup()` rebuilt from durable rows is adopted
-    /// through the normal acceptance path instead of returning
-    /// `provider_catalog_removal_pending_exists`, so a restart recovers its own
-    /// crash residue deterministically (R16). A candidate re-derived from the
-    /// same startup document then produces no new revision.
+    /// A pending removal prepared in this process waits for the explicit
+    /// accept/reject, so a later candidate keeps returning
+    /// `provider_catalog_removal_pending_exists` until it is resolved or
+    /// expires; the durable crash residue is adopted by [`Self::startup`]
+    /// itself (R40), never here.
     ///
     /// # Errors
     ///
@@ -654,92 +667,19 @@ where
         // corrected candidate (PR24-003).
         self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
-            // R16 (D-02 residual): only a pending candidate that `startup()`
-            // rebuilt from durable rows is the crash residue of the previous
-            // process's own proposal. The restart is the operator act that
-            // pending state waits for (D-02), so this reconciliation adopts it
-            // deterministically through the normal acceptance path instead of
-            // returning `provider_catalog_removal_pending_exists` until its
-            // 30-minute expiry. A same-process pending candidate still awaits
-            // the operator and keeps the conflict.
-            let rebuilt_pending =
-                if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
-                    if !gate
-                        .prepared
-                        .as_ref()
-                        .is_some_and(|prepared| prepared.rebuilt_from_durable)
-                    {
-                        return Err(catalog_error(
-                            "provider_catalog_removal_pending_exists",
-                            ErrorCategoryDto::Conflict,
-                            "a pending provider catalog removal candidate already exists",
-                        ));
-                    }
-                    true
-                } else {
-                    false
-                };
-            validate_candidate_limits(&source)?;
-            if rebuilt_pending {
-                let adopted = gate.prepared.take().ok_or_else(|| {
-                    catalog_error(
-                        "provider_catalog_state_inconsistent",
-                        ErrorCategoryDto::Unavailable,
-                        "the rebuilt pending removal candidate is missing",
-                    )
-                })?;
-                let acceptance = match self.commit_prepared_acceptance(
-                    gate,
-                    &adopted,
-                    format!("startup-adopt-{}", adopted.candidate_handle),
-                    now,
-                ) {
-                    Ok(acceptance) => acceptance,
-                    Err(error) => {
-                        // The durable pending removal is still recoverable:
-                        // keep the rebuilt candidate so a later attempt in
-                        // this process, or the next restart, does not lose it.
-                        gate.prepared = Some(adopted);
-                        return Err(error);
-                    }
-                };
-                if !matches!(acceptance.readiness, CatalogReadiness::Ready) {
-                    let (issues, truncated, total) = bounded_issues(&source.candidate);
-                    return Ok(CatalogCandidateOutcomeDto {
-                        changed: true,
-                        catalog_revision_id: Some(adopted.catalog_revision_id),
-                        candidate_handle: None,
-                        pending_removal: false,
-                        removal_expires_at: None,
-                        readiness: acceptance.readiness,
-                        issues,
-                        truncated_issues: truncated,
-                        total_issue_count: total,
-                    });
-                }
-                let resolved = source.candidate.safe_snapshot().resolved();
-                let (adopted_kinds, adopted_profiles) =
-                    self.build_candidate_records(&source, resolved)?;
-                if adopted_kinds == adopted.kind_descriptors && adopted_profiles == adopted.profiles
-                {
-                    // The startup document re-derives exactly the adopted
-                    // candidate: the open is complete and no new revision is
-                    // prepared (the adoption itself already advanced the
-                    // durable catalog to the candidate's revision).
-                    let (issues, truncated, total) = bounded_issues(&source.candidate);
-                    return Ok(CatalogCandidateOutcomeDto {
-                        changed: false,
-                        catalog_revision_id: None,
-                        candidate_handle: None,
-                        pending_removal: false,
-                        removal_expires_at: None,
-                        readiness: CatalogReadiness::Ready,
-                        issues,
-                        truncated_issues: truncated,
-                        total_issue_count: total,
-                    });
-                }
+            // A pending removal prepared in this process waits for the
+            // explicit accept/reject, so a later candidate keeps the conflict
+            // until it is resolved or expires. The durable crash residue is
+            // resolved by `startup()` itself before the startup document
+            // reconcile reaches this path (R40).
+            if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
+                return Err(catalog_error(
+                    "provider_catalog_removal_pending_exists",
+                    ErrorCategoryDto::Conflict,
+                    "a pending provider catalog removal candidate already exists",
+                ));
             }
+            validate_candidate_limits(&source)?;
             // The catalog runtime classifies only a provider-kind change as a
             // removal-signaling configuration change: model/endpoint changes
             // are catalog replacement material for this path. Live-reload
@@ -883,7 +823,6 @@ where
                     default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
                     removed_profile_ids,
                     removed_kind_ids,
-                    rebuilt_from_durable: false,
                 });
                 return Ok(CatalogCandidateOutcomeDto {
                     changed: true,

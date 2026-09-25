@@ -13,8 +13,9 @@
 //! `SessionProfileService::set` publishes one
 //! `SessionProviderProfileChangedEventDto` through
 //! `SessionProviderProfileChangePort` when the durable default changed. The
-//! durable append and the subscriber delivery are owned by the port's
-//! implementation outside this crate.
+//! port boundary validates the committed event; Slice 2 keeps no durable copy
+//! of it and writes no durable session-event snapshot, so durable append and
+//! subscriber delivery remain a declared future slice.
 
 use std::collections::BTreeMap;
 
@@ -201,17 +202,16 @@ fn resolved_profile_from_candidate(
 /// Resolves one enabled, ready profile to its complete safe projection.
 ///
 /// Implementations must fail closed with `provider_profile_unavailable`,
-/// `provider_profile_tombstoned`, `provider_configuration_unavailable`, or
-/// `execution_not_ready` when the profile cannot serve. No credential, path,
-/// or private handle crosses this boundary.
+/// `provider_configuration_unavailable`, or `execution_not_ready` when the
+/// profile cannot serve. No credential, path, or private handle crosses this
+/// boundary.
 pub trait CatalogAdmissionPort {
     /// Resolves the active enabled revision of one profile.
     ///
     /// # Errors
     ///
     /// Returns a typed unavailable error when the catalog is not ready, the
-    /// profile is unknown, disabled, tombstoned, or its driver is not
-    /// admitted.
+    /// profile is unknown, disabled, or its driver is not admitted.
     fn resolve_enabled_profile(&self, profile_id: &str) -> DtoResult<ResolvedProfileDto>;
 
     /// Verifies one exact persisted provider-selection registry key.
@@ -220,8 +220,7 @@ pub trait CatalogAdmissionPort {
     /// profile id, provider profile revision id, kind descriptor revision id,
     /// and driver contract revision. Implementations must fail closed when
     /// the catalog is not ready, the exact key is not admitted, the entry is
-    /// disabled or tombstoned, or the persisted driver contract is not the
-    /// admitted one.
+    /// disabled, or the persisted driver contract is not the admitted one.
     ///
     /// # Errors
     ///
@@ -249,9 +248,10 @@ pub trait ControlPlaneReadinessPort {
 /// Publishes one committed session provider-profile change.
 ///
 /// The service constructs the typed protocol event after the durable default
-/// commits and hands it to this port; the implementation owns the durable
-/// append and the subscriber notification. No credential, path, or private
-/// handle crosses this boundary.
+/// commits and hands it to this port; the implementation validates the event
+/// at the session-event boundary and records no durable copy of it. Durable
+/// append and subscriber delivery are a declared future slice. No credential,
+/// path, or private handle crosses this boundary.
 pub trait SessionProviderProfileChangePort {
     /// Publishes one committed session provider-profile change.
     ///
@@ -360,9 +360,7 @@ impl SelectionResolutionService {
 /// Maps one admission failure to the closed runtime-unavailable error.
 fn runtime_unavailable(error: ErrorDto) -> ErrorDto {
     match error.code() {
-        "provider_admission_not_found"
-        | "provider_profile_unavailable"
-        | "provider_profile_tombstoned" => ErrorDto::new(
+        "provider_admission_not_found" | "provider_profile_unavailable" => ErrorDto::new(
             "provider_profile_runtime_unavailable",
             ErrorCategoryDto::Unavailable,
             "the resolved provider profile cannot serve this run",
@@ -559,7 +557,6 @@ fn unavailable_reason_for(error: &ErrorDto) -> ProviderProfileUnavailableReason 
         "catalog_not_ready" | "execution_not_ready" | "provider_catalog_not_active" => {
             ProviderProfileUnavailableReason::CatalogNotActive
         }
-        "provider_profile_tombstoned" => ProviderProfileUnavailableReason::ProfileDisabled,
         "provider_configuration_unavailable" | "provider_profile_runtime_unavailable" => {
             ProviderProfileUnavailableReason::ProviderUnavailable
         }

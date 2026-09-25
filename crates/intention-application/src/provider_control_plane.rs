@@ -106,7 +106,7 @@ pub trait SafeBindingSource: Send + Sync {
     /// # Errors
     ///
     /// Returns a typed error such as `provider_profile_unavailable` when the
-    /// profile is unknown, tombstoned, or its binding cannot be read.
+    /// profile is unknown or its binding cannot be read.
     fn binding(&self, profile_id: &str) -> DtoResult<SafeCompositionBindingDto>;
 }
 
