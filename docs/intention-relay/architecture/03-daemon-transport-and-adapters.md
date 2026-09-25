@@ -196,7 +196,7 @@ At connection time, client and daemon exchange:
 - last observed session event sequence plus optional run scope for subscriptions,
   when available.
 
-An incompatible major protocol version fails closed with `ErrorDto { category: unavailable }`. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads.
+An incompatible major protocol version fails closed with `ErrorDto { category: unavailable }`. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads. This is the transport-handshake category only; a decode-time schema-version rejection at a public DTO boundary is a `validation` failure (architecture 02, "Validation ownership").
 
 M2 subscriptions return either a consistent session snapshot with a contiguous
 event tail or a typed resync instruction. The client reducer accepts ordered

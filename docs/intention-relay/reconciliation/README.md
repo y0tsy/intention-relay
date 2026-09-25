@@ -74,10 +74,11 @@ implementation specification can be prepared:
   content inspection, and per-call cancellation
   ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
 - post-M5 accepted execution directions: raw-TOML/configuration editing, model
-  discovery, arbitrary headers, provider-native preservation, server-side
-  parser, fork tool-result/child-agent execution, export, cross-workspace
-  clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM
-  packaging
+  discovery, arbitrary headers, fork tool-result/child-agent execution, export,
+  cross-workspace clone/rebind, autonomous harness goal mode, post-disconnect
+  work, and RLM packaging; the recorded provider-native preservation and
+  server-side parser directions have no typed contract after the D-16 audit
+  removed them as unconsumed
   ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
 - post-M5 accepted retained-deferral directions: rich MIME/raw kernel output
   projection, physical deletion/GC of historical work, worker/process

@@ -14,10 +14,14 @@ This record freezes and activates only M5+ Slice 2, Control plane. In scope is
 the full control-plane list from the roadmap Slice 2 line: controlled live
 reload; credential rotation; provider health checks; model discovery; pricing
 policy; provider profile UI and raw-TOML/configuration editing; arbitrary
-authentication headers; provider-native preservation controls; server-side
-parser setup; session defaults and per-turn/fork overrides; unavailable-queue
-promotion and reconciliation; `provider_profiles_v1`; pending-removal and
-degraded recovery; and the provider reasoning/catalog surface.
+authentication headers; session defaults and per-turn/fork overrides;
+unavailable-queue promotion and reconciliation; `provider_profiles_v1`;
+pending-removal and degraded recovery; and the provider reasoning/catalog
+surface. The D-16 audit removed the unconsumed provider-native
+preservation-control, server-side-parser, Responses reasoning-mode,
+reasoning-usage, and model-capability-envelope contracts; no
+preservation-control or parser-configuration surface is activated by this
+record.
 
 Out of scope: M6-M9 behavior; any second runtime, registry, scheduler,
 persistence authority, or sandbox; remote continuation; and any M3/M4 rewriting.
@@ -55,13 +59,21 @@ with the family errors:
 
 | Family | Error codes |
 | --- | --- |
-| Negotiation and readiness | `provider_profiles_capability_required`, `execution_not_ready`, `catalog_not_ready`, `provider_profile_runtime_unavailable`, `provider_configuration_unavailable`, `provider_profile_unavailable`, `provider_profile_tombstoned`, `provider_admission_not_found` |
+| Negotiation and readiness | `provider_profiles_capability_required`, `execution_not_ready`, `catalog_not_ready`, `provider_profile_runtime_unavailable`, `provider_configuration_unavailable`, `provider_profile_unavailable`, `provider_admission_not_found` |
 | Profile revisions | `provider_profile_revision_invalid`, `provider_profile_override_invalid`, `provider_profile_revision_mismatch`, `session_profile_revision_mismatch`, `session_provider_default_stale`, `config_revision_mismatch` |
 | Kind, endpoint, and credentials | `provider_kind_immutable_mismatch`, `provider_kind_has_dependents`, `invalid_provider_kind`, `invalid_endpoint`, `credentials_forbidden`, `invalid_digest` |
 | Catalog | `legacy_config_cannot_represent_active_catalog`, `catalog_page_token_stale`, `provider_catalog_projection_invalid`, `candidate_too_large`, `catalog_change_requires_restart` |
 | Reasoning | `provider_reasoning_stream_invalid`, `reasoning_history_unavailable`, `reasoning_history_incompatible`, `reasoning_history_too_large`, `reasoning_output_limit_exceeded` |
 | Context | `context_source_manifest_invalid`, `model_context_projection_invalid`, `model_context_projection_too_large` |
 | Rotation, health, and discovery | `credential_rotation_frozen_meaning_mismatch`, `credential_rotation_source_unavailable`, `provider_health_unavailable`, `provider_discovery_unavailable` |
+
+`provider_profile_tombstoned` is not a reachable code: registry lookup maps a
+missing profile to `provider_admission_not_found` or
+`provider_profile_unavailable`, which the session-selection boundary reports
+as `provider_profile_runtime_unavailable` on the run path and as a closed
+unavailable reason on the read path; durable tombstones are append-only
+removal history, not admission authority, so an identifier reintroduced by a
+later accepted catalog is admitted again (`pr24-review-1.md`, R36).
 
 The former `control_plane_unavailable` dispatch stub is removed from
 `crates/intention/src/lib.rs` (ADR 0038 Wave 7); control-plane dispatch
@@ -126,7 +138,7 @@ Crate ownership for the Slice 2 surface is fixed:
 | Wire families, negotiation, and typed commands/queries | `intention-protocol` |
 | TOML parsing, validation, reload candidates, and configuration DTOs | `intention-config` |
 | Current-schema DDL, projections, and durable control-plane rows | `intention-storage` and `intention-storage-sqlite` |
-| Provider-neutral reasoning surface (DTO-level) | `intention-model` |
+| Provider-neutral reasoning surface (surviving `intention-model` types; the unconsumed protocol and model duplicates were removed by the D-16 audit) | `intention-model` |
 | Provider translation and dialect decoding | provider crates (adapters) |
 | Catalog, session-selection, and control-plane services | `intention-application` |
 | Hosting, reload/rotation hosting, and degraded gate | `intention-daemon` |

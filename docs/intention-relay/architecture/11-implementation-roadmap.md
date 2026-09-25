@@ -442,12 +442,17 @@ activated by earlier slices in this order:
    (architectures 25/29/22): controlled live reload; credential rotation;
    provider health checks; model discovery; pricing policy; provider profile
    UI and raw-TOML/configuration editing; arbitrary authentication headers;
-   provider-native preservation controls; server-side parser setup; session
-   defaults and per-turn/fork overrides; unavailable-queue promotion and
-   reconciliation; `provider_profiles_v1`; pending-removal and degraded
+   session defaults and per-turn/fork overrides; unavailable-queue promotion
+   and reconciliation; `provider_profiles_v1`; pending-removal and degraded
    recovery; and the provider reasoning/catalog surface. **Activated by
    [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); Slice 2 is
-   complete.**
+   complete. The D-16 audit removed the unconsumed typed preservation-control,
+   server-side-parser, Responses reasoning-mode, reasoning-usage, and
+   model-capability-envelope contracts, the protocol-only reasoning/header/
+   parser duplicates, the eight producer-less control-plane event DTOs, and
+   the `provider_profile_tombstoned` wire code; the typed header policy and
+   `SessionProviderProfileChangedEventDto` remain, and the latter's durable
+   delivery is a reserved declaration below.**
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
@@ -565,6 +570,31 @@ inside its slice, each with its own contract, transaction, and outcome test.
 - reconciliation registers (source-of-truth matrix, evidence, ownership,
   contradiction, deferred/excluded) carry ADR 0035-keyed activation rows;
 - the M5+ evidence package passes the repository quality gates.
+
+## Reserved declarations carried by M6-M9
+
+The D-16 audit (2026-09) keeps exactly one audited surface for this block and
+records the deleted groups so no M6-M9 slice claims them:
+
+- **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed
+  by Milestone 6.** `SessionProviderProfileChangedEventDto` is produced by the
+  committed session-default change and validated at the session-event boundary,
+  but Slice 2 keeps no durable copy and writes no durable session-event
+  snapshot; the durable append/delivery layer is reserved to the first M6-M9
+  milestone that consumes session state and reconnect delivery. Anchors:
+  [`m4plus_concept.md`](../m4plus_concept.md) (session selection, runs, queues,
+  and usage),
+  [architecture 29](29-provider-session-and-profiles-protocol.md) (session
+  selection, runs, queues, and usage), and `pr24-review-1.md` R19 ("Anchor the
+  durable session-event delivery as a declared future slice in the audit").
+  Until Milestone 6 lands the layer, the event stays boundary-validated with
+  no durable copy.
+- **Deleted groups — no M6-M9 slice claims them.** The protocol reasoning/
+  header/parser duplicates (P2-06), the eight producer-less control-plane
+  event DTOs (P2-07), the six unconsumed model types (P2-15), and the
+  `provider_profile_tombstoned` wire code (R36) were deleted by the D-16
+  audit; the durable `configuration_audit.audit_kind` rows remain the owner of
+  catalog audit evidence.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -1336,8 +1366,9 @@ profile, quality-policy target, or implementation milestone.
 ## Post-M5 provider reasoning and catalog detail package
 
 **Documentation-only package extending architecture 22.** It records typed
-cross-turn reasoning history, reasoning usage, paged delivery, the dialect
-catalog, and catalog limits/tombstones/audit, adopted by
+cross-turn reasoning history, reported-usage accounting without double-count,
+paged delivery, the dialect catalog, and catalog limits/tombstones/durable
+audit, adopted by
 [decision 0028](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md).
 It activates no crate, schema, migration, protocol implementation, feature
 profile, quality-policy target, or implementation milestone.
@@ -1346,7 +1377,8 @@ profile, quality-policy target, or implementation milestone.
 
 - `ReasoningHistoryTransferDto`/`TextualHistoryV1`/`ReasoningHistoryManifestDto`/
   `ReasoningHistoryBound` with the 4-MiB aggregate bound;
-- `ReasoningUsageDto` absent-never-zero accounting;
+- reported-usage accounting without double-count (the typed
+  `ReasoningUsageDto` was removed as unconsumed by the D-16 audit);
 - `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (256-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
@@ -1490,8 +1522,9 @@ profile, quality-policy target, or implementation milestone.
 
 - provider-profile UI and raw-TOML editing, configuration editing, and model
   discovery (architecture 25);
-- arbitrary authentication headers, provider-native preservation controls, and
-  server-side parser setup (architecture 22);
+- arbitrary authentication headers, plus the recorded provider-native
+  preservation-control and server-side-parser directions whose typed contracts
+  were removed as unconsumed by the D-16 audit (architecture 22);
 - tool-result and child-agent execution in forks, export, and cross-workspace
   clone/rebind (architectures 23/24/26);
 - autonomous harness goal mode and work/requeue after client disconnection

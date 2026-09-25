@@ -18,8 +18,10 @@ provider/model-capability selections, endpoint and credential-transport
 semantics, driver-contract compatibility, provider-local availability, and
 normalized textual reasoning. Slice 2 activates the catalog lifecycle,
 provider selection and capability resolution, the normalized reasoning
-surface, the typed dialect decoder contract, typed
-header policy validation, preservation controls, and parser configuration. It
+surface, the typed dialect decoder contract, and typed
+header policy validation (the typed preservation-control and
+parser-configuration contracts were removed as unconsumed by the D-16 audit).
+It
 does not authorize a `responses` SDK/driver, remote continuation, live wire
 header injection (`SafeHeader`), a user-kind parser, provider-native live
 extraction beyond declared paths, or production provider behavior beyond the
@@ -276,7 +278,10 @@ remains the stopping authority. No private binding survives restart.
 The audit taxonomy is candidate prepared, removal pending/accepted/rejected/
 expired, catalog accepted/activated, activation recovery required, and recovery
 completed. It is neither Session, Run, Mandate, MCP, lineage, nor activity
-sequence. Numeric catalog/parser/page bounds must be explicitly classified as
+sequence. The taxonomy names are the durable `configuration_audit.audit_kind`
+vocabulary written by the storage path; they are not protocol events and no
+wire event DTO carries them. Numeric catalog/parser/page bounds must be
+explicitly classified as
 intrinsic representation bounds, protocol bounds, or actual capacity, never
 Mandate admission quotas.
 
@@ -285,7 +290,7 @@ Mandate admission quotas.
 Compatibility and availability are distinct. Corrupt/missing meaning, digest
 mismatch, unknown version/taxonomy, invalid intersection, descriptor mismatch,
 or incompatible driver blocks execution before effect. Exact compatible private
-material that is absent, disabled, tombstoned, or unavailable is live
+material that is absent, disabled, or unavailable is live
 availability evidence. For a Mandate it retains the existing reason and creates
 no `RunId`; readiness restoration only wakes architecture-16 reevaluation.
 Neither outcome allows default, same-model, alternate endpoint, kind, driver, or
@@ -392,11 +397,11 @@ closed for future facts; M3/M4 replay remains unchanged.
 ## Reasoning capability slice and bounded `responses` v1
 
 The initial versioned capability slice selects text streaming, textual
-reasoning output, the closed supported sets of `reasoning_effort` and
-`reasoning.mode`, reasoning-summary support, and custom function-call
+reasoning output, the closed supported set of `reasoning_effort`,
+reasoning-summary support, and custom function-call
 admission. A kind descriptor declares the maximum protocol capability envelope;
 each profile explicitly declares a safe subset for its exact configured model,
-including reasoning availability, supported effort and mode values, summary
+including reasoning availability, supported effort values, summary
 availability, and custom-function-call availability. The current ordinary
 `generic-chat-completion-api` driver declares reasoning output in its
 `ModelCapabilitiesDto` because it consumes and preserves `reasoning_content`
@@ -410,8 +415,9 @@ outbound work occurs.
 
 The resolved reasoning policy includes the closed fragment-category and
 summary support, the `ReasoningHistoryTransferDto` mode, and `compatibility_id`
-when transfer is enabled. It also records the fixed 4 MiB output/history limits
-and the optional reasoning-usage interpretation. A selection that cannot
+when transfer is enabled. It also records the fixed 4 MiB output/history limits.
+The optional typed reasoning-usage interpretation and its `ReasoningUsageDto`
+were removed as unconsumed by the D-16 audit. A selection that cannot
 represent the descriptor's declared history transfer fails preflight before
 provider work; it never falls back to a different transfer policy.
 
@@ -421,11 +427,12 @@ history and does not use OpenAI Conversations or `previous_response_id`. It
 must neither request nor persist, publish, replay, or depend on encrypted
 reasoning, opaque response output items, remote conversation identifiers, or
 provider-managed history state. The provider-neutral contract adds closed
-`ReasoningEffortDto` values (`none`, `minimal`, `low`, `medium`, `high`,
-`xhigh`, and `max`) and a Responses-specific closed reasoning-mode projection
-(`standard` or `pro`). A profile may select only values declared in its model
-subset; an unsupported effort or mode fails preflight. The resolved execution
-policy records those values as immutable safe provenance.
+`ReasoningEffortLevel` values (`none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`). A profile may select only values declared in its model
+subset; an unsupported effort fails preflight. The resolved execution policy
+records the selected effort as immutable safe provenance. The former
+Responses-specific reasoning-mode projection and the protocol-side effort copy
+were removed as unconsumed by the D-16 audit.
 
 For a `responses` profile whose model subset declares summary support, the
 default request asks for an automatic provider reasoning summary. A returned
@@ -487,12 +494,11 @@ readable with no synthetic manifests.
 
 ## Reasoning usage and initial delivery
 
-`UsageDto::Reported` includes an optional typed `ReasoningUsageDto` with optional
-input and output token counts; a missing value means the provider did not report
-that component, never zero. Reported reasoning values are components of the
-corresponding total input/output counts, not additional usage. Reconnect,
-replay, inheritance, and tree aggregation must not charge or count the same
-source `RunId` twice. There is no price, currency, or inferred cost.
+`UsageDto::Reported` carries only the ordinary reported input/output/total token
+counts; the optional typed `ReasoningUsageDto` was removed as unconsumed by the
+D-16 audit. A missing reported usage stays `NotReported`, never a zero count.
+Reconnect, replay, inheritance, and tree aggregation must not charge or count
+the same source `RunId` twice. There is no price, currency, or inferred cost.
 
 The negotiated `normalized_reasoning_stream_v1` capability provides automatic
 initial reasoning delivery through uncorrelated `RunReasoningHistoryPageDto` and
@@ -555,15 +561,16 @@ encrypted/opaque provider payloads, server-side vLLM/SGLang parser config, raw
 provider JSON, or generic request templates. Cross-turn policy is limited to the
 explicit typed textual history contract; provider-native `preserve_thinking`,
 `thinking.keep`, remote continuation identifiers, and non-fitting
-assistant-history requirements are excluded. Arbitrary authentication headers,
-provider-native preservation controls, and server-side parser setup are
-accepted post-M5 directions under
+assistant-history requirements are excluded. Arbitrary authentication headers
+are an accepted post-M5 direction under
 [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and are
 activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md):
-a closed code-owned typed header policy, explicit typed preservation controls
-under the local-history-first law (never remote continuation), and explicit
-typed server-side parser configuration where a closed descriptor declares it
-(never raw JSON/templates and never unbounded parsing). Live wire header
+a closed code-owned typed header policy (the `intention-model`
+`AuthenticationHeaderPolicyV1` consumed by both provider adapters; the
+protocol-only duplicate was removed by the D-16 audit). The typed
+provider-native preservation-control and server-side-parser contracts were
+removed as unconsumed by the D-16 audit: no preservation-control or
+parser-configuration surface is activated. Live wire header
 injection (`SafeHeader`) and provider-native live extraction beyond the
 declared paths remain not activated. The current `async-openai` core
 Chat Completions adapter is not assumed sufficient for every descriptor; a future
@@ -681,9 +688,12 @@ profile picker/editor presentation, credential entry/keychain, telemetry,
 multimodal or structured output, plugin drivers, or remote continuation; the
 catalog database, the single current storage schema (logical version 1),
 credential rotation, health checks,
-discovery, pricing, controlled live reload, typed header policy, and
-server-side parser configuration are activated by Slice 2
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)). Architecture
+discovery, pricing, controlled live reload, and typed header policy are
+activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
+preservation-control and server-side-parser contracts were removed as
+unconsumed by the D-16 audit, and no parser-configuration surface is
+activated. Architecture
 23 owns forks and lineage, architecture 29 owns session defaults/overrides and
 the profiles protocol, and UI, Cargo, Makefile/CI, or production activation
 beyond the activated Slice 2 contracts remain outside this document.

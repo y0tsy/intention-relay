@@ -125,6 +125,8 @@ The semantic half of the boundary rule is scoped to the Slice 2 control-plane co
 
 The 31 pre-Slice-2 public DTOs that declare invariants beyond their field types are not yet covered by decode-time enforcement: they still rely on admission-time validation. Extending decode-time enforcement to them is recorded as a follow-up card and is not claimed by this rule; the card is parked in the review register's parking list (`pr24-review-1.md`, "Parked with owners after V2", the 31 pre-Slice-2 invariant DTOs entry).
 
+The error category follows the boundary that detected a version mismatch: the transport handshake fails an incompatible major protocol version as `incompatible_protocol_version` with `ErrorDto { category: unavailable }` (architecture 03, "Protocol lifecycle"), while the same code is a `validation` failure at a public DTO decode boundary. The difference is intentional and is not an open gap; a caller that needs one category per code would require a new decision.
+
 Validation occurs at the earliest boundary that has the necessary context:
 
 1. transport validates schema version, framing, and basic DTO shape;

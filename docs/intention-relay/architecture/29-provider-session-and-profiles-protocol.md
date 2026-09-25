@@ -57,8 +57,11 @@ boundary. Slice 2 keeps no durable copy of that event and writes no durable
 session-event snapshot for it: the control-plane event family has no durable
 append seam yet, so the committed event is validated at the boundary and
 recorded nowhere. Durable delivery is parked as a declared future slice,
-anchored in the register's parking list (`pr24-review-1.md`, "Parked with
-owners after V2", the durable `SessionProviderProfileChanged` append layer). An
+reserved to Milestone 6 in the roadmap's
+[reserved declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declarations-carried-by-m6-m9)
+and anchored in the register's parking list
+(`pr24-review-1.md`, "Parked with owners after V2", the durable
+`SessionProviderProfileChanged` append layer). An
 existing-profile request is a successful `changed = false` no-op that
 publishes no event.
 `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe
@@ -206,9 +209,11 @@ presentation, credential entry/keychain, telemetry, multimodal or structured
 output, plugin drivers, or remote continuation; the catalog database, the
 single current storage schema (logical version 1),
 credential rotation, health checks, discovery, pricing, controlled
-live reload, typed header policy, and server-side parser configuration are
-activated by Slice 2
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)). UI, Cargo,
+live reload, and typed header policy are activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
+server-side-parser and preservation-control contracts were removed as
+unconsumed by the D-16 audit, so no parser-configuration surface is activated.
+UI, Cargo,
 Makefile/CI, or production activation beyond the activated Slice 2 contracts
 remain outside this document.
 

@@ -36,11 +36,13 @@ of activating slices, all approved together as one package:
 2. **Control plane** — the ADR 0020 cluster and provider session selection
    (architectures 25/29/22): controlled live reload, credential rotation,
    provider health checks, model discovery, pricing policy, profile UI and
-   raw-TOML/configuration editing, arbitrary authentication headers,
-   provider-native preservation controls, server-side parser setup, session
+   raw-TOML/configuration editing, arbitrary authentication headers, session
    defaults and per-turn/fork overrides, unavailable-queue promotion and
    reconciliation, `provider_profiles_v1`, pending-removal and degraded
-   recovery, and the provider reasoning/catalog surface.
+   recovery, and the provider reasoning/catalog surface. The D-16 audit
+   removed the unconsumed provider-native preservation-control and
+   server-side-parser contracts, the Responses reasoning-mode projection, the
+   reasoning-usage DTOs, and the model-capability envelope.
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers, dossiers/checkpoints,

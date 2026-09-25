@@ -19,8 +19,8 @@ The following detail from
   `TextualHistoryV1 { compatibility_id }`, `ReasoningHistoryManifestDto`,
   `ReasoningHistoryBound`, 4-MiB aggregate bound,
   `reasoning_history_unavailable`/`incompatible`/`too_large`);
-- reasoning usage accounting (`ReasoningUsageDto`, absent-never-zero, no
-  double-count, no price/currency);
+- reported-usage accounting with no double-count and no price/currency (the
+  typed `ReasoningUsageDto` was removed as unconsumed by the D-16 audit);
 - `normalized_reasoning_stream_v1` paged initial delivery
   (`RunReasoningHistoryPageDto`/`RunReasoningHistoryCompletedDto`, 256 facts /
   512 KiB per page, `normalized_reasoning_stream_required`);
@@ -50,17 +50,17 @@ The following detail from
   and the supersession note that the concept2 `reasoning_history_transfer`
   field name is research-only (architecture 22 owns
   `LocalDurableHistoryV1 { reasoning_input_contract }`);
-- the initial capability-slice detail: the closed supported sets of
-  `reasoning_effort` and `reasoning.mode`, and the resolved-reasoning-policy
-  contents (closed fragment-category and summary support, the
-  `ReasoningHistoryTransferDto` mode, `compatibility_id` when transfer is
-  enabled, the fixed 4-MiB output/history limits, and the optional
-  reasoning-usage interpretation);
-- the bounded `responses` v1 detail: the closed `ReasoningEffortDto` values
+- the initial capability-slice detail: the closed supported set of
+  `reasoning_effort` and the resolved-reasoning-policy contents (closed
+  fragment-category and summary support, the `ReasoningHistoryTransferDto`
+  mode, `compatibility_id` when transfer is enabled, and the fixed 4-MiB
+  output/history limits);
+- the bounded `responses` v1 detail: the closed `ReasoningEffortLevel` values
   (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and the
-  Responses-specific closed reasoning-mode projection (`standard` or `pro`),
-  and the automatic-provider-reasoning-summary default request for a
-  summary-supporting `responses` profile.
+  automatic-provider-reasoning-summary default request for a
+  summary-supporting `responses` profile. The typed Responses reasoning-mode
+  projection and the protocol-side effort copy were removed as unconsumed by
+  the D-16 audit.
 
 The session-selection layer (session defaults/overrides, `provider_profiles_v1`,
 promotion/reconciliation, held recovered-run admission) is owned by
@@ -89,8 +89,8 @@ evidence.
 2. A run is never silently sent without required history; the complete required
    history must transfer as a whole (4 MiB) or the dependent run is rejected
    before provider work.
-3. A missing reasoning usage component is never zero; the same source `RunId`
-   is never charged or counted twice.
+3. Reported usage is never double-counted: the same source `RunId` is never
+   charged or counted twice.
 4. `normalized_reasoning_stream_v1` is additive and negotiated; a client never
    receives live reasoning before the initial history completes; unnegotiated
    peers fail closed with `normalized_reasoning_stream_required`.
@@ -108,9 +108,9 @@ evidence.
    fails closed with `provider_reasoning_stream_invalid`, and the combined
    reasoning fragments and summaries of one run are bounded at 4 MiB with
    `reasoning_output_limit_exceeded`.
-9. `ReasoningEffortDto` and the `standard`/`pro` mode are closed; a profile may
-   select only values declared in its model subset, and an unsupported effort
-   or mode fails preflight before outbound work.
+9. `ReasoningEffortLevel` is closed; a profile may select only values declared
+   in its model subset, and an unsupported effort fails preflight before
+   outbound work.
 10. For a summary-supporting `responses` profile, the default request asks for
     an automatic provider reasoning summary; a returned summary becomes a
     distinct tail-only `ReasoningSummaryDelta`, never raw chain-of-thought and
