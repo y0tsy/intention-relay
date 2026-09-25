@@ -4479,6 +4479,57 @@ mutation-proven (removing the re-arm and removing the absent-reader pre-seed eac
 `m4_model_context` fixture passes three consecutive runs and fails the stale-read mutation that
 removes the `Starting` status check.
 
+### K.5 V4 sweep and residuals
+
+Seven read-only verifier slices re-read all 58 D.1 rows against the W4 head `881dfd4` (clean
+tree) and produced 58 `verified` verdicts: Package A 8, Package B 8 + 7, Package C 8 + 8,
+Package D and F 11, Package E 8. The aggregated record is `target/v4-report.json`; the seven
+delegated sessions could not write into the repository themselves, so they returned their
+payloads inline and those payloads remain the detailed evidence behind each row.
+
+The sweep found two text residuals that are fallout of this wave's deletions, and both are
+repaired with it: three admission doc comments (application `session_selection.rs` twice,
+composition `intention/src/lib.rs` once) still claimed that admission requires a
+"not tombstoned" predicate, which the accepted-membership authority no longer evaluates, and
+the model test name `reasoning_effort_and_mode_are_closed_and_snake_case` still named the
+deleted mode type. `intention-application`, `intention-model`, and `intention` re-ran at
+307/307 with clippy clean after the repairs.
+
+Residuals the sweep recorded, all outside the remediation scope of their rows:
+
+- `ReasoningHistoryManifestDto` exists in both `intention-domain` (`src/reasoning_history.rs`)
+  and `intention-protocol` (`src/contract_families.rs`) with no production constructor or
+  consumer outside tests and the canonical tag registry, while ADR 0037 calls
+  `reasoning-history-manifest-v1` wired. It is the same no-consumer class as the D-16
+  families but sits outside the audited symbol list; it stays parked as a follow-up with the
+  ledger row to correct when it is resolved.
+- No committed search guard covers the deleted protocol (P2-06, P2-07) or model (P2-15)
+  symbols, or `persist_resolved_run_provider_selection` (P3-11). Only `intention-domain`
+  carries `removed_domain_surfaces_do_not_reappear`, so those deletions rest on the search
+  performed at this head.
+- P1-01: the `ir-profile-v1` revision-id derivation remains in
+  `crates/intention-application/src/provider_catalog.rs`; it feeds `profile_revision_id`, not
+  the durable digest column, and the competing-digest guard covers only the `ir-selection-v1`
+  literal and the provider-selection namespace.
+- P2-13: `roll_forward_acceptance` commits the catalog acceptance before the registry rebuild
+  on the PR24-004 recovery path; a failure yields typed `Blocked` and is retried idempotently.
+  This is explicitly outside the D-05 auto-accept scope.
+- P2-08: the optional daemon-side incoming subscription schema-version check stays parked with
+  an owner; the guarantee is client-side. P2-03 and P3-07 leave the 31 pre-Slice-2 DTOs,
+  including `ForkBaseSnapshotV1/V2`, outside the decode-time version and validation scope,
+  documented in architecture 02.
+- P3-21: the SQLite column keeps the name `candidate_json` with a storage-owned encode/parse
+  pair, which G.7 item 4 permits because no free-form JSON crosses the DTO boundary.
+- P3-25: a failed held-run lookup returns early with no distinct log or error surface, so it is
+  indistinguishable from a legitimately held run; the remediation did not require one.
+- P3-34 and P3-36 rest on code plus logs (no macOS host, and the read-only sweep could not run
+  the `features.toml`-swapping fixture), and the opt-in live harness tests were not re-run in
+  the sweep.
+- Gate provenance: `target/w4-verify5.log` ends at the notices-check step because the
+  controller's cancelled wait killed that process group, and it predates the wave's final
+  commits; the same tree passed the affected phases, and `target/w4-deps.log` plus
+  `target/w4-selftest.log` record the two remaining phases green afterwards.
+
 End of register.
 
 <!-- pr24-review-1: complete -->
