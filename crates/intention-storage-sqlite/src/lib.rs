@@ -3348,6 +3348,63 @@ mod tests {
     }
 
     #[test]
+    fn run_rebinding_to_a_different_provider_selection_is_a_typed_conflict() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "run with a resolved selection",
+                    run_id,
+                    fixture_snapshot(),
+                    fixture_time(2),
+                )
+                .expect("fixture turn input is valid")
+                .with_provider_selection(fixture_selection()),
+            )
+            .expect("run with selection commits");
+        // The fresh-run accept and the queue promotion both guard the run
+        // identity before the selection row, so the conflict cannot be
+        // produced through a second accept or a second promotion; it is driven
+        // through the production selection writer inside a real transaction
+        // instead. The identical selection identity stays idempotent while
+        // different bytes for the same run are a typed conflict.
+        let mut connection = repository.connection().expect("connection acquires");
+        let transaction = repository
+            .begin(&mut connection)
+            .expect("transaction begins");
+        let mut different = fixture_selection();
+        different.model_id = "a-different-model".to_owned();
+        let error =
+            super::control_plane::insert_selection(&transaction, session_id, run_id, &different)
+                .expect_err("rebinding one run to a different selection is rejected");
+        assert_eq!(error.code(), "provider_selection_conflict");
+        super::control_plane::insert_selection(
+            &transaction,
+            session_id,
+            run_id,
+            &fixture_selection(),
+        )
+        .expect("the identical selection identity is idempotent");
+        drop(transaction);
+        drop(connection);
+        // The rejected rebinding left the durable row untouched.
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!(
+                    "SELECT COUNT(*) FROM resolved_run_provider_selections WHERE run_id='{run_id}' AND model_id='gpt-4.1'"
+                )
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn unavailable_queue_fault_rolls_back_promotion_and_marker_atomically() {
         let location = fixture_location();
         let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
@@ -3469,12 +3526,16 @@ mod tests {
     /// connection, so a fault fixture can compare every durable column at once.
     #[derive(Debug, Eq, PartialEq)]
     struct RemovalCandidateRow {
-        status: String,
-        operation_id: Option<String>,
-        completed_at: Option<i64>,
+        candidate_handle: String,
         candidate_catalog_revision_id: i64,
         active_catalog_revision_id: i64,
+        created_at: i64,
         expires_at: i64,
+        source_recheck: String,
+        status: String,
+        candidate_json: String,
+        operation_id: Option<String>,
+        completed_at: Option<i64>,
     }
 
     fn raw_removal_candidate(
@@ -3485,16 +3546,20 @@ mod tests {
             sqlite::Connection::open(&location.0).expect("database reopens for inspection");
         let row = connection
             .query_row(
-                "SELECT status, operation_id, completed_at, candidate_catalog_revision_id, active_catalog_revision_id, expires_at FROM provider_catalog_removal_candidates WHERE candidate_handle=?1",
+                "SELECT candidate_handle, candidate_catalog_revision_id, active_catalog_revision_id, created_at, expires_at, source_recheck, status, candidate_json, operation_id, completed_at FROM provider_catalog_removal_candidates WHERE candidate_handle=?1",
                 [handle],
                 |row| {
                     Ok(RemovalCandidateRow {
-                        status: row.get(0)?,
-                        operation_id: row.get(1)?,
-                        completed_at: row.get(2)?,
-                        candidate_catalog_revision_id: row.get(3)?,
-                        active_catalog_revision_id: row.get(4)?,
-                        expires_at: row.get(5)?,
+                        candidate_handle: row.get(0)?,
+                        candidate_catalog_revision_id: row.get(1)?,
+                        active_catalog_revision_id: row.get(2)?,
+                        created_at: row.get(3)?,
+                        expires_at: row.get(4)?,
+                        source_recheck: row.get(5)?,
+                        status: row.get(6)?,
+                        candidate_json: row.get(7)?,
+                        operation_id: row.get(8)?,
+                        completed_at: row.get(9)?,
                     })
                 },
             )
@@ -3503,18 +3568,89 @@ mod tests {
         row
     }
 
-    fn raw_catalog_state(location: &SqliteDatabaseLocationDto) -> (String, Option<i64>) {
+    /// One durable catalog-state row as read back through a raw connection, so
+    /// a fault fixture can compare every durable column at once.
+    #[derive(Debug, Eq, PartialEq)]
+    struct CatalogStateRow {
+        singleton_id: i64,
+        active_catalog_revision_id: Option<i64>,
+        candidate_catalog_revision_id: Option<i64>,
+        status: String,
+        active_default_profile_id: Option<String>,
+        candidate_handle: Option<String>,
+        degraded_reason: Option<String>,
+        updated_at: i64,
+    }
+
+    fn raw_catalog_state(location: &SqliteDatabaseLocationDto) -> CatalogStateRow {
         let connection =
             sqlite::Connection::open(&location.0).expect("database reopens for inspection");
         let row = connection
             .query_row(
-                "SELECT status, active_catalog_revision_id FROM provider_catalog_state WHERE singleton_id=1",
+                "SELECT singleton_id, active_catalog_revision_id, candidate_catalog_revision_id, status, active_default_profile_id, candidate_handle, degraded_reason, updated_at FROM provider_catalog_state WHERE singleton_id=1",
                 [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+                |row| {
+                    Ok(CatalogStateRow {
+                        singleton_id: row.get(0)?,
+                        active_catalog_revision_id: row.get(1)?,
+                        candidate_catalog_revision_id: row.get(2)?,
+                        status: row.get(3)?,
+                        active_default_profile_id: row.get(4)?,
+                        candidate_handle: row.get(5)?,
+                        degraded_reason: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                },
             )
             .expect("catalog state row reads");
         drop(connection);
         row
+    }
+
+    /// One durable configuration-audit row as read back through a raw
+    /// connection, so a fault fixture can compare the complete audit table
+    /// instead of a per-operation count.
+    #[derive(Debug, Eq, PartialEq)]
+    struct ConfigurationAuditRow {
+        audit_sequence: i64,
+        operation_id: String,
+        audit_kind: String,
+        catalog_revision_id: Option<i64>,
+        config_revision_id: Option<String>,
+        profile_id: Option<String>,
+        run_id: Option<String>,
+        occurred_at: i64,
+        audit_json: String,
+    }
+
+    fn raw_audit_rows(location: &SqliteDatabaseLocationDto) -> Vec<ConfigurationAuditRow> {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let mut statement = connection
+            .prepare(
+                "SELECT audit_sequence, operation_id, audit_kind, catalog_revision_id, config_revision_id, profile_id, run_id, occurred_at, audit_json FROM configuration_audit ORDER BY audit_sequence",
+            )
+            .expect("audit table statement prepares");
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ConfigurationAuditRow {
+                    audit_sequence: row.get(0)?,
+                    operation_id: row.get(1)?,
+                    audit_kind: row.get(2)?,
+                    catalog_revision_id: row.get(3)?,
+                    config_revision_id: row.get(4)?,
+                    profile_id: row.get(5)?,
+                    run_id: row.get(6)?,
+                    occurred_at: row.get(7)?,
+                    audit_json: row.get(8)?,
+                })
+            })
+            .expect("audit table query runs")
+            .map(|row| row.expect("audit row reads"))
+            .collect();
+        drop(statement);
+        drop(connection);
+        rows
     }
 
     fn create_removal_candidate(repository: &SqliteStorageRepository) {
@@ -3546,6 +3682,7 @@ mod tests {
             create_removal_candidate(&repository);
             let candidate_baseline = raw_removal_candidate(&location, "removal-1");
             let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
             assert_eq!(candidate_baseline.status, "pending");
             repository.arm_fault(point);
             let error = repository
@@ -3564,13 +3701,7 @@ mod tests {
                 candidate_baseline
             );
             assert_eq!(raw_catalog_state(&location), state_baseline);
-            assert_eq!(
-                raw_count(
-                    &location,
-                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-accept-1'"
-                ),
-                0
-            );
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
             // The rolled-back candidate is still pending and accepts durably.
             reopened
                 .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
@@ -3602,8 +3733,9 @@ mod tests {
             create_removal_candidate(&repository);
             let candidate_baseline = raw_removal_candidate(&location, "removal-1");
             let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
             assert_eq!(candidate_baseline.status, "pending");
-            assert_eq!(state_baseline.0, "pending_removal");
+            assert_eq!(state_baseline.status, "pending_removal");
             repository.arm_fault(point);
             let error = repository
                 .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
@@ -3621,13 +3753,7 @@ mod tests {
                 candidate_baseline
             );
             assert_eq!(raw_catalog_state(&location), state_baseline);
-            assert_eq!(
-                raw_count(
-                    &location,
-                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-reject-1'"
-                ),
-                0
-            );
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
             // The rolled-back rejection still restores the active catalog.
             reopened
                 .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
@@ -3640,7 +3766,7 @@ mod tests {
                 raw_removal_candidate(&location, "removal-1").status,
                 "rejected"
             );
-            assert_eq!(raw_catalog_state(&location).0, "active");
+            assert_eq!(raw_catalog_state(&location).status, "active");
         }
     }
 
@@ -3657,8 +3783,9 @@ mod tests {
             create_removal_candidate(&repository);
             let candidate_baseline = raw_removal_candidate(&location, "removal-1");
             let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
             assert_eq!(candidate_baseline.status, "pending");
-            assert_eq!(state_baseline.0, "pending_removal");
+            assert_eq!(state_baseline.status, "pending_removal");
             let now = candidate_baseline.expires_at;
             repository.arm_fault(point);
             let error = repository
@@ -3678,13 +3805,7 @@ mod tests {
                 candidate_baseline
             );
             assert_eq!(raw_catalog_state(&location), state_baseline);
-            assert_eq!(
-                raw_count(
-                    &location,
-                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-expire-1'"
-                ),
-                0
-            );
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
             // The rolled-back overdue candidate still expires durably.
             assert_eq!(
                 reopened
@@ -3701,7 +3822,7 @@ mod tests {
                 raw_removal_candidate(&location, "removal-1").status,
                 "expired"
             );
-            assert_eq!(raw_catalog_state(&location).0, "active");
+            assert_eq!(raw_catalog_state(&location).status, "active");
         }
     }
 }

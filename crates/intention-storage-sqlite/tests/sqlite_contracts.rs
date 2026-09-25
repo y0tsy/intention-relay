@@ -1096,6 +1096,87 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
     );
 }
 
+/// Reads every Rust source under the crate's `src` directory, so the seed
+/// guard covers a reworded create statement in any schema source file.
+fn catalog_state_sources() -> Vec<String> {
+    let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut paths = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).expect("schema source directory is readable");
+        for entry in entries {
+            let path = entry.expect("schema source entry is readable").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_some_and(|extension| extension == "rs") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("schema source is readable"))
+        .collect()
+}
+
+/// Counts the create statements that target the provider catalog state
+/// singleton across the supplied schema source texts.
+///
+/// A statement is counted when it is an `INSERT` whose target is
+/// `provider_catalog_state`, whatever the keyword case, line breaks, or extra
+/// keywords: the statement text is normalized before the search, so a
+/// reworded second create path cannot evade the guard behind its exact
+/// wording.
+fn catalog_state_insert_count(sources: &[String]) -> usize {
+    let mut count = 0;
+    for source in sources {
+        let normalized = source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_uppercase();
+        for statement in normalized.split(';') {
+            let mut words = statement.split_whitespace();
+            if words.any(|word| word == "INSERT")
+                && statement.contains("INTO PROVIDER_CATALOG_STATE")
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[test]
+fn catalog_state_seed_guard_counts_reworded_create_statements() {
+    let reworded = vec![
+        "INSERT OR IGNORE INTO provider_catalog_state(singleton_id) VALUES (1);".to_owned(),
+        "insert\n  into provider_catalog_state\n  (singleton_id) values (1);".to_owned(),
+        "INSERT INTO provider_catalog_state(singleton_id) VALUES (1);".to_owned(),
+    ];
+    assert_eq!(
+        catalog_state_insert_count(&reworded),
+        3,
+        "every reworded create statement must be counted"
+    );
+    let other_table = vec![
+        "INSERT OR IGNORE INTO provider_catalog_state(singleton_id) VALUES (1);".to_owned(),
+        "INSERT INTO other_table(singleton_id) VALUES (1);".to_owned(),
+        "SELECT last_insert_rowid();".to_owned(),
+    ];
+    assert_eq!(
+        catalog_state_insert_count(&other_table),
+        1,
+        "a statement for another table or an identifier word must not be counted"
+    );
+}
+
 #[test]
 fn catalog_state_seed_has_one_create_path_and_survives_reopen() {
     let directory = TempDir::new().expect("temporary directory exists");
@@ -1112,21 +1193,13 @@ fn catalog_state_seed_has_one_create_path_and_survives_reopen() {
     let reopened = SqliteStorageRepository::open(location).expect("database reopens");
     assert_eq!(state_row(&path), fresh);
     drop(reopened);
-    // The schema DDL is the only create path for the seeded singleton: a
-    // second seed statement anywhere in the crate's schema sources (the
-    // deleted defensive helper counted as one) fails this guard.
-    let seed = "INSERT OR IGNORE INTO provider_catalog_state";
-    let sources = [
-        include_str!("../src/lib.rs"),
-        include_str!("../src/control_plane.rs"),
-    ];
+    // The schema DDL is the only create path for the seeded singleton: any
+    // other INSERT into provider_catalog_state under src, however reworded or
+    // split across lines, fails this guard.
     assert_eq!(
-        sources
-            .iter()
-            .map(|source| source.matches(seed).count())
-            .sum::<usize>(),
+        catalog_state_insert_count(&catalog_state_sources()),
         1,
-        "the provider catalog state singleton must have exactly one seed statement"
+        "the provider catalog state singleton must have exactly one create statement"
     );
 }
 
