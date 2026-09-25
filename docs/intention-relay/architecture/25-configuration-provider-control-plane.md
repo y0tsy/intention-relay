@@ -123,7 +123,11 @@ operational readiness evidence:
   reservation, retry counter, or quota; restoration only permits
   architecture-16 reevaluation;
 - health checks never perform provider/model selection, routing, pricing,
-  discovery, or credential testing beyond the declared contract.
+  discovery, or credential testing beyond the declared contract;
+- health evidence carries the provider identity (`provider_id`) and reports no
+  profile revision while the catalog is not wired into the health path:
+  `provider_profile_revision_id` is absent, and no synthesized
+  `health-profile-<hex>` identity is fabricated.
 
 ## Provider and model discovery
 

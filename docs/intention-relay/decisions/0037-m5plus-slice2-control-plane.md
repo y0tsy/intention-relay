@@ -156,7 +156,7 @@ anchors:
 | --- | --- |
 | Provider catalog lifecycle and capability resolution | `crates/intention-domain/tests/m5_control_plane_canonical.rs`; `crates/intention-application/tests/m5_catalog_runtime.rs` |
 | Provider selection and rejection semantics | `crates/intention-domain/tests/m5_control_plane_rejections.rs`; `crates/intention-protocol/tests/control_plane_contracts.rs` |
-| Session defaults and per-turn/fork overrides | `crates/intention-domain/tests/m5_session_selection_overrides.rs`; `crates/intention-client/tests/session_selection_client.rs` |
+| Session defaults and per-turn/fork overrides | `crates/intention-domain/tests/m5_session_selection_overrides.rs`; `crates/intention-application/tests/m5_session_selection.rs`; `crates/intention-client/tests/session_selection_client.rs` |
 | Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `crates/intention-application/tests/m5_control_plane_runtime.rs`; `crates/intention-client/tests/control_plane_client.rs` |
 | Configuration reload and editing | `crates/intention-config/tests/m5_control_plane_config.rs` |
 | Reasoning surface (DTO-level) | `crates/intention-model/tests/m6_reasoning_surface.rs` |
@@ -169,6 +169,14 @@ This ledger does not implement M6-M9 behavior and does not introduce a second
 runtime, registry, scheduler, persistence authority, or sandbox. It does not
 implement remote continuation, live wire header injection (`SafeHeader`), a
 user-kind parser, or provider-native live extraction beyond declared paths.
+
+Recorded follow-up: the health path reports no profile revision, and
+`ProviderHealthEvidenceDto.provider_profile_revision_id` stays absent
+(`None`) until the catalog is genuinely wired into the health path. When that
+binding lands, the field is populated from the real active profile revision and
+the option-1 assertions become applicable; no synthesized identity is ever
+fabricated in the meantime. The follow-up is parked in the review register's
+parking list (`pr24-review-1.md`, "Parked with owners after V2").
 
 ## Resolution notes
 
@@ -308,6 +316,15 @@ Required column says otherwise. No table cell spans multiple lines.
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.source_manifest_digest | String | Yes | 64 lowercase hex |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.ordered_messages | Vec<String> | Yes | 1..=1024 nonblank entries; up to 1 MiB aggregate; `model_context_projection_invalid`/`_too_large` |
 | `model-context-projection-v1` (0x020B) | 1 | — | ModelContextProjectionV1.model_context_digest | String | Yes | 64 lowercase hex |
+
+### provider-health-evidence (control-plane DTO, no canonical family tag)
+
+The health evidence DTO is a control-plane query projection, not one of the newly wired canonical families, so it carries no numeric family tag.
+
+| Family | Version | Field tag | Field | Type | Required | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `provider-health-evidence` (control-plane DTO) | 1 | — | ProviderHealthEvidenceDto.provider_id | String | Yes | The provider identity the observation belongs to; this field was renamed from the misleading `profile_id`, which carried the provider identity |
+| `provider-health-evidence` (control-plane DTO) | 1 | — | ProviderHealthEvidenceDto.provider_profile_revision_id | Option<String> | No | Absent (`None`) until the catalog is genuinely wired into the health path; the former synthesized `health-profile-<hex>` identity is removed and no synthesized identity is fabricated |
 
 ## Appendix B: SQLite control-plane table inventory
 

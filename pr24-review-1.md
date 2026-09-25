@@ -4159,8 +4159,10 @@ each item's own regression test, the removed surface, and the named documents.
 
 - **D-13 (deviated).** The accepted option requires both layers to count characters and the
   bound value to be aligned, with one number per identifier field in ADR 0037 Appendix A.
-  The shipped change keeps 63 canonical bytes against 256 wire characters and documents the
-  divergence, which is option (c), explicitly rejected. Repair: the canonical record counts
+  The shipped change keeps the canonical-record bound at 63 characters against the 256
+  characters the ADR already promises (the parent counted characters, so the deviation was
+  the bound value 63 versus 256, not a unit mismatch) and documents the divergence, which
+  is option (c), explicitly rejected. Repair: the canonical record counts
   characters and enforces **256** for `profile_id`, `revision_id`, `provider_kind_id`, and
   `model_id`, so the number the ADR already promises wins at both layers; the multi-byte
   fixtures assert consistent acceptance at both layers.
@@ -4283,8 +4285,91 @@ one `P3-18` delivery question) and 21 P3 findings, all routed below.
 
 Parked with owners after V2: the daemon-side incoming subscription version check,
 the 31 pre-Slice-2 invariant DTOs (R23 anchor), the typed tool-name bridge, the
-`incompatible_protocol_version` category nuance, and the durable
-`SessionProviderProfileChanged` append layer (R19 anchor).
+`incompatible_protocol_version` category nuance, the durable
+`SessionProviderProfileChanged` append layer (R19 anchor), and the D-09
+health-evidence follow-up (ADR 0037: populate
+`ProviderHealthEvidenceDto.provider_profile_revision_id` from the real active
+profile revision once the catalog is wired into the health path).
+
+## Appendix J — Wave V3 verification outcome
+
+Seven read-only verifiers (JSON reports `target/verify-w3-{storage,harness-docs,audit,config,health,d09,selection}.json`)
+checked the committed W2 head plus the uncommitted W3 working tree, and the
+controller gates on the frozen tree are `make quick` (1124 passed, 2 skipped),
+`python3 quality/check_docs.py`, and a live `make e2e-real-api` run (2 passed in
+25.48 s) on the reworked harness.
+
+### J.1 Verdicts
+
+| Slice | Items | Verdict |
+| --- | --- | --- |
+| storage | F1 (`P3-09`), `P3-10`, `P3-11`, R21, R31, the deviation hunks | all implemented; 5 P3 |
+| harness and docs | R20, R24, R28, R29, R30, `P3-19`, `P3-36`, R18, R23, R27 | implemented; R26 partial (1 P2, 3 P3) |
+| audit deliverable | the D-16 audit's 22 deletions, 1 declaration, 5 parked items | P2-15 and R36 sound; P2-06 and P2-07 weak (stale line anchors); parked anchors real but three lack a named slice |
+| config | D-10, E8, D-14, R17, R25, R34, R35, R38 | implemented; R33 and R37 partial (5 P3) |
+| health | D-09, D-14 consumption, F2 | D-14 and F2 implemented; D-09 partial before the controller rename (3 P3) |
+| D-09 end to end | G.9 items 1–5 | all implemented after the rename and the documentation follow-up (2 P3, both repaired) |
+| selection and usage | D-04, R16, R22, R32, the differ-differ fix, the usage-scoping conclusion, the loader fix | D-04, R22, the differ-differ fix, the scope conclusion, and the loader fix implemented; R16 and R32 partial (2 P2, 3 P3) |
+
+No P0 defects were found. Two P2 implementation gaps remain (R16, R32), one P1
+and one P2 are audit and documentation defects (stale anchors, a doc comment
+that contradicts R18), and the rest are P3 hardening items.
+
+### J.2 Adjudications
+
+- **K-01.** The D-16 audit's protocol line anchors are stale by about 87 lines
+  and one range now covers an unrelated type. W4 relocates every symbol by name
+  and signature before deleting; the audit JSON is treated as a symbol list,
+  not as a range list (R39).
+- **K-02.** The R16 reverted-document case is a real gap, not a policy: a crash
+  residue plus a reverted startup document opens gated and neither adopts nor
+  rejects the pending removal. It is repaired in W4 (R40).
+- **K-03.** The R32 adoption branch keeps fallible steps after its durable
+  accept; it is repaired with the same invariant rule the candidate path
+  already follows (R41).
+- **K-04.** `session_selection.rs` still documents durable append and subscriber
+  delivery for the session-profile event, which R18 corrected in the documents.
+  The code comment is corrected in W4 (R42); the publication semantics stay as
+  J-02 decided.
+- **K-05.** EVD-051 cited the client fixture for the "reports no profile
+  revision" claim, but only the application test asserted it. The client fixture
+  now asserts typed absence, so the citation is true (done in the wave).
+- **K-06.** The new D-09 wire assertion now proves the key is present and null
+  rather than merely not a string; a future `skip_serializing_if` would fail it
+  (done in the wave).
+- **K-07.** An absent revision serializes as `null`, matching this DTO's sibling
+  optional fields; "absent" is read as an explicit null, not an omitted key.
+- **K-08.** W3 commit messages record the W2 bundling deviations instead of
+  rewriting history (J-05 stands).
+- **K-09.** The `UsageService::by_revision_and_model` collapsing path has no
+  production caller today; it stays declared with a pinning fixture rather than
+  being deleted, because D-04's identity grouping is its documented contract.
+
+### J.3 Repair routing
+
+| R | Finding | Repair | Owner |
+| --- | --- | --- | --- |
+| R39 | audit P1 | Relocate every audit symbol by name before deleting; add the warning to the first audit step | W4-A |
+| R40 | R16 residual | Adopt or reject a durable pending removal even when the startup document matches, instead of opening a gated platform | W4-B |
+| R41 | R32 residual | Remove the post-adoption fallible steps (or pre-validate them before the durable accept) on the adoption branch | W4-B |
+| R42 | audit P2 | Correct the `session_selection.rs` port documentation to the R18 publication semantics | W4-C |
+| R43 | R20 residual | Bind the harness budget self-test to the structural counts (tool-turn count, per-attempt calls, snapshot reads) instead of scalars only | W4-D |
+| R44 | R21 residual | Close the guard evasions (member visibility, non-`json` names, multi-line fields, aliases and generics, `serde_json::Map`, non-`src` paths) or record each as an accepted limit | W4-D |
+| R45 | F1 residual | Assert the complete candidate and state column sets (not a subset and a count) in the removal fault fixtures | W4-D |
+| R46 | F1 residual | Restore a fixture for the `provider_selection_conflict` branch removed with the dead writer | W4-D |
+| R47 | `P3-10` residual | Pin the seed path against a reworded second create statement | W4-D |
+| R48 | R25 residual | Reject a non-numeric port and a non-breaking-space host | W4-E |
+| R49 | R33 residual | Replace the textual rebuild pin with a driven rebuild assertion or record why the path is unobservable | W4-E |
+| R50 | R37 residual | Collapse the second kind enumeration in `intention-config` onto the single owner | W4-E |
+| R51 | R38 residual | Extend the activation-signature pin to a differently named public wrapper | W4-E |
+| R52 | R30 residual | Note or close the evicted-subscriber race that can satisfy a later attempt's byte check | W4-D |
+| R53 | differ-differ P3 | Observe the intermediate adoption in the two-change fixture | W4-B |
+| R54 | D-04 P3 | Add negative fixtures for the usage-set bound, duplicates, and unsorted entries | W4-B |
+
+The documentation follow-ups from G.9 (ADR 0037 field rows, the recorded
+follow-up, `architecture/25`, EVD-051, and the parking-list anchor) are already
+in the wave, so R53 and R54 are the only new slice-level fixtures left in the
+repair lane.
 
 End of register.
 

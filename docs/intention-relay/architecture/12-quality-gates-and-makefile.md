@@ -154,6 +154,8 @@ tests remain mandatory independently of the line threshold.
 - Coverage reports are stored as CI artifacts.
 - Test code and generated code must not inflate the production coverage denominator.
 
+The `intention-daemon` feature-profile normalization in `quality/run_coverage.py` (the `seen_effective` deduplication) is the one deliberate equivalence in the runner: because the daemon report always appends `--all-features` to the flags declared in `quality/features.toml`, a profile whose flags are only that selector, `--no-default-features`, or a `--features` list denotes the same instrumented daemon package set. The runner therefore drops the default-toggle and `--features` selector tokens for `intention-daemon`, deduplicates the resulting effective flag tuples per crate, and lets the first profile (the default one) keep its report name while later equivalent profiles are skipped without producing a second, identical daemon report. This does not weaken the feature-profile policy: the daemon still contributes one complete all-features coverage report per invocation, and it is the only crate the normalization touches. Genuinely different tuples are never merged: each other covered crate runs every profile and critical combination under its own report name, and a daemon tuple that reduces to anything other than the canonical `--all-features` set still runs and produces its own report. `quality/self_test.py` binds both halves of this rule.
+
 Applying an enabled exclusion is explicit and reviewable. The checker rejects duplicate, absolute, traversing, unowned, out-of-source-root, absent, unreported, and all-source-removing exclusions. The sole enabled M2 exclusion is `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to Tier C coverage.
 
 ## Cargo feature-profile policy
@@ -273,8 +275,9 @@ following integration test targets to the machine-readable policy:
 `intention-domain` `m5_control_plane_canonical`, `m5_control_plane_rejections`,
 `m5_session_selection_overrides`; `intention-protocol`
 `control_plane_contracts`; `intention-config` `m5_control_plane_config`;
-`intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`;
-`intention-client` `control_plane_client`, `session_selection_client`;
+`intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`,
+`m5_session_selection`; `intention-client` `control_plane_client`,
+`session_selection_client`;
 `intention-model` `m6_reasoning_surface`. `intention-storage-sqlite` adds no
 new integration file; the current-schema tests live inside the existing
 `sqlite_contracts` target. No new CI job, Makefile target, crate, dependency,

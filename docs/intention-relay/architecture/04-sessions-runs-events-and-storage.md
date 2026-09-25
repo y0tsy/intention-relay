@@ -220,8 +220,11 @@ historical event bytes and use additive versioned records.
 - A runtime configuration lookup for a matching `(SessionId, RunId)` returns
   only its immutable credential-free `ConfigSnapshotDto`, selected by the
   run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
-  cross-session runs all return `run_configuration_not_found`; unavailable or
-  malformed persisted selection returns `run_configuration_unavailable`. Raw
+  cross-session runs all return `run_configuration_not_found`; an absent
+  persisted safe selection row returns `run_configuration_unavailable`, a
+  present but undecodable selection returns `storage_decode_failed`, and a
+  backend read failure is transient `storage_unavailable`, never a permanent
+  not-found. Raw
   TOML, configuration paths, credentials, and SQLite resources never cross
   this DTO-only read boundary.
 - M4 wire run subscriptions are separate from M3 session subscriptions. Their

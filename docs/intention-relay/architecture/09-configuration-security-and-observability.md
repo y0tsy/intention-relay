@@ -73,6 +73,39 @@ checks, discovery, pricing, profile UI) are adopted as accepted future
 directions under [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
 and [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
+### M5+ typed-edit rendering and reload status
+
+Controlled reload renders typed-edit candidate documents inside
+`intention-config` (accepted decision D-10 / `P3-28`). The configuration crate
+builds the document from the active safe `ConfigSnapshotDto` as a TOML value
+tree and serializes it with the TOML serializer
+(`render_edited_configuration`), so:
+
+- values carrying TOML-significant characters are escaped by the serializer
+  instead of producing an unparseable document;
+- configuration fields the edit does not name survive the edit unchanged;
+- a value the configuration shape cannot represent fails with a typed
+  `configuration_edit_invalid` error instead of a generic
+  `invalid_config_toml` parse failure.
+
+The composition maps the protocol typed-edit operations into the configuration
+crate's own credential-free edit-operation type and performs no TOML rendering
+itself. The rendered document is credential-free by construction; the private
+channel re-inserts `provider.credential` as a TOML value
+(`restore_credential_document`) before the candidate flows through the
+unchanged server-side reload contract (`prepare`, `parse_candidate`,
+`reject_catalog_affecting_edits`). A document-shape failure in the restore
+helper is a typed validation error (`invalid_config_toml` or
+`invalid_config_schema`), never a credential-free document that a caller could
+mistake for a configured one.
+
+`ConfigurationProjectionDto.reload_status` is the closed
+`ConfigurationReloadStatusDto` vocabulary (`active` on the wire, the only
+status the current production path produces). It is validated by serde at
+decode: an unknown status is rejected with
+`configuration_projection_invalid`, and a consumer can match the status
+exhaustively (accepted decision D-14 / `P3-08`).
+
 ## Open-text provider credentials
 
 Provider credentials may be stored in TOML in open text by explicit product decision. This is not equivalent to allowing them to leak through the system.
@@ -156,6 +189,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
 | Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, session/run snapshot JSON, event envelopes, errors, logs, and presentation DTOs. |
+| Typed-edit rendering and reload status | Config and composition typed-edit fixtures. | Values with TOML-significant characters round-trip through the rendered document, fields the edit does not name survive, non-representable values yield typed edit errors, and an unknown reload status is rejected at decode. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration

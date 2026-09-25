@@ -51,8 +51,14 @@ A session copies the global `ProviderProfileId` as a durable future default;
 catalog changes never cascade. `SetSessionProviderProfileCommandDto` is
 user-initiated, idempotent, and optimistic: it takes the session, an enabled
 profile ID, the expected session projection revision, and an operation ID;
-it changes only future intent and publishes `SessionProviderProfileChanged`
-through the session-event boundary when the durable default changed; an
+it changes only future intent and, when the durable default changed, publishes
+the typed `SessionProviderProfileChanged` event to the validating session-event
+boundary. Slice 2 keeps no durable copy of that event and writes no durable
+session-event snapshot for it: the control-plane event family has no durable
+append seam yet, so the committed event is validated at the boundary and
+recorded nowhere. Durable delivery is parked as a declared future slice,
+anchored in the register's parking list (`pr24-review-1.md`, "Parked with
+owners after V2", the durable `SessionProviderProfileChanged` append layer). An
 existing-profile request is a successful `changed = false` no-op that
 publishes no event.
 `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe
@@ -96,10 +102,11 @@ selections per page; the request carries no page cursor, because the durable
 reconciliation marker is the single paging authority and its cursor is what the
 acceptance reports. It terminalizes only those, may promote the first
 available item, and never reroutes to a current default or new revision. Usage
-is keyed by exact profile identity and revision; aggregated by profile and
-separately by revision/model; no price, currency, or estimated cost; different
-profiles sharing all safe fields remain independent clients, selection
-identities, and usage groups.
+is keyed by exact profile identity and revision; aggregated by profile into one
+bounded entry per `(revision, model)` identity and separately by
+revision/model; no price, currency, or estimated cost; different profiles
+sharing all safe fields remain independent clients, selection identities, and
+usage groups.
 
 The fork override fields exist on the fork DTOs (`ForkSessionCommandDto` and
 `StartForkRunCommandDto`) and the resolution service is implemented in Slice 2,
@@ -215,8 +222,9 @@ current-schema storage policy, and the per-direction evidence anchors. Required
 evidence includes:
 
 - session default/override command and query fixtures with idempotency, a
-  `changed = false` no-op that publishes no event, and one
-  `SessionProviderProfileChanged` publication per committed change;
+  `changed = false` no-op that publishes no event, and one validated boundary
+  `SessionProviderProfileChanged` publication per committed change (no durable
+  copy in Slice 2);
 - per-turn/fork override binding and mismatch-rejection fixtures;
 - unavailable-queue promotion (8 per transition), reconciliation (32 per page)
   with the durable marker as the single paging authority, and no-reroute

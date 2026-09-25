@@ -6419,9 +6419,15 @@ exact enabled compatible `default` entry, otherwise failing closed.
 
 `SetSessionProviderProfileCommandDto` is user/client initiated, idempotent, and
 optimistic: it takes a session, enabled profile ID, expected session projection
-revision, and operation ID. It changes only future intent, emits a closed
-`SessionProviderProfileChanged` event and snapshot when changed, and cannot
-alter active or queued work. A request for the existing profile is a successful
+revision, and operation ID. It changes only future intent and, when the durable
+default changed, publishes the typed `SessionProviderProfileChanged` event to
+the validating session-event boundary. Slice 2 keeps no durable copy of that
+event and writes no durable session-event snapshot for it, because the
+control-plane event family has no durable append seam yet; durable delivery is
+parked as a declared future slice anchored in the review register's parking
+list (`pr24-review-1.md`, "Parked with owners after V2", the durable
+`SessionProviderProfileChanged` append layer). The command cannot alter active
+or queued work. A request for the existing profile is a successful
 `changed = false` no-op with no new event. A session may retain an unavailable
 profile ID only after later catalog disable/removal; an explicit command cannot
 select a disabled or absent profile.
