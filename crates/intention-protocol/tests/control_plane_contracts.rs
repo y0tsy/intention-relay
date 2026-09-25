@@ -6,7 +6,7 @@
 //! Slice 2 control-plane wire contract evidence.
 
 use intention_protocol::contract_families::{
-    AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto, ArbitraryHeaderPolicyDto,
+    AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto,
     ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationProjectionDto,
     ConfigurationReloadStatusDto, GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto,
     GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto,
@@ -14,10 +14,9 @@ use intention_protocol::contract_families::{
     GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto, ProviderCatalogActivationState,
     ProviderCatalogPageDto, ProviderCatalogStatusDto, ProviderDiscoveryAttemptDto,
     ProviderHealthEvidenceDto, ProviderHealthProjectionDto, ProviderReadinessDto,
-    ProviderReasoningCatalogProjectionDto, ProviderUsageAggregationsDto, RawTomlEditCommandDto,
-    ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateCommandDto,
-    ReloadConfigurationCommandDto, ReloadTransactionDto, ResolvedProviderProfileDto,
-    RotateProviderCredentialsCommandDto, ServerSideParserConfigDto,
+    ProviderUsageAggregationsDto, RawTomlEditCommandDto, ReconcileUnavailableQueueCommandDto,
+    RejectProviderCatalogCandidateCommandDto, ReloadConfigurationCommandDto, ReloadTransactionDto,
+    ResolvedProviderProfileDto, RotateProviderCredentialsCommandDto,
     SetSessionProviderProfileCommandDto, UsageAggregationDto,
 };
 use intention_protocol::{
@@ -669,7 +668,7 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
     // higher revision first is rejected at decode.
     let higher_revision_entry = USAGE_AGGREGATION.replace("\"rev-1\"", "\"rev-2\"");
     let unsorted_usage = format!(r#"{{"entries":[{higher_revision_entry},{USAGE_AGGREGATION}]}}"#);
-    let cases: [RejectionCase<'_>; 17] = [
+    let cases: [RejectionCase<'_>; 14] = [
         (
             malformed_command_version,
             "set_session_provider_profile_invalid",
@@ -711,24 +710,9 @@ fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
             decode_error::<ProviderUsageAggregationsDto>,
         ),
         (
-            r#"{"provider_kind_id":"responses","model_id":"model-1","supported_effort_levels":["low","low"],"responses_reasoning_modes":["standard"],"projection_revision":"projection-1"}"#,
-            "provider_reasoning_catalog_invalid",
-            decode_error::<ProviderReasoningCatalogProjectionDto>,
-        ),
-        (
-            r#"{"policy_revision":"policy-1","kind_descriptor_revision_id":"kind-rev-1","allowed_header_names":[]}"#,
-            "arbitrary_header_policy_invalid",
-            decode_error::<ArbitraryHeaderPolicyDto>,
-        ),
-        (
             r#"{"operation_id":"operation-1","expected_config_revision":"config-rev-1","operations":[]}"#,
             "configuration_edit_invalid",
             decode_error::<ConfigurationEditCommandDto>,
-        ),
-        (
-            r#"{"vllm":{"parser_id":"   ","bounded_limits":"limits-1"}}"#,
-            "server_side_parser_invalid",
-            decode_error::<ServerSideParserConfigDto>,
         ),
         (
             r#"{"kind":"resolved","data":{"profile_id":"sk-live-secret","profile_revision_id":"rev-1"}}"#,

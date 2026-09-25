@@ -3308,16 +3308,6 @@ impl ProviderUsageAggregationsDto {
     }
 }
 
-/// Optional reasoning token usage for one provider observation.
-///
-/// An absent token count means the provider did not report that count; it
-/// must never be interpreted as a zero count.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ReasoningUsageDto {
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-}
-
 fn validate_safe_event_fields(fields: &[&str], code: &'static str) -> DtoResult<()> {
     for field in fields {
         valid_text(field, 256, code)?;
@@ -3329,273 +3319,6 @@ fn validate_safe_event_fields(fields: &[&str], code: &'static str) -> DtoResult<
         ));
     }
     Ok(())
-}
-
-/// A provider catalog candidate was prepared for activation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogCandidatePreparedEventDto {
-    pub candidate_handle: String,
-    pub candidate_catalog_revision_id: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogCandidatePreparedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogCandidatePreparedEventDto {
-            candidate_handle: String,
-            candidate_catalog_revision_id: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogCandidatePreparedEventDto::deserialize(deserializer)?;
-        let value = Self {
-            candidate_handle: raw.candidate_handle,
-            candidate_catalog_revision_id: raw.candidate_catalog_revision_id,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogCandidatePreparedEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.candidate_handle, &self.candidate_catalog_revision_id],
-            "provider_catalog_event_invalid",
-        )
-    }
-}
-
-/// A provider catalog removal became pending.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogRemovalPendingEventDto {
-    pub candidate_handle: String,
-    pub removal_revision_id: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogRemovalPendingEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogRemovalPendingEventDto {
-            candidate_handle: String,
-            removal_revision_id: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogRemovalPendingEventDto::deserialize(deserializer)?;
-        let value = Self {
-            candidate_handle: raw.candidate_handle,
-            removal_revision_id: raw.removal_revision_id,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogRemovalPendingEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.candidate_handle, &self.removal_revision_id],
-            "provider_catalog_event_invalid",
-        )
-    }
-}
-
-/// A provider catalog removal candidate was rejected.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogCandidateRejectedEventDto {
-    pub candidate_handle: String,
-    pub safe_rejection_reason: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogCandidateRejectedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogCandidateRejectedEventDto {
-            candidate_handle: String,
-            safe_rejection_reason: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogCandidateRejectedEventDto::deserialize(deserializer)?;
-        let value = Self {
-            candidate_handle: raw.candidate_handle,
-            safe_rejection_reason: raw.safe_rejection_reason,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogCandidateRejectedEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.candidate_handle, &self.safe_rejection_reason],
-            "provider_catalog_event_invalid",
-        )
-    }
-}
-
-/// A provider catalog removal candidate expired.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogCandidateExpiredEventDto {
-    pub candidate_handle: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogCandidateExpiredEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogCandidateExpiredEventDto {
-            candidate_handle: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogCandidateExpiredEventDto::deserialize(deserializer)?;
-        let value = Self {
-            candidate_handle: raw.candidate_handle,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogCandidateExpiredEventDto {
-    /// Validates the bounded, credential-free event field.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(&[&self.candidate_handle], "provider_catalog_event_invalid")
-    }
-}
-
-/// Activation recovery became required for the provider catalog.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogActivationRecoveryRequiredEventDto {
-    pub candidate_handle: String,
-    pub safe_recovery_reason: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogActivationRecoveryRequiredEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogActivationRecoveryRequiredEventDto {
-            candidate_handle: String,
-            safe_recovery_reason: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogActivationRecoveryRequiredEventDto::deserialize(deserializer)?;
-        let value = Self {
-            candidate_handle: raw.candidate_handle,
-            safe_recovery_reason: raw.safe_recovery_reason,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogActivationRecoveryRequiredEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.candidate_handle, &self.safe_recovery_reason],
-            "provider_catalog_event_invalid",
-        )
-    }
-}
-
-/// Provider catalog activation recovery completed.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderCatalogRecoveryCompletedEventDto {
-    pub active_catalog_revision_id: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ProviderCatalogRecoveryCompletedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderCatalogRecoveryCompletedEventDto {
-            active_catalog_revision_id: String,
-            occurred_at: u64,
-        }
-        let raw = RawProviderCatalogRecoveryCompletedEventDto::deserialize(deserializer)?;
-        let value = Self {
-            active_catalog_revision_id: raw.active_catalog_revision_id,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderCatalogRecoveryCompletedEventDto {
-    /// Validates the bounded, credential-free event field.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_catalog_event_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.active_catalog_revision_id],
-            "provider_catalog_event_invalid",
-        )
-    }
 }
 
 /// A session's durable provider profile changed.
@@ -3857,102 +3580,6 @@ impl ReloadTransactionDto {
             ));
         }
         Ok(())
-    }
-}
-
-/// A configuration reload was committed and became active.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ConfigurationReloadedEventDto {
-    pub transaction_id: String,
-    pub config_revision: String,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ConfigurationReloadedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawConfigurationReloadedEventDto {
-            transaction_id: String,
-            config_revision: String,
-            occurred_at: u64,
-        }
-        let raw = RawConfigurationReloadedEventDto::deserialize(deserializer)?;
-        let value = Self {
-            transaction_id: raw.transaction_id,
-            config_revision: raw.config_revision,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ConfigurationReloadedEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `configuration_reload_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        validate_safe_event_fields(
-            &[&self.transaction_id, &self.config_revision],
-            "configuration_reload_invalid",
-        )
-    }
-}
-
-/// A configuration reload was safely rejected.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ConfigurationReloadRejectedEventDto {
-    pub transaction_id: String,
-    pub safe_failure_code: String,
-    pub safe_failure_detail: Option<String>,
-    pub occurred_at: u64,
-}
-
-impl<'de> Deserialize<'de> for ConfigurationReloadRejectedEventDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawConfigurationReloadRejectedEventDto {
-            transaction_id: String,
-            safe_failure_code: String,
-            safe_failure_detail: Option<String>,
-            occurred_at: u64,
-        }
-        let raw = RawConfigurationReloadRejectedEventDto::deserialize(deserializer)?;
-        let value = Self {
-            transaction_id: raw.transaction_id,
-            safe_failure_code: raw.safe_failure_code,
-            safe_failure_detail: raw.safe_failure_detail,
-            occurred_at: raw.occurred_at,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ConfigurationReloadRejectedEventDto {
-    /// Validates the bounded, credential-free event fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `configuration_reload_invalid` for a blank, over-long, or
-    /// control-bearing field and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        let mut fields: Vec<&str> = vec![&self.transaction_id, &self.safe_failure_code];
-        if let Some(detail) = &self.safe_failure_detail {
-            fields.push(detail);
-        }
-        validate_safe_event_fields(&fields, "configuration_reload_invalid")
     }
 }
 
@@ -5210,286 +4837,6 @@ impl ConfigurationEditCommandDto {
         }
         for operation in &self.operations {
             operation.validate()?;
-        }
-        Ok(())
-    }
-}
-
-/// A closed code-owned policy for arbitrary provider request headers.
-///
-/// The policy names allowed header names only, bound to one kind descriptor
-/// revision; it never carries header values.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ArbitraryHeaderPolicyDto {
-    pub policy_revision: String,
-    pub kind_descriptor_revision_id: String,
-    pub allowed_header_names: Vec<String>,
-}
-
-impl<'de> Deserialize<'de> for ArbitraryHeaderPolicyDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawArbitraryHeaderPolicyDto {
-            policy_revision: String,
-            kind_descriptor_revision_id: String,
-            allowed_header_names: Vec<String>,
-        }
-        let raw = RawArbitraryHeaderPolicyDto::deserialize(deserializer)?;
-        let value = Self {
-            policy_revision: raw.policy_revision,
-            kind_descriptor_revision_id: raw.kind_descriptor_revision_id,
-            allowed_header_names: raw.allowed_header_names,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ArbitraryHeaderPolicyDto {
-    /// Validates the bounded, credential-free header policy fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `arbitrary_header_policy_invalid` for a blank, over-long, or
-    /// control-bearing revision or header name, a policy with no names or
-    /// more than 64 names, and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        for field in [&self.policy_revision, &self.kind_descriptor_revision_id] {
-            valid_text(field, 256, "arbitrary_header_policy_invalid")?;
-        }
-        if self.allowed_header_names.is_empty() || self.allowed_header_names.len() > 64 {
-            return Err(ErrorDto::validation(
-                "arbitrary_header_policy_invalid",
-                "header policy must carry between 1 and 64 safe header names",
-            ));
-        }
-        for header in &self.allowed_header_names {
-            let header = header.trim();
-            if header.is_empty()
-                || header.chars().count() > 128
-                || header.chars().any(char::is_control)
-            {
-                return Err(ErrorDto::validation(
-                    "arbitrary_header_policy_invalid",
-                    "allowed header name is invalid",
-                ));
-            }
-        }
-        let mut fields: Vec<&str> = vec![&self.policy_revision, &self.kind_descriptor_revision_id];
-        fields.extend(self.allowed_header_names.iter().map(String::as_str));
-        if fields.iter().any(|value| credential_shaped(value)) {
-            return Err(ErrorDto::validation(
-                "credentials_forbidden",
-                "credentials are forbidden",
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Local-history-first provider reasoning preservation controls.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProviderPreservationControlsDto {
-    /// Preserve provider reasoning in the local history.
-    pub preserve_thinking: bool,
-    /// Keep the thinking field in the local history when preserved.
-    pub thinking_keep: bool,
-}
-
-/// A closed code-owned server-side parser configuration.
-///
-/// The configuration names a parser and its bounded limits only; it never
-/// carries raw JSON templates.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ServerSideParserConfigDto {
-    None,
-    Vllm {
-        parser_id: String,
-        bounded_limits: String,
-    },
-    Sglang {
-        parser_id: String,
-        bounded_limits: String,
-    },
-}
-
-impl<'de> Deserialize<'de> for ServerSideParserConfigDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum RawServerSideParserConfigDto {
-            None,
-            Vllm {
-                parser_id: String,
-                bounded_limits: String,
-            },
-            Sglang {
-                parser_id: String,
-                bounded_limits: String,
-            },
-        }
-        let raw = RawServerSideParserConfigDto::deserialize(deserializer)?;
-        let value = match raw {
-            RawServerSideParserConfigDto::None => Self::None,
-            RawServerSideParserConfigDto::Vllm {
-                parser_id,
-                bounded_limits,
-            } => Self::Vllm {
-                parser_id,
-                bounded_limits,
-            },
-            RawServerSideParserConfigDto::Sglang {
-                parser_id,
-                bounded_limits,
-            } => Self::Sglang {
-                parser_id,
-                bounded_limits,
-            },
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ServerSideParserConfigDto {
-    /// Validates the bounded, credential-free parser configuration fields.
-    ///
-    /// # Errors
-    ///
-    /// Returns `server_side_parser_invalid` for a blank, over-long, or
-    /// control-bearing parser id or bounded limits and
-    /// `credentials_forbidden` for a credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        match self {
-            Self::None => Ok(()),
-            Self::Vllm {
-                parser_id,
-                bounded_limits,
-            }
-            | Self::Sglang {
-                parser_id,
-                bounded_limits,
-            } => {
-                valid_text(parser_id, 256, "server_side_parser_invalid")?;
-                valid_text(bounded_limits, 1024, "server_side_parser_invalid")?;
-                if credential_shaped(parser_id) || credential_shaped(bounded_limits) {
-                    return Err(ErrorDto::validation(
-                        "credentials_forbidden",
-                        "credentials are forbidden",
-                    ));
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-/// The closed reasoning effort levels recognized by the catalog projection.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffortLevel {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-/// The closed Responses reasoning modes recognized by the catalog projection.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResponsesReasoningMode {
-    Standard,
-    Pro,
-}
-
-/// A credential-free provider reasoning catalog projection.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ProviderReasoningCatalogProjectionDto {
-    pub provider_kind_id: String,
-    pub model_id: String,
-    pub supported_effort_levels: Vec<ReasoningEffortLevel>,
-    pub responses_reasoning_modes: Vec<ResponsesReasoningMode>,
-    pub projection_revision: String,
-}
-
-impl<'de> Deserialize<'de> for ProviderReasoningCatalogProjectionDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawProviderReasoningCatalogProjectionDto {
-            provider_kind_id: String,
-            model_id: String,
-            supported_effort_levels: Vec<ReasoningEffortLevel>,
-            responses_reasoning_modes: Vec<ResponsesReasoningMode>,
-            projection_revision: String,
-        }
-        let raw = RawProviderReasoningCatalogProjectionDto::deserialize(deserializer)?;
-        let value = Self {
-            provider_kind_id: raw.provider_kind_id,
-            model_id: raw.model_id,
-            supported_effort_levels: raw.supported_effort_levels,
-            responses_reasoning_modes: raw.responses_reasoning_modes,
-            projection_revision: raw.projection_revision,
-        };
-        value.validate().map_err(de::Error::custom)?;
-        Ok(value)
-    }
-}
-
-impl ProviderReasoningCatalogProjectionDto {
-    /// Validates the bounded, duplicate-free, credential-free projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_reasoning_catalog_invalid` for a blank, over-long,
-    /// or control-bearing text field, a closed set with duplicates or
-    /// repeated entries, and `credentials_forbidden` for a
-    /// credential-shaped value.
-    pub fn validate(&self) -> DtoResult<()> {
-        for field in [
-            &self.provider_kind_id,
-            &self.model_id,
-            &self.projection_revision,
-        ] {
-            valid_text(field, 256, "provider_reasoning_catalog_invalid")?;
-        }
-        if credential_shaped(&self.provider_kind_id)
-            || credential_shaped(&self.model_id)
-            || credential_shaped(&self.projection_revision)
-        {
-            return Err(ErrorDto::validation(
-                "credentials_forbidden",
-                "credentials are forbidden",
-            ));
-        }
-        for (index, level) in self.supported_effort_levels.iter().enumerate() {
-            if self.supported_effort_levels[..index].contains(level) {
-                return Err(ErrorDto::validation(
-                    "provider_reasoning_catalog_invalid",
-                    "supported effort levels must not repeat",
-                ));
-            }
-        }
-        for (index, mode) in self.responses_reasoning_modes.iter().enumerate() {
-            if self.responses_reasoning_modes[..index].contains(mode) {
-                return Err(ErrorDto::validation(
-                    "provider_reasoning_catalog_invalid",
-                    "responses reasoning modes must not repeat",
-                ));
-            }
         }
         Ok(())
     }
@@ -7985,14 +7332,6 @@ mod tests {
         }
     }
 
-    fn candidate_prepared_event() -> ProviderCatalogCandidatePreparedEventDto {
-        ProviderCatalogCandidatePreparedEventDto {
-            candidate_handle: "candidate-1".to_owned(),
-            candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
-            occurred_at: 100,
-        }
-    }
-
     fn reload_command() -> ReloadConfigurationCommandDto {
         ReloadConfigurationCommandDto {
             candidate_snapshot_reference: Some("snapshot-1".to_owned()),
@@ -8104,24 +7443,6 @@ mod tests {
                 key_path: "daemon.max_parallel_runs".to_owned(),
                 safe_value: "2".to_owned(),
             }],
-        }
-    }
-
-    fn header_policy() -> ArbitraryHeaderPolicyDto {
-        ArbitraryHeaderPolicyDto {
-            policy_revision: "policy-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            allowed_header_names: vec!["x-provider-trace".to_owned()],
-        }
-    }
-
-    fn reasoning_catalog_projection() -> ProviderReasoningCatalogProjectionDto {
-        ProviderReasoningCatalogProjectionDto {
-            provider_kind_id: "responses".to_owned(),
-            model_id: "model-1".to_owned(),
-            supported_effort_levels: vec![ReasoningEffortLevel::Low, ReasoningEffortLevel::High],
-            responses_reasoning_modes: vec![ResponsesReasoningMode::Standard],
-            projection_revision: "projection-1".to_owned(),
         }
     }
 
@@ -8596,18 +7917,6 @@ mod tests {
         assert!(aggregation.validate().is_ok());
         round_trip(&aggregation);
 
-        // Absent reasoning token counts never mean zero.
-        let absent = ReasoningUsageDto {
-            input_tokens: None,
-            output_tokens: None,
-        };
-        round_trip(&absent);
-        let partial = ReasoningUsageDto {
-            input_tokens: Some(0),
-            output_tokens: Some(3),
-        };
-        round_trip(&partial);
-
         // Periods ending before their start are rejected.
         let mut reversed = usage_query();
         reversed.usage_period_start = 200;
@@ -8707,42 +8016,6 @@ mod tests {
 
     #[test]
     fn zone2_catalog_events_round_trip_and_validate() {
-        let prepared = candidate_prepared_event();
-        assert!(prepared.validate().is_ok());
-        round_trip(&prepared);
-        let pending = ProviderCatalogRemovalPendingEventDto {
-            candidate_handle: "candidate-1".to_owned(),
-            removal_revision_id: "catalog-rev-2".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(pending.validate().is_ok());
-        round_trip(&pending);
-        let rejected = ProviderCatalogCandidateRejectedEventDto {
-            candidate_handle: "candidate-1".to_owned(),
-            safe_rejection_reason: "reviewer rejected".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(rejected.validate().is_ok());
-        round_trip(&rejected);
-        let expired = ProviderCatalogCandidateExpiredEventDto {
-            candidate_handle: "candidate-1".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(expired.validate().is_ok());
-        round_trip(&expired);
-        let recovery_required = ProviderCatalogActivationRecoveryRequiredEventDto {
-            candidate_handle: "candidate-1".to_owned(),
-            safe_recovery_reason: "activation failed".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(recovery_required.validate().is_ok());
-        round_trip(&recovery_required);
-        let recovery_completed = ProviderCatalogRecoveryCompletedEventDto {
-            active_catalog_revision_id: "catalog-rev-1".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(recovery_completed.validate().is_ok());
-        round_trip(&recovery_completed);
         let changed = SessionProviderProfileChangedEventDto {
             session_id: "session-1".to_owned(),
             previous_profile_id: "profile-default".to_owned(),
@@ -8753,8 +8026,8 @@ mod tests {
         assert!(changed.validate().is_ok());
         round_trip(&changed);
 
-        let mut credential = prepared;
-        credential.candidate_handle = "sk-candidate".to_owned();
+        let mut credential = changed;
+        credential.session_id = "sk-session".to_owned();
         assert_eq!(
             credential
                 .validate()
@@ -8789,22 +8062,6 @@ mod tests {
         invalid.safe_failure_code = Some("validation_failed".to_owned());
         assert!(invalid.validate().is_ok());
         round_trip(&invalid);
-
-        let reloaded = ConfigurationReloadedEventDto {
-            transaction_id: "transaction-1".to_owned(),
-            config_revision: "config-rev-2".to_owned(),
-            occurred_at: 100,
-        };
-        assert!(reloaded.validate().is_ok());
-        round_trip(&reloaded);
-        let reload_rejected = ConfigurationReloadRejectedEventDto {
-            transaction_id: "transaction-1".to_owned(),
-            safe_failure_code: "validation_failed".to_owned(),
-            safe_failure_detail: Some("safe detail".to_owned()),
-            occurred_at: 100,
-        };
-        assert!(reload_rejected.validate().is_ok());
-        round_trip(&reload_rejected);
 
         // Neither candidate reference present is rejected.
         let mut no_reference = reload_command();
@@ -9035,117 +8292,6 @@ mod tests {
                 .code(),
             "credentials_forbidden"
         );
-
-        let policy = header_policy();
-        assert!(policy.validate().is_ok());
-        round_trip(&policy);
-        let mut empty_policy = header_policy();
-        empty_policy.allowed_header_names = Vec::new();
-        assert_eq!(
-            empty_policy
-                .validate()
-                .expect_err("an empty header policy is rejected")
-                .code(),
-            "arbitrary_header_policy_invalid"
-        );
-        let mut credential_policy = header_policy();
-        credential_policy.allowed_header_names = vec!["sk-header".to_owned()];
-        assert_eq!(
-            credential_policy
-                .validate()
-                .expect_err("credential-shaped header name is rejected")
-                .code(),
-            "credentials_forbidden"
-        );
-
-        round_trip(&ProviderPreservationControlsDto {
-            preserve_thinking: true,
-            thinking_keep: false,
-        });
-        for parser in [
-            ServerSideParserConfigDto::None,
-            ServerSideParserConfigDto::Vllm {
-                parser_id: "parser-1".to_owned(),
-                bounded_limits: "max-context=8192".to_owned(),
-            },
-            ServerSideParserConfigDto::Sglang {
-                parser_id: "parser-2".to_owned(),
-                bounded_limits: "max-context=4096".to_owned(),
-            },
-        ] {
-            assert!(parser.validate().is_ok());
-            round_trip(&parser);
-        }
-        let credential_parser = ServerSideParserConfigDto::Vllm {
-            parser_id: "parser-1".to_owned(),
-            bounded_limits: "Bearer limits".to_owned(),
-        };
-        assert_eq!(
-            credential_parser
-                .validate()
-                .expect_err("credential-shaped parser limits are rejected")
-                .code(),
-            "credentials_forbidden"
-        );
-
-        let projection = reasoning_catalog_projection();
-        assert!(projection.validate().is_ok());
-        round_trip(&projection);
-        for effort in [
-            ReasoningEffortLevel::None,
-            ReasoningEffortLevel::Minimal,
-            ReasoningEffortLevel::Low,
-            ReasoningEffortLevel::Medium,
-            ReasoningEffortLevel::High,
-            ReasoningEffortLevel::Xhigh,
-            ReasoningEffortLevel::Max,
-        ] {
-            round_trip(&effort);
-        }
-        for mode in [
-            ResponsesReasoningMode::Standard,
-            ResponsesReasoningMode::Pro,
-        ] {
-            round_trip(&mode);
-        }
-        let mut all_levels = reasoning_catalog_projection();
-        all_levels.supported_effort_levels = vec![
-            ReasoningEffortLevel::None,
-            ReasoningEffortLevel::Minimal,
-            ReasoningEffortLevel::Low,
-            ReasoningEffortLevel::Medium,
-            ReasoningEffortLevel::High,
-            ReasoningEffortLevel::Xhigh,
-            ReasoningEffortLevel::Max,
-        ];
-        assert!(all_levels.validate().is_ok());
-        round_trip(&all_levels);
-        let mut both_modes = reasoning_catalog_projection();
-        both_modes.responses_reasoning_modes = vec![
-            ResponsesReasoningMode::Standard,
-            ResponsesReasoningMode::Pro,
-        ];
-        assert!(both_modes.validate().is_ok());
-        round_trip(&both_modes);
-        let mut duplicated = reasoning_catalog_projection();
-        duplicated.supported_effort_levels =
-            vec![ReasoningEffortLevel::High, ReasoningEffortLevel::High];
-        assert_eq!(
-            duplicated
-                .validate()
-                .expect_err("duplicate effort levels are rejected")
-                .code(),
-            "provider_reasoning_catalog_invalid"
-        );
-        let mut credential_projection = reasoning_catalog_projection();
-        credential_projection.model_id = "sk-model".to_owned();
-        assert_eq!(
-            credential_projection
-                .validate()
-                .expect_err("credential-shaped projection field is rejected")
-                .code(),
-            "credentials_forbidden"
-        );
     }
 
     #[test]
@@ -9176,40 +8322,6 @@ mod tests {
             serde_json::to_string(&admit_recovered_accepted()).expect("admit accepted serializes"),
             serde_json::to_string(&usage_query()).expect("usage query serializes"),
             serde_json::to_string(&usage_aggregation()).expect("usage aggregation serializes"),
-            serde_json::to_string(&ReasoningUsageDto {
-                input_tokens: Some(1),
-                output_tokens: None,
-            })
-            .expect("reasoning usage serializes"),
-            serde_json::to_string(&candidate_prepared_event()).expect("prepared event serializes"),
-            serde_json::to_string(&ProviderCatalogRemovalPendingEventDto {
-                candidate_handle: "candidate-1".to_owned(),
-                removal_revision_id: "catalog-rev-2".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("pending event serializes"),
-            serde_json::to_string(&ProviderCatalogCandidateRejectedEventDto {
-                candidate_handle: "candidate-1".to_owned(),
-                safe_rejection_reason: "reviewer rejected".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("rejected event serializes"),
-            serde_json::to_string(&ProviderCatalogCandidateExpiredEventDto {
-                candidate_handle: "candidate-1".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("expired event serializes"),
-            serde_json::to_string(&ProviderCatalogActivationRecoveryRequiredEventDto {
-                candidate_handle: "candidate-1".to_owned(),
-                safe_recovery_reason: "activation failed".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("recovery required event serializes"),
-            serde_json::to_string(&ProviderCatalogRecoveryCompletedEventDto {
-                active_catalog_revision_id: "catalog-rev-1".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("recovery completed event serializes"),
             serde_json::to_string(&SessionProviderProfileChangedEventDto {
                 session_id: "session-1".to_owned(),
                 previous_profile_id: "profile-default".to_owned(),
@@ -9221,19 +8333,6 @@ mod tests {
             serde_json::to_string(&reload_command()).expect("reload command serializes"),
             serde_json::to_string(&reload_transaction(true))
                 .expect("reload transaction serializes"),
-            serde_json::to_string(&ConfigurationReloadedEventDto {
-                transaction_id: "transaction-1".to_owned(),
-                config_revision: "config-rev-2".to_owned(),
-                occurred_at: 100,
-            })
-            .expect("reloaded event serializes"),
-            serde_json::to_string(&ConfigurationReloadRejectedEventDto {
-                transaction_id: "transaction-1".to_owned(),
-                safe_failure_code: "validation_failed".to_owned(),
-                safe_failure_detail: None,
-                occurred_at: 100,
-            })
-            .expect("reload rejected event serializes"),
             serde_json::to_string(&rotate_credentials_command())
                 .expect("rotation command serializes"),
             serde_json::to_string(&rotation_result()).expect("rotation result serializes"),
@@ -9243,19 +8342,6 @@ mod tests {
             serde_json::to_string(&pricing_observation()).expect("pricing observation serializes"),
             serde_json::to_string(&raw_toml_edit()).expect("raw toml edit serializes"),
             serde_json::to_string(&typed_config_edit()).expect("typed edit serializes"),
-            serde_json::to_string(&header_policy()).expect("header policy serializes"),
-            serde_json::to_string(&ProviderPreservationControlsDto {
-                preserve_thinking: true,
-                thinking_keep: false,
-            })
-            .expect("preservation controls serialize"),
-            serde_json::to_string(&ServerSideParserConfigDto::Vllm {
-                parser_id: "parser-1".to_owned(),
-                bounded_limits: "max-context=8192".to_owned(),
-            })
-            .expect("parser config serializes"),
-            serde_json::to_string(&reasoning_catalog_projection())
-                .expect("reasoning projection serializes"),
         ];
         for payload in payloads {
             let json = payload;
@@ -9322,11 +8408,6 @@ mod tests {
                 value.validate()
             }),
             Box::new(|| {
-                let mut value = candidate_prepared_event();
-                value.candidate_handle = "Bearer secret".to_owned();
-                value.validate()
-            }),
-            Box::new(|| {
                 let mut value = reload_transaction(true);
                 value.transaction_id = "sk-test".to_owned();
                 value.validate()
@@ -9363,16 +8444,6 @@ mod tests {
                 value.expected_config_revision = "sk-test".to_owned();
                 value.validate()
             }),
-            Box::new(|| {
-                let mut value = header_policy();
-                value.kind_descriptor_revision_id = "api_key".to_owned();
-                value.validate()
-            }),
-            Box::new(|| {
-                let mut value = reasoning_catalog_projection();
-                value.projection_revision = "Bearer secret".to_owned();
-                value.validate()
-            }),
         ];
         for (index, case) in cases.into_iter().enumerate() {
             assert_eq!(
@@ -9398,12 +8469,9 @@ mod tests {
             assert!(serde_json::from_str::<ProviderDiscoveryPhase>(wire).is_err());
             assert!(serde_json::from_str::<ProviderAvailabilityObservation>(wire).is_err());
             assert!(serde_json::from_str::<ProviderHealthFailureCategory>(wire).is_err());
-            assert!(serde_json::from_str::<ReasoningEffortLevel>(wire).is_err());
-            assert!(serde_json::from_str::<ResponsesReasoningMode>(wire).is_err());
             assert!(serde_json::from_str::<ConfigurationOriginDto>(wire).is_err());
             assert!(serde_json::from_str::<ConfigurationValidationOutcomeDto>(wire).is_err());
             assert!(serde_json::from_str::<ConfigurationCommitOutcomeDto>(wire).is_err());
-            assert!(serde_json::from_str::<ServerSideParserConfigDto>(wire).is_err());
             assert!(serde_json::from_str::<CredentialTransportMode>(wire).is_err());
         }
         // Tagged enums reject unknown tags and unknown variants.
