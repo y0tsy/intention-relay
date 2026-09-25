@@ -4142,6 +4142,63 @@ Rows added by the coverage audit and decisions D-11 to D-16:
 | Provider adapter documentation | The SDK error classification rule by HTTP status (D-12) |
 | Evidence register | EVD-063 after F3 and F4 change what the live evidence means; EVD-051 after F2 strengthens the non-authority evidence |
 
+## Appendix H. W1 verification outcome (V1, 2026-09-25)
+
+Five read-only verifiers checked the eight W1 commits against the accepted option text,
+each item's own regression test, the removed surface, and the named documents.
+
+| Slice | Items | Verdicts | Verifier findings |
+| --- | --- | --- | --- |
+| A | D-01, P2-02, D-13, P3-22, P3-24 | implemented, implemented, deviated, implemented, partial | P1-01's profile-digest half unfinished (P2); D-13 bound not aligned (P3); no storage-failure fixture for P3-24's abort paths (P3); guard scans only `crates/**` and exact literals (P3) |
+| B | A2, D-08, P2-03, P2-08 | implemented, implemented, partial, implemented | P2-03 fixtures lack a malformed-text case and an admission-path rejection (P3); `architecture/02` generalizes decode enforcement that 31 pre-Slice-2 DTOs still lack (P3) |
+| C | E2, E3, A4, F3, F4, F5, F6 | implemented, implemented, implemented, implemented, implemented, implemented, partial | unbounded synchronous harness waits (`client.health`, `send_command`) (P2); F5 invariant vacuous on an empty fact set (P3); post-loop assertions on provider-chosen arguments (P3); a second six-name wire table in the durable discriminator (P3) |
+| E | A3, E5, A6 | implemented, implemented, implemented | run-identity lookup failures collapse to permanent not-found and the trait doc omits `storage_unavailable` (P2); NOTE claim "none returns without committing" false for two rejection branches (P3); A6 read-backs miss the touch and profile-change paths (P3); commit `9056b83` overstates the race (P3) |
+| F | D-12, P3-30, P3-31 | partial, implemented, implemented | the retryability rule has no documentation anchor (P3) |
+
+### H.1 Adjudications
+
+- **D-13 (deviated).** The accepted option requires both layers to count characters and the
+  bound value to be aligned, with one number per identifier field in ADR 0037 Appendix A.
+  The shipped change keeps 63 canonical bytes against 256 wire characters and documents the
+  divergence, which is option (c), explicitly rejected. Repair: the canonical record counts
+  characters and enforces **256** for `profile_id`, `revision_id`, `provider_kind_id`, and
+  `model_id`, so the number the ADR already promises wins at both layers; the multi-byte
+  fixtures assert consistent acceptance at both layers.
+- **P3-24 (partial).** Its remediation is a code change (fallible startup calls route through
+  `blocked(error.code())`), so the missing fixture is a real gap, not an optional extra.
+- **P1-01 (profile half).** D-01 item 3 names only the selection column, but the finding and
+  the accepted option cover the canonical profile revision digest too: the durable column is
+  still a JSON-text hash while `provider_profile_revision_digest` has no production caller.
+  The domain function already exists, so the repair is the storage call site.
+- **History correction.** The commit body of `9056b83` claims a lost race that the
+  `UNIQUE(workspace_root)` constraint already prevented; the defect was the error mapping.
+  The message is not rewritten for wording, and this appendix records the correction.
+
+### H.2 Repair routing folded into W2
+
+| Repair | From | Content | Owner |
+| --- | --- | --- | --- |
+| R1 | P1-01 | Storage writes the canonical profile revision digest | W2-A |
+| R2 | D-13 | Character counting and one aligned bound (256) at both layers; ADR 0037 Appendix A and `architecture/02` state the single number per field | W2-D, with the `architecture/02` sentence on W2-B |
+| R3 | P3-24 | Fallible startup calls route through `blocked` and gain their fixtures | W2-A |
+| R4 | guard scope | Extend the source guard beyond `crates/**` and record its literal-shape limits | W2-D |
+| R5 | P2-03 | Malformed-text version fixture; admission-path rejection test | W2-E (fixture), W2-C (admission test) |
+| R6 | `architecture/02` | Scope the decode-enforcement sentence to the control-plane families and record the 31 pre-Slice-2 DTOs as a follow-up card | W2-B |
+| R7 | F6 | Bound every synchronous harness wait (transport read timeout or a wrapped call) | W2-F |
+| R8 | F5 | Require a non-empty terminal fact set before the invariant loop | W2-F |
+| R9 | A4 residue | Keep post-loop assertions off provider-chosen argument text | W2-F |
+| R10 | E3 residue | Declare the durable tool-result discriminator table as a separate boundary | W2-A |
+| R11 | A3 residue | Map run-identity lookup failures as unavailable, not permanent not-found; update the trait doc | W2-A |
+| R12 | A6 | Correct the NOTE's "none returns without committing" claim | W2-C |
+| R13 | A6 | Cover the touch and profile-change commit paths with durable read-backs | W2-C |
+| R14 | D-12 | Document the SDK error classification rule by HTTP status in the provider adapter documentation | W2-B |
+| R15 | P2-03 / `architecture/02` | Keep the schema-version fixtures loud on a version bump | W2-E |
+
+Parked with owners: the daemon-side incoming subscription version check (P2-08 "Consider"),
+the 31 pre-Slice-2 invariant DTOs, the typed tool-name bridge, and the
+`incompatible_protocol_version` category nuance (Validation in protocol and client,
+Unavailable in transport).
+
 End of register.
 
 <!-- pr24-review-1: complete -->
