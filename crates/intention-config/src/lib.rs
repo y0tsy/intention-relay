@@ -1038,6 +1038,11 @@ credential = \"{credential}\"
             Some("http://api.example.com/v1"),
             Some("http://127.0.0.1.evil.example.com/v1"),
             Some("http://localhost.evil.example.com/v1"),
+            // An HTTPS endpoint without an authority has no host to reach
+            // (P3-03): the domain validator rejects it and the config layer
+            // reports the same typed code.
+            Some("https:///v1"),
+            Some("https://:8080/v1"),
         ] {
             let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
                 v1(
@@ -1048,7 +1053,7 @@ credential = \"{credential}\"
                 ),
                 explicit_source(),
             ))
-            .expect_err("non-loopback HTTP is rejected at startup");
+            .expect_err("an endpoint that violates the authority or loopback policy is rejected");
             assert_eq!(error.code(), "invalid_provider_endpoint");
         }
     }

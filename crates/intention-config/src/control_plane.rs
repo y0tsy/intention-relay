@@ -10,7 +10,9 @@
 //! digests, or serialized output. The raw text exists only transiently inside
 //! the parse call; responses and DTOs never echo it.
 
-use crate::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
+use crate::{
+    ConfigSnapshotDto, ProviderKindDto, ProviderSelectionDto, RawConfigInputDto, ResolvedConfigDto,
+};
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, TimestampDto,
 };
@@ -406,6 +408,45 @@ pub fn classify_changed_fields(left: &ConfigSnapshotDto, right: &ConfigSnapshotD
     changed
 }
 
+/// Projects one active catalog profile declaration into the credential-free
+/// snapshot shape the catalog prepare path compares against.
+///
+/// The startup catalog re-derivation (finding `P1-03`, accepted decision
+/// D-02) compares the startup document with the durable active catalog, and
+/// the catalog prepare path detects change by comparing two configuration
+/// snapshots. This projection turns one catalog profile declaration (kind,
+/// model, endpoint) into that comparison shape: it inherits the schema
+/// version, revision identity, capture time, execution policy, and source
+/// category of the reference snapshot and replaces only the provider
+/// declaration. The projection is comparison input only; it is never
+/// persisted, disclosed, or exposed as the active configuration.
+///
+/// # Errors
+///
+/// Returns a typed validation error when the projected declaration cannot
+/// form a valid provider selection (for example a non-HTTPS endpoint), and a
+/// safe unavailable error when the reference schema version is not the
+/// current configuration schema.
+pub fn catalog_declaration_snapshot(
+    reference: &ConfigSnapshotDto,
+    kind: ProviderKindDto,
+    model: &str,
+    endpoint: Option<&str>,
+) -> DtoResult<ConfigSnapshotDto> {
+    let resolved = ResolvedConfigDto::from_public_parts(
+        reference.schema_version(),
+        ProviderSelectionDto::new(kind, model.to_owned(), endpoint.map(str::to_owned), false)?,
+        *reference.resolved().provider_execution(),
+        reference.resolved().source_kind(),
+    )?;
+    ConfigSnapshotDto::new(
+        reference.schema_version(),
+        reference.revision_id(),
+        reference.captured_at(),
+        resolved,
+    )
+}
+
 /// Rejects candidate changes that would alter provider-catalog semantics.
 ///
 /// The provider catalog is startup-only per the configuration/provider
@@ -415,9 +456,11 @@ pub fn classify_changed_fields(left: &ConfigSnapshotDto, right: &ConfigSnapshotD
 /// provider endpoint is rejected with `catalog_change_requires_restart`,
 /// because each of those fields participates in the active catalog profile's
 /// identity and selection: kind selects the kind descriptor, and model and
-/// endpoint hash into the profile revision and the resolved selection. Until
-/// catalog replacement can atomically advance both authorities, those changes
-/// require a daemon restart. Execution-policy changes remain reloadable.
+/// endpoint hash into the profile revision and the resolved selection. The
+/// advertised recovery is real: the next daemon startup re-derives the
+/// catalog from the startup document through the catalog prepare and accept
+/// path (finding `P1-03`, accepted decision D-02), so restarting the daemon
+/// applies the change. Execution-policy changes remain reloadable.
 ///
 /// # Errors
 ///
@@ -434,7 +477,7 @@ pub fn reject_catalog_affecting_edits(
         Err(ErrorDto::new(
             "catalog_change_requires_restart",
             ErrorCategoryDto::Policy,
-            "catalog-affecting configuration changes require a daemon restart",
+            "catalog-affecting configuration changes apply at the next daemon restart",
             ErrorRetryDto::Manual,
             None,
         )?)

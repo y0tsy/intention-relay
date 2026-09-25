@@ -141,10 +141,11 @@ impl ProviderControlPlane {
     /// Builds the control plane over the shared durable repository handle.
     fn new(handle: RepositoryHandle) -> Self {
         let factories = vec![
-            Box::new(CompositionDriverFactory::service("openrouter"))
-                as Box<dyn ProviderDriverFactory>,
             Box::new(CompositionDriverFactory::service(
-                "generic-chat-completion-api",
+                ProviderKindDto::Openrouter,
+            )) as Box<dyn ProviderDriverFactory>,
+            Box::new(CompositionDriverFactory::service(
+                ProviderKindDto::GenericChatCompletionApi,
             )),
         ];
         Self {
@@ -264,27 +265,25 @@ impl ProviderRemovalRepositoryDto for RepositoryHandle {
 /// lookups and the private registry contract are fully wired without any
 /// credential crossing a boundary.
 struct CompositionDriverFactory {
-    kind: String,
+    kind: ProviderKindDto,
 }
 
 impl CompositionDriverFactory {
-    fn service(kind: &'static str) -> Self {
-        Self {
-            kind: kind.to_owned(),
-        }
+    const fn service(kind: ProviderKindDto) -> Self {
+        Self { kind }
     }
 }
 
 impl ProviderDriverFactory for CompositionDriverFactory {
     fn kind(&self) -> &str {
-        &self.kind
+        self.kind.as_str()
     }
 
     fn supports_contract(
         &self,
         contract: &intention_domain::ProviderDriverContractRevisionDto,
     ) -> bool {
-        contract.driver_family == self.kind && contract.major == 1 && contract.minor == 1
+        contract.driver_family == self.kind.as_str() && contract.major == 1 && contract.minor == 1
     }
 
     fn build(
@@ -304,15 +303,35 @@ impl ProviderDriverFactory for CompositionDriverFactory {
             profile.profile.safe_header_name.clone(),
             None,
         )?;
-        let preflight = if self.kind == "openrouter" {
-            declared.into_openrouter().map(|_| ())
-        } else {
-            declared.into_generic_chat().map(|_| ())
-        };
-        preflight?;
+        declared.preflight_for_kind(self.kind)?;
         let _ = &profile.private_credential_reference;
         Ok(Box::new(CompositionCatalogDriverHandle))
     }
+}
+
+/// Resolves one catalog provider kind id into the typed provider kind.
+///
+/// Catalog kind ids are the normalized typed kind strings, so the typed kind
+/// is the single mapping authority: an id with no typed kind fails closed
+/// instead of being routed to another adapter.
+///
+/// # Errors
+///
+/// Returns `unsupported_provider_kind` when no typed provider kind matches
+/// the supplied catalog id.
+fn typed_provider_kind(kind_id: &str) -> DtoResult<ProviderKindDto> {
+    [
+        ProviderKindDto::Openrouter,
+        ProviderKindDto::GenericChatCompletionApi,
+    ]
+    .into_iter()
+    .find(|kind| kind.as_str() == kind_id)
+    .ok_or_else(|| {
+        ErrorDto::validation(
+            "unsupported_provider_kind",
+            "the provider kind has no registered adapter",
+        )
+    })
 }
 
 /// Credential-free opaque handle behind the private registry.
@@ -555,6 +574,29 @@ impl DeclaredProviderOptions {
             builder = builder.with_reasoning_effort(effort);
         }
         builder.build()
+    }
+
+    /// Preflights this declaration through the option builder of one typed
+    /// provider kind.
+    ///
+    /// This is the single kind-to-adapter dispatch of the composition: the
+    /// catalog-activation driver factory and the credential-driven rebuild
+    /// both preflight through it, so the two sites can never select different
+    /// adapters for the same declaration. The match is exhaustive over the
+    /// typed kind, so a new provider kind fails to compile until its adapter
+    /// builder is wired instead of silently falling through to another
+    /// adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter builder's typed rejection
+    /// (`unsupported_safe_header_transport` or `unsupported_reasoning_effort`)
+    /// when the declaration cannot be applied by that adapter.
+    fn preflight_for_kind(self, kind: ProviderKindDto) -> DtoResult<()> {
+        match kind {
+            ProviderKindDto::Openrouter => self.into_openrouter().map(|_| ()),
+            ProviderKindDto::GenericChatCompletionApi => self.into_generic_chat().map(|_| ()),
+        }
     }
 }
 
@@ -1011,13 +1053,9 @@ impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {
             .facade
             .catalog_admission_port()
             .resolve_enabled_profile(profile_id)?;
-        let driver_kind = self
-            .facade
-            .inner
-            ._selected_provider
-            .safe_kind()
-            .map(ProviderKindDto::as_str);
-        if driver_kind != Some(resolved.kind_id.as_str()) {
+        let driver_kind = self.facade.inner._selected_provider.safe_kind();
+        let resolved_kind = typed_provider_kind(&resolved.kind_id)?;
+        if driver_kind != Some(resolved_kind) {
             return Err(ErrorDto::unavailable(
                 "credential_rotation_source_unavailable",
                 "no private driver is bound to this profile",
@@ -1043,12 +1081,7 @@ impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {
             resolved.credential_transport_safe_header_name,
             None,
         )?;
-        let preflight = if driver_kind == Some("openrouter") {
-            declared.into_openrouter().map(|_| ())
-        } else {
-            declared.into_generic_chat().map(|_| ())
-        };
-        preflight?;
+        declared.preflight_for_kind(resolved_kind)?;
         self.facade
             .inner
             ._selected_provider
@@ -1062,6 +1095,28 @@ impl DriverRebuildPort for CompositionDriverRebuildPort<'_> {
         state.material = Some(credential);
         drop(state);
         Ok(())
+    }
+}
+
+/// The composition's session-profile change publication seam.
+///
+/// The session-profile service constructs the typed
+/// `SessionProviderProfileChangedEventDto` after the durable default commits
+/// and hands it to this port. Slice 2 exposes no durable append for the
+/// control-plane event family yet, so the composition validates the committed
+/// event at this boundary and records no durable copy: the event is never
+/// fabricated into an evidence row, and no credential, path, or private
+/// handle crosses the seam.
+struct CompositionSessionProfileEvents;
+
+impl intention_application::session_selection::SessionProviderProfileChangePort
+    for CompositionSessionProfileEvents
+{
+    fn publish_session_provider_profile_changed(
+        &self,
+        event: intention_protocol::contract_families::SessionProviderProfileChangedEventDto,
+    ) -> DtoResult<()> {
+        event.validate()
     }
 }
 
@@ -1291,22 +1346,15 @@ const fn i64_time(timestamp: TimestampDto) -> i64 {
     timestamp.unix_seconds()
 }
 
-/// Encodes one immutable selection into the opaque durable queue text.
+/// The durable declaration of the active catalog's default profile.
 ///
-/// The queue column is opaque text; the canonical record bytes are
-/// hex-encoded so no crate below the composition needs a JSON serializer.
-fn canonical_selection_text(selection: &ProviderSelectionV1) -> String {
-    let mut text = String::with_capacity(2 + 64);
-    text.push_str("ir-record:");
-    match selection.encode() {
-        Ok(bytes) => {
-            for byte in bytes {
-                text.push_str(&format!("{byte:02x}"));
-            }
-        }
-        Err(_) => text.push_str("invalid"),
-    }
-    text
+/// The startup path compares this declaration with the validated startup
+/// document (D-02); it carries only the credential-free declaration fields
+/// that participate in the catalog profile identity and the run selection.
+struct ActiveCatalogDeclaration {
+    kind: String,
+    model: String,
+    endpoint: String,
 }
 
 impl DaemonApplicationFacade {
@@ -1422,61 +1470,199 @@ impl DaemonApplicationFacade {
             selected_provider,
         )?;
         retain_private_startup_credential(&facade, private_credential, source)?;
+        // The startup document is the single source of the provider catalog
+        // (D-02): on a fresh store it activates the first catalog revision and
+        // on a restart it re-derives the catalog when the file changed, so the
+        // executing driver, the active configuration snapshot, and the durable
+        // catalog can never disagree.
         facade.activate_startup_catalog(&raw_toml)?;
+        facade.ensure_driver_kind_matches_active_catalog()?;
         Ok(facade)
     }
 
-    /// Activates the startup provider configuration as the first catalog
-    /// revision exactly once.
+    /// Reconciles the durable provider catalog with the startup document.
     ///
-    /// The daemon opens with an empty provider catalog: the startup TOML is
-    /// the single source of the first provider declaration. When a catalog is
-    /// already active (a restart) this is a no-op. Activation is required
-    /// because selection-less acceptance is removed under ADR 0038: every
-    /// admitted run resolves a provider profile from the active catalog, and
-    /// no wire command prepares a first catalog in this slice.
+    /// The daemon opens with the startup TOML as the single source of the
+    /// provider declaration. A fresh store activates the first catalog
+    /// revision; a restart whose declaration (kind, model, and declared
+    /// endpoint) matches the active catalog's default profile is a no-op; a
+    /// restart whose declaration changed re-derives the catalog in-process
+    /// through the normal prepare and accept path, so the catalog catches up
+    /// with the file instead of diverging from the executing driver.
+    /// Activation is required because selection-less acceptance is removed
+    /// under ADR 0038: every admitted run resolves a provider profile from the
+    /// active catalog, and no wire command prepares a first catalog in this
+    /// slice.
+    ///
+    /// The helper stays private to the open path: the raw document carries the
+    /// credential, so it never crosses a public signature (finding `P3-29`,
+    /// executed with D-02).
     ///
     /// # Errors
     ///
     /// Returns the typed candidate, catalog, or storage error; an invalid
-    /// startup declaration fails the daemon open path closed.
-    pub fn activate_startup_catalog(&self, raw_toml: &str) -> DtoResult<()> {
+    /// startup declaration or an inconsistent active catalog fails the daemon
+    /// open path closed.
+    fn activate_startup_catalog(&self, raw_toml: &str) -> DtoResult<()> {
         use intention_application::{CatalogProviderDeclarationDto, CatalogSourceInputDto};
-        use intention_config::control_plane::parse_candidate;
+        use intention_config::control_plane::{catalog_declaration_snapshot, parse_candidate};
 
-        let state = self.inner.repository.load_provider_catalog_status()?;
-        if state.active_catalog_revision_id.is_some() {
-            return Ok(());
-        }
         let previous = self.active_config_snapshot()?;
         let candidate = parse_candidate(
             RawConfigInputDto::new(raw_toml.to_owned(), ConfigPathResolver::resolve(None)?),
             &previous,
         )?;
         let provider = candidate.safe_snapshot().resolved().provider();
+        let declaration = CatalogProviderDeclarationDto {
+            kind: provider.kind().as_str().to_owned(),
+            model: provider.model().to_owned(),
+            endpoint: provider.endpoint().map(str::to_owned),
+            declared_model_capability_subset: vec![
+                "text_input".to_owned(),
+                "text_streaming".to_owned(),
+            ],
+            enabled: true,
+        };
+        let raw_config_size_bytes = u64::try_from(raw_toml.len()).unwrap_or(u64::MAX);
+        let state = self.inner.repository.load_provider_catalog_status()?;
+        let Some(active_revision) = state.active_catalog_revision_id else {
+            self.prepare_catalog_candidate(CatalogSourceInputDto {
+                operation_id: "startup-catalog".to_owned(),
+                raw_config_size_bytes,
+                providers: vec![declaration],
+                candidate,
+                previous,
+            })?;
+            return Ok(());
+        };
+        // D-02 item 1: compare the startup-derived declaration with the active
+        // catalog's active (default) profile declaration. A declaration that
+        // names no endpoint matches the active profile's derived endpoint: the
+        // catalog stores the deterministic placeholder for an endpointless
+        // kind, and that placeholder is not an operator declaration.
+        let active = self.active_catalog_declaration()?.ok_or_else(|| {
+            ErrorDto::validation(
+                "provider_catalog_state_inconsistent",
+                "the active provider catalog has no default profile",
+            )
+        })?;
+        let endpoint_differs = declaration
+            .endpoint
+            .as_deref()
+            .is_some_and(|endpoint| endpoint != active.endpoint);
+        if declaration.kind == active.kind && declaration.model == active.model && !endpoint_differs
+        {
+            // The file already matches the durable catalog: the restart keeps
+            // the active revision and the second open is a no-op.
+            return Ok(());
+        }
+        // The catalog prepare path detects change by comparing two
+        // configuration snapshots, so the active catalog declaration is
+        // projected into that comparison shape before the candidate is
+        // prepared. Only the declared provider fields differ; the projection
+        // is comparison input and is never persisted.
+        let comparison_previous = catalog_declaration_snapshot(
+            &previous,
+            typed_provider_kind(&active.kind)?,
+            &active.model,
+            Some(active.endpoint.as_str()),
+        )?;
+        let outcome = self.prepare_catalog_candidate(CatalogSourceInputDto {
+            operation_id: "startup-catalog-rederive".to_owned(),
+            raw_config_size_bytes,
+            providers: vec![declaration],
+            candidate,
+            previous: comparison_previous,
+        })?;
+        if outcome.pending_removal {
+            // A changed provider kind is a catalog removal under the
+            // controller's change classification: the previous kind and
+            // profile are tombstoned with the replacement revision. The
+            // process restart is the explicit operator act the pending state
+            // waits for, so the startup path accepts the prepared candidate
+            // immediately and keeps the usual candidate, audit, and
+            // activation evidence.
+            let candidate_handle = outcome.candidate_handle.ok_or_else(|| {
+                ErrorDto::validation(
+                    "provider_catalog_state_inconsistent",
+                    "the prepared removal candidate is missing its handle",
+                )
+            })?;
+            let candidate_revision = outcome.catalog_revision_id.ok_or_else(|| {
+                ErrorDto::validation(
+                    "provider_catalog_state_inconsistent",
+                    "the prepared removal candidate is missing its revision",
+                )
+            })?;
+            self.inner.control_plane.controller.accept_pending(
+                candidate_handle,
+                active_revision.to_string(),
+                candidate_revision.to_string(),
+                "startup-catalog-removal".to_owned(),
+                now_seconds(now()?),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Prepares one catalog candidate through the controller at the current time.
+    fn prepare_catalog_candidate(
+        &self,
+        source: intention_application::CatalogSourceInputDto,
+    ) -> DtoResult<intention_application::CatalogCandidateOutcomeDto> {
         self.inner
             .control_plane
             .controller
-            .prepare_candidate(
-                CatalogSourceInputDto {
-                    operation_id: "startup-catalog".to_owned(),
-                    raw_config_size_bytes: u64::try_from(raw_toml.len()).unwrap_or(u64::MAX),
-                    providers: vec![CatalogProviderDeclarationDto {
-                        kind: provider.kind().as_str().to_owned(),
-                        model: provider.model().to_owned(),
-                        endpoint: provider.endpoint().map(str::to_owned),
-                        declared_model_capability_subset: vec![
-                            "text_input".to_owned(),
-                            "text_streaming".to_owned(),
-                        ],
-                        enabled: true,
-                    }],
-                    candidate,
-                    previous,
-                },
-                now_seconds(now()?),
-            )
-            .map(|_| ())
+            .prepare_candidate(source, now_seconds(now()?))
+    }
+
+    /// Returns the durable declaration of the active catalog's default profile.
+    ///
+    /// The startup document declares exactly one provider, so the active
+    /// default profile is the declaration the executing driver and every
+    /// admitted run must agree with.
+    fn active_catalog_declaration(&self) -> DtoResult<Option<ActiveCatalogDeclaration>> {
+        let material = self.inner.repository.load_provider_catalog_material()?;
+        let Some(default_profile_id) = material.default_profile_id.as_deref() else {
+            return Ok(None);
+        };
+        Ok(material
+            .profiles
+            .iter()
+            .find(|candidate| candidate.profile.profile_id == default_profile_id)
+            .map(|candidate| ActiveCatalogDeclaration {
+                kind: candidate.profile.provider_kind_id.clone(),
+                model: candidate.profile.model_id.clone(),
+                endpoint: candidate.profile.endpoint.clone(),
+            }))
+    }
+
+    /// Asserts the executing driver's kind equals the active catalog kind.
+    ///
+    /// The startup re-derivation makes the two agree by construction; this
+    /// check keeps a `SelectedProvider` whose kind differs from the active
+    /// catalog unconstructible on the production open path. Test-support
+    /// facades that never activate a catalog select no real provider kind and
+    /// leave the invariant vacuous.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid_selected_provider` when the executing driver kind and
+    /// the active catalog kind disagree.
+    fn ensure_driver_kind_matches_active_catalog(&self) -> DtoResult<()> {
+        let Some(selected_kind) = self.inner._selected_provider.safe_kind() else {
+            return Ok(());
+        };
+        let Some(active) = self.active_catalog_declaration()? else {
+            return Ok(());
+        };
+        if active.kind != selected_kind.as_str() {
+            return Err(ErrorDto::validation(
+                "invalid_selected_provider",
+                "selected provider does not match the active provider catalog",
+            ));
+        }
+        Ok(())
     }
 
     /// Opens a caller-provided absolute database exclusively for tests or controlled fixtures.
@@ -2024,7 +2210,7 @@ impl DaemonApplicationFacade {
                 unavailable_reason: "provider_configuration_unavailable".to_owned(),
                 first_unavailable_at: i64_time(now()?),
                 operation_id: format!("enqueue-unavailable-{session_id}-{run_id}"),
-                selection_json: canonical_selection_text(selection),
+                selection: selection.clone(),
             })
     }
 
@@ -2608,7 +2794,12 @@ impl DaemonApplicationFacade {
                     self.inner.repository.as_ref(),
                     &self.inner.control_plane,
                 )
-                .set(command, &port, now_seconds(timestamp))?;
+                .set(
+                    command,
+                    &port,
+                    &CompositionSessionProfileEvents,
+                    now_seconds(timestamp),
+                )?;
                 ProtocolAcceptedResultDto::SetSessionProviderProfile(accepted)
             }
             ProtocolCommandDto::AcceptProviderCatalogRemoval(command) => {
@@ -4145,12 +4336,15 @@ mod tests {
         // The driver factory is the catalog-activation construction seam:
         // producible bearer declarations build, while a profile declaring the
         // not-activated safe-header transport fails the activation closed.
-        for kind in ["openrouter", "generic-chat-completion-api"] {
+        for kind in [
+            ProviderKindDto::Openrouter,
+            ProviderKindDto::GenericChatCompletionApi,
+        ] {
             let factory = CompositionDriverFactory::service(kind);
             assert!(
                 factory
                     .build(factory_material(
-                        kind,
+                        kind.as_str(),
                         DomainCredentialTransportMode::Bearer,
                         None
                     ))
@@ -4160,7 +4354,7 @@ mod tests {
             assert_eq!(
                 factory
                     .build(factory_material(
-                        kind,
+                        kind.as_str(),
                         DomainCredentialTransportMode::SafeHeader,
                         Some("x-provider-header".to_owned()),
                     ))
@@ -4170,6 +4364,274 @@ mod tests {
                 "unsupported_safe_header_transport"
             );
         }
+    }
+
+    #[test]
+    fn provider_kind_dispatch_is_typed_and_rejects_an_unknown_kind() {
+        // P3-27: the adapter option builder is selected by the typed
+        // `ProviderKindDto`, so an unknown catalog kind id fails closed with a
+        // typed error instead of falling through to the generic-chat builder.
+        assert_eq!(
+            typed_provider_kind("openrouter").expect("openrouter is a typed kind"),
+            ProviderKindDto::Openrouter
+        );
+        assert_eq!(
+            typed_provider_kind("generic-chat-completion-api")
+                .expect("generic chat is a typed kind"),
+            ProviderKindDto::GenericChatCompletionApi
+        );
+        assert_eq!(
+            typed_provider_kind("gemini")
+                .expect_err("an unknown kind has no adapter")
+                .code(),
+            "unsupported_provider_kind"
+        );
+
+        // The catalog-activation factory and the credential-rebuild preflight
+        // share one dispatch, so the same declaration can never select
+        // different adapters at the two construction sites.
+        for kind in [
+            ProviderKindDto::Openrouter,
+            ProviderKindDto::GenericChatCompletionApi,
+        ] {
+            let factory = CompositionDriverFactory::service(kind);
+            assert_eq!(factory.kind(), kind.as_str());
+            for (transport, safe_header_name) in [
+                (DomainCredentialTransportMode::Bearer, None),
+                (
+                    DomainCredentialTransportMode::SafeHeader,
+                    Some("x-provider-header".to_owned()),
+                ),
+            ] {
+                let declared = DeclaredProviderOptions::from_declaration(
+                    transport,
+                    safe_header_name.clone(),
+                    None,
+                )
+                .expect("the fixture declaration is well-formed");
+                let factory_outcome = factory
+                    .build(factory_material(kind.as_str(), transport, safe_header_name))
+                    .map(|_| ());
+                assert_eq!(
+                    factory_outcome.is_ok(),
+                    declared.preflight_for_kind(kind).is_ok(),
+                    "the factory and the rebuild preflight agree for {kind}"
+                );
+            }
+        }
+    }
+
+    /// Builds one startup document fixture for the catalog re-derivation tests.
+    fn startup_document(kind: &str, model: &str, endpoint: Option<&str>) -> String {
+        let endpoint = endpoint.map_or_else(String::new, |endpoint| {
+            format!("endpoint = \"{endpoint}\"\n")
+        });
+        format!(
+            "schema_version = 1\n[provider]\nkind = \"{kind}\"\nmodel = \"{model}\"\n{endpoint}credential = \"fixture-credential\"\n"
+        )
+    }
+
+    /// Writes one startup document with owner-only permissions on Unix.
+    fn write_startup_document(path: &Path, raw_toml: &str) {
+        fs::write(path, raw_toml).expect("startup document writes");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .expect("startup document permissions set");
+        }
+    }
+
+    /// Opens one facade exactly as `open_platform` does over a caller-supplied
+    /// database and startup document, without touching platform paths.
+    fn open_startup_facade(database: &Path, config_path: &Path) -> DaemonApplicationFacade {
+        let source = ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(config_path.to_string_lossy().into_owned())
+                .expect("fixture startup document path is absolute"),
+        );
+        let (snapshot, selected_provider, raw_toml, private_credential) =
+            load_provider_configuration(source.clone()).expect("startup configuration composes");
+        let facade = DaemonApplicationFacade::open_with_selected_provider(
+            database,
+            snapshot,
+            selected_provider,
+        )
+        .expect("the durable facade opens");
+        retain_private_startup_credential(&facade, private_credential, source)
+            .expect("the private startup credential retains");
+        facade
+            .activate_startup_catalog(&raw_toml)
+            .expect("the startup catalog activates");
+        facade
+            .ensure_driver_kind_matches_active_catalog()
+            .expect("the executing driver kind matches the active catalog");
+        facade
+    }
+
+    /// Reads one active catalog revision and its default profile declaration.
+    fn active_catalog_profile(facade: &DaemonApplicationFacade) -> (u64, String, String, String) {
+        let status = facade
+            .inner
+            .repository
+            .load_provider_catalog_status()
+            .expect("catalog status reads");
+        let revision = status
+            .active_catalog_revision_id
+            .expect("an active catalog revision exists");
+        let material = facade
+            .inner
+            .repository
+            .load_provider_catalog_material()
+            .expect("active catalog material reads");
+        let profile = material
+            .profiles
+            .iter()
+            .find(|candidate| {
+                Some(&candidate.profile.profile_id) == material.default_profile_id.as_ref()
+            })
+            .expect("the active default profile exists");
+        (
+            revision,
+            profile.profile.provider_kind_id.clone(),
+            profile.profile.model_id.clone(),
+            profile.profile.endpoint.clone(),
+        )
+    }
+
+    #[test]
+    fn restart_with_an_edited_startup_model_rederives_the_active_catalog() {
+        // P1-03 / D-02: a restart whose startup document changed a catalog
+        // field re-derives the catalog through the normal prepare and accept
+        // path instead of leaving the catalog and the executing driver
+        // divergent.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-rederive-model.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model-a", None),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        let (revision, kind, model, _endpoint) = active_catalog_profile(&first);
+        assert_eq!(revision, 1);
+        assert_eq!(kind, "openrouter");
+        assert_eq!(model, "fixture-model-a");
+        assert_eq!(
+            first.selected_provider_kind(),
+            Some(ProviderKindDto::Openrouter)
+        );
+        drop(first);
+
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model-b", None),
+        );
+        let second = open_startup_facade(&database, &config_path);
+        let (revision, kind, model, _endpoint) = active_catalog_profile(&second);
+        assert_eq!(
+            revision, 2,
+            "the edited model advances the catalog revision"
+        );
+        assert_eq!(kind, "openrouter");
+        assert_eq!(model, "fixture-model-b");
+        drop(second);
+
+        // An unchanged restart is a no-op on the already reconciled catalog.
+        let third = open_startup_facade(&database, &config_path);
+        let (revision, _kind, model, _endpoint) = active_catalog_profile(&third);
+        assert_eq!(revision, 2, "the reconciled catalog keeps its revision");
+        assert_eq!(model, "fixture-model-b");
+    }
+
+    #[test]
+    fn restart_with_an_edited_startup_kind_rederives_through_the_removal_path() {
+        // A changed provider kind is a catalog removal under the controller's
+        // change classification; the startup path prepares and accepts it
+        // in-process, so a kind edit applied by restart never leaves the
+        // executing driver on a different kind than the active catalog.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-rederive-kind.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        assert_eq!(active_catalog_profile(&first).0, 1);
+        drop(first);
+
+        write_startup_document(
+            &config_path,
+            &startup_document(
+                "generic-chat-completion-api",
+                "fixture-model",
+                Some("https://api.example.invalid/v1"),
+            ),
+        );
+        let second = open_startup_facade(&database, &config_path);
+        let (revision, kind, model, endpoint) = active_catalog_profile(&second);
+        assert_eq!(
+            revision, 2,
+            "the edited provider kind advances the catalog revision"
+        );
+        assert_eq!(kind, "generic-chat-completion-api");
+        assert_eq!(model, "fixture-model");
+        assert_eq!(endpoint, "https://api.example.invalid/v1");
+        assert_eq!(
+            second.selected_provider_kind(),
+            Some(ProviderKindDto::GenericChatCompletionApi)
+        );
+        assert_eq!(
+            second.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn driver_kind_must_match_the_active_catalog_kind() {
+        // D-02 item 3: a `SelectedProvider` whose kind differs from the active
+        // catalog kind is rejected, so the executing driver can never serve a
+        // catalog it does not match.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("driver-kind-invariant.sqlite");
+        let generic_config = directory.path().join("generic-config.toml");
+        write_startup_document(
+            &generic_config,
+            &startup_document(
+                "generic-chat-completion-api",
+                "fixture-model",
+                Some("https://api.example.invalid/v1"),
+            ),
+        );
+        let matching = open_startup_facade(&database, &generic_config);
+        matching
+            .ensure_driver_kind_matches_active_catalog()
+            .expect("the matching driver kind passes the invariant");
+        drop(matching);
+
+        // A reopened facade whose startup document selects another kind than
+        // the durable active catalog cannot pass the invariant.
+        let openrouter_config = directory.path().join("openrouter-config.toml");
+        write_startup_document(
+            &openrouter_config,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let source = ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(openrouter_config.to_string_lossy().into_owned())
+                .expect("fixture startup document path is absolute"),
+        );
+        let (snapshot, selected_provider, _, _) =
+            load_provider_configuration(source).expect("startup configuration composes");
+        let mismatched = DaemonApplicationFacade::open_with_selected_provider(
+            &database,
+            snapshot,
+            selected_provider,
+        )
+        .expect("the durable facade opens");
+        let error = mismatched
+            .ensure_driver_kind_matches_active_catalog()
+            .expect_err("a driver of another kind cannot serve the active catalog");
+        assert_eq!(error.code(), "invalid_selected_provider");
     }
 
     #[test]
@@ -5517,7 +5979,9 @@ mod tests {
             fixture_config_snapshot(),
         )
         .expect("durable facade opens");
-        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        // Two profiles activate so the profile-change commit path is reachable:
+        // `default` and the second declaration's derived `profile-1`.
+        seed_catalog(&facade, "seed-1", &["fixture-model", "second-model"]).expect("catalog seeds");
         let session_id = SessionId::new();
         create(&facade, session_id);
 
@@ -5540,13 +6004,15 @@ mod tests {
                 ..
             } if profile_id == "default"
         ));
-        // NOTE: the zone-3 sqlite `set_session_provider_profile` commits on
-        // every path: the insert, the idempotent same-operation repeat, the
-        // same-profile touch, and the profile change all call `tx.commit()`
-        // before returning, and none returns without committing. The storage
-        // repository read-back below pins that durable commit; the projection
-        // read alone cannot catch a lost commit because an absent session row
-        // resolves to the global catalog default.
+        // NOTE: the zone-3 sqlite `set_session_provider_profile` commits before
+        // it returns on the insert, the idempotent same-operation repeat, the
+        // same-profile touch, and the profile change. It returns without
+        // committing on the differing-profile same-operation conflict and on
+        // the stale-revision mismatch, and this fixture pins both the
+        // committing and the rejecting paths with durable read-backs. The
+        // storage repository read-back below pins that durable commit; the
+        // projection read alone cannot catch a lost commit because an absent
+        // session row resolves to the global catalog default.
         let durable = durable_session_default(&facade, session_id);
         assert_eq!(durable.profile_id, "default");
         assert_eq!(durable.projection_revision, 0);
@@ -5568,9 +6034,28 @@ mod tests {
         assert_eq!(durable.projection_revision, 0);
         assert_eq!(durable.last_operation_id, "op-1");
 
+        // The same-profile touch with a fresh operation id commits the new
+        // operation identity without changing the bound profile or revision.
+        let touch = set_session_profile(&facade, session_id, "default", 0, "op-2");
+        let ProtocolCommandResultDto::Accepted(accepted) = touch else {
+            unreachable!("a same-profile touch is accepted")
+        };
+        let ProtocolAcceptedResultDto::SetSessionProviderProfile(result) = accepted.result() else {
+            unreachable!("session profile touch returns typed evidence")
+        };
+        assert!(!result.changed);
+        assert_eq!(result.resulting_projection_revision, 0);
+        let durable = durable_session_default(&facade, session_id);
+        assert_eq!(durable.profile_id, "default");
+        assert_eq!(durable.projection_revision, 0);
+        assert_eq!(
+            durable.last_operation_id, "op-2",
+            "the touch commit is durable"
+        );
+
         // A stale expected revision is rejected before any write and leaves
         // the durable row unchanged.
-        let stale = set_session_profile(&facade, session_id, "default", 1, "op-2");
+        let stale = set_session_profile(&facade, session_id, "default", 1, "op-3");
         let ProtocolCommandResultDto::Rejected(error) = stale else {
             unreachable!("a stale expected revision is rejected")
         };
@@ -5578,7 +6063,33 @@ mod tests {
         let durable = durable_session_default(&facade, session_id);
         assert_eq!(durable.profile_id, "default");
         assert_eq!(durable.projection_revision, 0);
-        assert_eq!(durable.last_operation_id, "op-1");
+        assert_eq!(durable.last_operation_id, "op-2");
+
+        // A profile change commits the new profile and advances the
+        // projection revision.
+        let changed = set_session_profile(&facade, session_id, "profile-1", 0, "op-4");
+        let ProtocolCommandResultDto::Accepted(accepted) = changed else {
+            unreachable!("a profile change is accepted")
+        };
+        let ProtocolAcceptedResultDto::SetSessionProviderProfile(result) = accepted.result() else {
+            unreachable!("session profile change returns typed evidence")
+        };
+        assert!(result.changed);
+        assert_eq!(result.resulting_projection_revision, 1);
+        assert!(matches!(
+            &result.resolved,
+            intention_protocol::contract_families::ResolvedProviderProfileDto::Resolved {
+                profile_id,
+                ..
+            } if profile_id == "profile-1"
+        ));
+        let durable = durable_session_default(&facade, session_id);
+        assert_eq!(durable.profile_id, "profile-1");
+        assert_eq!(
+            durable.projection_revision, 1,
+            "the profile change commit is durable"
+        );
+        assert_eq!(durable.last_operation_id, "op-4");
 
         let query = GetSessionProviderProfileQueryDto {
             schema_version: PROTOCOL_SCHEMA_VERSION_TEXT.to_owned(),
@@ -5586,17 +6097,67 @@ mod tests {
         };
         match facade.query(ProtocolQueryDto::GetSessionProviderProfile(query)) {
             ProtocolQueryResultDto::SessionProviderProfile(projection) => {
-                assert_eq!(projection.profile_id, "default");
+                assert_eq!(projection.profile_id, "profile-1");
                 assert!(matches!(
                     projection.resolved,
                     intention_protocol::contract_families::ResolvedProviderProfileDto::Resolved { .. }
                 ));
                 assert_eq!(projection.global_default_profile_id, "default");
+                assert_eq!(projection.session_projection_revision, 1);
             }
             ProtocolQueryResultDto::Rejected(error) => {
                 panic!("session profile query rejected: {}", error.code())
             }
             _ => unreachable!("session profile query returns a projection"),
+        }
+    }
+
+    #[test]
+    fn admission_rejects_a_non_current_schema_version_before_any_effect() {
+        // R5b / P2-03: the control-plane schema version is enforced at the
+        // composition admission point, so a peer that bypasses decode cannot
+        // make the daemon serve a non-current control-plane document.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = DaemonApplicationFacade::open_for_test(
+            directory.path().join("admission-schema-version.sqlite"),
+            fixture_config_snapshot(),
+        )
+        .expect("durable facade opens");
+        seed_catalog(&facade, "seed-1", &["fixture-model"]).expect("catalog seeds");
+        let session_id = SessionId::new();
+        create(&facade, session_id);
+
+        let command = SetSessionProviderProfileCommandDto {
+            schema_version: "9.9".to_owned(),
+            session_id: session_id.to_string(),
+            profile_id: "default".to_owned(),
+            expected_session_projection_revision: 0,
+            operation_id: "op-schema".to_owned(),
+        };
+        let rejected = facade.command(ProtocolCommandDto::SetSessionProviderProfile(command));
+        let ProtocolCommandResultDto::Rejected(error) = rejected else {
+            unreachable!("a non-current command schema version is rejected")
+        };
+        assert_eq!(error.code(), "incompatible_protocol_version");
+        assert_eq!(error.category(), ErrorCategoryDto::Validation);
+        assert!(
+            facade
+                .inner
+                .repository
+                .get_session_provider_profile(session_id)
+                .expect("the durable session default reads")
+                .is_none(),
+            "the rejected admission commits nothing"
+        );
+
+        let query = GetProviderCatalogStatusQueryDto {
+            schema_version: "9.9".to_owned(),
+        };
+        match facade.query(ProtocolQueryDto::GetProviderCatalogStatus(query)) {
+            ProtocolQueryResultDto::Rejected(error) => {
+                assert_eq!(error.code(), "incompatible_protocol_version");
+            }
+            _ => unreachable!("a non-current query schema version is rejected"),
         }
     }
 
@@ -5790,7 +6351,6 @@ mod tests {
                 expected_active_catalog_revision_id: "1".to_owned(),
                 expected_candidate_catalog_revision_id: "2".to_owned(),
                 operation_id: "accept-1".to_owned(),
-                source_recheck: false,
             },
         ));
         let ProtocolCommandResultDto::Accepted(_) = accept else {
@@ -5952,11 +6512,12 @@ mod tests {
             profile_id: "default".to_owned(),
             provider_profile_revision_id: "rev-1".to_owned(),
             model_id: "fixture-model".to_owned(),
-            input_units: 10,
-            output_units: 5,
-            reasoning_units: 0,
+            usage: intention_storage::ProviderUsageRecordDto {
+                input_units: 10,
+                output_units: 5,
+                reasoning_units: 0,
+            },
             occurred_at: 1,
-            usage_json: "{\"safe\":true}".to_owned(),
         };
         facade
             .inner
@@ -6081,7 +6642,6 @@ mod tests {
             ReconcileUnavailableQueueCommandDto {
                 session_id: first_session.to_string(),
                 operation_id: "op-reconcile-1".to_owned(),
-                page_cursor: None,
             },
         ));
         let ProtocolCommandResultDto::Accepted(accepted) = reconcile else {
@@ -6218,7 +6778,6 @@ mod tests {
             ReconcileUnavailableQueueCommandDto {
                 session_id: session_id.to_string(),
                 operation_id: FAKE_SECRET.to_owned(),
-                page_cursor: None,
             },
         ));
         let ProtocolCommandResultDto::Rejected(error) = reconcile else {
@@ -6310,7 +6869,6 @@ mod tests {
                 expected_active_catalog_revision_id: "1".to_owned(),
                 expected_candidate_catalog_revision_id: "2".to_owned(),
                 operation_id: "accept-after-restart".to_owned(),
-                source_recheck: false,
             },
         ));
         let ProtocolCommandResultDto::Accepted(_) = accept else {
@@ -6446,7 +7004,6 @@ mod tests {
                 expected_active_catalog_revision_id: "1".to_owned(),
                 expected_candidate_catalog_revision_id: "3".to_owned(),
                 operation_id: "accept-corrected".to_owned(),
-                source_recheck: false,
             },
         ));
         let ProtocolCommandResultDto::Accepted(_) = accept else {
