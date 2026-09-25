@@ -4197,9 +4197,12 @@ each item's own regression test, the removed surface, and the named documents.
 | R15 | P2-03 / `architecture/02` | Keep the schema-version fixtures loud on a version bump | W2-E |
 
 Parked with owners: the daemon-side incoming subscription version check (P2-08 "Consider"),
-the 31 pre-Slice-2 invariant DTOs, the typed tool-name bridge, and the
-`incompatible_protocol_version` category nuance (Validation in protocol and client,
-Unavailable in transport).
+the 31 pre-Slice-2 invariant DTOs, and the typed tool-name bridge. The
+`incompatible_protocol_version` category nuance is closed against the statements W4-F
+added: architecture 02 states the category split explicitly (Validation in the protocol
+and client, Unavailable in transport) and architecture 03 records the handshake category
+as transport-only with the decode-time failure owned by validation, so the two documents
+and the code now agree instead of the entry waiting on them.
 
 ## Appendix I — Wave V2 verification outcome
 
@@ -4383,6 +4386,98 @@ product failure, but it treats a lost stream as a plain retry with no recorded
 cause. W4-G keeps this as a watch item and records the cause (a turn-deadline
 expiry, a closed subscriber, or a provider stall) in the run report if it
 recurs.
+
+## Appendix K — Wave W4 execution outcome
+
+Six implementation cards ran in parallel on the W3 head `5d29ffe` (card letters are
+this wave's execution lanes, recorded in `target/w4-{a..f}.json`; they are independent
+of the owner letters in J.3). No card committed; the controller reviewed every report,
+closed the controller-side items, and owns the wave's commits and gate.
+
+### K.1 Card verdicts
+
+| Card | Scope | Repairs | Verdict |
+| --- | --- | --- | --- |
+| A — protocol deletions | `crates/intention-protocol` | D-16 steps 1–2, R39 | done: the eight event DTOs and the seven declaration families are deleted after every symbol was re-resolved by name; `SessionProviderProfileChangedEventDto` and `validate_safe_event_fields` are kept with their live producer and consumer; 106/106 tests, clippy clean, zero references to the deleted symbols inside the crate and no cross-crate reference |
+| B — model deletions | `crates/intention-model` | D-16 step 4 | done: the six public model types plus the parser constants are deleted (511 lines); the surviving effort, header, and credential-transport types keep their tests; 27/27 tests, clippy clean; the domain `MODEL_CAPABILITY_TAXONOMY_V1` and the protocol copies are distinct owners and were not touched here |
+| C — application repairs | `crates/intention-application` | R36, R40, R41, R42, R53, R54 | done: the two tombstone mapping arms and their dead fixture are removed and a workspace-wide grep guard fails if the code returns; `startup()` adopts a rebuilt durable pending removal through the normal acceptance path instead of leaving the platform gated; the adoption branch keeps no fallible step after its durable accept; the port docs state the R18 semantics; a fixture observes the intermediate adoption and three negative fixtures pin the usage-set bound, duplicates, and unsorted entries; 207/207 tests, clippy clean |
+| D — harness and storage | `quality/self_test.py`, `intention-storage`, `intention-storage-sqlite`, `intention-daemon` tests | R43, R44, R45, R46, R47, R52 | done: the budget self-test derives the harness's structural counts and three mutation fixtures must trip it; the guard parses struct bodies instead of `pub` lines; the removal fault fixtures compare the complete candidate, state, and audit column sets; the `provider_selection_conflict` branch has its fixture back; the seed path pin normalizes the create statement; the live byte checks bind to the observed run's own succeeded call; storage suites 120/120, clippy clean |
+| E — domain and configuration | `intention-domain`, `intention-config`, `intention` | R48, R49, R50, R51 | done: a non-numeric port and a non-breaking-space host are rejected with cross-layer fixtures; a driven credential-rebuild test replaces the textual pin and the unobservable rejection branch is recorded; configuration resolves the kind id through the single owner; the activation pin asserts exactly the private definition and its one call site; 229/229, 51/51, 72/72, clippy clean |
+| F — documents | `docs/intention-relay/**` | D-16 steps 3, 5, 7 | done: the roadmap reserves the durable session-event delivery for M6–M9 without renumbering; architecture 22/29, roadmap 11, ADRs 0028/0035/0037, the reconciliation registers, the evidence rows, the exclusion rows, the source-of-truth matrix, and the concept-supersession index no longer claim a deleted declaration; `make docs-check architecture` green |
+
+### K.2 Controller actions
+
+- The R40 adoption semantics made three composition fixtures stale. The controller moved
+  them to the new doctrine: `pending_removal_survives_restart_with_durable_material_and_accepts`
+  now reads the adoption from the durable repository instead of asserting a gated
+  readiness and accepting by command, `reload_during_pending_removal_preserves_the_lifecycle_across_restart`
+  proves the reload commit leaves the durable pending row untouched and the restart adopts
+  that same row, and `startup_open_accepts_a_second_change_after_adopting_a_durable_pending_removal`
+  expects removal revision two as the durable maximum because the second change is an
+  ordinary replacement. A new fixture,
+  `startup_open_adopts_a_durable_pending_removal_when_the_document_matches`, covers the
+  matching-document case the new doctrine made reachable. The stale differ-differ comment
+  in `activate_startup_catalog` now names `startup()` as the adopting step. `intention`
+  passes 73/73 with clippy clean.
+- The `incompatible_protocol_version` parking entry is closed in Appendix H against the
+  statements card F added: architecture 02 states the category split explicitly and
+  architecture 03 scopes the handshake category to the transport while decode-time
+  failures belong to validation.
+- R19's declaration now lives in the roadmap's "Reserved declarations carried by M6–M9"
+  section, anchored to `m4plus_concept.md`, architecture 29, and R19.
+- The R36 documentation side is consistent: ADR 0037 drops the `provider_profile_tombstoned`
+  row and `provider_control_plane.rs` no longer names it.
+
+### K.3 Accepted limits
+
+- R44: the struct-body parser closes member visibility, non-`json` names, multi-line
+  fields, aliases, `serde_json::Map`, and non-`src` paths, and fails closed; non-`json`
+  string carriers, generic alias targets, and macro-generated fields remain accepted
+  limits.
+- R51: the activation pin stays a source-text guard; the exact-two-reference assertion is
+  what catches a differently named public wrapper.
+- R52: the byte checks now require the observed run's own succeeded call to name the
+  effect file, so an evicted leftover run cannot satisfy them alone; a late unrelated
+  workspace write beyond call-identity binding remains possible.
+- The W4-D lane records that the budget arithmetic omissions (readiness health calls and
+  the write-side `SYNC_IO_TIMEOUT`) stay a W3 P3 outside the repair list.
+
+### K.4 Gate hardening from the W4 run
+
+The first `make verify` on the W4 tree reproduced a flaky `intention-tools` contract
+failure already seen once during W3: under the full workspace run (1134 tests)
+`execute_formats_success_and_truncates_both_streams` failed after 5.04 s with
+`tool_execute_external_effect_unknown`, while the same test passed five consecutive
+isolated runs and the whole `intention-tools` package passed 108/108.
+
+Root cause: `READER_DRAIN_GRACE` bounded the post-exit pipe collection to a fixed five
+seconds without a progress signal, so reader threads descheduled by the parallel load
+were classified as a descendant holding the pipes open and a legitimate command with
+large output was reported as an unknown effect. The drain is now progress-aware:
+`ProgressReader` counts consumed bytes, an observed increase re-arms the stall window,
+`drain_pipes` still returns `Stalled` after a full window without progress, and no drain
+outlives the execute deadline. Two latent defects surfaced by the new unit tests were
+fixed with it: an absent reader now counts as already collected (before, `drain_pipes`
+could never complete when a caller piped only one stream), and a partially collected
+pair keeps its gathered side instead of dropping it on a failed match.
+
+A second pre-existing flake blocked the following run:
+`intention-storage-sqlite::m4_model_context`
+`context_read_never_returns_starting_context_after_concurrent_terminalization` failed in the
+`--no-default-features` profile, and the same assertion had already failed once in
+`target/pr24-make-verify-2.log` before W4. The fixture inferred "the read observed the
+terminalization" from completion timestamps (`writer_finished < reader_finished`), an inference
+a descheduled reader thread violates legitimately: it can return a pre-commit snapshot after the
+writer committed. The fixture now records whether terminalization was already durable when the
+read began (`SeqCst` atomic), validates either outcome's typed code and the coherence of a
+starting snapshot, and adds a deterministic post-race read that must fail with
+`run_model_context_unavailable` once terminalization is durable.
+
+Verification: `intention-tools` 110/110 including the two new `drain_progress_tests`, each
+mutation-proven (removing the re-arm and removing the absent-reader pre-seed each fail
+`reader_progress_extends_the_drain_beyond_the_stall_window`), clippy clean; the repaired
+`m4_model_context` fixture passes three consecutive runs and fails the stale-read mutation that
+removes the `Starting` status check.
 
 End of register.
 
