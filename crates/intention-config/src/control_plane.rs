@@ -764,6 +764,154 @@ fn contains_credential_shape(value: &str) -> bool {
     intention_domain::canonical::secret_value_credential_shaped(value)
 }
 
+/// One typed, credential-free configuration edit operation.
+///
+/// The configuration crate owns its own edit vocabulary (D-10): the
+/// composition maps the protocol `ConfigurationEditOperationDto` into this
+/// type, so the TOML document shape stays inside the crate the ownership map
+/// assigns to configuration editing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigurationEditOperation {
+    /// Sets one configuration key path to a bounded safe value.
+    Set {
+        /// The structural configuration key path.
+        key_path: String,
+        /// The replacement value.
+        safe_value: String,
+    },
+    /// Removes one configuration key path.
+    Remove {
+        /// The structural configuration key path.
+        key_path: String,
+    },
+}
+
+/// Renders the credential-free candidate document for typed edits.
+///
+/// The document is built from every safe field the active snapshot exposes
+/// (`schema_version`, the provider selection, and the execution policy) as a
+/// TOML value tree and serialized by the TOML serializer, so a value carrying
+/// TOML-significant characters is escaped instead of producing an unparseable
+/// document, and a field the edit does not name survives the edit unchanged.
+/// The document deliberately omits `provider.credential`: the private channel
+/// re-inserts it through [`restore_credential_document`] before the candidate
+/// is validated through the server-side reload contract.
+///
+/// # Errors
+///
+/// Returns `configuration_edit_invalid` for an unrecognized or non-removable
+/// key path or a non-integer execution policy value. Errors never contain the
+/// rendered document or any edited value.
+pub fn render_edited_configuration(
+    snapshot: &ConfigSnapshotDto,
+    operations: &[ConfigurationEditOperation],
+) -> DtoResult<String> {
+    let resolved = snapshot.resolved();
+    let provider = resolved.provider();
+    let execution = resolved.provider_execution();
+    let mut provider_table = toml::Table::new();
+    provider_table.insert(
+        "kind".to_owned(),
+        toml::Value::String(provider.kind().as_str().to_owned()),
+    );
+    provider_table.insert(
+        "model".to_owned(),
+        toml::Value::String(provider.model().to_owned()),
+    );
+    if let Some(endpoint) = provider.endpoint() {
+        provider_table.insert(
+            "endpoint".to_owned(),
+            toml::Value::String(endpoint.to_owned()),
+        );
+    }
+    let mut execution_table = toml::Table::new();
+    execution_table.insert(
+        "attempt_timeout_seconds".to_owned(),
+        toml::Value::Integer(i64::from(execution.attempt_timeout_seconds())),
+    );
+    execution_table.insert(
+        "max_attempts".to_owned(),
+        toml::Value::Integer(i64::from(execution.max_attempts())),
+    );
+    for operation in operations {
+        match operation {
+            ConfigurationEditOperation::Set {
+                key_path,
+                safe_value,
+            } => match key_path.as_str() {
+                "provider.kind" => {
+                    provider_table
+                        .insert("kind".to_owned(), toml::Value::String(safe_value.clone()));
+                }
+                "provider.model" => {
+                    provider_table
+                        .insert("model".to_owned(), toml::Value::String(safe_value.clone()));
+                }
+                "provider.endpoint" => {
+                    provider_table.insert(
+                        "endpoint".to_owned(),
+                        toml::Value::String(safe_value.clone()),
+                    );
+                }
+                "provider.execution.attempt_timeout_seconds" => {
+                    let seconds = safe_value.parse::<u8>().map_err(|_| {
+                        ErrorDto::validation(
+                            "configuration_edit_invalid",
+                            "attempt timeout seconds must be an integer",
+                        )
+                    })?;
+                    execution_table.insert(
+                        "attempt_timeout_seconds".to_owned(),
+                        toml::Value::Integer(i64::from(seconds)),
+                    );
+                }
+                "provider.execution.max_attempts" => {
+                    let attempts = safe_value.parse::<u8>().map_err(|_| {
+                        ErrorDto::validation(
+                            "configuration_edit_invalid",
+                            "max attempts must be an integer",
+                        )
+                    })?;
+                    execution_table.insert(
+                        "max_attempts".to_owned(),
+                        toml::Value::Integer(i64::from(attempts)),
+                    );
+                }
+                _ => {
+                    return Err(ErrorDto::validation(
+                        "configuration_edit_invalid",
+                        "unrecognized configuration key path",
+                    ));
+                }
+            },
+            ConfigurationEditOperation::Remove { key_path } => match key_path.as_str() {
+                "provider.endpoint" => {
+                    provider_table.remove("endpoint");
+                }
+                _ => {
+                    return Err(ErrorDto::validation(
+                        "configuration_edit_invalid",
+                        "this configuration field cannot be removed",
+                    ));
+                }
+            },
+        }
+    }
+    provider_table.insert("execution".to_owned(), toml::Value::Table(execution_table));
+    let mut document = toml::Table::new();
+    document.insert(
+        "schema_version".to_owned(),
+        toml::Value::Integer(i64::from(resolved.schema_version().major())),
+    );
+    document.insert("provider".to_owned(), toml::Value::Table(provider_table));
+    toml::to_string(&toml::Value::Table(document)).map_err(|_| {
+        ErrorDto::validation(
+            "configuration_edit_invalid",
+            "the edited configuration document could not be rendered",
+        )
+    })
+}
+
 /// Restores `provider.credential` into one raw configuration document.
 ///
 /// Typed configuration edits reconstruct the candidate document from the
@@ -777,26 +925,42 @@ fn contains_credential_shape(value: &str) -> bool {
 /// consumed by the existing parse path; it never appears in a DTO, error,
 /// digest, log, or durable surface.
 ///
-/// When the text is not a TOML table carrying a `provider` table, the text is
-/// returned unchanged so downstream validation fails closed exactly as it
-/// does for a document that legitimately omits the credential.
-#[must_use]
-pub fn restore_credential_document(text: &str, credential: &str) -> String {
-    let Ok(document) = toml::from_str::<toml::Value>(text) else {
-        // A non-parseable document cannot carry a provider table.
-        return text.to_owned();
-    };
+/// # Errors
+///
+/// Returns `invalid_config_toml` when the text is not valid TOML and
+/// `invalid_config_schema` when the document is not a table carrying a
+/// `provider` table or cannot be re-serialized. A document-shape failure is
+/// therefore a typed error instead of a credential-free document that a
+/// caller could mistake for a configured one.
+pub fn restore_credential_document(text: &str, credential: &str) -> DtoResult<String> {
+    let document: toml::Value = toml::from_str(text).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_config_toml",
+            "configuration TOML could not be parsed",
+        )
+    })?;
     let toml::Value::Table(mut document) = document else {
-        return text.to_owned();
+        return Err(ErrorDto::validation(
+            "invalid_config_schema",
+            "configuration document must be a table",
+        ));
     };
     let Some(toml::Value::Table(provider)) = document.get_mut("provider") else {
-        return text.to_owned();
+        return Err(ErrorDto::validation(
+            "invalid_config_schema",
+            "configuration document must carry a provider table",
+        ));
     };
     provider.insert(
         "credential".to_owned(),
         toml::Value::String(credential.to_owned()),
     );
-    toml::to_string(&toml::Value::Table(document)).unwrap_or_else(|_| text.to_owned())
+    toml::to_string(&toml::Value::Table(document)).map_err(|_| {
+        ErrorDto::validation(
+            "invalid_config_schema",
+            "configuration document could not be serialized",
+        )
+    })
 }
 
 /// Returns the current whole-second Unix timestamp.

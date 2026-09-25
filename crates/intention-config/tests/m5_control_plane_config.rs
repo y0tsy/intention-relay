@@ -6,12 +6,14 @@
 //! Slice 2 configuration control-plane candidate contract evidence.
 
 use intention_config::control_plane::{
-    CandidateIssueDto, ConfigCandidateDto, ConfigCandidateSourceDto, MAX_CANDIDATE_ISSUES,
-    classify_changed_fields, parse_candidate, reject_catalog_affecting_edits,
-    restore_credential_document, semantic_equivalence,
+    CandidateIssueDto, ConfigCandidateDto, ConfigCandidateSourceDto, ConfigurationEditOperation,
+    MAX_CANDIDATE_ISSUES, catalog_declaration_snapshot, classify_changed_fields, parse_candidate,
+    reject_catalog_affecting_edits, render_edited_configuration, restore_credential_document,
+    semantic_equivalence,
 };
 use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
+    ResolvedConfigDto,
 };
 use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
@@ -818,7 +820,8 @@ fn restore_credential_document_reinserts_the_credential_into_typed_edit_candidat
     // The typed-edit renderer emits a credential-free candidate document that
     // omits `provider.credential`; the private channel restores it.
     let edited = "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\n[provider.execution]\nattempt_timeout_seconds = 45\nmax_attempts = 2\n";
-    let restored = restore_credential_document(edited, FAKE_CREDENTIAL);
+    let restored = restore_credential_document(edited, FAKE_CREDENTIAL)
+        .expect("the credential-free candidate carries a provider table");
     assert!(
         !restored.eq(edited),
         "the restored document differs from the credential-free candidate"
@@ -846,12 +849,13 @@ fn restore_credential_document_reinserts_the_credential_into_typed_edit_candidat
 }
 
 #[test]
-fn restore_credential_document_escapes_values_and_passes_through_unsuitable_documents() {
+fn restore_credential_document_escapes_values_and_rejects_unsuitable_documents() {
     // A credential carrying TOML-significant characters round-trips exactly:
     // the value is inserted as a TOML value, so escaping is serializer-owned.
     let tricky = "sk-\"quoted\"-and\\backslash";
     let edited = "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture-model\"\ncredential = \"previous-value\"\n[provider.execution]\nmax_attempts = 2\n";
-    let restored = restore_credential_document(edited, tricky);
+    let restored =
+        restore_credential_document(edited, tricky).expect("the document carries a provider table");
     let material =
         ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(restored, source()))
             .expect("the escaped document parses as startup material");
@@ -861,18 +865,254 @@ fn restore_credential_document_escapes_values_and_passes_through_unsuitable_docu
         "the restored value is the exact private credential, not a mangled text"
     );
 
-    // Documents that cannot carry a provider credential table are returned
-    // unchanged so downstream validation fails closed exactly as it does for
-    // a document that legitimately omits the credential.
-    for unsuitable in [
-        "schema_version = 1\n",
-        "not a toml document [[",
-        "provider = \"openrouter\"",
-    ] {
-        assert_eq!(
-            restore_credential_document(unsuitable, FAKE_CREDENTIAL),
-            unsuitable,
-            "unsuitable documents pass through unchanged"
+    // E8 (P3-12): a document that cannot carry the credential table fails with
+    // a typed validation error instead of being returned unchanged, so a
+    // caller can distinguish "no credential configured" from "this path
+    // cannot edit the document".
+    let unparseable = restore_credential_document("not a toml document [[", FAKE_CREDENTIAL)
+        .expect_err("an unparseable document must not be returned unchanged");
+    assert_eq!(unparseable.code(), "invalid_config_toml");
+    for unsuitable in ["schema_version = 1\n", "provider = \"openrouter\""] {
+        let error = restore_credential_document(unsuitable, FAKE_CREDENTIAL)
+            .expect_err("a document without a provider table must not pass through");
+        assert_eq!(error.code(), "invalid_config_schema");
+        assert!(
+            !error.to_string().contains(FAKE_CREDENTIAL),
+            "the typed error never echoes the credential"
         );
     }
+}
+
+#[test]
+fn typed_edit_rendering_escapes_values_and_preserves_untouched_fields() {
+    // D-10 (P3-28): the document is rendered from the safe snapshot as a TOML
+    // AST, so a field the edit does not name survives and a value carrying
+    // TOML-significant characters is escaped instead of producing an
+    // unparseable document.
+    let text = format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"model-\\\"quoted\\\"-and\\\\backslash\"\ncredential = \"{FAKE_CREDENTIAL}\"\nendpoint = \"https://api.example.invalid/v1\"\n"
+    );
+    let previous = snapshot(&text, "44444444-4444-4444-8444-444444444441");
+    let rendered = render_edited_configuration(
+        &previous,
+        &[ConfigurationEditOperation::Set {
+            key_path: "provider.execution.attempt_timeout_seconds".to_owned(),
+            safe_value: "45".to_owned(),
+        }],
+    )
+    .expect("the typed edit renders");
+    assert!(
+        !rendered.contains(FAKE_CREDENTIAL) && !rendered.contains("credential"),
+        "the rendered document is credential-free: {rendered}"
+    );
+    let restored = restore_credential_document(&rendered, FAKE_CREDENTIAL)
+        .expect("the rendered document carries a provider table");
+    let parsed = candidate(&restored, &previous);
+    assert!(
+        parsed.validation().issues().is_empty(),
+        "the rendered document parses without issues: {:?}",
+        parsed.validation().issues()
+    );
+    let resolved = parsed.safe_snapshot().resolved();
+    assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
+    assert_eq!(
+        resolved.provider().model(),
+        "model-\"quoted\"-and\\backslash",
+        "the serializer escapes the preserved model exactly"
+    );
+    assert_eq!(
+        resolved.provider().endpoint(),
+        Some("https://api.example.invalid/v1"),
+        "a field the edit does not name survives the edit"
+    );
+    assert_eq!(resolved.provider_execution().attempt_timeout_seconds(), 45);
+    assert_eq!(resolved.provider_execution().max_attempts(), 2);
+}
+
+#[test]
+fn typed_edit_rendering_rejects_values_the_configuration_shape_cannot_represent() {
+    let text = v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, "");
+    let previous = snapshot(&text, "44444444-4444-4444-8444-444444444442");
+    for operation in [
+        ConfigurationEditOperation::Set {
+            key_path: "provider.unknown".to_owned(),
+            safe_value: "x".to_owned(),
+        },
+        ConfigurationEditOperation::Remove {
+            key_path: "provider.model".to_owned(),
+        },
+        ConfigurationEditOperation::Set {
+            key_path: "provider.execution.max_attempts".to_owned(),
+            safe_value: "many".to_owned(),
+        },
+        ConfigurationEditOperation::Set {
+            key_path: "provider.execution.attempt_timeout_seconds".to_owned(),
+            safe_value: "not-an-integer".to_owned(),
+        },
+    ] {
+        let error = render_edited_configuration(&previous, std::slice::from_ref(&operation))
+            .expect_err("a non-representable edit must fail with a typed error");
+        assert_eq!(error.code(), "configuration_edit_invalid");
+        assert!(
+            !error.to_string().contains("fixture-model"),
+            "the typed error never echoes a document value"
+        );
+    }
+}
+
+#[test]
+fn typed_edit_rendering_applies_every_representable_key_path() {
+    // The typed-edit vocabulary renders each representable key path through
+    // the TOML AST, and removing the optional endpoint is the one accepted
+    // removal.
+    let text = v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, "");
+    let previous = snapshot(&text, "44444444-4444-4444-8444-444444444443");
+    let rendered = render_edited_configuration(
+        &previous,
+        &[
+            ConfigurationEditOperation::Set {
+                key_path: "provider.kind".to_owned(),
+                safe_value: "openrouter".to_owned(),
+            },
+            ConfigurationEditOperation::Set {
+                key_path: "provider.model".to_owned(),
+                safe_value: "edited-model".to_owned(),
+            },
+            ConfigurationEditOperation::Set {
+                key_path: "provider.endpoint".to_owned(),
+                safe_value: "https://edited.example.invalid/v1".to_owned(),
+            },
+            ConfigurationEditOperation::Set {
+                key_path: "provider.execution.attempt_timeout_seconds".to_owned(),
+                safe_value: "30".to_owned(),
+            },
+            ConfigurationEditOperation::Set {
+                key_path: "provider.execution.max_attempts".to_owned(),
+                safe_value: "2".to_owned(),
+            },
+        ],
+    )
+    .expect("every representable key path renders");
+    let restored = restore_credential_document(&rendered, FAKE_CREDENTIAL)
+        .expect("the rendered document carries a provider table");
+    let parsed = candidate(&restored, &previous);
+    assert!(
+        parsed.validation().issues().is_empty(),
+        "the edited document parses without issues: {:?}",
+        parsed.validation().issues()
+    );
+    let edited = parsed.safe_snapshot().resolved();
+    assert_eq!(edited.provider().kind(), ProviderKindDto::Openrouter);
+    assert_eq!(edited.provider().model(), "edited-model");
+    assert_eq!(
+        edited.provider().endpoint(),
+        Some("https://edited.example.invalid/v1")
+    );
+    assert_eq!(edited.provider_execution().attempt_timeout_seconds(), 30);
+    assert_eq!(edited.provider_execution().max_attempts(), 2);
+
+    let without_endpoint = render_edited_configuration(
+        parsed.safe_snapshot(),
+        &[ConfigurationEditOperation::Remove {
+            key_path: "provider.endpoint".to_owned(),
+        }],
+    )
+    .expect("removing the optional endpoint renders");
+    let restored = restore_credential_document(&without_endpoint, FAKE_CREDENTIAL)
+        .expect("the rendered document carries a provider table");
+    let parsed = candidate(&restored, &previous);
+    assert!(
+        parsed.validation().issues().is_empty(),
+        "the endpoint-free edit parses without issues: {:?}",
+        parsed.validation().issues()
+    );
+    assert_eq!(
+        parsed.safe_snapshot().resolved().provider().endpoint(),
+        None,
+        "the accepted removal drops the endpoint from the rendered document"
+    );
+}
+
+#[test]
+fn candidate_wire_decodes_back_into_the_candidate_dto() {
+    // The client decodes the candidate payload, so the wire shape is
+    // exercised in both directions, including a candidate that carries
+    // validation issues.
+    let text = v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, "");
+    let previous = snapshot(&text, "44444444-4444-4444-8444-444444444444");
+    let invalid = "schema_version = 1\n[provider]\nkind = \"openrouter\"\n";
+    let parsed = candidate(invalid, &previous);
+    assert!(
+        !parsed.validation().issues().is_empty(),
+        "the fixture candidate carries issues"
+    );
+
+    let encoded = serde_json::to_string(&parsed).expect("candidate serializes");
+    assert!(
+        !encoded.contains(FAKE_CREDENTIAL),
+        "the candidate wire never contains the credential"
+    );
+    let decoded: ConfigCandidateDto =
+        serde_json::from_str(&encoded).expect("the candidate wire decodes");
+    assert_eq!(
+        decoded.candidate_revision_id(),
+        parsed.candidate_revision_id()
+    );
+    assert_eq!(decoded.source().as_str(), parsed.source().as_str());
+    assert_eq!(
+        decoded.validation().total_issue_count(),
+        parsed.validation().total_issue_count()
+    );
+    assert_eq!(
+        decoded.validation().issues().len(),
+        parsed.validation().issues().len()
+    );
+    assert_eq!(
+        decoded
+            .validation()
+            .issues()
+            .first()
+            .map(CandidateIssueDto::code),
+        parsed
+            .validation()
+            .issues()
+            .first()
+            .map(CandidateIssueDto::code)
+    );
+}
+
+#[test]
+fn catalog_declaration_snapshot_projects_the_declaration_onto_the_reference() {
+    // The declaration projection reuses the reference schema version,
+    // revision, and capture time, and validates the declared selection through
+    // the one endpoint policy every boundary shares.
+    let text = v1("openrouter", "fixture-model", FAKE_CREDENTIAL, None, "");
+    let reference = snapshot(&text, "55555555-5555-4555-8555-555555555551");
+    let declared = catalog_declaration_snapshot(
+        &reference,
+        ProviderKindDto::Openrouter,
+        "declared-model",
+        Some("https://declared.example.invalid/v1"),
+    )
+    .expect("the declared selection is representable");
+    assert_eq!(
+        declared.schema_version().major(),
+        reference.schema_version().major()
+    );
+    assert_eq!(declared.revision_id(), reference.revision_id());
+    assert_eq!(declared.captured_at(), reference.captured_at());
+    assert_eq!(declared.resolved().provider().model(), "declared-model");
+    assert_eq!(
+        declared.resolved().provider().endpoint(),
+        Some("https://declared.example.invalid/v1")
+    );
+
+    let error = catalog_declaration_snapshot(
+        &reference,
+        ProviderKindDto::Openrouter,
+        "declared-model",
+        Some("http://plaintext.example.invalid/v1"),
+    )
+    .expect_err("a non-loopback plaintext endpoint is not representable");
+    assert_eq!(error.code(), "invalid_provider_endpoint");
 }

@@ -219,6 +219,13 @@ pub enum ProviderKindDto {
 }
 
 impl ProviderKindDto {
+    /// Every typed provider kind, in stable id order.
+    ///
+    /// The array is the single id-to-kind mapping authority (R37): both this
+    /// crate's TOML deserialization and the composition's catalog id
+    /// resolution consume [`Self::from_id`] instead of re-listing the ids.
+    pub const ALL: [Self; 2] = [Self::Openrouter, Self::GenericChatCompletionApi];
+
     /// Returns the stable TOML and projection representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -226,6 +233,12 @@ impl ProviderKindDto {
             Self::Openrouter => "openrouter",
             Self::GenericChatCompletionApi => "generic-chat-completion-api",
         }
+    }
+
+    /// Resolves the stable provider kind id, or `None` when it names no kind.
+    #[must_use]
+    pub fn from_id(kind_id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == kind_id)
     }
 }
 
@@ -773,11 +786,9 @@ impl<'de> Deserialize<'de> for ProviderKindDto {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "openrouter" => Ok(Self::Openrouter),
-            "generic-chat-completion-api" => Ok(Self::GenericChatCompletionApi),
-            _ => Err(serde::de::Error::custom("unsupported provider kind")),
-        }
+        // One id-to-kind owner (R37): the typed kind resolves its own id set,
+        // so this boundary cannot drift from the composition's dispatch.
+        Self::from_id(&value).ok_or_else(|| serde::de::Error::custom("unsupported provider kind"))
     }
 }
 
@@ -915,6 +926,25 @@ credential = \"{credential}\"
     }
 
     #[test]
+    fn provider_kind_ids_resolve_through_the_single_mapping_owner() {
+        // R37: the id-to-kind mapping has one owner (`ProviderKindDto`), which
+        // both this boundary's deserialization and the composition's catalog
+        // dispatch consume.
+        assert_eq!(ProviderKindDto::ALL.len(), 2);
+        for kind in ProviderKindDto::ALL {
+            assert_eq!(ProviderKindDto::from_id(kind.as_str()), Some(kind));
+        }
+        assert_eq!(ProviderKindDto::from_id("gemini"), None);
+        assert_eq!(ProviderKindDto::from_id(""), None);
+        let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            v1("gemini", "fixture-model", CREDENTIAL, None),
+            explicit_source(),
+        ))
+        .expect_err("an unregistered kind id is rejected through the owner");
+        assert_eq!(unknown.code(), "invalid_config_schema");
+    }
+
+    #[test]
     fn configuration_validation_rejects_all_boundary_failures_safely() {
         let fixtures = [
             (
@@ -1043,6 +1073,12 @@ credential = \"{credential}\"
             // reports the same typed code.
             Some("https:///v1"),
             Some("https://:8080/v1"),
+            // R25: a non-empty authority whose host is malformed names no
+            // reachable host either. The backslash is doubled because the
+            // fixture embeds the value in a TOML basic string.
+            Some("https://]/v1"),
+            Some("https://[::1]]/v1"),
+            Some("https://exa\\\\mple.com/v1"),
         ] {
             let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
                 v1(
