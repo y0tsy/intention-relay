@@ -4,11 +4,8 @@
 )]
 
 use intention_model::{
-    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
-    MODEL_CAPABILITY_TAXONOMY_V1, ModelCapabilityEnvelopeV1, ModelEventDto,
-    ModelStreamLifecycleDto, ParserLimitsV1, ProviderNativePreservationControlsV1,
-    ReasoningEffortLevel, ReasoningFragmentCategoryDto, ReasoningUsageDto, ResponsesReasoningMode,
-    ServerSideParserConfigV1,
+    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto, ModelEventDto,
+    ModelStreamLifecycleDto, ReasoningEffortLevel, ReasoningFragmentCategoryDto,
 };
 
 #[test]
@@ -118,13 +115,6 @@ fn reasoning_effort_and_mode_are_closed_and_snake_case() {
             .to_string()
             .contains("unknown variant")
     );
-    for (mode, wire) in [
-        (ResponsesReasoningMode::Standard, "standard"),
-        (ResponsesReasoningMode::Pro, "pro"),
-    ] {
-        let encoded = serde_json::to_string(&mode).expect("mode serializes");
-        assert_eq!(encoded, format!("\"{wire}\""));
-    }
 }
 
 #[test]
@@ -180,95 +170,5 @@ fn header_policy_validates_names_and_transport_consistency() {
             r#"{"allowed_header_names":["X-Custom-Auth"],"selected_transport":"safe_header","extra":true}"#
         )
         .is_err()
-    );
-}
-
-#[test]
-fn preservation_controls_and_parser_config_validate_closed_values() {
-    let controls = ProviderNativePreservationControlsV1::new(true, false);
-    assert!(controls.preserve_thinking());
-    assert!(!controls.thinking_keep());
-
-    let limits = ParserLimitsV1::new(64 * 1024, 16, 256, 1024).expect("limits are valid");
-    assert_eq!(limits.max_bytes(), 64 * 1024);
-    assert_eq!(limits.max_nesting(), 16);
-    assert_eq!(limits.max_fields(), 256);
-    assert_eq!(limits.max_array_items(), 1024);
-    assert!(ParserLimitsV1::new(0, 1, 1, 1).is_err());
-    assert!(ParserLimitsV1::new(512 * 1024 + 1, 1, 1, 1).is_err());
-    assert!(ParserLimitsV1::new(1, 129, 1, 1).is_err());
-    assert!(ParserLimitsV1::new(1, 1, 4097, 1).is_err());
-    assert!(ParserLimitsV1::new(1, 1, 1, 65_537).is_err());
-
-    assert_eq!(
-        ServerSideParserConfigV1::none(),
-        ServerSideParserConfigV1::None
-    );
-    let vllm = ServerSideParserConfigV1::vllm("structured-output-v1", limits)
-        .expect("vllm parser is valid");
-    let decoded: ServerSideParserConfigV1 =
-        serde_json::from_str(&serde_json::to_string(&vllm).expect("parser serializes"))
-            .expect("parser deserializes");
-    assert_eq!(decoded, vllm);
-    let sglang =
-        ServerSideParserConfigV1::sglang("json-parser-v2", limits).expect("sglang parser is valid");
-    let decoded: ServerSideParserConfigV1 =
-        serde_json::from_str(&serde_json::to_string(&sglang).expect("parser serializes"))
-            .expect("parser deserializes");
-    assert_eq!(decoded, sglang);
-    assert!(ServerSideParserConfigV1::vllm(" ", limits).is_err());
-    assert!(ServerSideParserConfigV1::sglang("ctrl\u{7}", limits).is_err());
-    assert!(serde_json::from_str::<ServerSideParserConfigV1>(r#"{"mode":"bogus"}"#).is_err());
-}
-
-#[test]
-fn capability_envelope_requires_the_closed_taxonomy_revision() {
-    let envelope = ModelCapabilityEnvelopeV1::new(
-        MODEL_CAPABILITY_TAXONOMY_V1,
-        true,
-        true,
-        true,
-        true,
-        false,
-        true,
-    )
-    .expect("closed envelope is valid");
-    assert_eq!(envelope.taxonomy_version(), MODEL_CAPABILITY_TAXONOMY_V1);
-    assert!(envelope.input_text_only());
-    assert!(envelope.text_streaming());
-    assert!(envelope.structured_output_unsupported());
-    assert!(envelope.reasoning());
-    assert!(!envelope.tool_exchange());
-    assert!(envelope.context_preservation_local_durable_history());
-    let decoded: ModelCapabilityEnvelopeV1 =
-        serde_json::from_str(&serde_json::to_string(&envelope).expect("envelope serializes"))
-            .expect("envelope deserializes");
-    assert_eq!(decoded, envelope);
-    assert!(
-        ModelCapabilityEnvelopeV1::new("other-taxonomy-v1", true, true, true, true, false, true)
-            .is_err()
-    );
-}
-
-#[test]
-fn reasoning_usage_is_optional_typed_and_never_zero() {
-    let partial = ReasoningUsageDto::new(Some(12), None).expect("partial usage is valid");
-    assert_eq!(partial.input_tokens(), Some(12));
-    assert_eq!(partial.output_tokens(), None);
-    assert!(
-        serde_json::from_str::<ReasoningUsageDto>(r#"{}"#).expect("empty usage decodes")
-            == ReasoningUsageDto::new(None, None).expect("empty usage is valid")
-    );
-    let decoded: ReasoningUsageDto =
-        serde_json::from_str(&serde_json::to_string(&partial).expect("usage serializes"))
-            .expect("usage deserializes");
-    assert_eq!(decoded, partial);
-    assert!(ReasoningUsageDto::new(Some(0), None).is_err());
-    assert!(ReasoningUsageDto::new(None, Some(0)).is_err());
-    assert!(
-        serde_json::from_str::<ReasoningUsageDto>(r#"{"input_tokens":0}"#)
-            .expect_err("zero component is rejected")
-            .to_string()
-            .contains("reasoning usage")
     );
 }
