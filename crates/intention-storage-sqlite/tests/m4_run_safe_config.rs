@@ -148,6 +148,44 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
     assert_eq!(missing.code(), "run_configuration_unavailable");
 }
 
+#[test]
+fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
+    // R11/A3: only a genuinely missing run row is a permanent not-found; a
+    // backend read failure during the run-identity lookup stays transient
+    // unavailability.
+    let (directory, repository) = repository();
+    let session_id = create_session(&repository, "backend-failure");
+    let run_id = RunId::new();
+    repository
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session_id,
+                TurnId::new(),
+                "turn",
+                run_id,
+                snapshot("safe-model", None, 30, 2),
+                time(2),
+            )
+            .expect("turn input is valid"),
+        )
+        .expect("turn starts");
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the backend failure");
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .expect("foreign keys disable for the backend-failure fixture");
+    connection
+        .execute("DROP TABLE runs", [])
+        .expect("run table drops for the backend-failure fixture");
+    drop(connection);
+    let error = repository
+        .load_run_config_snapshot(session_id, run_id)
+        .expect_err("a backend read failure is unavailable");
+    assert_eq!(error.code(), "storage_unavailable");
+    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+    assert_ne!(error.retry(), ErrorRetryDto::Never);
+}
+
 fn repository() -> (TempDir, SqliteStorageRepository) {
     let directory = TempDir::new().expect("temporary directory exists");
     let repository = SqliteStorageRepository::open(

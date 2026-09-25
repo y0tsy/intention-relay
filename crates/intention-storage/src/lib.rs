@@ -2,10 +2,15 @@
 //!
 //! Implementations own transactions and backend resources. This crate exposes no
 //! connection, filesystem, SQL, path, or closure-based API across its boundary.
+//!
+//! Every field is a typed domain or storage value. No opaque JSON string,
+//! untyped map, or caller-supplied encoding crosses this boundary: a backend
+//! that persists a record as text owns both directions of its canonical codec
+//! behind the typed field, and only the typed value is visible to callers.
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto,
+    CreateSessionCommandDto, CredentialTransportMode, DomainEventDto, ModelRunFactInputDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
     RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunProjectionDto,
     RunReplayDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
@@ -91,6 +96,15 @@ const fn is_terminal_tool_lifecycle_status(
 const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
 
 /// Closed durable discriminator for one committed local tool result family.
+///
+/// This is a storage-owned durable vocabulary: the names below are the table
+/// discriminator persisted with tool result evidence and are the only values
+/// [`ToolResultKindDto::name`] and [`ToolResultKindDto::parse`] accept. It is
+/// deliberately separate from the provider-side tool-name authority
+/// (`intention-tools`) so the storage boundary carries no tool-registry
+/// dependency: these are independent boundaries, storage never resolves a
+/// tool name through the registry, and a change to the provider-side name
+/// table does not silently change durable bytes.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ToolResultKindDto {
     Read,
@@ -854,11 +868,14 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns `run_configuration_not_found` for unknown or cross-session run
-    /// identity, `run_configuration_unavailable` when the persisted safe
-    /// selection is absent, and `storage_decode_failed` when it is present but
-    /// cannot be decoded. Credentials, raw TOML, configuration paths,
-    /// and backend resources never cross this boundary.
+    /// Returns `run_configuration_not_found` only when the durable run row is
+    /// genuinely absent for the supplied identity (unknown session, unknown
+    /// run, or a run owned by another session), `storage_unavailable` when the
+    /// durable backend cannot be read at all, `run_configuration_unavailable`
+    /// when the persisted safe selection row is absent, and
+    /// `storage_decode_failed` when the selection is present but cannot be
+    /// decoded. Credentials, raw TOML, configuration paths, and backend
+    /// resources never cross this boundary.
     fn load_run_config_snapshot(
         &self,
         _session_id: SessionId,
@@ -974,8 +991,10 @@ pub trait StorageRepositoryDto {
 // Current-schema control-plane DTOs and repository contracts.
 //
 // These contracts are DTO-only: no connection, SQL, path, or closure crosses
-// the boundary. Record JSON columns are opaque safe strings produced and
-// consumed by the backend; credentials never enter any current-schema column.
+// the boundary, credentials never enter any current-schema column, and every
+// control-plane record crosses the boundary as typed fields. A backend that
+// persists a record as text encodes and decodes its own canonical record
+// behind the typed DTO; the encoded text never crosses this boundary.
 // ============================================================================
 
 /// The durable provider catalog lifecycle status.
@@ -1018,6 +1037,29 @@ pub enum ProviderReadinessDto {
     Unavailable,
 }
 
+/// The typed credential-free safe projection of one provider profile.
+///
+/// The projection carries the resolved safe profile values a catalog reader
+/// may disclose: the profile identity and revision, the resolved kind, model,
+/// endpoint, driver contract, reasoning policy, execution policy, capability
+/// subset, and credential transport. No credential literal is representable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogSafeProjectionDto {
+    pub credential_transport_mode: CredentialTransportMode,
+    pub credential_transport_safe_header_name: Option<String>,
+    pub declared_model_capability_subset: Vec<String>,
+    pub effective_execution_policy: String,
+    pub effective_loopback_policy_or_not_applicable: String,
+    pub kind_descriptor_revision_id: String,
+    pub kind_id: String,
+    pub model_id: String,
+    pub normalized_effective_endpoint: String,
+    pub profile_id: String,
+    pub profile_revision_id: String,
+    pub provider_driver_contract_revision: String,
+    pub resolved_reasoning_policy: String,
+}
+
 /// One safe projected provider profile entry in a catalog projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogProfileEntryDto {
@@ -1029,8 +1071,8 @@ pub struct ProviderCatalogProfileEntryDto {
     pub enabled: bool,
     pub credential_configured: bool,
     pub readiness: ProviderReadinessDto,
-    /// The opaque safe projection JSON produced by the backend.
-    pub safe_projection_json: String,
+    /// The typed credential-free safe projection of the profile.
+    pub safe_projection: ProviderCatalogSafeProjectionDto,
 }
 
 /// One bounded page of a provider catalog projection.
@@ -1196,7 +1238,9 @@ pub struct UnavailableRunQueueEntryDto {
     pub promotion_attempts: u64,
     pub state: UnavailableQueueStateDto,
     pub last_operation_id: Option<String>,
-    pub selection_json: String,
+    /// The resolved provider selection of the queued run, exactly as it was
+    /// resolved when the provider became unavailable.
+    pub selection: ProviderSelectionV1,
 }
 
 /// Input enqueueing one unavailable provider run.
@@ -1209,7 +1253,8 @@ pub struct EnqueueUnavailableRunInputDto {
     pub unavailable_reason: String,
     pub first_unavailable_at: i64,
     pub operation_id: String,
-    pub selection_json: String,
+    /// The resolved provider selection to persist with the queued run.
+    pub selection: ProviderSelectionV1,
 }
 
 /// Input loading one bounded FIFO page of the unavailable queue.
@@ -1263,6 +1308,14 @@ pub struct QueueReconciliationMarkerDto {
     pub resolved_at: Option<i64>,
 }
 
+/// The typed credential-free usage record of one provider usage event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderUsageRecordDto {
+    pub input_units: u64,
+    pub output_units: u64,
+    pub reasoning_units: u64,
+}
+
 /// One credential-free provider usage event.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderUsageEventInputDto {
@@ -1271,11 +1324,9 @@ pub struct ProviderUsageEventInputDto {
     pub profile_id: String,
     pub provider_profile_revision_id: String,
     pub model_id: String,
-    pub input_units: u64,
-    pub output_units: u64,
-    pub reasoning_units: u64,
+    /// The typed usage record reported for this event.
+    pub usage: ProviderUsageRecordDto,
     pub occurred_at: i64,
-    pub usage_json: String,
 }
 
 /// Input recording a batch of provider usage events for one usage period.
@@ -1313,6 +1364,19 @@ pub enum ProviderCatalogRemovalStatusDto {
     Expired,
 }
 
+/// The typed credential-free removal evidence of one catalog removal
+/// candidate.
+///
+/// The evidence carries the candidate revision identity plus the removed
+/// profile and kind identities a restart needs to reconstruct and roll the
+/// removal forward.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderCatalogRemovalEvidenceDto {
+    pub catalog_revision_id: u64,
+    pub removed_profile_ids: Vec<String>,
+    pub removed_kind_ids: Vec<String>,
+}
+
 /// One durable provider catalog removal candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogRemovalCandidateDto {
@@ -1323,7 +1387,8 @@ pub struct ProviderCatalogRemovalCandidateDto {
     pub expires_at: i64,
     pub source_recheck: String,
     pub status: ProviderCatalogRemovalStatusDto,
-    pub candidate_json: String,
+    /// The typed credential-free removal evidence of the candidate.
+    pub evidence: ProviderCatalogRemovalEvidenceDto,
     pub operation_id: Option<String>,
     pub completed_at: Option<i64>,
 }
@@ -1336,7 +1401,8 @@ pub struct CreateProviderCatalogRemovalCandidateInputDto {
     pub active_catalog_revision_id: u64,
     pub created_at: i64,
     pub source_recheck: String,
-    pub candidate_json: String,
+    /// The typed credential-free removal evidence of the candidate.
+    pub evidence: ProviderCatalogRemovalEvidenceDto,
     pub operation_id: String,
 }
 
@@ -1781,4 +1847,20 @@ pub trait HeldRunRepositoryDto {
     ///
     /// Returns an unavailable error when the record cannot be read.
     fn load_held_recovered_run(&self, run_id: RunId) -> DtoResult<Option<HeldRecoveredRunDto>>;
+}
+
+#[cfg(test)]
+mod tests {
+    /// D-07 boundary guard: no storage DTO may declare an opaque encoded
+    /// record string field. The needle is assembled at runtime so this
+    /// guard's own source can neither satisfy nor trip the scan it performs.
+    #[test]
+    fn storage_dto_surface_declares_no_opaque_json_string_field() {
+        let source = include_str!("lib.rs");
+        let opaque_field = ["_j", "son: String"].concat();
+        assert!(
+            !source.contains(&opaque_field),
+            "the storage boundary must not declare an opaque `{opaque_field}` field"
+        );
+    }
 }

@@ -13,6 +13,8 @@ use intention_domain::{
     ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto,
     ProviderProfileRevisionV1, ProviderProfileTombstoneDto, ProviderSelectionV1,
     ReasoningCapability,
+    canonical::{CanonicalIdentityInput, WireType, encode_optional_utf8, encode_u64, encode_utf8},
+    provider_catalog::provider_profile_revision_digest,
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
@@ -26,7 +28,8 @@ use intention_storage::{
     PersistResolvedRunProviderSelectionInputDto, PromoteUnavailableRunsInputDto,
     PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
     ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
-    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStateDto,
+    ProviderCatalogRemovalEvidenceDto, ProviderCatalogRemovalStatusDto,
+    ProviderCatalogRepositoryDto, ProviderCatalogSafeProjectionDto, ProviderCatalogStateDto,
     ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
     ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
     ProviderUsageAggregateDto, ProviderUsageRepositoryDto, QueueReconciliationMarkerDto,
@@ -245,7 +248,6 @@ CREATE TABLE IF NOT EXISTS provider_usage_facts (
   output_units INTEGER NOT NULL CHECK(output_units >= 0),
   reasoning_units INTEGER NOT NULL CHECK(reasoning_units >= 0),
   occurred_at INTEGER NOT NULL CHECK(occurred_at >= 0),
-  usage_json TEXT NOT NULL,
   PRIMARY KEY(run_id, usage_event_id)
 );
 CREATE INDEX IF NOT EXISTS provider_usage_facts_by_profile ON provider_usage_facts(profile_id, provider_profile_revision_id, model_id);
@@ -898,6 +900,42 @@ impl SelectionJson {
     }
 }
 
+/// Typed encoding of one credential-free removal-evidence record.
+#[derive(Clone, Debug)]
+struct RemovalEvidenceJson {
+    catalog_revision_id: u64,
+    removed_kind_ids: Vec<String>,
+    removed_profile_ids: Vec<String>,
+}
+
+impl RemovalEvidenceJson {
+    fn to_json(&self) -> String {
+        format!(
+            "{{\"catalog_revision_id\":{},\"removed_kinds\":{},\"removed_profiles\":{}}}",
+            encode_json_u64(self.catalog_revision_id),
+            encode_json_string_list(&self.removed_kind_ids),
+            encode_json_string_list(&self.removed_profile_ids),
+        )
+    }
+
+    fn from_json(encoded: &str) -> DtoResult<Self> {
+        Ok(Self {
+            catalog_revision_id: decode_json_u64(
+                json_object_field(encoded, "catalog_revision_id")?,
+                "the removal evidence revision is missing or malformed",
+            )?,
+            removed_kind_ids: decode_json_string_list(json_object_field(
+                encoded,
+                "removed_kinds",
+            )?)?,
+            removed_profile_ids: decode_json_string_list(json_object_field(
+                encoded,
+                "removed_profiles",
+            )?)?,
+        })
+    }
+}
+
 /// Typed encoding of one profile tombstone record.
 #[derive(Clone, Debug)]
 struct ProfileTombstoneJson {
@@ -980,6 +1018,54 @@ impl SafeProjectionJson {
             encode_json_string(&self.provider_driver_contract_revision),
             encode_json_string(&self.resolved_reasoning_policy),
         )
+    }
+
+    /// Decodes one persisted safe projection record into its typed record.
+    fn from_json(encoded: &str) -> DtoResult<ProviderCatalogSafeProjectionDto> {
+        Ok(ProviderCatalogSafeProjectionDto {
+            credential_transport_mode: parse_transport_mode(&decode_json_string(
+                json_object_field(encoded, "credential_transport_mode")?,
+            )?)?,
+            credential_transport_safe_header_name: decode_json_optional_string(json_object_field(
+                encoded,
+                "credential_transport_safe_header_name",
+            )?)?,
+            declared_model_capability_subset: decode_json_string_list(json_object_field(
+                encoded,
+                "declared_model_capability_subset",
+            )?)?,
+            effective_execution_policy: decode_json_string(json_object_field(
+                encoded,
+                "effective_execution_policy",
+            )?)?,
+            effective_loopback_policy_or_not_applicable: decode_json_string(json_object_field(
+                encoded,
+                "effective_loopback_policy_or_not_applicable",
+            )?)?,
+            kind_descriptor_revision_id: decode_json_string(json_object_field(
+                encoded,
+                "kind_descriptor_revision_id",
+            )?)?,
+            kind_id: decode_json_string(json_object_field(encoded, "kind_id")?)?,
+            model_id: decode_json_string(json_object_field(encoded, "model_id")?)?,
+            normalized_effective_endpoint: decode_json_string(json_object_field(
+                encoded,
+                "normalized_effective_endpoint",
+            )?)?,
+            profile_id: decode_json_string(json_object_field(encoded, "profile_id")?)?,
+            profile_revision_id: decode_json_string(json_object_field(
+                encoded,
+                "profile_revision_id",
+            )?)?,
+            provider_driver_contract_revision: decode_json_string(json_object_field(
+                encoded,
+                "provider_driver_contract_revision",
+            )?)?,
+            resolved_reasoning_policy: decode_json_string(json_object_field(
+                encoded,
+                "resolved_reasoning_policy",
+            )?)?,
+        })
     }
 }
 
@@ -1432,8 +1518,74 @@ pub fn insert_kind_descriptor(
     Ok(())
 }
 
+/// Computes the canonical provider profile revision digest for one profile.
+///
+/// The durable `profile_revision_digest` column carries the domain identity
+/// digest ([`provider_profile_revision_digest`]) over the identity-bearing
+/// fields of the profile revision rather than a hash of the persisted record
+/// text: the record encoding may change without changing the stored identity,
+/// and provenance-only values can never enter the digest.
+fn canonical_profile_revision_digest(profile: &ProviderProfileRevisionV1) -> DtoResult<String> {
+    let identity_error = |_| codec_error("provider profile revision identity is not canonical");
+    let transport_mode = u64::from(matches!(
+        profile.credential_transport_mode,
+        CredentialTransportMode::SafeHeader
+    ));
+    let input = CanonicalIdentityInput::new()
+        .field(1, WireType::Utf8, encode_utf8(&profile.profile_id))
+        .map_err(identity_error)?
+        .field(2, WireType::Utf8, encode_utf8(&profile.revision_id))
+        .map_err(identity_error)?
+        .field(3, WireType::Utf8, encode_utf8(&profile.provider_kind_id))
+        .map_err(identity_error)?
+        .field(4, WireType::Utf8, encode_utf8(&profile.model_id))
+        .map_err(identity_error)?
+        .field(5, WireType::Utf8, encode_utf8(&profile.endpoint))
+        .map_err(identity_error)?
+        .field(6, WireType::U64, encode_u64(transport_mode))
+        .map_err(identity_error)?
+        .field(
+            7,
+            WireType::Optional,
+            encode_optional_utf8(&profile.safe_header_name),
+        )
+        .map_err(identity_error)?
+        .field(
+            8,
+            WireType::Utf8,
+            encode_utf8(&profile.capability_taxonomy_revision),
+        )
+        .map_err(identity_error)?
+        .field(
+            9,
+            WireType::Optional,
+            encode_optional_utf8(&profile.reasoning_compatibility_id),
+        )
+        .map_err(identity_error)?
+        .field(
+            10,
+            WireType::Utf8,
+            encode_utf8(&profile.kind_descriptor_revision_id),
+        )
+        .map_err(identity_error)?
+        .field(
+            11,
+            WireType::Record,
+            profile
+                .driver_contract_revision
+                .encode()
+                .map_err(identity_error)?,
+        )
+        .map_err(identity_error)?;
+    provider_profile_revision_digest(input)
+        .map(|digest| digest.to_string())
+        .map_err(identity_error)
+}
+
 /// Inserts one provider profile revision into append-only history.
 /// Idempotent for the identical record; conflicts on digest or identity reuse.
+/// The digest column carries the canonical domain profile-revision identity
+/// digest, not a hash of the persisted record text.
 pub fn insert_profile(
     tx: &sqlite::Transaction<'_>,
     candidate: &ProviderProfileCandidateDto,
@@ -1442,7 +1594,7 @@ pub fn insert_profile(
 ) -> DtoResult<()> {
     let profile = &candidate.profile;
     let json = profile_json(profile).to_json();
-    let digest = record_digest(&json);
+    let digest = canonical_profile_revision_digest(profile)?;
     let existing_by_digest = tx
         .query_row(
             "SELECT profile_id, profile_revision_id FROM provider_profile_revisions WHERE profile_revision_digest=?1",
@@ -1586,7 +1738,7 @@ fn load_queue_entry(row: &sqlite::Row<'_>) -> Result<UnavailableRunQueueEntryDto
         promotion_attempts: u64::try_from(row.get::<_, i64>(7)?).unwrap_or(u64::MAX),
         state: parse_queue_state(&row.get::<_, String>(8)?).map_err(to_sql_error)?,
         last_operation_id: row.get(9)?,
-        selection_json: row.get(10)?,
+        selection: parse_selection_json(&row.get::<_, String>(10)?).map_err(to_sql_error)?,
     })
 }
 
@@ -1796,7 +1948,7 @@ impl ProviderCatalogRepositoryDto for SqliteStorageRepository {
                 enabled: enabled != 0,
                 credential_configured: configured != 0,
                 readiness: parse_catalog_readiness(&readiness)?,
-                safe_projection_json: safe_json,
+                safe_projection: SafeProjectionJson::from_json(&safe_json)?,
             });
         }
         drop(statement);
@@ -2387,14 +2539,19 @@ fn parse_kind_descriptor_json(encoded: &str) -> DtoResult<ProviderKindDescriptor
     Ok(descriptor)
 }
 
+/// Parses one persisted closed credential transport mode.
+fn parse_transport_mode(value: &str) -> DtoResult<CredentialTransportMode> {
+    match value {
+        "bearer" => Ok(CredentialTransportMode::Bearer),
+        "safe_header" => Ok(CredentialTransportMode::SafeHeader),
+        _ => Err(codec_error("invalid persisted credential transport mode")),
+    }
+}
+
 /// Parses one persisted profile revision record back into its domain record.
 fn parse_profile_json(encoded: &str) -> DtoResult<ProviderProfileRevisionV1> {
     let record = ProfileJson::from_json(encoded)?;
-    let transport = match record.credential_transport_mode.as_str() {
-        "bearer" => CredentialTransportMode::Bearer,
-        "safe_header" => CredentialTransportMode::SafeHeader,
-        _ => return Err(codec_error("invalid persisted credential transport mode")),
-    };
+    let transport = parse_transport_mode(&record.credential_transport_mode)?;
     let profile = ProviderProfileRevisionV1 {
         profile_id: record.profile_id,
         revision_id: record.revision_id,
@@ -2450,11 +2607,7 @@ pub fn encode_selection_json(selection: &ProviderSelectionV1) -> String {
 /// Parses one persisted resolved provider selection record back into its domain record.
 pub fn parse_selection_json(encoded: &str) -> DtoResult<ProviderSelectionV1> {
     let record = SelectionJson::from_json(encoded)?;
-    let transport = match record.credential_transport_mode.as_str() {
-        "bearer" => CredentialTransportMode::Bearer,
-        "safe_header" => CredentialTransportMode::SafeHeader,
-        _ => return Err(codec_error("invalid persisted credential transport mode")),
-    };
+    let transport = parse_transport_mode(&record.credential_transport_mode)?;
     let selection = ProviderSelectionV1 {
         selection_canonicalization_version: record.selection_canonicalization_version,
         profile_id: record.profile_id,
@@ -2679,6 +2832,13 @@ impl ProviderSelectionRepositoryDto for SqliteStorageRepository {
 
 impl UnavailableQueueRepositoryDto for SqliteStorageRepository {
     fn enqueue_unavailable_run(&self, input: EnqueueUnavailableRunInputDto) -> DtoResult<()> {
+        input.selection.validate().map_err(|_| {
+            ErrorDto::validation(
+                "invalid_provider_selection",
+                "the resolved provider selection of the queued run is invalid",
+            )
+        })?;
+        let selection = encode_selection_json(&input.selection);
         immediate_transaction!(self, |tx| {
             tx.execute(
                 "INSERT OR IGNORE INTO unavailable_provider_queue(run_id, session_id, profile_id, provider_profile_revision_id, unavailable_reason, first_unavailable_at, promotion_attempts, state, last_operation_id, selection_json) VALUES (?1,?2,?3,?4,?5,?6,0,'queued',?7,?8)",
@@ -2690,7 +2850,7 @@ impl UnavailableQueueRepositoryDto for SqliteStorageRepository {
                     input.unavailable_reason,
                     input.first_unavailable_at,
                     input.operation_id,
-                    input.selection_json
+                    selection
                 ],
             )
             .map_err(storage_error)?;
@@ -2946,15 +3106,15 @@ impl ProviderUsageRepositoryDto for SqliteStorageRepository {
     fn record_provider_usage(&self, input: RecordProviderUsageInputDto) -> DtoResult<()> {
         immediate_transaction!(self, |tx| {
             for event in &input.events {
-                let input_units = i64::try_from(event.input_units)
+                let input_units = i64::try_from(event.usage.input_units)
                     .map_err(|_| codec_error("usage units outside the SQLite range"))?;
-                let output_units = i64::try_from(event.output_units)
+                let output_units = i64::try_from(event.usage.output_units)
                     .map_err(|_| codec_error("usage units outside the SQLite range"))?;
-                let reasoning_units = i64::try_from(event.reasoning_units)
+                let reasoning_units = i64::try_from(event.usage.reasoning_units)
                     .map_err(|_| codec_error("usage units outside the SQLite range"))?;
                 let inserted = tx
                     .execute(
-                        "INSERT OR IGNORE INTO provider_usage_facts(run_id, usage_event_id, profile_id, provider_profile_revision_id, model_id, input_units, output_units, reasoning_units, occurred_at, usage_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                        "INSERT OR IGNORE INTO provider_usage_facts(run_id, usage_event_id, profile_id, provider_profile_revision_id, model_id, input_units, output_units, reasoning_units, occurred_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                         sqlite::params![
                             event.run_id.to_string(),
                             event.usage_event_id,
@@ -2964,8 +3124,7 @@ impl ProviderUsageRepositoryDto for SqliteStorageRepository {
                             input_units,
                             output_units,
                             reasoning_units,
-                            event.occurred_at,
-                            event.usage_json
+                            event.occurred_at
                         ],
                     )
                     .map_err(storage_error)?;
@@ -3054,58 +3213,37 @@ fn load_removal_candidate(
         expires_at: row.get(4)?,
         source_recheck: row.get(5)?,
         status: parse_removal_status(&row.get::<_, String>(6)?).map_err(to_sql_error)?,
-        candidate_json: row.get(7)?,
+        evidence: parse_removal_evidence(&row.get::<_, String>(7)?).map_err(to_sql_error)?,
         operation_id: row.get(8)?,
         completed_at: row.get(9)?,
     })
 }
 
-/// Decodes the removed-identity evidence of one removal candidate row.
-///
-/// The candidate evidence is the credential-free JSON shape the controller
-/// writes at prepare time:
-/// `{"catalog_revision_id":N,"removed_profiles":[...],"removed_kinds":[...],
-/// "default_profile_id":"default"}`. Unknown or malformed shapes fail closed
-/// so restart handling never guesses removed identities.
-fn decode_removal_evidence(encoded: &str) -> DtoResult<(Vec<String>, Vec<String>)> {
-    let removed_profiles = decode_removed_identity_list(encoded, "removed_profiles")?;
-    let removed_kinds = decode_removed_identity_list(encoded, "removed_kinds")?;
-    Ok((removed_profiles, removed_kinds))
+/// Encodes one typed removal-evidence record into its persisted canonical text.
+fn encode_removal_evidence(evidence: &ProviderCatalogRemovalEvidenceDto) -> String {
+    RemovalEvidenceJson {
+        catalog_revision_id: evidence.catalog_revision_id,
+        removed_kind_ids: evidence.removed_kind_ids.clone(),
+        removed_profile_ids: evidence.removed_profile_ids.clone(),
+    }
+    .to_json()
 }
 
-/// Decodes one `[...]` list of string identities from the removal evidence
-/// record through the span scanner (never through an untyped JSON value).
-fn decode_removed_identity_list(encoded: &str, key: &str) -> DtoResult<Vec<String>> {
-    let RawJsonField::Value(span) = json_object_field(encoded, key)? else {
-        return Err(codec_error("removal candidate evidence is malformed"));
-    };
-    let bytes = encoded.as_bytes();
-    let start = span.as_ptr() as usize - bytes.as_ptr() as usize;
-    if start >= bytes.len() || bytes[start] != b'[' {
-        return Err(codec_error("removal candidate evidence is malformed"));
-    }
-    let mut index = start + 1;
-    let mut identities = Vec::new();
-    loop {
-        index = skip_json_whitespace(bytes, index);
-        if index >= bytes.len() {
-            return Err(codec_error("removal candidate evidence is malformed"));
-        }
-        match bytes[index] {
-            b']' => return Ok(identities),
-            b'"' => {
-                let (item, after) = json_string_span(bytes, index)?;
-                identities.push(item[1..item.len() - 1].to_owned());
-                index = skip_json_whitespace(bytes, after);
-                match bytes.get(index) {
-                    Some(b',') => index += 1,
-                    Some(b']') => {}
-                    _ => return Err(codec_error("removal candidate evidence is malformed")),
-                }
-            }
-            _ => return Err(codec_error("removal candidate evidence is malformed")),
-        }
-    }
+/// Decodes one persisted removal-evidence record into its typed record.
+///
+/// The evidence is the credential-free record the controller writes at
+/// prepare time; both identity lists decode with the same codec as every
+/// other persisted list field, so an identity containing an escape sequence
+/// (`\"`, `\\`, `\uXXXX`) round-trips to its original value. Unknown or
+/// malformed shapes fail closed so restart handling never guesses removed
+/// identities.
+fn parse_removal_evidence(encoded: &str) -> DtoResult<ProviderCatalogRemovalEvidenceDto> {
+    let record = RemovalEvidenceJson::from_json(encoded)?;
+    Ok(ProviderCatalogRemovalEvidenceDto {
+        catalog_revision_id: record.catalog_revision_id,
+        removed_kind_ids: record.removed_kind_ids,
+        removed_profile_ids: record.removed_profile_ids,
+    })
 }
 
 impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
@@ -3159,18 +3297,18 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
             .optional()
             .map_err(storage_error)?;
         drop(connection);
-        let Some((handle, revision, active, expires_at, status, evidence_json)) = row else {
+        let Some((handle, revision, active, expires_at, status, evidence)) = row else {
             return Ok(None);
         };
-        let (removed_profile_ids, removed_kind_ids) = decode_removal_evidence(&evidence_json)?;
+        let evidence = parse_removal_evidence(&evidence)?;
         Ok(Some(PendingRemovalCandidateDto {
             candidate_handle: handle,
             candidate_catalog_revision_id: u64::try_from(revision).unwrap_or(u64::MAX),
             active_catalog_revision_id: u64::try_from(active).unwrap_or(u64::MAX),
             expires_at,
             removal_status: parse_removal_status(&status)?,
-            removed_profile_ids,
-            removed_kind_ids,
+            removed_profile_ids: evidence.removed_profile_ids,
+            removed_kind_ids: evidence.removed_kind_ids,
         }))
     }
 
@@ -3178,6 +3316,13 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
         &self,
         input: CreateProviderCatalogRemovalCandidateInputDto,
     ) -> DtoResult<()> {
+        if input.evidence.catalog_revision_id != input.candidate_catalog_revision_id {
+            return Err(ErrorDto::validation(
+                "invalid_removal_evidence",
+                "the removal evidence revision must match the candidate revision",
+            ));
+        }
+        let evidence = encode_removal_evidence(&input.evidence);
         immediate_transaction!(self, |tx| {
             let expires_at = input
                 .created_at
@@ -3246,7 +3391,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                         input.created_at,
                         expires_at,
                         input.source_recheck,
-                        input.candidate_json,
+                        evidence,
                         input.operation_id
                     ],
                 )

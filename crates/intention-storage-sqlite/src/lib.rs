@@ -1204,7 +1204,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 sqlite::params![session_id.to_string(), run_id.to_string()],
                 |row| row.get(0),
             )
-            .map_err(|_| run_configuration_not_found())?;
+            .map_err(|error| match error {
+                // Only a genuinely missing run row is a permanent not-found;
+                // a backend read failure stays transient unavailability.
+                sqlite::Error::QueryReturnedNoRows => run_configuration_not_found(),
+                other => storage_error(other),
+            })?;
         let snapshot: String = connection
             .query_row(
                 "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
@@ -3353,7 +3358,7 @@ mod tests {
                 unavailable_reason: "provider_unavailable".to_owned(),
                 first_unavailable_at: 3,
                 operation_id: "op-enqueue-1".to_owned(),
-                selection_json: "{\"safe\":true}".to_owned(),
+                selection: fixture_selection(),
             })
             .expect("unavailable run enqueues");
         repository.arm_fault(FaultPoint::UnavailableQueue);

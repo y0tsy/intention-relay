@@ -23,12 +23,13 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     HeldRunAdmissionStateDto, HeldRunRepositoryDto, LoadProviderCatalogPageInputDto,
     MarkRecoveredRunHeldInputDto, PersistResolvedRunProviderSelectionInputDto,
-    ProviderCatalogRepositoryDto, ProviderProfileCandidateDto, ProviderReadinessDto,
-    ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto, ProviderUsageRepositoryDto,
-    RecordProviderUsageInputDto, RecoverUnfinishedRunsInputDto,
-    RejectProviderCatalogCandidateInputDto, RemoveQueuedTurnInputDto,
-    SessionProviderDefaultsRepositoryDto, SetSessionProviderProfileInputDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
+    ProviderCatalogRemovalEvidenceDto, ProviderCatalogRepositoryDto, ProviderProfileCandidateDto,
+    ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
+    ProviderUsageRecordDto, ProviderUsageRepositoryDto, RecordProviderUsageInputDto,
+    RecoverUnfinishedRunsInputDto, RejectProviderCatalogCandidateInputDto,
+    RemoveQueuedTurnInputDto, SessionProviderDefaultsRepositoryDto,
+    SetSessionProviderProfileInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
+    ToolResultKindDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -1597,11 +1598,12 @@ fn schema4_tables_never_persist_fake_secrets() {
                 profile_id: "profile-a".to_owned(),
                 provider_profile_revision_id: "rev-a".to_owned(),
                 model_id: "fixture-model".to_owned(),
-                input_units: 10,
-                output_units: 20,
-                reasoning_units: 5,
+                usage: ProviderUsageRecordDto {
+                    input_units: 10,
+                    output_units: 20,
+                    reasoning_units: 5,
+                },
                 occurred_at: 3,
-                usage_json: "{\"safe\":true}".to_owned(),
             }],
         })
         .expect("usage records");
@@ -1614,7 +1616,7 @@ fn schema4_tables_never_persist_fake_secrets() {
             unavailable_reason: "provider_unavailable".to_owned(),
             first_unavailable_at: 3,
             operation_id: "op-enqueue-1".to_owned(),
-            selection_json: "{\"safe\":true}".to_owned(),
+            selection: fixture_selection(),
         })
         .expect("unavailable run enqueues");
     store
@@ -1632,7 +1634,11 @@ fn schema4_tables_never_persist_fake_secrets() {
             active_catalog_revision_id: 1,
             created_at: 3,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: ProviderCatalogRemovalEvidenceDto {
+                catalog_revision_id: 2,
+                removed_profile_ids: Vec::new(),
+                removed_kind_ids: Vec::new(),
+            },
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -3092,6 +3098,27 @@ fn safe_header_selection_and_profile_round_trip_transport_codecs() {
     assert!(safe_json.contains("\"credential_transport_safe_header_name\":\"X-Custom-Header\""));
     assert!(!contains_credential_shape(&safe_json));
     assert!(!safe_json.contains("fixture-secret"));
+    // The typed reader decodes the same canonical bytes into the typed record.
+    let page = store
+        .load_provider_catalog_page(LoadProviderCatalogPageInputDto {
+            token: None,
+            limit: 10,
+        })
+        .expect("catalog page loads");
+    assert_eq!(page.entries.len(), 1);
+    let projection = &page.entries[0].safe_projection;
+    assert_eq!(projection.profile_id, "profile-saf");
+    assert_eq!(projection.profile_revision_id, "rev-saf");
+    assert_eq!(
+        projection.credential_transport_mode,
+        CredentialTransportMode::SafeHeader
+    );
+    assert_eq!(
+        projection.credential_transport_safe_header_name.as_deref(),
+        Some("X-Custom-Header")
+    );
+    assert_eq!(projection.model_id, "gpt-4.1");
+    assert!(!contains_credential_shape(&format!("{projection:?}")));
 }
 
 #[test]

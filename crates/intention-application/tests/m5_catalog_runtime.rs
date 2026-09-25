@@ -36,9 +36,9 @@ use intention_storage::{
     ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
     ProviderCatalogMaterialDto, ProviderCatalogPageDto, ProviderCatalogProfileEntryDto,
     ProviderCatalogRemovalCandidateDto, ProviderCatalogRemovalStatusDto,
-    ProviderCatalogRepositoryDto, ProviderCatalogStateDto, ProviderCatalogStatusDto,
-    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
-    ProviderRemovalRepositoryDto, RejectProviderCatalogCandidateInputDto,
+    ProviderCatalogRepositoryDto, ProviderCatalogSafeProjectionDto, ProviderCatalogStateDto,
+    ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
+    ProviderReadinessDto, ProviderRemovalRepositoryDto, RejectProviderCatalogCandidateInputDto,
     RejectProviderCatalogRemovalInputDto,
 };
 use intention_types::{ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, TimestampDto};
@@ -48,6 +48,26 @@ const ENDPOINT: &str = "https://api.example.invalid/v1";
 
 fn time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
+}
+
+/// A placeholder safe projection for the in-memory catalog fake; the fake's
+/// consumers read the typed record's presence, not its values.
+const fn safe_projection_stub() -> ProviderCatalogSafeProjectionDto {
+    ProviderCatalogSafeProjectionDto {
+        credential_transport_mode: CredentialTransportMode::Bearer,
+        credential_transport_safe_header_name: None,
+        declared_model_capability_subset: Vec::new(),
+        effective_execution_policy: String::new(),
+        effective_loopback_policy_or_not_applicable: String::new(),
+        kind_descriptor_revision_id: String::new(),
+        kind_id: String::new(),
+        model_id: String::new(),
+        normalized_effective_endpoint: String::new(),
+        profile_id: String::new(),
+        profile_revision_id: String::new(),
+        provider_driver_contract_revision: String::new(),
+        resolved_reasoning_policy: String::new(),
+    }
 }
 
 fn explicit_source() -> ConfigSourceDto {
@@ -225,6 +245,7 @@ struct CountingFactory {
     contract_major: u64,
     max_minor: u64,
     builds: Arc<AtomicUsize>,
+    fail_build: bool,
 }
 
 impl CountingFactory {
@@ -241,7 +262,14 @@ impl CountingFactory {
             contract_major,
             max_minor,
             builds,
+            fail_build: false,
         }
+    }
+
+    /// Returns a factory variant whose driver build always fails (D-05).
+    const fn failing(mut self) -> Self {
+        self.fail_build = true;
+        self
     }
 }
 
@@ -261,6 +289,12 @@ impl ProviderDriverFactory for CountingFactory {
         _profile: PrivateProviderProfileMaterial,
     ) -> DtoResult<Box<dyn ModelRunDriverHandle + Send + Sync>> {
         self.builds.fetch_add(1, Ordering::SeqCst);
+        if self.fail_build {
+            return Err(unavailable(
+                "injected_factory_build_failure",
+                "the injected driver factory build fails",
+            ));
+        }
         Ok(Box::new(TestHandle))
     }
 }
@@ -311,6 +345,9 @@ struct FakeCatalog {
     state: RefCell<FakeCatalogState>,
     audits: RefCell<Vec<String>>,
     material_fault: bool,
+    accept_fault: bool,
+    removal_load_fault: bool,
+    removal_expire_fault: bool,
 }
 
 impl FakeCatalog {
@@ -319,6 +356,9 @@ impl FakeCatalog {
             state: RefCell::new(FakeCatalogState::new()),
             audits: RefCell::new(Vec::new()),
             material_fault: false,
+            accept_fault: false,
+            removal_load_fault: false,
+            removal_expire_fault: false,
         }
     }
 
@@ -512,7 +552,7 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
                 enabled: profile.enabled,
                 credential_configured: profile.credential_configured,
                 readiness: profile.readiness,
-                safe_projection_json: String::new(),
+                safe_projection: safe_projection_stub(),
             })
             .collect::<Vec<_>>();
         let limit = usize::try_from(input.limit).unwrap_or(usize::MAX);
@@ -526,6 +566,12 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
     }
 
     fn accept_provider_catalog(&self, input: AcceptProviderCatalogInputDto) -> DtoResult<()> {
+        if self.accept_fault {
+            return Err(unavailable(
+                "injected_accept_fault",
+                "the injected catalog acceptance fails",
+            ));
+        }
         let mut state = self.state.borrow_mut();
         if state.candidate_catalog_revision_id != Some(input.catalog_revision_id) {
             return Err(conflict(
@@ -695,6 +741,12 @@ impl ProviderRemovalRepositoryDto for &FakeCatalog {
     fn load_pending_removal_candidate(
         &self,
     ) -> DtoResult<Option<intention_storage::PendingRemovalCandidateDto>> {
+        if self.removal_load_fault {
+            return Err(unavailable(
+                "injected_removal_load_fault",
+                "the injected pending-removal read fails",
+            ));
+        }
         let state = self.state.borrow();
         let Some(candidate_revision) = state.candidate_catalog_revision_id else {
             return Ok(None);
@@ -752,7 +804,7 @@ impl ProviderRemovalRepositoryDto for &FakeCatalog {
                 expires_at,
                 source_recheck: input.source_recheck,
                 status: ProviderCatalogRemovalStatusDto::Pending,
-                candidate_json: input.candidate_json,
+                evidence: input.evidence,
                 operation_id: Some(input.operation_id),
                 completed_at: None,
             });
@@ -834,6 +886,12 @@ impl ProviderRemovalRepositoryDto for &FakeCatalog {
         &self,
         input: ExpireProviderCatalogRemovalCandidateInputDto,
     ) -> DtoResult<u64> {
+        if self.removal_expire_fault {
+            return Err(unavailable(
+                "injected_removal_expire_fault",
+                "the injected pending-removal expiry fails",
+            ));
+        }
         let mut state = self.state.borrow_mut();
         let mut expired = 0_u64;
         for candidate in state.removal_candidates.iter_mut() {
@@ -1124,9 +1182,9 @@ fn candidate_raw_size_over_512_kib_is_rejected() {
 }
 
 #[test]
-fn candidate_with_63_character_id_overflow_is_rejected() {
+fn candidate_with_257_character_id_overflow_is_rejected() {
     let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
-    let long_model = "m".repeat(64);
+    let long_model = "m".repeat(257);
     let fake = FakeCatalog::new();
     let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
     let error = controller
@@ -1222,6 +1280,36 @@ fn non_removal_candidate_is_auto_accepted_and_activated() {
         .expect("status loads");
     assert_eq!(state.status, ProviderCatalogStatusDto::Active);
     assert_eq!(state.active_catalog_revision_id, Some(1));
+}
+
+#[test]
+fn failed_registry_build_leaves_no_durable_catalog_advance() {
+    // D-05: the replacement registry is fully built before the durable
+    // acceptance, so a failing factory build cannot leave a committed catalog
+    // that the in-memory registry does not serve.
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let fake = FakeCatalog::new();
+    let builds = Arc::new(AtomicUsize::new(0));
+    let controller = fake.build_controller(vec![Box::new(
+        CountingFactory::new("responses", "responses", 1, 2, builds.clone()).failing(),
+    )]);
+    let error = controller
+        .prepare_candidate(base_source(&previous, "model-b"), 1_000)
+        .expect_err("a failing registry build fails before any durable acceptance");
+    assert_eq!(error.code(), "injected_factory_build_failure");
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+    // The preparation append is durable (that is the candidate step), but no
+    // catalog acceptance committed: the active revision is still absent and
+    // the status is still preparing.
+    let state = (&fake)
+        .load_provider_catalog_status()
+        .expect("status loads");
+    assert_eq!(state.status, ProviderCatalogStatusDto::Preparing);
+    assert_eq!(state.active_catalog_revision_id, None);
+    assert_eq!(state.candidate_catalog_revision_id, Some(1));
+    let projection = controller.inspect().expect("inspect succeeds");
+    assert_eq!(projection.active_catalog_revision_id, None);
+    assert_eq!(projection.entry_count, 0);
 }
 
 // ============================================================================
@@ -1398,6 +1486,76 @@ fn startup_blocks_when_pending_removal_state_has_no_durable_row() {
 }
 
 #[test]
+fn startup_degrades_when_the_pending_removal_row_cannot_be_read() {
+    // P3-24/R3: a transient storage failure while reading the durable pending
+    // removal row degrades to a typed blocked readiness instead of aborting
+    // startup.
+    let mut fake = seeded_catalog();
+    fake.state.borrow_mut().status = ProviderCatalogStatusDto::PendingRemoval;
+    fake.removal_load_fault = true;
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller
+        .startup(2_000)
+        .expect("startup degrades instead of aborting");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "injected_removal_load_fault".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn startup_degrades_when_pending_removal_expiry_cannot_be_committed() {
+    // P3-24/R3: a transient storage failure during the startup expiry pass
+    // degrades to a typed blocked readiness instead of aborting startup.
+    let mut fake = seeded_catalog();
+    let (_, _) = removal_controller(&fake, 1_000);
+    fake.removal_expire_fault = true;
+    let restarted = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = restarted
+        .startup(1_000 + 30 * 60 + 1)
+        .expect("startup degrades instead of aborting");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "injected_removal_expire_fault".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_degrades_when_roll_forward_acceptance_fails() {
+    // P3-24/R3: a storage failure while rolling an accepted removal forward
+    // degrades to a typed blocked readiness carrying the failing error code.
+    let mut fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    (&fake)
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: handle,
+            accepted_at: 1_200,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+    fake.accept_fault = true;
+    let restarted = fake.build_controller(vec![
+        responses_factory(Arc::new(AtomicUsize::new(0))),
+        generic_chat_factory(Arc::new(AtomicUsize::new(0))),
+    ]);
+    let startup = restarted
+        .startup(2_000)
+        .expect("startup degrades instead of aborting");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "injected_accept_fault".to_owned(),
+        }
+    );
+}
+
+#[test]
 fn pending_removal_acceptance_commits_tombstones_and_the_ordered_audit() {
     let fake = seeded_catalog();
     let (controller, outcome) = removal_controller(&fake, 1_000);
@@ -1439,12 +1597,11 @@ fn pending_removal_acceptance_commits_tombstones_and_the_ordered_audit() {
 
 #[test]
 fn reintroduced_identifiers_are_admitted_after_a_later_removal_acceptance() {
-    // PR24-017: durable tombstones are append-only removal history and the
-    // in-memory controller tombstones clear when an identifier is
-    // reintroduced by an accepted catalog. Remove the seeded responses
+    // PR24-017: durable removal history is append-only and admission
+    // authority is the current active membership. Remove the seeded responses
     // kind/profile, then accept a catalog that reintroduces them (while
     // removing the interim generic-chat profile): admission must succeed
-    // again instead of returning provider_profile_tombstoned.
+    // again because the reintroduced identity is a current member.
     let fake = seeded_catalog();
     let (controller, removal) = removal_controller(&fake, 1_000);
     let handle = removal.candidate_handle.expect("removal handle exists");
@@ -1509,6 +1666,35 @@ fn reintroduced_identifiers_are_admitted_after_a_later_removal_acceptance() {
         1,
         "the interim generic-chat removal is recorded"
     );
+}
+
+#[test]
+fn removed_profile_is_not_admitted_after_removal_acceptance() {
+    // P3-16: admission authority is the current active membership; the
+    // durable removal history is never consulted by registry_lookup.
+    let fake = seeded_catalog();
+    let (controller, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    controller
+        .accept_pending(
+            handle,
+            "1".to_owned(),
+            "2".to_owned(),
+            "op-accept".to_owned(),
+            1_100,
+        )
+        .expect("removal acceptance commits");
+    let removed = seed_profile(
+        "responses",
+        "model-a",
+        "default",
+        "rev-0001",
+        "kind-responses-v1",
+    );
+    let error = controller
+        .registry_lookup(&key_for(&removed.profile))
+        .expect_err("a removed profile is not admitted by the active catalog");
+    assert_eq!(error.code(), "provider_admission_not_found");
 }
 
 #[test]
@@ -1990,11 +2176,12 @@ fn wire_profile_revision(
 
 #[test]
 fn identifier_bounds_count_characters_at_the_wire_and_canonical_layers() {
-    let inside = "\u{e9}".repeat(63);
-    let outside = "\u{e9}".repeat(64);
-    // Inside the documented canonical bound a multi-byte identifier is accepted
-    // by the public wire DTO and by the canonical identity record, so neither
-    // layer rejects a value the document promises.
+    let inside = "\u{e9}".repeat(256);
+    let outside = "\u{e9}".repeat(257);
+    // Inside the single documented canonical bound a multi-byte identifier is
+    // accepted by the public wire DTO and by the canonical identity record, so
+    // neither layer rejects a value the document promises (D-13, Appendix H.1:
+    // both layers count characters and enforce 256).
     assert!(wire_profile_revision(&inside).validate().is_ok());
     assert!(
         seed_profile(
@@ -2019,11 +2206,11 @@ fn identifier_bounds_count_characters_at_the_wire_and_canonical_layers() {
         )
         .profile
         .validate()
-        .expect_err("the canonical identity bound rejects 64 characters")
+        .expect_err("the canonical identity bound rejects 257 characters")
         .code(),
         "provider_profile_revision_invalid"
     );
-    // The wire bound is its own documented number: 256 characters are accepted
+    // The wire bound is the same number: 256 characters are accepted
     // and 257 are rejected.
     assert!(
         wire_profile_revision(&"\u{e9}".repeat(256))

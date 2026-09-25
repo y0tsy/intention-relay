@@ -16,7 +16,12 @@ use intention_domain::{
     ModelCapabilitySetV1, ModelInputCapability, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
     ReasoningCapability, RunModeDto, RunStatusDto, StructuredOutputCapability, WorkspaceRootDto,
-    canonical::contains_credential_shape, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
+    canonical::{
+        CanonicalIdentityInput, WireType, contains_credential_shape, encode_optional_utf8,
+        encode_u64, encode_utf8,
+    },
+    provider_catalog::provider_profile_revision_digest,
+    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto, AcceptUserTurnInputDto,
@@ -25,10 +30,11 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
     LoadUnavailableQueuePageInputDto, PersistResolvedRunProviderSelectionInputDto,
-    PromoteUnavailableRunsInputDto, ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto,
-    ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto,
-    ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
-    ProviderUsageEventInputDto, ProviderUsageRepositoryDto, ReconcileUnavailableQueueInputDto,
+    PromoteUnavailableRunsInputDto, ProviderCatalogRemovalEvidenceDto,
+    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
+    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+    ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto, ProviderUsageEventInputDto,
+    ProviderUsageRecordDto, ProviderUsageRepositoryDto, ReconcileUnavailableQueueInputDto,
     RecordProviderUsageInputDto, RejectProviderCatalogCandidateInputDto,
     RejectProviderCatalogRemovalInputDto, StorageRepositoryDto, TransitionRunInputDto,
     UnavailableQueueRepositoryDto, UnavailableQueueStateDto,
@@ -289,6 +295,20 @@ fn accept_catalog_with(
         .expect("fixture catalog accepts");
 }
 
+/// The typed resolved selection every queue fixture enqueues.
+fn queue_selection() -> ProviderSelectionV1 {
+    fixture_selection(&fixture_profile("profile-a", "rev-a"))
+}
+
+/// One typed empty-removal evidence record for the supplied candidate revision.
+const fn removal_evidence(revision: u64) -> ProviderCatalogRemovalEvidenceDto {
+    ProviderCatalogRemovalEvidenceDto {
+        catalog_revision_id: revision,
+        removed_profile_ids: Vec::new(),
+        removed_kind_ids: Vec::new(),
+    }
+}
+
 fn enqueue(
     store: &SqliteStorageRepository,
     session: SessionId,
@@ -306,7 +326,7 @@ fn enqueue(
             unavailable_reason: reason.to_owned(),
             first_unavailable_at: at,
             operation_id: operation_id.to_owned(),
-            selection_json: "{\"safe\":true}".to_owned(),
+            selection: queue_selection(),
         })
         .expect("unavailable run enqueues");
 }
@@ -596,9 +616,17 @@ fn catalog_page_paginates_sorted_with_token_round_trip() {
     assert!(first.entries[0].enabled);
     assert!(first.entries[0].credential_configured);
     assert_eq!(first.entries[0].readiness, ProviderReadinessDto::Ready);
-    assert!(!contains_credential_shape(
-        &first.entries[0].safe_projection_json
-    ));
+    let projection = &first.entries[0].safe_projection;
+    assert_eq!(projection.profile_id, "profile-a");
+    assert_eq!(projection.profile_revision_id, "rev-a");
+    assert_eq!(projection.kind_id, "responses");
+    assert_eq!(projection.kind_descriptor_revision_id, "kd-1");
+    assert_eq!(projection.model_id, "gpt-4.1");
+    assert_eq!(
+        projection.credential_transport_mode,
+        CredentialTransportMode::Bearer
+    );
+    assert!(!contains_credential_shape(&format!("{projection:?}")));
     // The token resumes exactly after the last seen profile.
     let second = store
         .load_provider_catalog_page(LoadProviderCatalogPageInputDto {
@@ -1205,7 +1233,7 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
             active_catalog_revision_id: 1,
             created_at: 100,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(2),
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -1224,7 +1252,7 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
             active_catalog_revision_id: 1,
             created_at: 101,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(3),
             operation_id: "op-removal-2".to_owned(),
         })
         .expect_err("a second pending removal candidate is rejected");
@@ -1241,7 +1269,7 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
             active_catalog_revision_id: 1,
             created_at: 101,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(2),
             operation_id: "op-removal-1b".to_owned(),
         })
         .expect_err("re-creating the same removal candidate identity is rejected");
@@ -1319,6 +1347,33 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
 }
 
 #[test]
+fn removal_candidate_rejects_evidence_for_a_different_revision() {
+    // D-07: the typed evidence is validated at admission instead of being
+    // persisted verbatim; evidence for another revision is rejected typed.
+    let (directory, store) = repository();
+    let error = store
+        .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
+            candidate_handle: "removal-mismatch".to_owned(),
+            candidate_catalog_revision_id: 2,
+            active_catalog_revision_id: 1,
+            created_at: 100,
+            source_recheck: "health-recheck".to_owned(),
+            evidence: removal_evidence(9),
+            operation_id: "op-removal-mismatch".to_owned(),
+        })
+        .expect_err("evidence for another revision is rejected at admission");
+    assert_eq!(error.code(), "invalid_removal_evidence");
+    let connection = raw_connection(&directory);
+    assert_eq!(
+        query_count(
+            &connection,
+            "SELECT COUNT(*) FROM provider_catalog_removal_candidates"
+        ),
+        0
+    );
+}
+
+#[test]
 fn prepared_candidate_material_and_pending_loader_cover_restart_surfaces() {
     // PR24-003/004: the prepared candidate's durable material and the pending
     // removal loader (scoped to the state's candidate revision, carrying the
@@ -1363,9 +1418,11 @@ fn prepared_candidate_material_and_pending_loader_cover_restart_surfaces() {
             active_catalog_revision_id: 1,
             created_at: 200,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json:
-                "{\"catalog_revision_id\":2,\"removed_profiles\":[\"profile-a\"],\"removed_kinds\":[],\"default_profile_id\":\"default\"}"
-                    .to_owned(),
+            evidence: ProviderCatalogRemovalEvidenceDto {
+                catalog_revision_id: 2,
+                removed_profile_ids: vec!["profile-a".to_owned()],
+                removed_kind_ids: Vec::new(),
+            },
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -1421,6 +1478,158 @@ fn prepared_candidate_material_and_pending_loader_cover_restart_surfaces() {
 }
 
 #[test]
+fn removal_evidence_round_trips_escaped_identities() {
+    // P2-11/P3-15: the removal-evidence codec escapes quotes and backslashes.
+    // The typed loader must decode the persisted bytes back to the original
+    // identities instead of slicing the quoted span.
+    let (directory, store) = repository();
+    prepare_candidate(
+        &store,
+        1,
+        "op-prep-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    accept_candidate(
+        &store,
+        1,
+        "candidate-1",
+        "op-accept-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    prepare_candidate(
+        &store,
+        2,
+        "op-prep-2",
+        "kind-a",
+        "kd-1",
+        "profile-b",
+        "rev-b",
+        2,
+    );
+    let escaped_profile = "profile-\"quoted\"-\\backslash";
+    let escaped_kind = "kind-\"quoted\"-\\backslash";
+    store
+        .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
+            candidate_handle: "removal-escaped".to_owned(),
+            candidate_catalog_revision_id: 2,
+            active_catalog_revision_id: 1,
+            created_at: 100,
+            source_recheck: "health-recheck".to_owned(),
+            evidence: ProviderCatalogRemovalEvidenceDto {
+                catalog_revision_id: 2,
+                removed_profile_ids: vec![escaped_profile.to_owned()],
+                removed_kind_ids: vec![escaped_kind.to_owned()],
+            },
+            operation_id: "op-removal-escaped".to_owned(),
+        })
+        .expect("escaped removal candidate creates");
+    // The persisted canonical text escapes the identities; the typed loader
+    // decodes them back to their original values with no span slicing.
+    let connection = raw_connection(&directory);
+    let persisted: String = connection
+        .query_row(
+            "SELECT candidate_json FROM provider_catalog_removal_candidates WHERE candidate_handle='removal-escaped'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("persisted removal evidence reads");
+    assert!(persisted.contains("\\\""));
+    assert!(persisted.contains("\\\\"));
+    drop(connection);
+    let pending = store
+        .load_pending_removal_candidate()
+        .expect("pending loader reads")
+        .expect("the escaped removal candidate is durable");
+    assert_eq!(
+        pending.removed_profile_ids,
+        vec![escaped_profile.to_owned()]
+    );
+    assert_eq!(pending.removed_kind_ids, vec![escaped_kind.to_owned()]);
+}
+
+#[test]
+fn malformed_removal_evidence_fails_typed_decode() {
+    // P2-11: evidence that is not the expected list-of-strings shape fails
+    // closed with the typed decode error instead of guessing identities.
+    let (directory, store) = repository();
+    prepare_candidate(
+        &store,
+        1,
+        "op-prep-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    accept_candidate(
+        &store,
+        1,
+        "candidate-1",
+        "op-accept-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    prepare_candidate(
+        &store,
+        2,
+        "op-prep-2",
+        "kind-a",
+        "kd-1",
+        "profile-b",
+        "rev-b",
+        2,
+    );
+    store
+        .create_provider_catalog_removal_candidate(CreateProviderCatalogRemovalCandidateInputDto {
+            candidate_handle: "removal-malformed".to_owned(),
+            candidate_catalog_revision_id: 2,
+            active_catalog_revision_id: 1,
+            created_at: 100,
+            source_recheck: "health-recheck".to_owned(),
+            evidence: ProviderCatalogRemovalEvidenceDto {
+                catalog_revision_id: 2,
+                removed_profile_ids: vec!["profile-a".to_owned()],
+                removed_kind_ids: Vec::new(),
+            },
+            operation_id: "op-removal-malformed".to_owned(),
+        })
+        .expect("removal candidate creates");
+    let connection = raw_connection(&directory);
+    let malformed_shapes = [
+        // A non-string identity element.
+        "{\"catalog_revision_id\":2,\"removed_profiles\":[1],\"removed_kinds\":[],\"default_profile_id\":\"default\"}",
+        // A missing identity list.
+        "{\"catalog_revision_id\":2,\"removed_profiles\":[\"profile-a\"],\"default_profile_id\":\"default\"}",
+        // A null identity list.
+        "{\"catalog_revision_id\":2,\"removed_profiles\":null,\"removed_kinds\":[],\"default_profile_id\":\"default\"}",
+    ];
+    for shape in malformed_shapes {
+        connection
+            .execute(
+                "UPDATE provider_catalog_removal_candidates SET candidate_json=?1 WHERE candidate_handle='removal-malformed'",
+                [shape],
+            )
+            .expect("removal evidence corrupts");
+        let error = store
+            .load_pending_removal_candidate()
+            .expect_err("malformed removal evidence fails typed decode");
+        assert_eq!(error.code(), "storage_decode_failed");
+    }
+}
+
+#[test]
 fn removal_candidate_reject_expire_and_non_pending_guards() {
     let (_directory, store) = repository();
     prepare_candidate(
@@ -1451,7 +1660,7 @@ fn removal_candidate_reject_expire_and_non_pending_guards() {
             active_catalog_revision_id: 1,
             created_at: 100,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(2),
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -1494,7 +1703,7 @@ fn removal_candidate_reject_expire_and_non_pending_guards() {
             active_catalog_revision_id: 1,
             created_at: 200,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(3),
             operation_id: "op-removal-3".to_owned(),
         })
         .expect("second removal candidate creates");
@@ -1631,7 +1840,7 @@ fn unavailable_queue_enqueue_is_idempotent_and_pages_fifo() {
         first_page[0].last_operation_id.as_deref(),
         Some("op-enqueue-1")
     );
-    assert_eq!(first_page[0].selection_json, "{\"safe\":true}");
+    assert_eq!(first_page[0].selection, queue_selection());
     // The cursor resumes after the last seen queue id.
     let second_page = store
         .load_unavailable_queue_page(LoadUnavailableQueuePageInputDto {
@@ -1648,6 +1857,38 @@ fn unavailable_queue_enqueue_is_idempotent_and_pages_fifo() {
         })
         .expect("terminal queue page loads");
     assert!(empty.is_empty());
+}
+
+#[test]
+fn unavailable_queue_enqueue_rejects_an_invalid_typed_selection() {
+    // D-07: the writer path admits a typed selection, validates it, and never
+    // persists caller-supplied encoded text verbatim.
+    let (directory, store) = repository();
+    let session = create(&store);
+    let run = accept_terminal_run(&store, session);
+    let mut invalid = queue_selection();
+    invalid.profile_id.clear();
+    let error = store
+        .enqueue_unavailable_run(EnqueueUnavailableRunInputDto {
+            run_id: run,
+            session_id: session,
+            profile_id: "profile-a".to_owned(),
+            provider_profile_revision_id: "rev-a".to_owned(),
+            unavailable_reason: "provider_unavailable".to_owned(),
+            first_unavailable_at: 3,
+            operation_id: "op-enqueue-invalid".to_owned(),
+            selection: invalid,
+        })
+        .expect_err("an invalid typed selection is rejected at admission");
+    assert_eq!(error.code(), "invalid_provider_selection");
+    let connection = raw_connection(&directory);
+    assert_eq!(
+        query_count(
+            &connection,
+            "SELECT COUNT(*) FROM unavailable_provider_queue"
+        ),
+        0
+    );
 }
 
 #[test]
@@ -1696,7 +1937,7 @@ fn unavailable_queue_promotion_batches_and_marks_exhaustion() {
         assert_eq!(entry.last_operation_id.as_deref(), Some("op-promote-1"));
         assert_eq!(entry.profile_id, "profile-a");
         assert_eq!(entry.provider_profile_revision_id, "rev-a");
-        assert_eq!(entry.selection_json, "{\"safe\":true}");
+        assert_eq!(entry.selection, queue_selection());
     }
     assert!(
         store
@@ -1885,11 +2126,12 @@ fn usage_event(
         profile_id: "profile-a".to_owned(),
         provider_profile_revision_id: "rev-a".to_owned(),
         model_id: "model-m".to_owned(),
-        input_units,
-        output_units,
-        reasoning_units,
+        usage: ProviderUsageRecordDto {
+            input_units,
+            output_units,
+            reasoning_units,
+        },
         occurred_at,
-        usage_json: "{\"safe\":true}".to_owned(),
     }
 }
 
@@ -2079,7 +2321,7 @@ fn queue_usage_removal_tables_never_persist_fake_secrets() {
             active_catalog_revision_id: 1,
             created_at: 3,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(2),
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -2133,7 +2375,10 @@ fn queue_usage_removal_tables_never_persist_fake_secrets() {
         })
         .expect("queue page reloads");
     assert_eq!(page.len(), 1);
-    assert!(!contains_credential_shape(&page[0].selection_json));
+    assert!(!contains_credential_shape(&format!(
+        "{:?}",
+        page[0].selection
+    )));
     assert!(!contains_credential_shape(&page[0].unavailable_reason));
     let aggregates = store
         .load_provider_usage_by_profile("profile-a".to_owned())
@@ -2330,7 +2575,7 @@ fn corrupted_durable_state_fails_typed_loads() {
             active_catalog_revision_id: 1,
             created_at: 100,
             source_recheck: "health-recheck".to_owned(),
-            candidate_json: "{\"safe\":true}".to_owned(),
+            evidence: removal_evidence(2),
             operation_id: "op-removal-1".to_owned(),
         })
         .expect("removal candidate creates");
@@ -2507,4 +2752,102 @@ fn persisted_selection_digest_is_the_canonical_domain_identity() {
             occurred_at: 4,
         })
         .expect("a provenance-only change is the same identity");
+}
+
+// ---------------------------------------------------------------------------
+// Provider profile revisions: the persisted digest is the domain identity.
+// ---------------------------------------------------------------------------
+
+/// Computes the canonical domain profile-revision digest for one fixture
+/// profile through the same identity field table the storage layer uses.
+fn expected_profile_revision_digest(profile: &ProviderProfileRevisionV1) -> String {
+    let transport_mode = match profile.credential_transport_mode {
+        CredentialTransportMode::Bearer => 0,
+        CredentialTransportMode::SafeHeader => 1,
+    };
+    let input = CanonicalIdentityInput::new()
+        .field(1, WireType::Utf8, encode_utf8(&profile.profile_id))
+        .expect("identity field accepts")
+        .field(2, WireType::Utf8, encode_utf8(&profile.revision_id))
+        .expect("identity field accepts")
+        .field(3, WireType::Utf8, encode_utf8(&profile.provider_kind_id))
+        .expect("identity field accepts")
+        .field(4, WireType::Utf8, encode_utf8(&profile.model_id))
+        .expect("identity field accepts")
+        .field(5, WireType::Utf8, encode_utf8(&profile.endpoint))
+        .expect("identity field accepts")
+        .field(6, WireType::U64, encode_u64(transport_mode))
+        .expect("identity field accepts")
+        .field(
+            7,
+            WireType::Optional,
+            encode_optional_utf8(&profile.safe_header_name),
+        )
+        .expect("identity field accepts")
+        .field(
+            8,
+            WireType::Utf8,
+            encode_utf8(&profile.capability_taxonomy_revision),
+        )
+        .expect("identity field accepts")
+        .field(
+            9,
+            WireType::Optional,
+            encode_optional_utf8(&profile.reasoning_compatibility_id),
+        )
+        .expect("identity field accepts")
+        .field(
+            10,
+            WireType::Utf8,
+            encode_utf8(&profile.kind_descriptor_revision_id),
+        )
+        .expect("identity field accepts")
+        .field(
+            11,
+            WireType::Record,
+            profile
+                .driver_contract_revision
+                .encode()
+                .expect("driver contract encodes"),
+        )
+        .expect("identity field accepts");
+    provider_profile_revision_digest(input)
+        .expect("profile digests")
+        .to_string()
+}
+
+#[test]
+fn persisted_profile_digest_is_the_canonical_domain_identity() {
+    let (directory, store) = repository();
+    let candidate = fixture_profile_candidate("profile-a", "rev-a");
+    store
+        .append_provider_profile_revision(AppendProviderProfileRevisionInputDto {
+            profile: candidate.clone(),
+            catalog_revision_id: 1,
+            accepted_at: 1,
+            operation_id: "op-profile-digest".to_owned(),
+        })
+        .expect("profile revision prepares");
+    let connection = raw_connection(&directory);
+    let persisted: String = connection
+        .query_row(
+            "SELECT profile_revision_digest FROM provider_profile_revisions WHERE profile_id='profile-a' AND profile_revision_id='rev-a'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("persisted profile digest reads");
+    // The digest column carries the namespaced canonical domain identity, not
+    // a hash of the persisted record text.
+    let expected = expected_profile_revision_digest(&candidate.profile);
+    assert_eq!(persisted, expected);
+    assert!(persisted.starts_with("provider-profile-revision:sha256:"));
+    // The same identity re-appends idempotently under the canonical digest.
+    store
+        .append_provider_profile_revision(AppendProviderProfileRevisionInputDto {
+            profile: candidate,
+            catalog_revision_id: 1,
+            accepted_at: 2,
+            operation_id: "op-profile-digest-again".to_owned(),
+        })
+        .expect("identical profile revision re-appends idempotently");
 }

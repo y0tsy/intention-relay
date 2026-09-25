@@ -28,10 +28,10 @@ use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
     AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
     CreateProviderCatalogRemovalCandidateInputDto, ExpireProviderCatalogRemovalCandidateInputDto,
-    PendingRemovalCandidateDto, ProviderCatalogMaterialDto, ProviderCatalogRemovalStatusDto,
-    ProviderCatalogRepositoryDto, ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto,
-    ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
-    RejectProviderCatalogRemovalInputDto,
+    PendingRemovalCandidateDto, ProviderCatalogMaterialDto, ProviderCatalogRemovalEvidenceDto,
+    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
+    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+    ProviderRemovalRepositoryDto, RejectProviderCatalogRemovalInputDto,
 };
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 
@@ -120,9 +120,9 @@ pub struct CatalogAcceptanceOutcomeDto {
     pub readiness: CatalogReadiness,
     /// The number of active private registry entries after acceptance.
     pub entry_count: usize,
-    /// The profile ids tombstoned by this acceptance.
+    /// The profile ids removed by this acceptance.
     pub removed_profile_ids: Vec<String>,
-    /// The kind ids tombstoned by this acceptance.
+    /// The kind ids removed by this acceptance.
     pub removed_kind_ids: Vec<String>,
 }
 
@@ -191,13 +191,6 @@ type BuiltRegistryEntries =
 /// The admission context map paired with the private registry.
 type AdmissionContext = HashMap<PrivateRegistryKey, AdmissionEntry>;
 
-/// The controller-side tombstone sets for admission checks.
-#[derive(Default)]
-struct TombstoneSets {
-    profile_ids: HashSet<String>,
-    kind_ids: HashSet<String>,
-}
-
 /// The provider catalog runtime controller.
 pub struct ProviderCatalogController<Catalog, Removal>
 where
@@ -210,7 +203,6 @@ where
     gate: ControlPlaneGate,
     registry: PrivateRegistry,
     admissions: Mutex<HashMap<PrivateRegistryKey, AdmissionEntry>>,
-    tombstones: Mutex<TombstoneSets>,
 }
 
 impl<Catalog, Removal> ProviderCatalogController<Catalog, Removal>
@@ -233,7 +225,6 @@ where
             gate: ControlPlaneGate::new(),
             registry: PrivateRegistry::new(),
             admissions: Mutex::new(HashMap::new()),
-            tombstones: Mutex::new(TombstoneSets::default()),
         }
     }
 
@@ -254,14 +245,14 @@ where
     ///
     /// # Errors
     ///
-    /// Returns `catalog_gate_unavailable` when the control-plane gate lock is
-    /// poisoned. Not every catalog failure degrades: the pending-removal row
-    /// read, the pending expiry, roll-forward acceptance, and registry
-    /// activation propagate their own error code, so a transient storage
-    /// failure aborts startup instead of yielding a readiness value. Only the
-    /// catalog-status load, an inconsistent pending state, a catalog-material
-    /// read or revision mismatch, a private-registry build failure, and the
-    /// activation-recovery material checks degrade to a typed readiness state.
+    /// Returns `catalog_gate_unavailable` only when the control-plane gate
+    /// lock is poisoned. Every other failure degrades to a typed readiness
+    /// value instead of aborting startup: a storage failure while reading the
+    /// pending-removal row, expiring it, rolling an accepted removal forward,
+    /// or activating the rebuilt registry is reported through
+    /// `blocked(error.code())`, and catalog-material, registry-build, and
+    /// activation-recovery failures keep their documented `Blocked` or
+    /// `ActivationRecoveryRequired` degradation.
     pub fn startup(&self, now: u64) -> DtoResult<CatalogStartupOutcomeDto> {
         let mut state = match self.catalog.load_provider_catalog_status() {
             Ok(state) => state,
@@ -273,8 +264,12 @@ where
         // missing under a pending state is inconsistent.
         let mut pending_rebuild: Option<PendingRemovalCandidateDto> = None;
         if state.status == ProviderCatalogStatusDto::PendingRemoval {
-            let Some(pending) = self.removal.load_pending_removal_candidate()? else {
-                return self.blocked("catalog_state_inconsistent_missing_removal_row");
+            let pending = match self.removal.load_pending_removal_candidate() {
+                Ok(Some(pending)) => pending,
+                Ok(None) => {
+                    return self.blocked("catalog_state_inconsistent_missing_removal_row");
+                }
+                Err(error) => return self.blocked(error.code()),
             };
             if pending.removal_status == ProviderCatalogRemovalStatusDto::Accepted {
                 // The removal acceptance committed but the catalog acceptance
@@ -283,7 +278,9 @@ where
                 return self.roll_forward_acceptance(&pending, now);
             }
             if pending.expires_at <= i64_time(now) {
-                self.expire_pending(now)?;
+                if let Err(error) = self.expire_pending(now) {
+                    return self.blocked(error.code());
+                }
                 state = match self.catalog.load_provider_catalog_status() {
                     Ok(state) => state,
                     Err(error) => {
@@ -369,7 +366,9 @@ where
             gate.prepared = prepared;
             Ok(())
         })?;
-        self.activate_registry(built, admissions)?;
+        if let Err(error) = self.activate_registry(built, admissions) {
+            return self.blocked(error.code());
+        }
         self.startup_outcome()
     }
 
@@ -395,7 +394,7 @@ where
         };
         let accepted_at = i64_time(now);
         let operation_id = format!("recovery-roll-forward-{}", pending.candidate_handle);
-        if self
+        if let Err(error) = self
             .catalog
             .accept_provider_catalog(AcceptProviderCatalogInputDto {
                 catalog_revision_id: pending.candidate_catalog_revision_id,
@@ -406,9 +405,8 @@ where
                 accepted_at,
                 operation_id,
             })
-            .is_err()
         {
-            return self.blocked("activation_recovery_failed");
+            return self.blocked(error.code());
         }
         let (built, admissions) = match self.build_registry_from_candidate(
             &material.kind_descriptors,
@@ -416,7 +414,7 @@ where
             pending.candidate_catalog_revision_id,
         ) {
             Ok(built) => built,
-            Err(_) => return self.blocked("activation_recovery_failed"),
+            Err(error) => return self.blocked(error.code()),
         };
         self.gate.run_exclusive(|gate| {
             gate.readiness = CatalogReadiness::Ready;
@@ -427,7 +425,9 @@ where
             gate.prepared = None;
             Ok(())
         })?;
-        self.activate_registry(built, admissions)?;
+        if let Err(error) = self.activate_registry(built, admissions) {
+            return self.blocked(error.code());
+        }
         self.startup_outcome()
     }
 
@@ -463,7 +463,9 @@ where
             gate.prepared = None;
             Ok(())
         })?;
-        self.activate_registry(built, admissions)?;
+        if let Err(error) = self.activate_registry(built, admissions) {
+            return self.recovery_required(accepted, error.code());
+        }
         self.startup_outcome()
     }
 
@@ -673,8 +675,11 @@ where
             let (issues, truncated, total) = bounded_issues(&source.candidate);
             if removal {
                 let expires_at = now.saturating_add(REMOVAL_CANDIDATE_LIFETIME_SECONDS);
-                let candidate_json =
-                    removal_candidate_json(next_revision, &removed_profile_ids, &removed_kind_ids);
+                let evidence = ProviderCatalogRemovalEvidenceDto {
+                    catalog_revision_id: next_revision,
+                    removed_profile_ids: removed_profile_ids.clone(),
+                    removed_kind_ids: removed_kind_ids.clone(),
+                };
                 self.removal.create_provider_catalog_removal_candidate(
                     CreateProviderCatalogRemovalCandidateInputDto {
                         candidate_handle: candidate_handle.clone(),
@@ -682,7 +687,7 @@ where
                         active_catalog_revision_id: gate.applied_revision.unwrap_or(0),
                         created_at: i64_time(now),
                         source_recheck: "health-recheck".to_owned(),
-                        candidate_json,
+                        evidence,
                         operation_id: source.operation_id.clone(),
                     },
                 )?;
@@ -715,6 +720,15 @@ where
                     total_issue_count: total,
                 });
             }
+            // D-05: build the complete replacement registry and admission map
+            // before the durable acceptance, so a build failure leaves the
+            // durable catalog unchanged and the caller's error describes the
+            // actual state. Activation after the commit is then only a swap:
+            // one registry entry is built per profile and the candidate
+            // profile bound is not larger than the active-entry bound, so the
+            // map size is pre-validated by construction.
+            let (built, admissions) =
+                self.build_registry_from_candidate(&kind_descriptors, &profiles, next_revision)?;
             self.catalog
                 .accept_provider_catalog(AcceptProviderCatalogInputDto {
                     catalog_revision_id: next_revision,
@@ -725,23 +739,7 @@ where
                     accepted_at: i64_time(now),
                     operation_id: source.operation_id.clone(),
                 })?;
-            let (built, admissions) =
-                self.build_registry_from_candidate(&kind_descriptors, &profiles, next_revision)?;
             self.activate_registry(built, admissions)?;
-            let active_profile_ids = profiles
-                .iter()
-                .map(|profile| profile.profile.profile_id.clone())
-                .collect::<Vec<_>>();
-            let active_kind_ids = kind_descriptors
-                .iter()
-                .map(|kind| kind.descriptor.kind_id.clone())
-                .collect::<Vec<_>>();
-            self.record_tombstones(
-                &removed_profile_ids,
-                &removed_kind_ids,
-                &active_profile_ids,
-                &active_kind_ids,
-            );
             gate.readiness = CatalogReadiness::Ready;
             gate.applied_revision = Some(next_revision);
             gate.active_default_profile_id = Some(DEFAULT_PROFILE_ID.to_owned());
@@ -836,24 +834,8 @@ where
             self.activate_registry(built, admissions)?;
             let removed_profile_ids = prepared.removed_profile_ids.clone();
             let removed_kind_ids = prepared.removed_kind_ids.clone();
-            let active_profile_ids = prepared
-                .profiles
-                .iter()
-                .map(|profile| profile.profile.profile_id.clone())
-                .collect::<Vec<_>>();
-            let active_kind_ids = prepared
-                .kind_descriptors
-                .iter()
-                .map(|kind| kind.descriptor.kind_id.clone())
-                .collect::<Vec<_>>();
             let revision = prepared.catalog_revision_id;
             let default_profile_id = prepared.default_profile_id.clone();
-            self.record_tombstones(
-                &removed_profile_ids,
-                &removed_kind_ids,
-                &active_profile_ids,
-                &active_kind_ids,
-            );
             gate.readiness = CatalogReadiness::Ready;
             gate.applied_revision = Some(revision);
             gate.active_default_profile_id = Some(default_profile_id);
@@ -964,17 +946,18 @@ where
 
     /// Resolves one provider admission under the gate.
     ///
-    /// Admission requires an exact registry key match, an enabled profile, no
-    /// tombstone, and `Ready` readiness. The returned DTO carries no private
+    /// Admission requires an exact registry key match, an enabled profile, and
+    /// `Ready` readiness; the authority is the current active membership, so a
+    /// profile removed by an accepted catalog is no longer admitted even when
+    /// its durable removal history exists. The returned DTO carries no private
     /// handle; the controller pairs the DTO with the private handle internally
     /// for later runtime wiring.
     ///
     /// # Errors
     ///
     /// Returns `catalog_not_ready` when the catalog is not ready,
-    /// `provider_admission_not_found` when the key is not admitted,
-    /// `provider_profile_unavailable` when the profile is disabled, or
-    /// `provider_profile_tombstoned` when the profile is tombstoned.
+    /// `provider_admission_not_found` when the key is not admitted, or
+    /// `provider_profile_unavailable` when the profile is disabled.
     pub fn registry_lookup(&self, key: &PrivateRegistryKey) -> DtoResult<ProviderAdmissionDto> {
         self.gate.read(|state| {
             if !matches!(state.readiness, CatalogReadiness::Ready) {
@@ -1000,12 +983,6 @@ where
                 return Err(ErrorDto::unavailable(
                     "provider_profile_unavailable",
                     "the provider profile is disabled",
-                ));
-            }
-            if self.is_tombstoned(&entry.dto.profile_id) {
-                return Err(ErrorDto::unavailable(
-                    "provider_profile_tombstoned",
-                    "the provider profile is tombstoned",
                 ));
             }
             let dto = entry.dto.clone();
@@ -1211,42 +1188,6 @@ where
         *current = admissions;
         drop(current);
         Ok(())
-    }
-
-    /// Records tombstoned profile and kind ids on the controller side and
-    /// clears any tombstone for identifiers the accepted material
-    /// reintroduces.
-    ///
-    /// Durable tombstones are append-only removal-history events; admission
-    /// authority is the current active membership. An identifier removed by
-    /// an earlier catalog and present again in an accepted catalog is
-    /// therefore admitted again (PR24-017).
-    fn record_tombstones(
-        &self,
-        removed_profile_ids: &[String],
-        removed_kind_ids: &[String],
-        active_profile_ids: &[String],
-        active_kind_ids: &[String],
-    ) {
-        if let Ok(mut tombstones) = self.tombstones.lock() {
-            tombstones
-                .profile_ids
-                .extend(removed_profile_ids.iter().cloned());
-            tombstones.kind_ids.extend(removed_kind_ids.iter().cloned());
-            for reintroduced in active_profile_ids {
-                tombstones.profile_ids.remove(reintroduced);
-            }
-            for reintroduced in active_kind_ids {
-                tombstones.kind_ids.remove(reintroduced);
-            }
-        }
-    }
-
-    /// Returns whether one profile id is tombstoned on the controller side.
-    fn is_tombstoned(&self, profile_id: &str) -> bool {
-        self.tombstones
-            .lock()
-            .is_ok_and(|tombstones| tombstones.profile_ids.contains(profile_id))
     }
 
     /// Returns the current startup outcome from the gate state.
@@ -1548,40 +1489,6 @@ fn digest_hex(digest: Digest256) -> String {
 /// defaults in a later slice.
 fn default_endpoint(kind: &str) -> String {
     format!("https://{kind}.api.example.invalid/v1")
-}
-
-/// The safe opaque removal candidate JSON (credential-free).
-fn removal_candidate_json(
-    catalog_revision_id: u64,
-    removed_profile_ids: &[String],
-    removed_kind_ids: &[String],
-) -> String {
-    let profiles = removed_profile_ids
-        .iter()
-        .map(|id| json_string(id))
-        .collect::<Vec<_>>()
-        .join(",");
-    let kinds = removed_kind_ids
-        .iter()
-        .map(|id| json_string(id))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        "{{\"catalog_revision_id\":{catalog_revision_id},\"removed_profiles\":[{profiles}],\"removed_kinds\":[{kinds}],\"default_profile_id\":\"default\"}}"
-    )
-}
-
-/// Escapes one safe identifier for inclusion in opaque JSON.
-fn json_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            other => escaped.push(other),
-        }
-    }
-    format!("\"{escaped}\"")
 }
 
 /// Converts one whole-second Unix time to the storage `i64` representation.
