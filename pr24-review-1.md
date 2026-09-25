@@ -4371,6 +4371,19 @@ follow-up, `architecture/25`, EVD-051, and the parking-list anchor) are already
 in the wave, so R53 and R54 are the only new slice-level fixtures left in the
 repair lane.
 
+### J.4 Live-channel observation (W4 watch item)
+
+The W3 live run recorded in EVD-063 first failed on commit `c9b4c6a` with the
+harness's own gap message "the run stream closed after 30 facts" during the
+`edit` turn, and the repeated turn on the identical commit observed the
+succeeded call (2 passed in 28.61s). The loss is therefore an intermittent
+live-channel event rather than a reproducible defect: the harness already
+retries each tool turn and distinguishes a model-rejected argument from a
+product failure, but it treats a lost stream as a plain retry with no recorded
+cause. W4-G keeps this as a watch item and records the cause (a turn-deadline
+expiry, a closed subscriber, or a provider stall) in the run report if it
+recurs.
+
 End of register.
 
 <!-- pr24-review-1: complete -->
