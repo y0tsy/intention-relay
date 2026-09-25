@@ -1085,33 +1085,77 @@ fn removed_domain_surfaces_do_not_reappear() {
     );
 }
 
-/// Returns every `.rs` source path under the repository root except the build
-/// `target` directory.
+/// Returns every `.rs` source path under the repository root except build
+/// `target` directories.
+///
+/// The walk fails closed (R35): a directory or entry the process cannot read
+/// aborts the guard with an error instead of silently shrinking the scan,
+/// because a guard that skips what it cannot read reports success while
+/// covering less. The callers surface that error as a test failure.
+///
+/// Scan limits the guard cannot cover: it reads only `.rs` files, prunes any
+/// directory named `target`, does not follow symbolic links (so a linked
+/// subtree is outside the scan), and each guard's own needles are literal
+/// text, so a reintroduction written with different quoting, whitespace,
+/// concatenation, or a macro is outside its shape.
 fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
-    fn collect(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|name| name == "target") {
-                    continue;
-                }
-                collect(&path, found);
-            }
-            if path.extension() == Some(std::ffi::OsStr::new("rs")) {
-                found.push(path);
-            }
-        }
-    }
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(std::path::Path::parent)
         .expect("the domain crate lives two levels under the repository root");
     let mut found = Vec::new();
-    collect(repository, &mut found);
+    collect_rust_sources(repository, &mut found)
+        .expect("the guard must fail closed: every scanned subtree must be readable");
     found
+}
+
+/// Collects every `.rs` source path under `directory` into `found`.
+///
+/// Fails with the offending path when a subtree cannot be read, so an
+/// unreadable directory can never be skipped silently (R35).
+fn collect_rust_sources(
+    directory: &std::path::Path,
+    found: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            if path.file_name().is_some_and(|name| name == "target") {
+                continue;
+            }
+            collect_rust_sources(&path, found)?;
+        }
+        if path.extension() == Some(std::ffi::OsStr::new("rs")) {
+            found.push(path);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn source_guard_fails_closed_when_a_subtree_cannot_be_read() {
+    // R35: a regular file is the deterministic unreadable-subtree case on
+    // every platform (`read_dir` fails with NotADirectory). The guard must
+    // report the failure instead of silently scanning less.
+    let directory = std::env::temp_dir().join(format!(
+        "intention-relay-source-guard-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("fixture directory creates");
+    let file = directory.join("subtree.rs");
+    std::fs::write(&file, "fn fixture() {}\n").expect("fixture file writes");
+    let mut found = Vec::new();
+    assert!(
+        collect_rust_sources(&file, &mut found).is_err(),
+        "an unreadable subtree must fail the guard closed"
+    );
+    assert!(
+        found.is_empty(),
+        "a failed walk must not report partial source coverage"
+    );
+    std::fs::remove_file(&file).expect("fixture file removes");
+    std::fs::remove_dir(&directory).expect("fixture directory removes");
 }
 
 #[test]

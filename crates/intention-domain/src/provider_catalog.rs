@@ -140,10 +140,12 @@ pub fn validate_profile_id(profile_id: &str) -> Result<(), CanonicalError> {
 
 /// Validates an endpoint as credential-free execution metadata.
 ///
-/// The endpoint must be absolute HTTPS or HTTP with a non-empty host and no
-/// userinfo, query, fragment, control characters, whitespace, or malformed
-/// percent escapes. Raw or secret-bearing URL input is never public or durable
-/// identity.
+/// The endpoint must be absolute HTTPS or HTTP with a non-empty, well-formed
+/// host and no userinfo, query, fragment, control characters, whitespace, or
+/// malformed percent escapes. A non-empty authority with a stray or nested
+/// bracket, a backslash in the host, or a non-numeric port after a bracketed
+/// host names no reachable host and is rejected (R25). Raw or secret-bearing
+/// URL input is never public or durable identity.
 ///
 /// # Errors
 ///
@@ -171,7 +173,8 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), CanonicalError> {
     } else {
         return Err(CanonicalError::InvalidEndpoint);
     };
-    if endpoint.contains('@')
+    if authority_host_is_malformed(&endpoint[scheme_len..])
+        || endpoint.contains('@')
         || endpoint.contains('?')
         || endpoint.contains('#')
         || contains_control_or_nul(endpoint)
@@ -201,6 +204,32 @@ fn authority_host_is_empty(rest: &str) -> bool {
             .is_none_or(|(host, _)| host.is_empty());
     }
     authority.split(':').next().unwrap_or_default().is_empty()
+}
+
+/// Whether the authority of one absolute URL carries a malformed host.
+///
+/// A malformed authority is non-empty but names no reachable host: it carries
+/// a stray or nested bracket (`https://]/v1`, `https://[::1]]/v1`), a
+/// backslash in the host, an empty or interior-bracketed bracketed host, or a
+/// bracketed host followed by anything other than an optional numeric port.
+/// The endpoint policy rejects these shapes instead of passing them on as
+/// execution metadata (R25).
+#[must_use]
+fn authority_host_is_malformed(rest: &str) -> bool {
+    let authority = rest.split('/').next().unwrap_or_default();
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        let Some((host, remainder)) = bracketed.split_once(']') else {
+            return true;
+        };
+        if host.is_empty() || host.contains(['[', ']', '\\']) {
+            return true;
+        }
+        return !(remainder.is_empty()
+            || remainder.strip_prefix(':').is_some_and(|port| {
+                !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+            }));
+    }
+    authority.contains(['[', ']', '\\'])
 }
 
 /// Whether the authority of an `http://` endpoint is a literal loopback host.
@@ -1425,6 +1454,12 @@ mod tests {
             ("https://api.example.com/v1 ", "invalid_endpoint"),
             ("ftp://api.example.com/v1", "invalid_endpoint"),
             ("https://api.example.com/%zz", "invalid_endpoint"),
+            // R25: a non-empty authority whose host is malformed names no
+            // reachable host and is rejected.
+            ("https://]/v1", "invalid_endpoint"),
+            ("https://[::1]]/v1", "invalid_endpoint"),
+            ("https://exa\\mple.com/v1", "invalid_endpoint"),
+            ("https://[::1]suffix/v1", "invalid_endpoint"),
             // HTTPS is required; plaintext HTTP is only tolerated for
             // literal-loopback endpoints (PR24-055).
             ("http://api.example.com/v1", "invalid_endpoint"),
