@@ -184,6 +184,16 @@ where
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// Maximum bytes of one round's accumulated reasoning echo.
+///
+/// This per-round bound matches the transient `AssistantReasoningDto`
+/// representable bound and the durable per-reasoning-fact bound (512 KiB), so
+/// an echo inside it is always attachable. The durable per-fact and per-run
+/// bounds remain the append authority; a round that crosses this bound
+/// terminalizes as a typed failed run instead of aborting `execute` with a
+/// DTO validation error (ADR 0041).
+const MAX_ROUND_REASONING_ECHO_BYTES: usize = 512 * 1024;
+
 /// Appends one atomic manual-retry failure for exactly a current starting run.
 ///
 /// This narrow helper is used by application scheduling when a committed run
@@ -820,6 +830,7 @@ where
         let mut calls: Vec<ToolCallDto> = Vec::new();
         let mut reasoning_text = String::new();
         let mut reasoning_channel_seen = false;
+        let mut reasoning_echo_exceeds_round_bound = false;
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
@@ -873,8 +884,15 @@ where
                             retryable: false,
                         });
                     }
-                    let reasoning =
-                        round_reasoning_attachment(reasoning_channel_seen, reasoning_text, &calls)?;
+                    let reasoning = match round_reasoning_attachment(
+                        reasoning_channel_seen,
+                        reasoning_text,
+                        &calls,
+                        reasoning_echo_exceeds_round_bound,
+                    ) {
+                        Ok(reasoning) => reasoning,
+                        Err(_) => return unrepresentable_reasoning_round(cursor),
+                    };
                     return Ok(RoundOutcome::ToolCalls {
                         cursor,
                         calls,
@@ -911,7 +929,19 @@ where
                     // constructors reject blank content.
                     reasoning_channel_seen = true;
                     if !content.is_empty() {
-                        reasoning_text.push_str(&content);
+                        // The accumulated echo is bounded per round at the
+                        // attachment's representable bound. Once it is crossed
+                        // the round is unrepresentable and terminalizes as a
+                        // typed failed run at round end; the echo is never
+                        // truncated and the durable per-fact and per-run bounds
+                        // stay with the append authority (ADR 0041).
+                        if reasoning_echo_exceeds_round_bound
+                            || reasoning_text.len() + content.len() > MAX_ROUND_REASONING_ECHO_BYTES
+                        {
+                            reasoning_echo_exceeds_round_bound = true;
+                        } else {
+                            reasoning_text.push_str(&content);
+                        }
                         let category = match category {
                             intention_model::ReasoningFragmentCategoryDto::Primary => {
                                 intention_domain::ReasoningDeltaCategory::Primary
@@ -990,8 +1020,15 @@ where
                         self.transition_completed(input.session_id, input.run_id, cursor)?;
                         return Ok(RoundOutcome::Completed { cursor });
                     }
-                    let reasoning =
-                        round_reasoning_attachment(reasoning_channel_seen, reasoning_text, &calls)?;
+                    let reasoning = match round_reasoning_attachment(
+                        reasoning_channel_seen,
+                        reasoning_text,
+                        &calls,
+                        reasoning_echo_exceeds_round_bound,
+                    ) {
+                        Ok(reasoning) => reasoning,
+                        Err(_) => return unrepresentable_reasoning_round(cursor),
+                    };
                     return Ok(RoundOutcome::ToolCalls {
                         cursor,
                         calls,
@@ -1332,18 +1369,51 @@ enum RoundOutcome {
 ///
 /// # Errors
 ///
-/// Returns a validation error when the round's accumulated reasoning cannot
-/// form a valid attachment.
+/// Returns a validation error when the round's accumulated echo cannot form a
+/// valid attachment: it crossed the per-round attachment bound, or the
+/// attachment DTO rejects its control characters. Callers record the dedicated
+/// typed failed run instead of propagating the validation error.
 fn round_reasoning_attachment(
     reasoning_channel_seen: bool,
     text: String,
     calls: &[ToolCallDto],
+    echo_exceeds_round_bound: bool,
 ) -> DtoResult<Option<AssistantReasoningDto>> {
     if !reasoning_channel_seen {
         return Ok(None);
     }
+    if echo_exceeds_round_bound {
+        return Err(ErrorDto::validation(
+            "invalid_round_reasoning_echo",
+            "the round's reasoning echo exceeds the per-round attachment bound",
+        ));
+    }
     let tool_call_ids = calls.iter().map(ToolCallDto::call_id).collect();
     AssistantReasoningDto::new(tool_call_ids, text).map(Some)
+}
+
+/// Terminalizes a round whose accumulated reasoning echo cannot become the
+/// continuation attachment as a durable typed failed run.
+///
+/// The echo crossed the per-round attachment bound or carries a control
+/// character the attachment DTO rejects. The run fails with the dedicated
+/// `reasoning_attachment_unrepresentable` code instead of aborting `execute`
+/// with a DTO validation error, and the echo is never truncated or silently
+/// omitted (ADR 0041, PR24 P3-32).
+///
+/// # Errors
+///
+/// Returns a validation error only when the static failure code is rejected.
+fn unrepresentable_reasoning_round(cursor: RunEventCursorDto) -> DtoResult<RoundOutcome> {
+    Ok(RoundOutcome::Failed {
+        cursor,
+        failure: RunFailureDto::new(
+            "reasoning_attachment_unrepresentable",
+            ErrorRetryDto::Never,
+            None,
+        )?,
+        retryable: false,
+    })
 }
 
 const fn valid_boundary_at_or_before(value: &str, maximum: usize) -> usize {
@@ -1486,15 +1556,30 @@ mod tests {
         let call =
             ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("fixture tool call is valid");
         let attachment =
-            round_reasoning_attachment(true, String::new(), std::slice::from_ref(&call))
+            round_reasoning_attachment(true, String::new(), std::slice::from_ref(&call), false)
                 .expect("presence-only reasoning is valid")
                 .expect("the reasoning channel marks presence");
         assert_eq!(attachment.tool_call_ids(), &[call.call_id()]);
         assert!(attachment.text().is_empty());
         assert!(
-            round_reasoning_attachment(false, "unused".to_owned(), std::slice::from_ref(&call))
-                .expect("an absent reasoning channel is valid")
-                .is_none()
+            round_reasoning_attachment(
+                false,
+                "unused".to_owned(),
+                std::slice::from_ref(&call),
+                false
+            )
+            .expect("an absent reasoning channel is valid")
+            .is_none()
+        );
+        assert!(
+            round_reasoning_attachment(
+                true,
+                "bounded".to_owned(),
+                std::slice::from_ref(&call),
+                true
+            )
+            .is_err(),
+            "an echo that crossed the per-round bound is unrepresentable"
         );
     }
 }

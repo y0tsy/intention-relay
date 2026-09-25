@@ -1086,6 +1086,145 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
 }
 
 #[test]
+fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    // Each fragment stays inside the durable 512 KiB per-fact bound, so the
+    // durable path accepts both; only the accumulated per-round echo crosses
+    // the attachment's representable bound.
+    let first = "a".repeat(300 * 1024);
+    let second = "b".repeat(300 * 1024);
+    let driver = ScriptedDriver::new(vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::reasoning_delta(first.clone()).expect("reasoning is valid")),
+        Ok(ModelEventDto::reasoning_delta(second.clone()).expect("reasoning is valid")),
+        Ok(ModelEventDto::tool_call(call)),
+    ]);
+    let port = ScriptedPort::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("an unrepresentable attachment terminalizes as a typed failed run");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Failed {
+            cursor: RunEventCursorDto::new(5)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 1);
+    assert!(
+        port.calls
+            .lock()
+            .expect("port call recorder is available")
+            .is_empty(),
+        "the failed round never executes its tool call"
+    );
+    let appends = repository.appends.borrow();
+    assert_eq!(appends.len(), 4);
+    assert!(matches!(
+        appends[1].facts(),
+        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }] if content == &first
+    ));
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }] if content == &second
+    ));
+    assert!(matches!(
+        appends[3].facts(),
+        [
+            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
+            ModelRunFactInputDto::Failed { .. },
+        ] if failure.code() == "reasoning_attachment_unrepresentable"
+            && failure.retry() == ErrorRetryDto::Never
+    ));
+    assert!(matches!(
+        appends[3].facts(),
+        [
+            ModelRunFactInputDto::ProviderAttemptFailed { .. },
+            ModelRunFactInputDto::Failed { failure },
+        ] if failure.code() == "reasoning_attachment_unrepresentable"
+    ));
+    assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
+}
+
+#[test]
+fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    // The durable fact path accepts the control character; the transient
+    // attachment DTO rejects it.
+    let content = "thinking\u{7}".to_owned();
+    let driver = ScriptedDriver::new(vec![
+        Ok(ModelEventDto::started()),
+        Ok(ModelEventDto::reasoning_delta(content.clone()).expect("reasoning is valid")),
+        Ok(ModelEventDto::tool_call(call)),
+        Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+    ]);
+    let port = ScriptedPort::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("an unrepresentable attachment terminalizes as a typed failed run");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Failed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 1);
+    assert!(
+        port.calls
+            .lock()
+            .expect("port call recorder is available")
+            .is_empty(),
+        "the failed round never executes its tool call"
+    );
+    let appends = repository.appends.borrow();
+    assert_eq!(appends.len(), 3);
+    assert!(matches!(
+        appends[1].facts(),
+        [ModelRunFactInputDto::ReasoningDeltaRecorded { content: recorded, .. }]
+            if recorded == &content
+    ));
+    assert!(matches!(
+        appends[2].facts(),
+        [
+            ModelRunFactInputDto::ProviderAttemptFailed { attempt: 1, failure },
+            ModelRunFactInputDto::Failed { .. },
+        ] if failure.code() == "reasoning_attachment_unrepresentable"
+            && failure.retry() == ErrorRetryDto::Never
+    ));
+    assert!(matches!(
+        appends[2].facts(),
+        [
+            ModelRunFactInputDto::ProviderAttemptFailed { .. },
+            ModelRunFactInputDto::Failed { failure },
+        ] if failure.code() == "reasoning_attachment_unrepresentable"
+    ));
+    assert_eq!(appends[2].status(), Some(RunStatusDto::Failed));
+}
+
+#[test]
 fn tool_failure_records_result_and_terminalizes_without_retry() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
