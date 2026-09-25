@@ -89,6 +89,24 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
 - a tool result identifies the normalized path/CWD used, with safe redaction as necessary;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
+### Project script library
+
+The project script library is the logical, slash-separated, workspace-relative
+path `.ir/scripts` under `workspace_root`, with `.ir` as the project-local hidden
+root for agent-authored reusable material
+([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
+
+- the convention names a location only; the library is not implicitly included
+  in, or excluded from, any other policy, and no plan artifact, daemon state,
+  checkpoint, or configuration lives there;
+- modules are created and edited only through `write` and `edit`, read through
+  `read`, `glob`, and `grep`, and run through `execute`; the relative-path,
+  symbolic-link, and traversal rules above apply unchanged and fail closed;
+- a tool result or error identifies a module by its logical relative path, with
+  the same redaction as every other workspace path; and
+- `write` and `edit` remain incompatible in Plan mode, so library mutation stays
+  Build activity.
+
 A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
 
 This check is necessarily subject to a TOCTOU residual risk: validation and the

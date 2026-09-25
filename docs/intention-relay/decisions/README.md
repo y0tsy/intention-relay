@@ -59,3 +59,4 @@ provenance.
 | [0039](0039-request-side-tool-advertisement.md) | Accepted | Request-side tool advertisement (ordinary production tool loop) |
 | [0040](0040-opt-in-live-provider-e2e.md) | Accepted | Opt-in live-provider end-to-end channel (manual, non-blocking) |
 | [0041](0041-same-run-reasoning-round-trip.md) | Accepted | Same-run provider reasoning round-trip (ordinary production tool loop) |
+| [0042](0042-project-script-library-for-kernel-cells.md) | Accepted | Project script library for kernel cells (`.ir/scripts` persistence of agent-authored kernel modules) |

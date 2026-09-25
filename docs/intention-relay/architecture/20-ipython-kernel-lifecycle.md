@@ -8,7 +8,8 @@
 - Decision record: [`0012`](../decisions/0012-ipython-kernel-lifecycle.md).
 - Detail decision: [`0027`](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md) (kernel detail).
 - Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (rich MIME/raw kernel output projection).
-- Reconciliation topics: `KER-001..023`.
+- Detail decision: [`0042`](../decisions/0042-project-script-library-for-kernel-cells.md) (project script library for kernel cells).
+- Reconciliation topics: `KER-001..027`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
@@ -72,6 +73,7 @@ MandateKernelSelectionV1
   checkpoint_policy = Disabled | Optional | Required
   host_request_contract_revision
   safe_projection_revision
+  script_library_reference
   canonical_kernel_selection_digest
 ```
 
@@ -81,6 +83,13 @@ socket handles, namespace values, checkpoint payload, credentials, endpoints,
 current interpreter/environment, registry, readiness, child graph, and MCP state.
 Unknown, corrupt, unsupported, or mismatched selection blocks dependent kernel
 work before process creation or restoration and never falls back to current state.
+
+One additive bounded reference joins the selection: `script_library_reference`
+points at a `KernelScriptLibraryV1` value (contract, import-surface, and evidence
+revisions plus the canonical library digest over the logical workspace-relative
+path `.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)).
+It is credential-free and content-free, carries no absolute, canonical, or
+symlink-target path, and its absence means an empty import surface.
 
 One live `KernelEpochId` belongs to exactly one admitted `RunId`. It is created
 lazily only after recovery completes, a supported active Mandate run is reread,
@@ -152,6 +161,46 @@ tool action. The kernel cannot create a listener, registry, direct primitive pat
 sequence, or result channel. Equal operation reuse returns durable evidence;
 changed reuse fails before effect. Grant expiry, cell closure, cancellation,
 kernel disposal, and restart prevent new host requests.
+
+## Project script library and script evidence
+
+Agent-authored reusable modules live as ordinary project files under the logical
+workspace-relative path `.ir/scripts` (`.ir` is the project-local hidden root),
+created and edited only through the frozen `write` and `edit` descriptors and run
+through `execute` or a foreground cell
+([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)). The
+library is file material, not kernel state: it is never a namespace, checkpoint,
+epoch, task, or host-request resource, and no selection, cell, or checkpoint
+carries its source.
+
+An epoch's import surface is exactly the library directory named by
+`script_library_reference`: the parent, the workspace root, a second library, and
+any outside path never enter it, and the directory joins the surface only after
+the workspace boundary check proves it inside the session root. A missing library
+directory yields an empty import surface, so a project without saved modules
+behaves as if the capability were absent. A boundary or symbolic-link escape fails
+before effect with `kernel_script_library_unavailable`. Python-level import errors
+inside a cell stay ordinary safe `Error` output under the closed text-only
+projection.
+
+A fresh run reuses a module by reading the file inside its own epoch. Namespace,
+cell, task, grant, and checkpoint state are never carried over to provide reuse,
+and the trusted-local model is unchanged: library code is project material, not a
+sandbox, and direct Python OS APIs remain outside the facade.
+
+Every foreground cell that imports library modules records bounded script-import
+evidence: for each imported module the logical workspace-relative path and the
+content digest, inside bounded counts and sizes. Evidence contains no source text,
+no absolute, canonical, or symlink-target path, and no Python value, and it is
+published as run facts through architecture 15's post-commit publication gate under
+this document's cell rules. Evidence that cannot be represented inside its bounds
+fails before publication with `kernel_script_library_unavailable`; it is never
+truncated, sampled, or stringified. Verified checkpoint metadata may carry the
+canonical library digest as safe verification metadata, while checkpoint payload
+and metadata keep excluding script source and any executable payload. Deleting a
+module stays an explicit user or agent action through the ordinary tools; idle
+disposal, checkpoint promotion, and restart never collect one.
+
 ## Checkpoints and replacement kernels
 
 A verified checkpoint may be created only after a known successful foreground
@@ -180,10 +229,14 @@ KernelCheckpointMetadataV1
 Payload is deterministic, typed, versioned, bounded, and private. It contains no
 executable payload, open file/process/socket/task handle, provider/MCP/Jupyter
 resource, bridge grant, credential, endpoint, raw traceback, or implementation
-resource. Unsupported values are explicitly omitted with safe metadata, never
-guessed or stringified. Payload, metadata, verification, generation promotion,
-and publication are atomic: a failed generation leaves the prior verified one
-intact and never becomes latest verified.
+resource. Verified metadata may additionally carry the canonical project
+script-library digest
+([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the
+payload never carries script source. Unsupported values are explicitly omitted
+with safe metadata, never guessed or stringified. Payload, metadata,
+verification, generation promotion, and publication are atomic: a failed
+generation leaves the prior verified one intact and never becomes latest
+verified.
 
 Only a selected verified checkpoint may seed a replacement kernel for a new run.
 `Required` restoration failure blocks dependent work before effect. `Optional`
@@ -258,6 +311,8 @@ KernelStatusDto
 KernelStateSnapshotDto
 KernelHostRequestDto
 KernelHostResponseDto
+KernelScriptLibraryDto
+KernelScriptImportEvidenceDto
 ```
 
 A kernel is session-scoped: one daemon-owned session actor owns at most one
@@ -326,6 +381,7 @@ kernel_concurrency_limit_exceeded
 kernel_execution_unavailable
 kernel_execution_timeout
 kernel_output_unrepresentable
+kernel_script_library_unavailable
 kernel_checkpoint_unavailable
 kernel_state_restore_unavailable
 ```
@@ -335,12 +391,13 @@ process resource, grant, or implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 13--19 and decisions 0001--0011. It does
-not define Python/Jupyter dependencies, process supervision implementation,
-storage/wire tags, migrations, retention, encryption, resource-limit values, RLM
-executor topology, continual harness, Skills/Goals/context, provider evolution,
-session forks, activity/UI, direct MCP administration, Cargo, Makefile/CI, or
-production activation.
+This document depends on architectures 13--19, decisions 0001--0011, and
+decision 0042 for the project script library path, selection, and evidence
+contract. It does not define Python/Jupyter dependencies, process supervision
+implementation, storage/wire tags, migrations, retention, encryption,
+resource-limit values, RLM executor topology, continual harness,
+Skills/Goals/context, provider evolution, session forks, activity/UI, direct MCP
+administration, Cargo, Makefile/CI, or production activation.
 
 A later activating specification must declare exact crate owners, test targets,
 coverage tiers, feature profiles, storage/wire versions, dependency policy, and
@@ -356,6 +413,10 @@ CI. It must cover:
   matrices and exact uncertainty/reconciliation;
 - bridge-only host operations, idempotency, changed reuse, stale grants/tasks,
   and no-bypass fixtures;
+- project script library import surface: missing library, boundary,
+  symbolic-link, and outside-path escape fixtures, reuse by reading the file in a
+  fresh epoch, bounded import evidence without source text or absolute paths, and
+  explicit-only deletion;
 - child checkpoint-copy isolation, verifier non-authority, MCP reacquisition,
   negotiated replay/resync/history-before-live, and zero-effect reconnect;
 - M3/M4 and retained IPython/RLM byte/meaning/recovery/provider/tool-denial

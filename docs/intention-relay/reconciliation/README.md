@@ -177,6 +177,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Request-side tool advertisement | architecture 08, architecture 05 | decision 0039 |
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
 | Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
+| Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

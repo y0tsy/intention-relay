@@ -1008,13 +1008,19 @@ migration, feature profile, quality-policy target, or implementation milestone.
   no-resume semantics;
 - immutable kernel selection and checkpoint restore policy under existing
   execution meaning;
-- bridge-only host requests and child/verifier/MCP non-authority boundaries; and
+- bridge-only host requests and child/verifier/MCP non-authority boundaries;
+- the project script library the kernel imports from (`.ir/scripts`,
+  [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
+  agent-authored modules persisted as ordinary project files through the frozen
+  tool descriptors, an exact import surface, bounded script-import evidence, and
+  no executable payload in checkpoints; and
 - reconciliation ownership, compatibility, contradiction, dependency, and
   evidence updates.
 
 ### Exit criteria
 
-- KER-001..018 have one owner and compatibility/failure rule;
+- KER-001..018 have one owner and compatibility/failure rule, and KER-025..027
+  carry the project script library rows of decision 0042;
 - live namespaces, grants, tasks, checkpoints, and output cannot become Mandate,
   scheduler, registry, child, verifier, MCP, or reconciliation authority;
 - every host request uses the existing bridge and frozen tool-loop path;
