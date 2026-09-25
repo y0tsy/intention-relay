@@ -1415,6 +1415,181 @@ fn startup_rebuilds_a_pending_removal_candidate_and_acceptance_succeeds() {
 }
 
 #[test]
+fn startup_adopts_a_rebuilt_pending_removal_instead_of_blocking_the_open() {
+    // R16 (D-02 residual): a durable pending removal is the crash residue of
+    // the previous process's own startup reconcile. Re-opening with the same
+    // startup document adopts it through the normal acceptance path instead
+    // of returning `provider_catalog_removal_pending_exists` until the
+    // 30-minute expiry.
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    assert_eq!(outcome.candidate_handle.as_deref(), Some("catalog-2"));
+    // Simulated crash: the controller is dropped with the durable pending
+    // removal row still pending.
+    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let startup = restarted
+        .startup(2_000)
+        .expect("startup rebuilds the pending removal");
+    assert!(matches!(
+        startup.readiness,
+        intention_application::CatalogReadiness::PendingRemoval { .. }
+    ));
+
+    // The reconciliation re-proposes exactly the startup document.
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let adopted = restarted
+        .prepare_candidate(
+            source(
+                "op-removal",
+                1_024,
+                vec![declaration(
+                    "generic-chat-completion-api",
+                    "model-b",
+                    Some(ENDPOINT),
+                    true,
+                )],
+                candidate(
+                    "generic-chat-completion-api",
+                    "model-b",
+                    ENDPOINT,
+                    &previous,
+                ),
+                previous,
+            ),
+            2_100,
+        )
+        .expect("the rebuilt pending removal is adopted, not rejected as a conflict");
+    assert!(
+        !adopted.changed,
+        "the adopted candidate already is the proposal"
+    );
+    assert!(!adopted.pending_removal);
+    assert_eq!(
+        adopted.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+
+    // The durable state follows the adoption: the candidate is accepted, the
+    // previous kind is tombstoned, and the active catalog is the candidate.
+    let state = (&fake)
+        .load_provider_catalog_status()
+        .expect("status loads");
+    assert_eq!(state.status, ProviderCatalogStatusDto::Active);
+    assert_eq!(state.active_catalog_revision_id, Some(2));
+    assert_eq!(state.candidate_catalog_revision_id, None);
+    let material = fake.active_material().expect("active material loads");
+    assert_eq!(material.catalog_revision_id, 2);
+    assert_eq!(material.profiles.len(), 1);
+    assert_eq!(
+        material.profiles[0].profile.provider_kind_id,
+        "generic-chat-completion-api"
+    );
+    assert_eq!(material.profiles[0].profile.model_id, "model-b");
+    let removal_status = fake
+        .state
+        .borrow()
+        .removal_candidates
+        .iter()
+        .find(|candidate| candidate.candidate_handle == "catalog-2")
+        .map(|candidate| candidate.status)
+        .expect("the adopted removal candidate exists");
+    assert_eq!(removal_status, ProviderCatalogRemovalStatusDto::Accepted);
+
+    // A same-process pending candidate still awaits the operator: only a
+    // startup-rebuilt candidate is adopted.
+    let fresh = seeded_catalog();
+    let (fresh_controller, _) = removal_controller(&fresh, 1_000);
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let error = fresh_controller
+        .prepare_candidate(
+            source(
+                "op-removal-2",
+                1_024,
+                vec![declaration(
+                    "generic-chat-completion-api",
+                    "model-c",
+                    Some(ENDPOINT),
+                    true,
+                )],
+                candidate(
+                    "generic-chat-completion-api",
+                    "model-c",
+                    ENDPOINT,
+                    &previous,
+                ),
+                previous,
+            ),
+            1_100,
+        )
+        .expect_err("a same-process pending candidate still conflicts");
+    assert_eq!(error.code(), "provider_catalog_removal_pending_exists");
+}
+
+#[test]
+fn the_removed_source_recheck_input_stays_out_of_the_request_surface() {
+    // P3-17/R22: the removal acceptance request never consumed
+    // `source_recheck`; the storage-side provenance literal stays in the
+    // application and storage crates. This guard fails if the removed input
+    // returns to the wire contract, the client, or the daemon request
+    // mapping, and it fails closed when a scanned subtree cannot be read.
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the application crate lives under the workspace crates directory");
+    let surfaces = [
+        "intention-protocol/src",
+        "intention-client/src",
+        "intention-daemon/src",
+        "intention/src",
+    ];
+    let mut scanned = 0_usize;
+    let mut unreadable: Vec<String> = Vec::new();
+    for surface in surfaces {
+        let root = crates.join(surface);
+        let mut surface_scanned = 0_usize;
+        let mut pending = vec![root.clone()];
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                unreadable.push(directory.display().to_string());
+                continue;
+            };
+            for entry in entries {
+                let path = entry
+                    .expect("the request surface entry must be readable")
+                    .path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs") {
+                    continue;
+                }
+                scanned += 1;
+                surface_scanned += 1;
+                let text = std::fs::read_to_string(&path)
+                    .expect("the request surface source must be UTF-8");
+                assert!(
+                    !text.contains("source_recheck"),
+                    "the removed source_recheck input must not return to the request surface: {}",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            surface_scanned > 0,
+            "the request-surface guard must scan {surface} (scanned {surface_scanned})"
+        );
+    }
+    assert!(
+        unreadable.is_empty(),
+        "the request-surface guard fails closed: these subtrees must be readable: {unreadable:?}"
+    );
+    assert!(
+        scanned >= 7,
+        "the request-surface guard must scan the request source trees (scanned {scanned})"
+    );
+}
+
+#[test]
 fn startup_rolls_forward_an_accepted_removal_whose_catalog_acceptance_never_committed() {
     // PR24-004: a crash between the removal acceptance commit and the catalog
     // acceptance leaves an accepted removal row under a pending state;

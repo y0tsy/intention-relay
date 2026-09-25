@@ -7,7 +7,7 @@
 //! or raw configuration crosses a public boundary.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use intention_config::control_plane::{
     CandidateIssueDto, ConfigCandidateDto, MAX_CANDIDATE_RAW_BYTES, classify_changed_fields,
@@ -35,10 +35,10 @@ use intention_storage::{
 };
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 
-use crate::provider_gate::{CatalogReadiness, ControlPlaneGate};
+use crate::provider_gate::{CatalogReadiness, ControlPlaneGate, ControlPlaneState};
 use crate::provider_registry::{
-    ModelRunDriverHandle, PrivateProviderProfileMaterial, PrivateRegistry, PrivateRegistryKey,
-    ProviderDriverFactory, private_credential_reference,
+    MAX_ACTIVE_PRIVATE_ENTRIES, ModelRunDriverHandle, PrivateProviderProfileMaterial,
+    PrivateRegistry, PrivateRegistryKey, ProviderDriverFactory, private_credential_reference,
 };
 
 /// The provider catalog removal candidate lifetime in seconds (30 minutes).
@@ -49,6 +49,14 @@ const RESOLVED_REASONING_POLICY: &str = "textual-reasoning-v1";
 const LOOPBACK_POLICY_NOT_APPLICABLE: &str = "not-applicable";
 /// The deterministic first-party default profile id.
 const DEFAULT_PROFILE_ID: &str = "default";
+/// The provenance value recorded for a removal candidate that the catalog
+/// runtime derived from its own catalog recheck, never from a wire request.
+///
+/// This is the value the controller writes to the storage-side `source_recheck`
+/// column of the removal create input
+/// ([`CreateProviderCatalogRemovalCandidateInputDto`]); the wire removal
+/// acceptance request carries no `source_recheck` input at all (P3-17/R22).
+const REMOVAL_SOURCE_RECHECK_HEALTH: &str = "health-recheck";
 
 /// One credential-free provider declaration inside a catalog source.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -169,6 +177,7 @@ pub struct ProviderAdmissionDto {
 }
 
 /// The in-memory prepared candidate retained for pending-removal acceptance.
+#[derive(Clone)]
 pub(crate) struct PreparedCandidate {
     pub(crate) candidate_handle: String,
     pub(crate) catalog_revision_id: u64,
@@ -177,6 +186,13 @@ pub(crate) struct PreparedCandidate {
     pub(crate) default_profile_id: String,
     pub(crate) removed_profile_ids: Vec<String>,
     pub(crate) removed_kind_ids: Vec<String>,
+    /// Whether `startup()` rebuilt this candidate from durable rows.
+    ///
+    /// Only such a candidate is the crash residue of the previous process's
+    /// own proposal; the startup reconcile adopts it through the normal
+    /// acceptance path instead of returning
+    /// `provider_catalog_removal_pending_exists` until its deadline (R16).
+    pub(crate) rebuilt_from_durable: bool,
 }
 
 /// One admission-context entry paired with the private registry.
@@ -191,6 +207,77 @@ type BuiltRegistryEntries =
 /// The admission context map paired with the private registry.
 type AdmissionContext = HashMap<PrivateRegistryKey, AdmissionEntry>;
 
+/// One activation whose fallible preconditions were resolved before the
+/// durable acceptance (D-05, R32).
+///
+/// The built registry entries and the admission context are ready to swap,
+/// the private-registry entry bound is already validated, and the admission
+/// lock is held by this value until the swap completes, so finishing the
+/// activation after a durable acceptance cannot fail on those conditions.
+struct PreparedActivation<'a> {
+    built: BuiltRegistryEntries,
+    admissions: AdmissionContext,
+    admissions_guard: MutexGuard<'a, AdmissionContext>,
+}
+
+/// Validates every fallible activation precondition and takes the admission
+/// lock (D-05, R32).
+///
+/// The private-registry entry bound and the admission lock are the two
+/// conditions that could fail between a durable acceptance and the in-memory
+/// swap; both are resolved here, before any durable commit, and the returned
+/// guard keeps the admission lock held until [`swap_activation`] completes.
+///
+/// # Errors
+///
+/// Returns `provider_registry_limit_exceeded` for an over-limit entry map, or
+/// `provider_admission_unavailable` when the admission lock is poisoned.
+fn prepare_activation<'a>(
+    admissions: &'a Mutex<AdmissionContext>,
+    built: BuiltRegistryEntries,
+    context: AdmissionContext,
+) -> DtoResult<PreparedActivation<'a>> {
+    if built.len() > MAX_ACTIVE_PRIVATE_ENTRIES {
+        return Err(ErrorDto::validation(
+            "provider_registry_limit_exceeded",
+            "the private provider registry exceeds its active entry limit",
+        ));
+    }
+    let admissions_guard = admissions.lock().map_err(|_| {
+        ErrorDto::unavailable(
+            "provider_admission_unavailable",
+            "the admission context lock is poisoned",
+        )
+    })?;
+    Ok(PreparedActivation {
+        built,
+        admissions: context,
+        admissions_guard,
+    })
+}
+
+/// Completes one prepared activation and reports whether the registry swapped.
+///
+/// The private-registry lock cannot fail here: the entry bound is already
+/// validated by [`prepare_activation`], and every `PrivateRegistry` critical
+/// section performs only a whole-map assignment, a lookup, or a length read,
+/// none of which can panic while the registry lock is held. The `false`
+/// result is therefore unreachable in the current code; it exists so the
+/// caller represents the impossible poisoned-registry state as a typed
+/// recovery readiness instead of a failed acceptance (R32).
+fn swap_activation(registry: &PrivateRegistry, activation: PreparedActivation<'_>) -> bool {
+    let PreparedActivation {
+        built,
+        admissions,
+        mut admissions_guard,
+    } = activation;
+    if registry.activate(built).is_err() {
+        return false;
+    }
+    *admissions_guard = admissions;
+    true
+}
+
 /// The provider catalog runtime controller.
 pub struct ProviderCatalogController<Catalog, Removal>
 where
@@ -202,7 +289,7 @@ where
     factories: Vec<Box<dyn ProviderDriverFactory>>,
     gate: ControlPlaneGate,
     registry: PrivateRegistry,
-    admissions: Mutex<HashMap<PrivateRegistryKey, AdmissionEntry>>,
+    admissions: Mutex<AdmissionContext>,
 }
 
 impl<Catalog, Removal> ProviderCatalogController<Catalog, Removal>
@@ -346,6 +433,7 @@ where
                 default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
                 removed_profile_ids: pending.removed_profile_ids.clone(),
                 removed_kind_ids: pending.removed_kind_ids.clone(),
+                rebuilt_from_durable: true,
             };
             (
                 CatalogReadiness::PendingRemoval {
@@ -542,10 +630,20 @@ where
     /// pending-removal state with a 30-minute expiry; any other candidate is
     /// auto-accepted and its private registry is activated.
     ///
+    /// A pending removal that `startup()` rebuilt from durable rows is adopted
+    /// through the normal acceptance path instead of returning
+    /// `provider_catalog_removal_pending_exists`, so a restart recovers its own
+    /// crash residue deterministically (R16). A candidate re-derived from the
+    /// same startup document then produces no new revision.
+    ///
     /// # Errors
     ///
     /// Returns a typed validation, policy, conflict, or storage error. No
     /// driver build is invoked on any preflight failure.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail (R32)"
+    )]
     pub fn prepare_candidate(
         &self,
         source: CatalogSourceInputDto,
@@ -556,14 +654,92 @@ where
         // corrected candidate (PR24-003).
         self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
-            if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
-                return Err(catalog_error(
-                    "provider_catalog_removal_pending_exists",
-                    ErrorCategoryDto::Conflict,
-                    "a pending provider catalog removal candidate already exists",
-                ));
-            }
+            // R16 (D-02 residual): only a pending candidate that `startup()`
+            // rebuilt from durable rows is the crash residue of the previous
+            // process's own proposal. The restart is the operator act that
+            // pending state waits for (D-02), so this reconciliation adopts it
+            // deterministically through the normal acceptance path instead of
+            // returning `provider_catalog_removal_pending_exists` until its
+            // 30-minute expiry. A same-process pending candidate still awaits
+            // the operator and keeps the conflict.
+            let rebuilt_pending =
+                if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
+                    if !gate
+                        .prepared
+                        .as_ref()
+                        .is_some_and(|prepared| prepared.rebuilt_from_durable)
+                    {
+                        return Err(catalog_error(
+                            "provider_catalog_removal_pending_exists",
+                            ErrorCategoryDto::Conflict,
+                            "a pending provider catalog removal candidate already exists",
+                        ));
+                    }
+                    true
+                } else {
+                    false
+                };
             validate_candidate_limits(&source)?;
+            if rebuilt_pending {
+                let adopted = gate.prepared.take().ok_or_else(|| {
+                    catalog_error(
+                        "provider_catalog_state_inconsistent",
+                        ErrorCategoryDto::Unavailable,
+                        "the rebuilt pending removal candidate is missing",
+                    )
+                })?;
+                let acceptance = match self.commit_prepared_acceptance(
+                    gate,
+                    &adopted,
+                    format!("startup-adopt-{}", adopted.candidate_handle),
+                    now,
+                ) {
+                    Ok(acceptance) => acceptance,
+                    Err(error) => {
+                        // The durable pending removal is still recoverable:
+                        // keep the rebuilt candidate so a later attempt in
+                        // this process, or the next restart, does not lose it.
+                        gate.prepared = Some(adopted);
+                        return Err(error);
+                    }
+                };
+                if !matches!(acceptance.readiness, CatalogReadiness::Ready) {
+                    let (issues, truncated, total) = bounded_issues(&source.candidate);
+                    return Ok(CatalogCandidateOutcomeDto {
+                        changed: true,
+                        catalog_revision_id: Some(adopted.catalog_revision_id),
+                        candidate_handle: None,
+                        pending_removal: false,
+                        removal_expires_at: None,
+                        readiness: acceptance.readiness,
+                        issues,
+                        truncated_issues: truncated,
+                        total_issue_count: total,
+                    });
+                }
+                let resolved = source.candidate.safe_snapshot().resolved();
+                let (adopted_kinds, adopted_profiles) =
+                    self.build_candidate_records(&source, resolved)?;
+                if adopted_kinds == adopted.kind_descriptors && adopted_profiles == adopted.profiles
+                {
+                    // The startup document re-derives exactly the adopted
+                    // candidate: the open is complete and no new revision is
+                    // prepared (the adoption itself already advanced the
+                    // durable catalog to the candidate's revision).
+                    let (issues, truncated, total) = bounded_issues(&source.candidate);
+                    return Ok(CatalogCandidateOutcomeDto {
+                        changed: false,
+                        catalog_revision_id: None,
+                        candidate_handle: None,
+                        pending_removal: false,
+                        removal_expires_at: None,
+                        readiness: CatalogReadiness::Ready,
+                        issues,
+                        truncated_issues: truncated,
+                        total_issue_count: total,
+                    });
+                }
+            }
             // The catalog runtime classifies only a provider-kind change as a
             // removal-signaling configuration change: model/endpoint changes
             // are catalog replacement material for this path. Live-reload
@@ -686,7 +862,10 @@ where
                         candidate_catalog_revision_id: next_revision,
                         active_catalog_revision_id: gate.applied_revision.unwrap_or(0),
                         created_at: i64_time(now),
-                        source_recheck: "health-recheck".to_owned(),
+                        // The provenance is this controller's own catalog
+                        // recheck; no request-supplied value reaches this
+                        // storage column (P3-17/R22).
+                        source_recheck: REMOVAL_SOURCE_RECHECK_HEALTH.to_owned(),
                         evidence,
                         operation_id: source.operation_id.clone(),
                     },
@@ -704,6 +883,7 @@ where
                     default_profile_id: DEFAULT_PROFILE_ID.to_owned(),
                     removed_profile_ids,
                     removed_kind_ids,
+                    rebuilt_from_durable: false,
                 });
                 return Ok(CatalogCandidateOutcomeDto {
                     changed: true,
@@ -720,15 +900,16 @@ where
                     total_issue_count: total,
                 });
             }
-            // D-05: build the complete replacement registry and admission map
-            // before the durable acceptance, so a build failure leaves the
+            // D-05/R32: build the complete replacement registry and admission
+            // map before the durable acceptance and resolve every remaining
+            // fallible activation precondition there too (the active-entry
+            // bound and the admission lock), so a preflight failure leaves the
             // durable catalog unchanged and the caller's error describes the
-            // actual state. Activation after the commit is then only a swap:
-            // one registry entry is built per profile and the candidate
-            // profile bound is not larger than the active-entry bound, so the
-            // map size is pre-validated by construction.
+            // actual state. The completion after the commit is then an
+            // infallible swap.
             let (built, admissions) =
                 self.build_registry_from_candidate(&kind_descriptors, &profiles, next_revision)?;
+            let activation = prepare_activation(&self.admissions, built, admissions)?;
             self.catalog
                 .accept_provider_catalog(AcceptProviderCatalogInputDto {
                     catalog_revision_id: next_revision,
@@ -739,20 +920,19 @@ where
                     accepted_at: i64_time(now),
                     operation_id: source.operation_id.clone(),
                 })?;
-            self.activate_registry(built, admissions)?;
-            gate.readiness = CatalogReadiness::Ready;
-            gate.applied_revision = Some(next_revision);
-            gate.active_default_profile_id = Some(DEFAULT_PROFILE_ID.to_owned());
-            gate.candidate_catalog_revision_id = None;
-            gate.degraded_reason = None;
-            gate.prepared = None;
+            let readiness = self.complete_activation(
+                gate,
+                activation,
+                next_revision,
+                DEFAULT_PROFILE_ID.to_owned(),
+            );
             Ok(CatalogCandidateOutcomeDto {
                 changed: true,
                 catalog_revision_id: Some(next_revision),
                 candidate_handle: None,
                 pending_removal: false,
                 removal_expires_at: None,
-                readiness: CatalogReadiness::Ready,
+                readiness,
                 issues,
                 truncated_issues: truncated,
                 total_issue_count: total,
@@ -762,10 +942,13 @@ where
 
     /// Accepts one pending removal candidate atomically.
     ///
-    /// The removal acceptance is committed through storage (removal accepted
-    /// audit, then catalog accepted and activated audits), then the private
-    /// registry is swapped. On a crash after acceptance, the startup path
-    /// recovers the accepted catalog.
+    /// The replacement registry and admission context are fully built and
+    /// every fallible activation precondition (including the admission lock)
+    /// is resolved before the durable commit; the removal acceptance then
+    /// commits through storage (removal accepted audit, then catalog accepted
+    /// and activated audits) and the private registry is swapped with the
+    /// prepared activation (D-05, R32). On a crash after acceptance, the
+    /// startup path recovers the accepted catalog.
     ///
     /// # Errors
     ///
@@ -784,7 +967,7 @@ where
         // be accepted (PR24-003).
         self.expire_pending(now)?;
         self.gate.run_exclusive(|gate| {
-            let prepared = gate.prepared.as_ref().ok_or_else(|| {
+            let prepared = gate.prepared.clone().ok_or_else(|| {
                 catalog_error(
                     "provider_catalog_removal_not_pending",
                     ErrorCategoryDto::Conflict,
@@ -810,45 +993,10 @@ where
                     "the accepted catalog revision does not match the prepared candidate",
                 ));
             }
-            self.removal
-                .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
-                    candidate_handle: candidate_handle.clone(),
-                    accepted_at: i64_time(now),
-                    operation_id: operation_id.clone(),
-                })?;
-            self.catalog
-                .accept_provider_catalog(AcceptProviderCatalogInputDto {
-                    catalog_revision_id: prepared.catalog_revision_id,
-                    candidate_handle: candidate_handle.clone(),
-                    kind_descriptors: prepared.kind_descriptors.clone(),
-                    profiles: prepared.profiles.clone(),
-                    default_profile_id: prepared.default_profile_id.clone(),
-                    accepted_at: i64_time(now),
-                    operation_id,
-                })?;
-            let (built, admissions) = self.build_registry_from_candidate(
-                &prepared.kind_descriptors,
-                &prepared.profiles,
-                prepared.catalog_revision_id,
-            )?;
-            self.activate_registry(built, admissions)?;
-            let removed_profile_ids = prepared.removed_profile_ids.clone();
-            let removed_kind_ids = prepared.removed_kind_ids.clone();
-            let revision = prepared.catalog_revision_id;
-            let default_profile_id = prepared.default_profile_id.clone();
-            gate.readiness = CatalogReadiness::Ready;
-            gate.applied_revision = Some(revision);
-            gate.active_default_profile_id = Some(default_profile_id);
-            gate.candidate_catalog_revision_id = None;
-            gate.degraded_reason = None;
-            gate.prepared = None;
+            let acceptance = self.commit_prepared_acceptance(gate, &prepared, operation_id, now)?;
             Ok(CatalogAcceptanceOutcomeDto {
-                catalog_revision_id: revision,
                 candidate_handle,
-                readiness: CatalogReadiness::Ready,
-                entry_count: self.registry.len(),
-                removed_profile_ids,
-                removed_kind_ids,
+                ..acceptance
             })
         })
     }
@@ -1170,6 +1318,99 @@ where
         }
         let built = PrivateRegistry::build_all(&self.factories, materials)?;
         Ok((built, admissions))
+    }
+
+    /// Commits one prepared removal acceptance through the normal path.
+    ///
+    /// Order: build the complete replacement registry and admission context,
+    /// resolve every remaining fallible activation precondition and take the
+    /// admission lock (D-05, R32), commit the durable removal and catalog
+    /// acceptances, then complete the swap. A failure before the durable
+    /// acceptance leaves the durable catalog unchanged and is returned as an
+    /// error; the completion after it cannot fail by construction.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail (R32)"
+    )]
+    fn commit_prepared_acceptance(
+        &self,
+        gate: &mut ControlPlaneState,
+        prepared: &PreparedCandidate,
+        operation_id: String,
+        now: u64,
+    ) -> DtoResult<CatalogAcceptanceOutcomeDto> {
+        let (built, admissions) = self.build_registry_from_candidate(
+            &prepared.kind_descriptors,
+            &prepared.profiles,
+            prepared.catalog_revision_id,
+        )?;
+        let activation = prepare_activation(&self.admissions, built, admissions)?;
+        self.removal
+            .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+                candidate_handle: prepared.candidate_handle.clone(),
+                accepted_at: i64_time(now),
+                operation_id: operation_id.clone(),
+            })?;
+        self.catalog
+            .accept_provider_catalog(AcceptProviderCatalogInputDto {
+                catalog_revision_id: prepared.catalog_revision_id,
+                candidate_handle: prepared.candidate_handle.clone(),
+                kind_descriptors: prepared.kind_descriptors.clone(),
+                profiles: prepared.profiles.clone(),
+                default_profile_id: prepared.default_profile_id.clone(),
+                accepted_at: i64_time(now),
+                operation_id,
+            })?;
+        let readiness = self.complete_activation(
+            gate,
+            activation,
+            prepared.catalog_revision_id,
+            prepared.default_profile_id.clone(),
+        );
+        Ok(CatalogAcceptanceOutcomeDto {
+            catalog_revision_id: prepared.catalog_revision_id,
+            candidate_handle: prepared.candidate_handle.clone(),
+            readiness,
+            entry_count: self.registry.len(),
+            removed_profile_ids: prepared.removed_profile_ids.clone(),
+            removed_kind_ids: prepared.removed_kind_ids.clone(),
+        })
+    }
+
+    /// Completes one prepared activation and records the resulting gate state.
+    ///
+    /// The swap cannot fail by construction (see [`swap_activation`]: the
+    /// entry bound is validated and the admission lock is held before the
+    /// durable acceptance). The unreachable registry-poison result still
+    /// degrades to `ActivationRecoveryRequired` instead of reporting a failed
+    /// acceptance, because the durable catalog already advanced and the next
+    /// startup re-derives the registry from the accepted revision (R32).
+    fn complete_activation(
+        &self,
+        gate: &mut ControlPlaneState,
+        activation: PreparedActivation<'_>,
+        revision: u64,
+        default_profile_id: String,
+    ) -> CatalogReadiness {
+        if swap_activation(&self.registry, activation) {
+            gate.readiness = CatalogReadiness::Ready;
+            gate.applied_revision = Some(revision);
+            gate.active_default_profile_id = Some(default_profile_id);
+            gate.candidate_catalog_revision_id = None;
+            gate.degraded_reason = None;
+            gate.prepared = None;
+            return CatalogReadiness::Ready;
+        }
+        let readiness = CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: revision.to_string(),
+        };
+        gate.readiness = readiness.clone();
+        gate.applied_revision = Some(revision);
+        gate.active_default_profile_id = None;
+        gate.candidate_catalog_revision_id = None;
+        gate.degraded_reason = Some("provider_registry_unavailable".to_owned());
+        gate.prepared = None;
+        readiness
     }
 
     /// Atomically installs the built registry and its admission context.
@@ -1662,5 +1903,106 @@ mod tests {
             baseline
         );
         assert!(!baseline.to_string().contains("sk-test"));
+    }
+
+    /// One opaque private registry handle for the activation unit fixtures.
+    struct TestHandle;
+
+    impl ModelRunDriverHandle for TestHandle {}
+
+    fn test_key() -> PrivateRegistryKey {
+        PrivateRegistryKey {
+            profile_id: "default".to_owned(),
+            profile_revision_id: "rev-1".to_owned(),
+            kind_descriptor_revision_id: "kind-1".to_owned(),
+            driver_contract: ProviderDriverContractRevisionDto {
+                driver_family: "responses".to_owned(),
+                major: 1,
+                minor: 1,
+            },
+        }
+    }
+
+    fn test_handle() -> Arc<dyn ModelRunDriverHandle + Send + Sync> {
+        Arc::new(TestHandle)
+    }
+
+    #[test]
+    fn a_poisoned_admission_lock_is_rejected_before_any_durable_acceptance() {
+        // R32: the admission lock is resolved before the durable acceptance,
+        // so a poisoned lock surfaces as a pre-commit error instead of a
+        // committed catalog revision whose in-memory state never installed.
+        let admissions = Mutex::new(AdmissionContext::new());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = admissions
+                .lock()
+                .expect("the fixture admission lock is clean before the poison");
+            std::panic::resume_unwind(Box::new("poison the fixture admission lock"));
+        }));
+        assert!(
+            poisoned.is_err(),
+            "the fixture unwinds while holding the lock"
+        );
+        let error = prepare_activation(
+            &admissions,
+            BuiltRegistryEntries::new(),
+            AdmissionContext::new(),
+        )
+        .err()
+        .expect("a poisoned admission lock is rejected before the commit");
+        assert_eq!(error.code(), "provider_admission_unavailable");
+    }
+
+    #[test]
+    fn an_over_limit_activation_is_rejected_before_any_durable_acceptance() {
+        // R32: the private-registry active-entry bound is validated before the
+        // durable acceptance, so the bound can never fail the post-commit
+        // swap.
+        let admissions = Mutex::new(AdmissionContext::new());
+        let mut built = BuiltRegistryEntries::new();
+        for index in 0..=MAX_ACTIVE_PRIVATE_ENTRIES {
+            let mut key = test_key();
+            key.profile_id = format!("profile-{index:04}");
+            built.insert(key, test_handle());
+        }
+        let error = prepare_activation(&admissions, built, AdmissionContext::new())
+            .err()
+            .expect("the active-entry bound is validated before the commit");
+        assert_eq!(error.code(), "provider_registry_limit_exceeded");
+    }
+
+    #[test]
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the fixture holds the prepared admission guard until the swap completes, exactly as the production path does"
+    )]
+    fn a_prepared_activation_completes_and_installs_both_maps() {
+        let admissions = Mutex::new(AdmissionContext::new());
+        let registry = PrivateRegistry::new();
+        let key = test_key();
+        let mut built = BuiltRegistryEntries::new();
+        built.insert(key.clone(), test_handle());
+        let mut context = AdmissionContext::new();
+        context.insert(
+            key.clone(),
+            AdmissionEntry {
+                dto: admission_dto(&key),
+                enabled: true,
+            },
+        );
+        let activation = prepare_activation(&admissions, built, context)
+            .expect("a clean lock and an in-bound map prepare");
+        assert!(
+            swap_activation(&registry, activation),
+            "the prepared activation completes without a fallible step"
+        );
+        assert!(registry.lookup(&key).is_some());
+        assert_eq!(
+            admissions
+                .lock()
+                .expect("the admission lock is clean")
+                .len(),
+            1
+        );
     }
 }
