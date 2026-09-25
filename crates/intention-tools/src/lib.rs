@@ -7,7 +7,7 @@ use std::fmt::{Display, Formatter};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -400,13 +400,39 @@ fn bounded_output(
     bounded_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
 }
 
-/// How long pipe readers may keep draining after the direct child has been
-/// reaped or terminated. Descendants holding the pipes open are killed with
-/// the child's process group on Unix; on every platform the collection is
-/// deadline-bounded so Execute can never wait forever (PR24-011). The grace
-/// tolerates reader-thread descheduling on loaded, instrumented machines
-/// while staying far below the thirty-second execute deadline.
+/// How long pipe readers may keep draining without observed progress after the
+/// direct child has been reaped or terminated. Descendants holding the pipes
+/// open are killed with the child's process group on Unix; on every platform
+/// the collection is deadline-bounded so Execute can never wait forever
+/// (PR24-011). The window tolerates reader-thread descheduling on loaded,
+/// instrumented machines; a reader that keeps consuming bytes is descheduled
+/// rather than stalled, so observed progress extends the window up to the
+/// thirty-second execute deadline instead of failing the command.
 const READER_DRAIN_GRACE: Duration = Duration::from_secs(5);
+
+/// Counts the bytes a pipe reader has consumed.
+///
+/// The drain loop compares consecutive readings to separate a slow reader from
+/// a stalled one: a descendant that inherited the pipes but writes nothing
+/// produces no progress, while a reader on a loaded machine keeps advancing.
+struct ProgressReader<R> {
+    inner: R,
+    progress: Arc<AtomicU64>,
+}
+
+impl<R: std::io::Read> std::io::Read for ProgressReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        progress_add(&self.progress, count);
+        Ok(count)
+    }
+}
+
+/// Records consumed bytes, saturating on the platforms where a single read can
+/// exceed the counter's range.
+fn progress_add(progress: &AtomicU64, count: usize) {
+    let _ = progress.fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed);
+}
 
 fn bounded_output_with_timeout(
     mut child: Child,
@@ -414,20 +440,31 @@ fn bounded_output_with_timeout(
     timeout: Duration,
 ) -> Result<BoundedOutput, &'static str> {
     let child_id = child.id();
+    let stdout_progress = Arc::new(AtomicU64::new(0));
+    let stderr_progress = Arc::new(AtomicU64::new(0));
     let stdout = child.stdout.take().map(|pipe| {
+        let progress = Arc::clone(&stdout_progress);
         thread::spawn(move || {
             let mut output = Vec::new();
-            read_bounded(&mut std::io::BufReader::new(pipe), &mut output)
-                .map(|truncated| (output, truncated))
+            let mut reader = std::io::BufReader::new(ProgressReader {
+                inner: pipe,
+                progress,
+            });
+            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
+        let progress = Arc::clone(&stderr_progress);
         thread::spawn(move || {
             let mut output = Vec::new();
-            read_bounded(&mut std::io::BufReader::new(pipe), &mut output)
-                .map(|truncated| (output, truncated))
+            let mut reader = std::io::BufReader::new(ProgressReader {
+                inner: pipe,
+                progress,
+            });
+            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         })
     });
+    let progress = [&*stdout_progress, &*stderr_progress];
     let deadline = Instant::now() + timeout;
     loop {
         if cancellation.is_cancelled() || Instant::now() >= deadline {
@@ -439,7 +476,9 @@ fn bounded_output_with_timeout(
             let _ = drain_pipes(
                 stdout,
                 stderr,
-                Instant::now() + READER_DRAIN_GRACE,
+                &progress,
+                READER_DRAIN_GRACE,
+                deadline,
                 &cancellation,
             );
             return Err("tool_execute_external_effect_unknown");
@@ -447,11 +486,18 @@ fn bounded_output_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => {
                 // The direct child is reaped, but a descendant may still hold
-                // the output pipes open. Collect until the grace bound; a
-                // stalled drain is killed and classified unknown so Execute
-                // still returns within its deadline.
-                let drain_until = deadline.min(Instant::now() + READER_DRAIN_GRACE);
-                match drain_pipes(stdout, stderr, drain_until, &cancellation) {
+                // the output pipes open. Collect while the readers keep making
+                // progress, within the grace bound; a drain that stalls is
+                // killed and classified unknown so Execute still returns
+                // within its deadline.
+                match drain_pipes(
+                    stdout,
+                    stderr,
+                    &progress,
+                    READER_DRAIN_GRACE,
+                    deadline,
+                    &cancellation,
+                ) {
                     PipeDrain::Complete { stdout, stderr } => {
                         let (stdout, stdout_was_truncated) = stdout?;
                         let (stderr, stderr_was_truncated) = stderr?;
@@ -477,7 +523,9 @@ fn bounded_output_with_timeout(
                 let _ = drain_pipes(
                     stdout,
                     stderr,
-                    Instant::now() + READER_DRAIN_GRACE,
+                    &progress,
+                    READER_DRAIN_GRACE,
+                    deadline,
                     &cancellation,
                 );
                 return Err("tool_execute_external_effect_unknown");
@@ -517,15 +565,27 @@ enum PipeDrain {
     Stalled,
 }
 
-/// Joins both pipe readers until `until`, observing cancellation.
+/// Joins both pipe readers until the stall window or `deadline`, observing
+/// cancellation.
+///
+/// A reader that keeps consuming bytes is descheduled rather than stalled, so
+/// observed progress re-arms the stall window up to `deadline`; a reader that
+/// stops making progress for the whole window is treated as a descendant
+/// holding the pipes open.
 fn drain_pipes(
     mut stdout: Option<ReaderHandle>,
     mut stderr: Option<ReaderHandle>,
-    until: Instant,
+    progress: &[&AtomicU64],
+    stall: Duration,
+    deadline: Instant,
     cancellation: &CancellationSignal,
 ) -> PipeDrain {
-    let mut stdout_result = None;
-    let mut stderr_result = None;
+    // An absent reader is already collected: the joined pair must complete even
+    // when a caller pipes only one of the two streams.
+    let mut stdout_result = stdout.is_none().then_some(Ok((Vec::new(), false)));
+    let mut stderr_result = stderr.is_none().then_some(Ok((Vec::new(), false)));
+    let mut observed = total_progress(progress);
+    let mut until = (Instant::now() + stall).min(deadline);
     loop {
         if let Some(handle) = stdout.take() {
             if handle.is_finished() {
@@ -541,13 +601,81 @@ fn drain_pipes(
                 stderr = Some(handle);
             }
         }
-        if let (Some(stdout), Some(stderr)) = (stdout_result.take(), stderr_result.take()) {
-            return PipeDrain::Complete { stdout, stderr };
+        match (stdout_result.take(), stderr_result.take()) {
+            (Some(stdout), Some(stderr)) => return PipeDrain::Complete { stdout, stderr },
+            partial => {
+                // Both readers must be collected before the drain completes, so
+                // a partially collected pair keeps its gathered side.
+                (stdout_result, stderr_result) = partial;
+            }
         }
         if cancellation.is_cancelled() || Instant::now() >= until {
             return PipeDrain::Stalled;
         }
         thread::sleep(Duration::from_millis(5));
+        let current = total_progress(progress);
+        if current > observed {
+            observed = current;
+            until = (Instant::now() + stall).min(deadline);
+        }
+    }
+}
+
+/// Sums the bytes the pipe readers have consumed so far.
+fn total_progress(progress: &[&AtomicU64]) -> u64 {
+    progress
+        .iter()
+        .map(|counter| counter.load(Ordering::Relaxed))
+        .sum()
+}
+
+#[cfg(test)]
+mod drain_progress_tests {
+    use super::*;
+
+    #[test]
+    fn reader_progress_extends_the_drain_beyond_the_stall_window() {
+        let progress = Arc::new(AtomicU64::new(0));
+        let writer = Arc::clone(&progress);
+        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            // Bytes keep arriving well past the stall window: the loaded-machine
+            // descheduling case that must not be classified as a stalled drain.
+            for _ in 0..8 {
+                thread::sleep(Duration::from_millis(20));
+                progress_add(&writer, 64);
+            }
+            Ok((vec![b'x'; 64], false))
+        });
+        let drain = drain_pipes(
+            Some(handle),
+            None,
+            &[&*progress],
+            Duration::from_millis(50),
+            Instant::now() + Duration::from_secs(5),
+            &CancellationSignal::new(),
+        );
+        assert!(matches!(drain, PipeDrain::Complete { .. }));
+    }
+
+    #[test]
+    fn reader_without_progress_stalls_at_the_window() {
+        let progress = Arc::new(AtomicU64::new(0));
+        let handle = thread::spawn(move || -> Result<(Vec<u8>, bool), &'static str> {
+            // Alive and silent, like a descendant that inherited the pipes.
+            thread::sleep(Duration::from_secs(30));
+            Ok((Vec::new(), false))
+        });
+        let started = Instant::now();
+        let drain = drain_pipes(
+            Some(handle),
+            None,
+            &[&*progress],
+            Duration::from_millis(50),
+            started + Duration::from_secs(30),
+            &CancellationSignal::new(),
+        );
+        assert!(matches!(drain, PipeDrain::Stalled));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
 
