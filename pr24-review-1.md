@@ -4199,6 +4199,93 @@ the 31 pre-Slice-2 invariant DTOs, the typed tool-name bridge, and the
 `incompatible_protocol_version` category nuance (Validation in protocol and client,
 Unavailable in transport).
 
+## Appendix I — Wave V2 verification outcome
+
+Six read-only verifiers (slices A–F, no builds, JSON reports at
+`target/verify-w2-{a..f}.json`) checked the committed W2 stack `ab8cfdc..fbc0fb8`.
+The controller gates on the same head are `make quick` (1090 passed, 2 skipped,
+rustfmt and clippy clean), `make docs-check`, and a live `make e2e-real-api` run
+(2 passed in 30.53 s, recorded in EVD-063).
+
+### I.1 Verdicts
+
+| Slice | Commits | Items | Verdict |
+| --- | --- | --- | --- |
+| A — storage boundary | `5722852` | D-07 (`P2-10`, `P3-21`), D-05 (`P2-13`), A5 (`P2-11`, `P3-15`), `P3-14`, `P3-16`, R1, R3, R10, R11 | all implemented; 4 P3 |
+| B — capability gate and hello | `64088cd`, `dd3be15` | D-03 (`P2-05`), A1 (`P1-02`), R14 | implemented; R6 partial (3 P3) |
+| C — startup | `fa9f0c8` | E6 (`P3-29`), E7 (`P3-27`), R5b, R12, R13 | implemented; D-02 partial (2 P2, 3 P3) |
+| D — domain and codecs | `58ba4a6`, `dd3be15` | E1 (`P3-03`), E4 (`P3-04`), `P2-01`, `P3-01`, `P3-05`, `P3-06`, R2, R4 | all implemented (3 P3) |
+| E — queue and session events | `219a8bc`, `dd3be15` | D-11 (`P2-04`), R5a, R15 | implemented; `P3-17` and `P3-18` partial (1 P2, 3 P3) |
+| F — transport, harness, runtime | `f5c7b44`, `0cd0a03`, `fbc0fb8` | D-06 (`P2-14`), R8, R9, D-15 (`P3-32`) | implemented; R7 partial (5 P3) |
+
+No P0 or P1 defects were found. Three P2 findings remain (two D-02 residuals,
+one `P3-18` delivery question) and 21 P3 findings, all routed below.
+
+### I.2 Adjudications
+
+- **J-01.** D-02's two residuals are in scope now: startup must not deadlock on
+  its own durable pending removal until expiry, and endpoint removal must be
+  two-directional (R16, R17).
+- **J-02.** `P3-18` stands as a workflow-boundary publication: the composition
+  validates the committed event and keeps no durable copy, because Slice 2 has
+  no durable append seam for the control-plane event family. The concept and
+  architecture promises are corrected to that behavior, and durable delivery is
+  parked with an explicit anchor (R18, R19); no durable copy is fabricated.
+- **J-03.** The harness budget claim is recomputed (about 82 minutes worst case
+  on the current constants, not 66) and the CI relation is re-declared with a
+  self-test that fails when a constant and the declared budget diverge (R20).
+- **J-04.** The `P3-17` provenance constant stays storage-side and is documented
+  and guarded rather than re-introduced as a wire field (R22).
+- **J-05.** History is not rewritten for commit-message or bundling deviations
+  (`64088cd`, `219a8bc`, `9056b83`); each deviation is recorded here instead.
+- **J-06.** R6's "follow-up card" pointer is anchored to the register parking
+  list rather than left as prose (R23).
+- **J-07.** A1's negative path is completed with a real-client gated command
+  probe, and the unit assertion names the exact rejection code (R24).
+- **J-08.** The domain validator rejects malformed authority hosts instead of
+  only empty ones (R25).
+- **J-09.** Appendix H's sentence "63 canonical bytes" is corrected: the parent
+  already counted characters; the deviation was the bound value (63 versus 256)
+  (R27).
+- **J-10.** R7's gap is closed or documented with an anchor, `kill_daemon` is
+  bounded, and the write-turn fixture reseeds its target file (R28–R30).
+- **J-11.** The D-05 residual (a post-commit registry activation can still fail
+  on a poisoned lock) is repaired as an invariant path, not documented away
+  (R32).
+
+### I.3 Repair routing
+
+| R | Finding | Repair | Owner |
+| --- | --- | --- | --- |
+| R16 | D-02 residual | Recover a durable pending removal at startup instead of returning `provider_catalog_removal_pending_exists` until expiry | W3-C |
+| R17 | D-02 residual | Make the endpoint comparison two-directional so a dropped declared endpoint re-derives | W3-A |
+| R18 | `P3-18` / docs | Correct `architecture/29` and `m4plus_concept` to the validated boundary publication with no durable copy | W3-E |
+| R19 | `P3-18` / D-16 | Anchor the durable session-event delivery as a declared future slice in the audit | W3-F |
+| R20 | harness budget | Recompute the declared budget, keep the step and job relation true, and add a self-test binding constants to the declared budget | W3-G |
+| R21 | D-07 residual | Strengthen the opaque-boundary guard (`serde_json::Value`, suffixed and differently named string fields) and fail closed on an unreadable subtree | W3-D |
+| R22 | `P3-17` residual | Document the storage-side provenance literal and guard it against wire re-introduction | W3-C |
+| R23 | R6 residual | Anchor the pre-Slice-2 DTO follow-up in `architecture/02` to the register parking list | W3-E |
+| R24 | A1 residual | Add a real-client gated command rejection probe and assert the exact rejection code | W3-G |
+| R25 | E1 residual | Reject non-empty malformed authority hosts (`https://]/v1`, `https://[::1]]/v1`, backslash hosts) | W3-A |
+| R26 | D-07 item 5 | Extend the EVD-060 row to the typed boundary it now describes | W3-E |
+| R27 | register wording | Correct Appendix H's unit sentence; record the V2 verdicts in the register tail | W3-E |
+| R28 | R7 residual | Bound or explicitly document the non-Unix synchronous I/O path with an anchor | W3-G |
+| R29 | R7 residual | Bound the `kill_daemon` fallback wait | W3-G |
+| R30 | R9 residual | Reseed the write-turn target file so a stale artifact cannot satisfy the effect | W3-G |
+| R31 | R11 residual | Align the state-and-config storage trait doc with the snapshot query's actual error mapping | W3-D |
+| R32 | D-05 residual | Make the post-commit registry activation infallible or pre-validate before the durable accept | W3-C |
+| R33 | E7 residual | Replace the tautological agreement assertion or drive `CompositionDriverRebuildPort` | W3-A |
+| R34 | E7 residual | Have the startup fixtures call `open_platform` instead of re-implementing its sequence | W3-A |
+| R35 | R4 residual | Fail the source guard closed on an unreadable subtree and record its scan limits | W3-A |
+| R36 | V2 uncertainty | Audit the `provider_profile_tombstoned` wire mappings with no remaining producer: declare or delete | W3-F |
+| R37 | V2 finding | Collapse the duplicated id-to-kind mapping (config serde versus the composition array) into one owner | W3-A |
+| R38 | E6 residual | Pin the private activation signature with a source guard or record the accepted limit | W3-A |
+
+Parked with owners after V2: the daemon-side incoming subscription version check,
+the 31 pre-Slice-2 invariant DTOs (R23 anchor), the typed tool-name bridge, the
+`incompatible_protocol_version` category nuance, and the durable
+`SessionProviderProfileChanged` append layer (R19 anchor).
+
 End of register.
 
 <!-- pr24-review-1: complete -->
