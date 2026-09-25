@@ -1079,6 +1079,11 @@ credential = \"{credential}\"
             Some("https://]/v1"),
             Some("https://[::1]]/v1"),
             Some("https://exa\\\\mple.com/v1"),
+            // R48: an unbracketed authority with a non-numeric port and a
+            // host carrying a non-breaking space (U+00A0) name no reachable
+            // host; the config layer reports the domain validator's verdict.
+            Some("https://api.example.com:notaport/v1"),
+            Some("https://exa\u{a0}mple.com/v1"),
         ] {
             let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
                 v1(

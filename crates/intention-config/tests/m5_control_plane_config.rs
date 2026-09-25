@@ -712,6 +712,54 @@ fn validation_collects_typed_issues_for_malformed_v1_documents() {
 }
 
 #[test]
+fn candidate_kind_validation_consumes_the_single_id_owner() {
+    // R50: the raw-candidate field validator resolves ids through
+    // `ProviderKindDto::from_id` instead of a second literal list, so every id
+    // the single owner carries is accepted and an unregistered id is rejected
+    // at the field. A reintroduced literal list that drifts from
+    // `ProviderKindDto::ALL` fails this fixture as soon as the owner gains a
+    // kind.
+    let previous = snapshot(
+        &v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),
+        "12121212-1212-4212-8212-121212121212",
+    );
+    for kind in ProviderKindDto::ALL {
+        let parsed = candidate(
+            &v1(kind.as_str(), "fixture", FAKE_CREDENTIAL, None, ""),
+            &previous,
+        );
+        assert!(
+            !parsed
+                .validation()
+                .issues()
+                .iter()
+                .any(|issue| issue.code() == "invalid_provider_kind"),
+            "the single id owner's kind {} must be accepted",
+            kind.as_str()
+        );
+    }
+    let unregistered = candidate(
+        &v1(
+            "not-a-registered-kind",
+            "fixture",
+            FAKE_CREDENTIAL,
+            None,
+            "",
+        ),
+        &previous,
+    );
+    assert!(
+        unregistered
+            .validation()
+            .issues()
+            .iter()
+            .any(|issue| issue.code() == "invalid_provider_kind"
+                && issue.field() == Some("provider.kind")),
+        "an id outside the single owner is rejected with the field-level issue"
+    );
+}
+
+#[test]
 fn validation_collects_typed_issues_for_unversioned_documents() {
     let previous = snapshot(
         &v1("openrouter", "fixture", FAKE_CREDENTIAL, None, ""),

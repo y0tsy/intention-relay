@@ -584,15 +584,20 @@ fn collect_v1_issues(table: &toml::Table, issues: &mut Vec<CandidateIssueDto>) {
 }
 
 /// Validates a provider kind value against the closed kind set.
+///
+/// The accepted ids are exactly [`ProviderKindDto::ALL`] through
+/// [`ProviderKindDto::from_id`], so this field-level validator consumes the
+/// single id-to-kind owner instead of keeping a second list that can drift
+/// (R37, R50).
 fn validate_provider_kind(
     value: Option<&toml::Value>,
     field: &str,
     issues: &mut Vec<CandidateIssueDto>,
 ) {
-    let supported = matches!(
-        value.and_then(toml::Value::as_str),
-        Some("openrouter") | Some("generic-chat-completion-api")
-    );
+    let supported = value
+        .and_then(toml::Value::as_str)
+        .and_then(ProviderKindDto::from_id)
+        .is_some();
     if !supported {
         issues.push(CandidateIssueDto::new(
             "invalid_provider_kind",

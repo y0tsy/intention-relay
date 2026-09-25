@@ -143,9 +143,10 @@ pub fn validate_profile_id(profile_id: &str) -> Result<(), CanonicalError> {
 /// The endpoint must be absolute HTTPS or HTTP with a non-empty, well-formed
 /// host and no userinfo, query, fragment, control characters, whitespace, or
 /// malformed percent escapes. A non-empty authority with a stray or nested
-/// bracket, a backslash in the host, or a non-numeric port after a bracketed
-/// host names no reachable host and is rejected (R25). Raw or secret-bearing
-/// URL input is never public or durable identity.
+/// bracket, a backslash in the host, an empty or non-numeric port, or a
+/// Unicode whitespace character such as a non-breaking space names no
+/// reachable host and is rejected (R25, R48). Raw or secret-bearing URL input
+/// is never public or durable identity.
 ///
 /// # Errors
 ///
@@ -210,13 +211,19 @@ fn authority_host_is_empty(rest: &str) -> bool {
 ///
 /// A malformed authority is non-empty but names no reachable host: it carries
 /// a stray or nested bracket (`https://]/v1`, `https://[::1]]/v1`), a
-/// backslash in the host, an empty or interior-bracketed bracketed host, or a
-/// bracketed host followed by anything other than an optional numeric port.
-/// The endpoint policy rejects these shapes instead of passing them on as
-/// execution metadata (R25).
+/// backslash in the host, an empty or interior-bracketed bracketed host, a
+/// bracketed host followed by anything other than an optional numeric port,
+/// an unbracketed host followed by anything other than an optional numeric
+/// port (`https://api.example.com:notaport/v1`), or a Unicode whitespace
+/// character such as a non-breaking space that the ASCII whitespace scan
+/// cannot see (`https://exa\u{a0}mple.com/v1`). The endpoint policy rejects
+/// these shapes instead of passing them on as execution metadata (R25, R48).
 #[must_use]
 fn authority_host_is_malformed(rest: &str) -> bool {
     let authority = rest.split('/').next().unwrap_or_default();
+    if authority.chars().any(char::is_whitespace) {
+        return true;
+    }
     if let Some(bracketed) = authority.strip_prefix('[') {
         let Some((host, remainder)) = bracketed.split_once(']') else {
             return true;
@@ -229,7 +236,12 @@ fn authority_host_is_malformed(rest: &str) -> bool {
                 !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
             }));
     }
-    authority.contains(['[', ']', '\\'])
+    let (host, port) = authority
+        .split_once(':')
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    host.contains(['[', ']', '\\'])
+        || port
+            .is_some_and(|port| port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Whether the authority of an `http://` endpoint is a literal loopback host.
@@ -1460,6 +1472,12 @@ mod tests {
             ("https://[::1]]/v1", "invalid_endpoint"),
             ("https://exa\\mple.com/v1", "invalid_endpoint"),
             ("https://[::1]suffix/v1", "invalid_endpoint"),
+            // R48: an unbracketed authority with a non-numeric or empty port
+            // and a host carrying a non-breaking space (U+00A0, which the
+            // ASCII whitespace scan cannot see) name no reachable host.
+            ("https://api.example.com:notaport/v1", "invalid_endpoint"),
+            ("https://api.example.com:/v1", "invalid_endpoint"),
+            ("https://exa\u{a0}mple.com/v1", "invalid_endpoint"),
             // HTTPS is required; plaintext HTTP is only tolerated for
             // literal-loopback endpoints (PR24-055).
             ("http://api.example.com/v1", "invalid_endpoint"),
