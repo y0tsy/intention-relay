@@ -25,9 +25,9 @@ pub use model_facts::{
     ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
     RunSnapshotDto, ToolResultOutcomeDto,
 };
-// The DtoResult reasoning-output bound helper lives in `model_facts`; it is
-// re-exported under this alias because `reasoning_history` already re-exports
-// the canonical `Result<(), CanonicalError>` variant under the same name.
+// The DtoResult reasoning-output bound helper lives in `model_facts`; this
+// alias is the single live reasoning-output bound and the name the durable
+// append authority calls.
 pub use model_facts::validate_reasoning_output_bound as validate_reasoning_fact_output_bound;
 
 pub use context_projection::{
@@ -46,10 +46,8 @@ pub use provider_selection::{
     ModelInputCapability, ProviderSelectionV1, ReasoningCapability, StructuredOutputCapability,
 };
 pub use reasoning_history::{
-    ReasoningDeltaCategory, ReasoningDeltaDto, ReasoningHistoryBound, ReasoningHistoryManifestDto,
-    ReasoningSummaryDeltaDto, reasoning_history_manifest_digest, validate_reasoning_dialect,
-    validate_reasoning_history_available, validate_reasoning_history_compatibility,
-    validate_reasoning_output_bound,
+    ReasoningDeltaCategory, ReasoningHistoryBound, ReasoningHistoryManifestDto,
+    reasoning_history_manifest_digest,
 };
 
 /// The agent policy active for a run.
@@ -592,10 +590,24 @@ impl SessionProjectionDto {
     }
 }
 
+/// Deserializes one current optional wire field that must be present.
+///
+/// The wire shape carries the key, and `null` means "no value". Serde treats a
+/// bare `Option` field as absent-tolerant, so this helper keeps the field
+/// required: a `deserialize_with` field is never defaulted, and a missing key
+/// is a decode error.
+fn deserialize_required_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
+}
+
 /// A command requesting that the daemon accept a new user turn.
 ///
-/// The per-turn provider override fields are additive: a legacy command that
-/// omits them deserializes with both absent, and the three-argument
+/// The per-turn provider override fields are optional current wire fields:
+/// the wire shape carries both keys, a `null` value means "no override", and a
+/// document that omits a key is a decode error. The three-argument
 /// [`Self::new`] constructor keeps producing override-free commands.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SendUserTurnCommandDto {
@@ -616,9 +628,9 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
             session_id: SessionId,
             turn_id: TurnId,
             content: String,
-            #[serde(default)]
+            #[serde(deserialize_with = "deserialize_required_optional_string")]
             profile_override: Option<String>,
-            #[serde(default)]
+            #[serde(deserialize_with = "deserialize_required_optional_string")]
             expected_profile_revision: Option<String>,
         }
 

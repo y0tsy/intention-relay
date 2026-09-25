@@ -764,6 +764,10 @@ fn provider_profile_rejects_endpoint_userinfo_query_fragment() {
         "https://api.example.com/v1?x=1",
         "https://api.example.com/v1#x",
         "https://api.example.com/\x01",
+        // An absolute endpoint without a host cannot ever connect, so it is
+        // rejected at admission instead of inside a provider driver (E1).
+        "https:///v1",
+        "https://:8080/v1",
     ] {
         let mut profile = profile_revision();
         profile.endpoint = endpoint.to_owned();
@@ -777,6 +781,7 @@ fn provider_profile_rejects_endpoint_userinfo_query_fragment() {
         );
     }
     assert!(validate_endpoint("https://api.openai.com/v1").is_ok());
+    assert!(validate_endpoint("https://api.example.com:8443/v1").is_ok());
 }
 
 #[test]
@@ -841,9 +846,14 @@ fn credential_transport_never_encodes_secret_value() {
 // ---- Limits ----
 
 #[test]
-fn provider_ids_are_limited_to_63_characters() {
+fn provider_ids_are_limited_to_256_characters() {
+    assert_eq!(
+        intention_domain::provider_catalog::MAX_PROVIDER_ID_CHARS,
+        256,
+        "the canonical identifier bound is the single number ADR 0037 promises"
+    );
     let mut profile = profile_revision();
-    profile.profile_id = "p".repeat(64);
+    profile.profile_id = "p".repeat(257);
     assert_eq!(
         profile
             .encode()
@@ -851,10 +861,10 @@ fn provider_ids_are_limited_to_63_characters() {
             .code(),
         "provider_profile_revision_invalid"
     );
-    profile.profile_id = "p".repeat(63);
+    profile.profile_id = "p".repeat(256);
     assert!(profile.encode().is_ok());
     let mut selection = provider_selection();
-    selection.profile_id = "p".repeat(64);
+    selection.profile_id = "p".repeat(257);
     assert_eq!(
         selection
             .encode()
@@ -863,7 +873,7 @@ fn provider_ids_are_limited_to_63_characters() {
         "provider_profile_revision_invalid"
     );
     let mut kind = kind_descriptor();
-    kind.kind_id = "k".repeat(64);
+    kind.kind_id = "k".repeat(257);
     assert_eq!(
         kind.encode()
             .expect_err("over-limit kind id is rejected")
@@ -873,14 +883,15 @@ fn provider_ids_are_limited_to_63_characters() {
 }
 
 #[test]
-fn provider_id_bounds_count_characters_not_bytes() {
-    // A multi-byte identifier inside the documented bound is 126 bytes but 63
-    // characters, so the profile record, the selection record, and the kind id
-    // validator must all accept it; one character more must fail closed.
-    let inside = "\u{e9}".repeat(63);
-    let outside = "\u{e9}".repeat(64);
-    assert_eq!(inside.chars().count(), 63);
-    assert_eq!(inside.len(), 126);
+fn provider_id_bound_counts_characters_at_the_canonical_layer() {
+    // The canonical record counts characters and enforces the same 256 the
+    // public wire DTO already enforces, so one value cannot pass one boundary
+    // and fail the other. A 256-character multi-byte identifier is 512 bytes
+    // and is accepted; 257 characters fail closed.
+    let inside = "\u{e9}".repeat(256);
+    let outside = "\u{e9}".repeat(257);
+    assert_eq!(inside.chars().count(), 256);
+    assert_eq!(inside.len(), 512);
 
     let mut profile = profile_revision();
     profile.profile_id = inside.clone();
@@ -889,7 +900,43 @@ fn provider_id_bounds_count_characters_not_bytes() {
     assert_eq!(
         profile
             .encode()
-            .expect_err("a 64-character multi-byte profile id is rejected")
+            .expect_err("a 257-character multi-byte profile id is rejected")
+            .code(),
+        "provider_profile_revision_invalid"
+    );
+
+    let mut profile = profile_revision();
+    profile.revision_id = inside.clone();
+    assert!(profile.encode().is_ok());
+    profile.revision_id = outside.clone();
+    assert_eq!(
+        profile
+            .encode()
+            .expect_err("a 257-character multi-byte revision id is rejected")
+            .code(),
+        "provider_profile_revision_invalid"
+    );
+
+    let mut profile = profile_revision();
+    profile.provider_kind_id = inside.clone();
+    assert!(profile.encode().is_ok());
+    profile.provider_kind_id = outside.clone();
+    assert_eq!(
+        profile
+            .encode()
+            .expect_err("a 257-character multi-byte kind id is rejected")
+            .code(),
+        "invalid_provider_kind"
+    );
+
+    let mut profile = profile_revision();
+    profile.model_id = inside.clone();
+    assert!(profile.encode().is_ok());
+    profile.model_id = outside.clone();
+    assert_eq!(
+        profile
+            .encode()
+            .expect_err("a 257-character multi-byte model id is rejected")
             .code(),
         "provider_profile_revision_invalid"
     );
@@ -901,7 +948,7 @@ fn provider_id_bounds_count_characters_not_bytes() {
     assert_eq!(
         selection
             .encode()
-            .expect_err("a 64-character multi-byte selection id is rejected")
+            .expect_err("a 257-character multi-byte selection id is rejected")
             .code(),
         "provider_profile_revision_invalid"
     );
@@ -909,7 +956,7 @@ fn provider_id_bounds_count_characters_not_bytes() {
     assert!(validate_provider_kind_id(&inside).is_ok());
     assert_eq!(
         validate_provider_kind_id(&outside)
-            .expect_err("a 64-character multi-byte kind id is rejected")
+            .expect_err("a 257-character multi-byte kind id is rejected")
             .code(),
         "invalid_provider_kind"
     );
@@ -923,9 +970,31 @@ fn no_competing_selection_digest_computation_exists() {
         "the workspace source tree must be readable"
     );
     // This guard necessarily names the shapes it forbids, so it skips itself.
+    // Its matches are literal: it finds the exact text `ir-selection-v1` and
+    // the exact call prefix `for_namespace("provider-selection"`. A producer
+    // written with different quoting or whitespace, assembled from
+    // concatenated fragments, or generated by a macro is outside the guard's
+    // literal shape and would not be reported here. The guard scans every
+    // `.rs` file under the repository root except the build `target`
+    // directory and this file.
     let guard = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("m5_control_plane_canonical.rs");
+    // R4: the scan starts at the repository root, so a Rust source outside the
+    // crate tree is covered, while the build `target` directory is not.
+    let crates_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the domain crate lives under the workspace crates directory");
+    assert!(
+        sources.iter().any(|path| !path.starts_with(crates_root)),
+        "the guard must scan beyond the workspace crates directory: {sources:?}"
+    );
+    assert!(
+        !sources.iter().any(|path| path
+            .components()
+            .any(|component| component.as_os_str() == "target")),
+        "the guard must exclude the build target directory: {sources:?}"
+    );
     let ad_hoc = "ir-selection-".to_owned() + "v1";
     let producer = "for_namespace(\"provider-selection\"";
     let mut offenders: Vec<String> = Vec::new();
@@ -950,7 +1019,74 @@ fn no_competing_selection_digest_computation_exists() {
     );
 }
 
-/// Returns every `.rs` source path under the workspace `crates` directory.
+#[test]
+fn removed_domain_surfaces_do_not_reappear() {
+    let sources = workspace_rust_sources();
+    assert!(
+        !sources.is_empty(),
+        "the repository source tree must be readable"
+    );
+    let guard = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("m5_control_plane_canonical.rs");
+    // P2-01 removed the unconsumed reasoning DTO/validator surface, P3-01
+    // removed the provider-native dialect table, and P3-05 removed the stale
+    // tombstone wording. The matches below are exact literals, so a renamed
+    // reintroduction is outside the guard's shape. The guard scans every `.rs`
+    // file under the repository root except the build `target` directory and
+    // this file, which necessarily names the removed identifiers.
+    let removed_identifiers = [
+        "ReasoningDeltaDto",
+        "ReasoningSummaryDeltaDto",
+        "validate_reasoning_dialect",
+        "validate_reasoning_history_available",
+        "validate_reasoning_history_compatibility",
+        "REASONING_DIALECT_VALUES",
+        "permanent safe identity record",
+    ];
+    let removed_dialect_paths = [
+        "reasoning_details[].message.thinking",
+        "reasoning_details[].text",
+        "thinking_token_budget",
+    ];
+    let domain_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut offenders: Vec<String> = Vec::new();
+    let mut bound_definitions: Vec<String> = Vec::new();
+    for path in sources.into_iter().filter(|path| path != &guard) {
+        let text = std::fs::read_to_string(&path).expect("repository source is UTF-8");
+        for forbidden in removed_identifiers {
+            if text.contains(forbidden) {
+                offenders.push(format!("{}: {forbidden}", path.display()));
+            }
+        }
+        if path.starts_with(domain_root) {
+            for forbidden in removed_dialect_paths {
+                if text.contains(forbidden) {
+                    offenders.push(format!("{}: {forbidden}", path.display()));
+                }
+            }
+        }
+        if text.contains("fn validate_reasoning_output_bound") {
+            bound_definitions.push(path.display().to_string());
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "removed domain surfaces must not reappear: {offenders:?}"
+    );
+    assert_eq!(
+        bound_definitions.len(),
+        1,
+        "exactly one reasoning-output bound function may exist: {bound_definitions:?}"
+    );
+    assert!(
+        bound_definitions[0].ends_with("model_facts.rs"),
+        "the single reasoning-output bound must be the durable append authority's: {bound_definitions:?}"
+    );
+}
+
+/// Returns every `.rs` source path under the repository root except the build
+/// `target` directory.
 fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
     fn collect(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(directory) else {
@@ -959,6 +1095,9 @@ fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "target") {
+                    continue;
+                }
                 collect(&path, found);
             }
             if path.extension() == Some(std::ffi::OsStr::new("rs")) {
@@ -966,11 +1105,12 @@ fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
             }
         }
     }
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the domain crate lives under the workspace crates directory");
+        .and_then(std::path::Path::parent)
+        .expect("the domain crate lives two levels under the repository root");
     let mut found = Vec::new();
-    collect(crates, &mut found);
+    collect(repository, &mut found);
     found
 }
 
@@ -1186,6 +1326,31 @@ fn provider_profile_tombstones_are_append_only_removal_history() {
             .expect_err("immutable part change is rejected")
             .code(),
         "provider_kind_immutable_mismatch"
+    );
+}
+
+#[test]
+fn profile_and_kind_tombstones_share_one_framing_codec() {
+    // P3-06: both tombstone families delegate to one codec, so equivalent
+    // fields produce identical framing bytes and identity digests.
+    let profile = ProviderProfileTombstoneDto::new("shared-identifier", 3, 100, "removal-accepted")
+        .expect("profile tombstone is valid");
+    let kind = ProviderKindTombstoneDto::new("shared-identifier", 3, 100, "removal-accepted")
+        .expect("kind tombstone is valid");
+    let profile_bytes = profile.encode().expect("profile tombstone encodes");
+    let kind_bytes = kind.encode().expect("kind tombstone encodes");
+    assert_eq!(
+        profile_bytes, kind_bytes,
+        "both tombstone families must frame the same fields identically"
+    );
+    assert_eq!(
+        profile.digest, kind.digest,
+        "both tombstone families must derive the identity digest from the shared framing"
+    );
+    assert_eq!(
+        ProviderKindTombstoneDto::decode(&profile_bytes)
+            .expect("the shared codec decodes the profile framing"),
+        kind
     );
 }
 

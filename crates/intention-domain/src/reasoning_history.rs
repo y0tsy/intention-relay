@@ -1,5 +1,5 @@
-//! Normalized reasoning deltas, summaries, and the typed cross-turn reasoning
-//! history manifest.
+//! The normalized reasoning fragment category and the typed cross-turn
+//! reasoning history manifest.
 //!
 //! Reasoning manifests are immutable references to completed compatible source
 //! responses; they never carry reasoning text, credentials, or current state.
@@ -13,18 +13,6 @@ use crate::canonical::{
 /// The fixed combined canonical reasoning output/history bound of one run.
 pub const MAX_REASONING_AGGREGATE_BYTES: u64 = 4 * 1024 * 1024;
 
-/// The closed textual reasoning dialect values a descriptor may declare.
-pub const REASONING_DIALECT_VALUES: [&str; 8] = [
-    "reasoning_content",
-    "reasoning",
-    "reasoning_details[].text",
-    "reasoning_details[].message.thinking",
-    "thinking",
-    "reasoning_effort",
-    "thinking_budget",
-    "thinking_token_budget",
-];
-
 /// The closed reasoning fragment category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReasoningDeltaCategory {
@@ -32,44 +20,6 @@ pub enum ReasoningDeltaCategory {
     Primary,
     /// A separate detailed reasoning representation.
     Detail,
-}
-
-/// One normalized reasoning fragment.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReasoningDeltaDto {
-    pub category: ReasoningDeltaCategory,
-    pub content: String,
-}
-
-impl ReasoningDeltaDto {
-    /// Validates one normalized reasoning fragment.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CanonicalError::ProviderReasoningStreamInvalid` when the
-    /// content is blank or carries control characters.
-    pub fn validate(&self) -> Result<(), CanonicalError> {
-        validate_reasoning_content(&self.content)
-    }
-}
-
-/// One normalized reasoning summary, distinct from reasoning and never raw
-/// chain-of-thought.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReasoningSummaryDeltaDto {
-    pub content: String,
-}
-
-impl ReasoningSummaryDeltaDto {
-    /// Validates one normalized reasoning summary.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CanonicalError::ProviderReasoningStreamInvalid` when the
-    /// content is blank or carries control characters.
-    pub fn validate(&self) -> Result<(), CanonicalError> {
-        validate_reasoning_content(&self.content)
-    }
 }
 
 /// The closed per-run reasoning history bounds.
@@ -248,73 +198,6 @@ impl ReasoningHistoryManifestDto {
     }
 }
 
-/// Validates one closed reasoning dialect value.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::ProviderReasoningStreamInvalid` when `value` is
-/// not one of the closed dialect values.
-pub fn validate_reasoning_dialect(value: &str) -> Result<(), CanonicalError> {
-    if REASONING_DIALECT_VALUES.contains(&value) {
-        Ok(())
-    } else {
-        Err(CanonicalError::ProviderReasoningStreamInvalid)
-    }
-}
-
-/// Validates that every required reasoning history reference is available.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::ReasoningHistoryUnavailable` when a required
-/// entry is missing from the available material.
-pub fn validate_reasoning_history_available(
-    required_entries: &[String],
-    available_entries: &[String],
-) -> Result<(), CanonicalError> {
-    if required_entries
-        .iter()
-        .any(|required| !available_entries.contains(required))
-    {
-        return Err(CanonicalError::ReasoningHistoryUnavailable);
-    }
-    Ok(())
-}
-
-/// Validates that required and available reasoning history are compatible.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::ReasoningHistoryIncompatible` when the required
-/// and available compatibility identities differ.
-pub fn validate_reasoning_history_compatibility(
-    required: &str,
-    available: &str,
-) -> Result<(), CanonicalError> {
-    if required != available {
-        return Err(CanonicalError::ReasoningHistoryIncompatible);
-    }
-    Ok(())
-}
-
-/// Validates that appending one reasoning fragment stays within the fixed
-/// per-run output bound.
-///
-/// # Errors
-///
-/// Returns `CanonicalError::ReasoningOutputLimitExceeded` when the fragment
-/// would push the aggregate over `MAX_REASONING_AGGREGATE_BYTES` or when the
-/// aggregate addition itself overflows `u64`.
-pub const fn validate_reasoning_output_bound(
-    current_aggregate_bytes: u64,
-    fragment_len: u64,
-) -> Result<(), CanonicalError> {
-    match current_aggregate_bytes.checked_add(fragment_len) {
-        Some(total) if total <= MAX_REASONING_AGGREGATE_BYTES => Ok(()),
-        _ => Err(CanonicalError::ReasoningOutputLimitExceeded),
-    }
-}
-
 /// Computes the namespaced reasoning-history-manifest digest over the
 /// identity-bearing fields only; the manifest digest field is excluded by
 /// construction.
@@ -333,14 +216,6 @@ pub fn reasoning_history_manifest_digest(
         .field(4, WireType::Utf8, encode_utf8(&manifest.transfer_policy))?
         .field(5, WireType::Record, manifest.history_bound.encode()?)?;
     Digest256::for_namespace("reasoning-history-manifest", &input.encode()?)
-}
-
-/// Validates one reasoning content value.
-fn validate_reasoning_content(content: &str) -> Result<(), CanonicalError> {
-    if content.trim().is_empty() || contains_control_or_nul(content) {
-        return Err(CanonicalError::ProviderReasoningStreamInvalid);
-    }
-    Ok(())
 }
 
 /// Validates manifest entries against the declared bound.
@@ -511,59 +386,6 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_dialect_is_closed_and_history_rules_are_enforced() {
-        for value in REASONING_DIALECT_VALUES {
-            assert!(validate_reasoning_dialect(value).is_ok(), "dialect {value}");
-        }
-        assert_eq!(
-            validate_reasoning_dialect("raw_thoughts")
-                .expect_err("unknown dialect is rejected")
-                .code(),
-            "provider_reasoning_stream_invalid"
-        );
-        assert_eq!(
-            validate_reasoning_history_compatibility("a", "b")
-                .expect_err("compatibility mismatch is rejected")
-                .code(),
-            "reasoning_history_incompatible"
-        );
-        assert!(validate_reasoning_history_compatibility("a", "a").is_ok());
-        assert_eq!(
-            validate_reasoning_history_available(
-                &["required-ref".to_owned()],
-                &["other-ref".to_owned()],
-            )
-            .expect_err("missing material is unavailable")
-            .code(),
-            "reasoning_history_unavailable"
-        );
-        assert!(
-            validate_reasoning_history_available(
-                &["required-ref".to_owned()],
-                &["required-ref".to_owned()],
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            validate_reasoning_output_bound(MAX_REASONING_AGGREGATE_BYTES, 1)
-                .expect_err("over-limit fragment is rejected")
-                .code(),
-            "reasoning_output_limit_exceeded"
-        );
-        assert_eq!(
-            validate_reasoning_output_bound(u64::MAX, 1)
-                .expect_err("overflowing aggregate is rejected")
-                .code(),
-            "reasoning_output_limit_exceeded"
-        );
-        assert!(validate_reasoning_output_bound(0, 1).is_ok());
-        assert!(
-            validate_reasoning_output_bound(MAX_REASONING_AGGREGATE_BYTES - 1, 1).is_ok(),
-            "an exact-bound aggregate must be accepted"
-        );
-    }
-
-    #[test]
     fn reasoning_bound_decode_rejects_entries_outside_u32() {
         // A raw `max_entries` value above `u32::MAX` must fail closed instead
         // of silently truncating to a different bound on decode.
@@ -607,29 +429,5 @@ mod tests {
                 max_aggregate_bytes: 1,
             }
         );
-    }
-
-    #[test]
-    fn reasoning_deltas_and_summaries_validate_closed_content() {
-        let delta = ReasoningDeltaDto {
-            category: ReasoningDeltaCategory::Primary,
-            content: "thinking".to_owned(),
-        };
-        assert!(delta.validate().is_ok());
-        let blank = ReasoningDeltaDto {
-            category: ReasoningDeltaCategory::Detail,
-            content: "  ".to_owned(),
-        };
-        assert_eq!(
-            blank
-                .validate()
-                .expect_err("blank reasoning is rejected")
-                .code(),
-            "provider_reasoning_stream_invalid"
-        );
-        let summary = ReasoningSummaryDeltaDto {
-            content: "summary".to_owned(),
-        };
-        assert!(summary.validate().is_ok());
     }
 }

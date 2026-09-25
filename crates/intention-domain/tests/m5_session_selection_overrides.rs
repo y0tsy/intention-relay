@@ -1,9 +1,9 @@
 //! Slice 2 per-turn provider override contract tests.
 //!
-//! The override fields are current wire fields: the three-argument
-//! constructor still works, wire JSON with the override fields round-trips,
-//! and the bounded override validation rejects invalid or credential-shaped
-//! values.
+//! The override fields are current wire fields: both keys are required in the
+//! wire shape and `null` means "no override", the three-argument constructor
+//! still works, wire JSON with the override fields round-trips, and the
+//! bounded override validation rejects invalid or credential-shaped values.
 
 #![allow(
     clippy::expect_used,
@@ -122,11 +122,38 @@ fn wire_json_with_expected_revision_but_no_override_is_rejected() {
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
     let wire = format!(
-        r#"{{"session_id":"{session_id}","turn_id":"{turn_id}","content":"hello","expected_profile_revision":"rev-1"}}"#
+        r#"{{"session_id":"{session_id}","turn_id":"{turn_id}","content":"hello","profile_override":null,"expected_profile_revision":"rev-1"}}"#
     );
     let error: Result<SendUserTurnCommandDto, _> = serde_json::from_str(&wire);
     assert!(
         error.is_err(),
         "expected revision without override must fail wire decode"
     );
+}
+
+#[test]
+fn wire_json_without_override_keys_is_rejected() {
+    // E4: absence is a decode error; only the current shape carries both keys.
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let wire =
+        format!(r#"{{"session_id":"{session_id}","turn_id":"{turn_id}","content":"hello"}}"#);
+    let error: Result<SendUserTurnCommandDto, _> = serde_json::from_str(&wire);
+    assert!(
+        error.is_err(),
+        "an omitted override key must fail wire decode"
+    );
+}
+
+#[test]
+fn wire_json_with_null_override_keys_decodes() {
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let wire = format!(
+        r#"{{"session_id":"{session_id}","turn_id":"{turn_id}","content":"hello","profile_override":null,"expected_profile_revision":null}}"#
+    );
+    let decoded: SendUserTurnCommandDto =
+        serde_json::from_str(&wire).expect("null override keys decode");
+    assert!(decoded.profile_override().is_none());
+    assert!(decoded.expected_profile_revision().is_none());
 }

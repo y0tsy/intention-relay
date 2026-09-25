@@ -594,7 +594,7 @@ fn profile_rejects_malformed_and_noncanonical_framing() {
         &fields,
         1,
         WireType::Utf8 as u8,
-        encode_utf8(&"p".repeat(64)),
+        encode_utf8(&"p".repeat(257)),
     );
     assert_eq!(
         ProviderProfileRevisionV1::decode(&raw_record(tag, 1, &refs(&over)))
@@ -730,7 +730,7 @@ fn selection_rejects_malformed_and_noncanonical_framing() {
         &fields,
         4,
         WireType::Utf8 as u8,
-        encode_utf8(&"k".repeat(64)),
+        encode_utf8(&"k".repeat(257)),
     );
     assert_eq!(
         ProviderSelectionV1::decode(&raw_record(tag, 1, &refs(&over)))

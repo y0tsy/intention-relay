@@ -13,14 +13,14 @@ use crate::canonical::{
 };
 use crate::provider_selection::{MODEL_CAPABILITY_TAXONOMY_V1, ModelCapabilitySetV1};
 
-/// Maximum characters of a provider profile or user kind identifier.
+/// Maximum characters of a provider profile, revision, kind, or model
+/// identifier.
 ///
-/// This is the canonical identity bound. The public wire DTO admits up to
-/// [`MAX_PROVIDER_STRING_CHARS`] characters for the same identifier fields, so
-/// an identifier above this bound passes the wire contract and is rejected when
-/// the canonical record encodes or digests it. ADR 0037 Appendix A records both
-/// numbers per identifier field.
-pub const MAX_PROVIDER_ID_CHARS: usize = 63;
+/// This is the single identifier bound (D-13): the canonical record counts
+/// characters and enforces the same number the public wire DTO enforces, so a
+/// value cannot pass one boundary and fail the other. ADR 0037 Appendix A
+/// records this number per identifier field.
+pub const MAX_PROVIDER_ID_CHARS: usize = 256;
 /// Maximum characters of a safe header name.
 pub const MAX_SAFE_HEADER_NAME_CHARS: usize = 128;
 /// Maximum characters of a generic provider-domain scalar string.
@@ -140,9 +140,10 @@ pub fn validate_profile_id(profile_id: &str) -> Result<(), CanonicalError> {
 
 /// Validates an endpoint as credential-free execution metadata.
 ///
-/// The endpoint must be absolute HTTPS or HTTP with no userinfo, query,
-/// fragment, control characters, whitespace, or malformed percent escapes.
-/// Raw or secret-bearing URL input is never public or durable identity.
+/// The endpoint must be absolute HTTPS or HTTP with a non-empty host and no
+/// userinfo, query, fragment, control characters, whitespace, or malformed
+/// percent escapes. Raw or secret-bearing URL input is never public or durable
+/// identity.
 ///
 /// # Errors
 ///
@@ -152,7 +153,7 @@ pub fn validate_profile_id(profile_id: &str) -> Result<(), CanonicalError> {
 pub fn validate_endpoint(endpoint: &str) -> Result<(), CanonicalError> {
     let lower = endpoint.to_ascii_lowercase();
     let scheme_len = if let Some(rest) = lower.strip_prefix("https://") {
-        if rest.is_empty() {
+        if authority_host_is_empty(rest) {
             return Err(CanonicalError::InvalidEndpoint);
         }
         "https://".len()
@@ -183,6 +184,23 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), CanonicalError> {
         return Err(CanonicalError::CredentialsForbidden);
     }
     Ok(())
+}
+
+/// Whether the authority of one absolute URL carries no host.
+///
+/// The authority is the text between the scheme and the first `/`. A
+/// bracketed IPv6 authority is hostless when its brackets contain no host or
+/// are unclosed; every other authority is hostless when it carries no
+/// characters before the first `:` or the end of the authority.
+#[must_use]
+fn authority_host_is_empty(rest: &str) -> bool {
+    let authority = rest.split('/').next().unwrap_or_default();
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        return bracketed
+            .split_once(']')
+            .is_none_or(|(host, _)| host.is_empty());
+    }
+    authority.split(':').next().unwrap_or_default().is_empty()
 }
 
 /// Whether the authority of an `http://` endpoint is a literal loopback host.
@@ -688,8 +706,162 @@ impl ProviderProfileRevisionV1 {
     }
 }
 
-/// A permanent safe identity record for one removed provider profile.
+/// One append-only catalog removal-history event.
 ///
+/// Removal history is durable evidence, not admission authority: the current
+/// active catalog membership decides admission, and an identifier removed by
+/// one catalog may be reintroduced by a later accepted catalog (PR24-017).
+/// Both tombstone families share this framing and identity codec.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TombstoneEvent {
+    id: String,
+    removed_catalog_revision: u64,
+    removed_time: u64,
+    provenance: String,
+    digest: Digest256,
+}
+
+/// The family-specific id and provenance validators of one tombstone codec.
+#[derive(Clone, Copy)]
+struct TombstoneCodec {
+    validate_id: fn(&str) -> Result<(), CanonicalError>,
+    validate_provenance: fn(&str) -> Result<(), CanonicalError>,
+}
+
+const PROFILE_TOMBSTONE_CODEC: TombstoneCodec = TombstoneCodec {
+    validate_id: validate_profile_id,
+    validate_provenance: validate_profile_tombstone_provenance,
+};
+
+const KIND_TOMBSTONE_CODEC: TombstoneCodec = TombstoneCodec {
+    validate_id: validate_provider_kind_id,
+    validate_provenance: validate_kind_descriptor_string,
+};
+
+impl TombstoneEvent {
+    /// Creates a removal-history event with its identity digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the codec's id and provenance validation errors.
+    fn new(
+        id: impl Into<String>,
+        removed_catalog_revision: u64,
+        removed_time: u64,
+        provenance: impl Into<String>,
+        codec: TombstoneCodec,
+    ) -> Result<Self, CanonicalError> {
+        let id = id.into();
+        let provenance = provenance.into();
+        (codec.validate_id)(&id)?;
+        (codec.validate_provenance)(&provenance)?;
+        let identity =
+            tombstone_identity(&id, removed_catalog_revision, removed_time, &provenance)?;
+        Ok(Self {
+            id,
+            removed_catalog_revision,
+            removed_time,
+            provenance,
+            digest: Digest256::sha256(&identity),
+        })
+    }
+
+    /// Encodes this event into its nested anonymous record.
+    ///
+    /// # Errors
+    ///
+    /// Returns the codec's validation errors, and
+    /// `CanonicalError::DuplicateOrDescendingField` or
+    /// `CanonicalError::OverLimit` only if the fixed field table were
+    /// noncanonical or the record exceeded the codec size bounds; both are
+    /// impossible by construction.
+    fn encode(&self, codec: TombstoneCodec) -> Result<Vec<u8>, CanonicalError> {
+        (codec.validate_id)(&self.id)?;
+        (codec.validate_provenance)(&self.provenance)?;
+        let mut fields = tombstone_fields(
+            &self.id,
+            self.removed_catalog_revision,
+            self.removed_time,
+            &self.provenance,
+        );
+        fields.push((5, WireType::Digest, self.digest.bytes().to_vec()));
+        record(0, 1, fields)
+    }
+
+    /// Decodes one event from its nested anonymous record and verifies its
+    /// identity digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CanonicalError::InvalidTag` when the nested record is not the
+    /// anonymous tag-zero version-one frame, `CanonicalError::InvalidField`
+    /// when any of the five fields is absent or malformed,
+    /// `CanonicalError::DigestMismatch` when the stored digest does not match
+    /// the identity bytes, the codec's validation errors, and other
+    /// `CanonicalError` values for malformed framing.
+    fn decode(bytes: &[u8], codec: TombstoneCodec) -> Result<Self, CanonicalError> {
+        let reader = CanonicalRecordReader::new(bytes, 5)?;
+        if reader.tag != 0 || reader.version != 1 {
+            return Err(CanonicalError::InvalidTag);
+        }
+        let id = decode_utf8(
+            reader
+                .field(1, WireType::Utf8)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?
+        .to_owned();
+        let removed_catalog_revision = decode_u64_field(&reader, 2)?;
+        let removed_time = decode_u64_field(&reader, 3)?;
+        let provenance = decode_utf8(
+            reader
+                .field(4, WireType::Utf8)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?
+        .to_owned();
+        let digest = Digest256::from_bytes(
+            reader
+                .field(5, WireType::Digest)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let identity =
+            tombstone_identity(&id, removed_catalog_revision, removed_time, &provenance)?;
+        if Digest256::sha256(&identity) != digest {
+            return Err(CanonicalError::DigestMismatch);
+        }
+        let event = Self {
+            id,
+            removed_catalog_revision,
+            removed_time,
+            provenance,
+            digest,
+        };
+        (codec.validate_id)(&event.id)?;
+        (codec.validate_provenance)(&event.provenance)?;
+        Ok(event)
+    }
+}
+
+/// One catalog tombstone's first four fields; the digest field is excluded by
+/// construction.
+fn tombstone_fields(
+    id: &str,
+    removed_catalog_revision: u64,
+    removed_time: u64,
+    provenance: &str,
+) -> Vec<(u32, WireType, Vec<u8>)> {
+    vec![
+        (1, WireType::Utf8, encode_utf8(id)),
+        (2, WireType::U64, encode_u64(removed_catalog_revision)),
+        (3, WireType::U64, encode_u64(removed_time)),
+        (4, WireType::Utf8, encode_utf8(provenance)),
+    ]
+}
+
+/// Validates profile tombstone provenance with the profile error code.
+fn validate_profile_tombstone_provenance(value: &str) -> Result<(), CanonicalError> {
+    validate_provider_string(value, MAX_PROVIDER_STRING_CHARS)
+}
+
 /// One append-only profile removal-history event.
 ///
 /// Removal history is durable evidence, not admission authority: the current
@@ -717,23 +889,13 @@ impl ProviderProfileTombstoneDto {
         removed_time: u64,
         provenance: impl Into<String>,
     ) -> Result<Self, CanonicalError> {
-        let profile_id = profile_id.into();
-        let provenance = provenance.into();
-        validate_profile_id(&profile_id)?;
-        validate_provider_string(&provenance, MAX_PROVIDER_STRING_CHARS)?;
-        let identity = tombstone_identity(&[
-            (1, WireType::Utf8, encode_utf8(&profile_id)),
-            (2, WireType::U64, encode_u64(removed_catalog_revision)),
-            (3, WireType::U64, encode_u64(removed_time)),
-            (4, WireType::Utf8, encode_utf8(&provenance)),
-        ]);
-        Ok(Self {
+        Ok(Self::from_event(TombstoneEvent::new(
             profile_id,
             removed_catalog_revision,
             removed_time,
             provenance,
-            digest: Digest256::sha256(&identity),
-        })
+            PROFILE_TOMBSTONE_CODEC,
+        )?))
     }
 
     /// Encodes this tombstone into its nested anonymous record.
@@ -747,19 +909,7 @@ impl ProviderProfileTombstoneDto {
     /// noncanonical or the record exceeded the codec size bounds; both are
     /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
-        validate_profile_id(&self.profile_id)?;
-        validate_provider_string(&self.provenance, MAX_PROVIDER_STRING_CHARS)?;
-        record(
-            0,
-            1,
-            vec![
-                (1, WireType::Utf8, encode_utf8(&self.profile_id)),
-                (2, WireType::U64, encode_u64(self.removed_catalog_revision)),
-                (3, WireType::U64, encode_u64(self.removed_time)),
-                (4, WireType::Utf8, encode_utf8(&self.provenance)),
-                (5, WireType::Digest, self.digest.bytes().to_vec()),
-            ],
-        )
+        self.event().encode(PROFILE_TOMBSTONE_CODEC)
     }
 
     /// Decodes this tombstone from its nested anonymous record and verifies
@@ -774,56 +924,40 @@ impl ProviderProfileTombstoneDto {
     /// the identity bytes, and other `CanonicalError` values for malformed
     /// framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
-        let reader = CanonicalRecordReader::new(bytes, 5)?;
-        if reader.tag != 0 || reader.version != 1 {
-            return Err(CanonicalError::InvalidTag);
-        }
-        let profile_id = decode_utf8(
-            reader
-                .field(1, WireType::Utf8)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?
-        .to_owned();
-        let removed_catalog_revision = decode_u64_field(&reader, 2)?;
-        let removed_time = decode_u64_field(&reader, 3)?;
-        let provenance = decode_utf8(
-            reader
-                .field(4, WireType::Utf8)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?
-        .to_owned();
-        let digest = Digest256::from_bytes(
-            reader
-                .field(5, WireType::Digest)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?;
-        let identity = tombstone_identity(&[
-            (1, WireType::Utf8, encode_utf8(&profile_id)),
-            (2, WireType::U64, encode_u64(removed_catalog_revision)),
-            (3, WireType::U64, encode_u64(removed_time)),
-            (4, WireType::Utf8, encode_utf8(&provenance)),
-        ]);
-        if Digest256::sha256(&identity) != digest {
-            return Err(CanonicalError::DigestMismatch);
-        }
-        let tombstone = Self {
-            profile_id,
-            removed_catalog_revision,
-            removed_time,
-            provenance,
-            digest,
-        };
-        tombstone.validate()?;
-        Ok(tombstone)
+        Ok(Self::from_event(TombstoneEvent::decode(
+            bytes,
+            PROFILE_TOMBSTONE_CODEC,
+        )?))
     }
 
-    fn validate(&self) -> Result<(), CanonicalError> {
-        validate_profile_id(&self.profile_id)?;
-        validate_provider_string(&self.provenance, MAX_PROVIDER_STRING_CHARS)
+    /// Borrows this tombstone as its shared removal-history event.
+    fn event(&self) -> TombstoneEvent {
+        TombstoneEvent {
+            id: self.profile_id.clone(),
+            removed_catalog_revision: self.removed_catalog_revision,
+            removed_time: self.removed_time,
+            provenance: self.provenance.clone(),
+            digest: self.digest,
+        }
+    }
+
+    /// Builds this tombstone from its shared removal-history event.
+    fn from_event(event: TombstoneEvent) -> Self {
+        Self {
+            profile_id: event.id,
+            removed_catalog_revision: event.removed_catalog_revision,
+            removed_time: event.removed_time,
+            provenance: event.provenance,
+            digest: event.digest,
+        }
     }
 }
 
-/// A permanent safe identity record for one removed provider kind.
+/// One append-only kind removal-history event.
+///
+/// Removal history is durable evidence, not admission authority: the current
+/// active catalog membership decides admission, and an identifier removed by
+/// one catalog may be reintroduced by a later accepted catalog (PR24-017).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderKindTombstoneDto {
     pub kind_id: String,
@@ -846,23 +980,13 @@ impl ProviderKindTombstoneDto {
         removed_time: u64,
         provenance: impl Into<String>,
     ) -> Result<Self, CanonicalError> {
-        let kind_id = kind_id.into();
-        let provenance = provenance.into();
-        validate_provider_kind_id(&kind_id)?;
-        validate_kind_descriptor_string(&provenance)?;
-        let identity = tombstone_identity(&[
-            (1, WireType::Utf8, encode_utf8(&kind_id)),
-            (2, WireType::U64, encode_u64(removed_catalog_revision)),
-            (3, WireType::U64, encode_u64(removed_time)),
-            (4, WireType::Utf8, encode_utf8(&provenance)),
-        ]);
-        Ok(Self {
+        Ok(Self::from_event(TombstoneEvent::new(
             kind_id,
             removed_catalog_revision,
             removed_time,
             provenance,
-            digest: Digest256::sha256(&identity),
-        })
+            KIND_TOMBSTONE_CODEC,
+        )?))
     }
 
     /// Encodes this tombstone into its nested anonymous record.
@@ -875,19 +999,7 @@ impl ProviderKindTombstoneDto {
     /// noncanonical or the record exceeded the codec size bounds; both are
     /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
-        validate_provider_kind_id(&self.kind_id)?;
-        validate_kind_descriptor_string(&self.provenance)?;
-        record(
-            0,
-            1,
-            vec![
-                (1, WireType::Utf8, encode_utf8(&self.kind_id)),
-                (2, WireType::U64, encode_u64(self.removed_catalog_revision)),
-                (3, WireType::U64, encode_u64(self.removed_time)),
-                (4, WireType::Utf8, encode_utf8(&self.provenance)),
-                (5, WireType::Digest, self.digest.bytes().to_vec()),
-            ],
-        )
+        self.event().encode(KIND_TOMBSTONE_CODEC)
     }
 
     /// Decodes this tombstone from its nested anonymous record and verifies
@@ -902,52 +1014,32 @@ impl ProviderKindTombstoneDto {
     /// the identity bytes, and other `CanonicalError` values for malformed
     /// framing.
     pub fn decode(bytes: &[u8]) -> Result<Self, CanonicalError> {
-        let reader = CanonicalRecordReader::new(bytes, 5)?;
-        if reader.tag != 0 || reader.version != 1 {
-            return Err(CanonicalError::InvalidTag);
-        }
-        let kind_id = decode_utf8(
-            reader
-                .field(1, WireType::Utf8)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?
-        .to_owned();
-        let removed_catalog_revision = decode_u64_field(&reader, 2)?;
-        let removed_time = decode_u64_field(&reader, 3)?;
-        let provenance = decode_utf8(
-            reader
-                .field(4, WireType::Utf8)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?
-        .to_owned();
-        let digest = Digest256::from_bytes(
-            reader
-                .field(5, WireType::Digest)?
-                .ok_or(CanonicalError::InvalidField)?,
-        )?;
-        let identity = tombstone_identity(&[
-            (1, WireType::Utf8, encode_utf8(&kind_id)),
-            (2, WireType::U64, encode_u64(removed_catalog_revision)),
-            (3, WireType::U64, encode_u64(removed_time)),
-            (4, WireType::Utf8, encode_utf8(&provenance)),
-        ]);
-        if Digest256::sha256(&identity) != digest {
-            return Err(CanonicalError::DigestMismatch);
-        }
-        let tombstone = Self {
-            kind_id,
-            removed_catalog_revision,
-            removed_time,
-            provenance,
-            digest,
-        };
-        tombstone.validate()?;
-        Ok(tombstone)
+        Ok(Self::from_event(TombstoneEvent::decode(
+            bytes,
+            KIND_TOMBSTONE_CODEC,
+        )?))
     }
 
-    fn validate(&self) -> Result<(), CanonicalError> {
-        validate_provider_kind_id(&self.kind_id)?;
-        validate_kind_descriptor_string(&self.provenance)
+    /// Borrows this tombstone as its shared removal-history event.
+    fn event(&self) -> TombstoneEvent {
+        TombstoneEvent {
+            id: self.kind_id.clone(),
+            removed_catalog_revision: self.removed_catalog_revision,
+            removed_time: self.removed_time,
+            provenance: self.provenance.clone(),
+            digest: self.digest,
+        }
+    }
+
+    /// Builds this tombstone from its shared removal-history event.
+    fn from_event(event: TombstoneEvent) -> Self {
+        Self {
+            kind_id: event.id,
+            removed_catalog_revision: event.removed_catalog_revision,
+            removed_time: event.removed_time,
+            provenance: event.provenance,
+            digest: event.digest,
+        }
     }
 }
 
@@ -1035,21 +1127,27 @@ fn decode_u64_field(
 }
 
 /// Builds the canonical identity bytes of one tombstone from its first four
-/// fields; the digest field is excluded by construction.
-#[must_use]
-fn tombstone_identity(fields: &[(u32, WireType, Vec<u8>)]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(b"IRCR");
-    out.extend_from_slice(&1u32.to_be_bytes());
-    out.extend_from_slice(&0u32.to_be_bytes());
-    out.extend_from_slice(&1u32.to_be_bytes());
-    for (number, wire_type, value) in fields {
-        out.extend_from_slice(&number.to_be_bytes());
-        out.push(*wire_type as u8);
-        out.extend_from_slice(&(value.len() as u32).to_be_bytes());
-        out.extend_from_slice(value);
-    }
-    out
+/// fields; the digest field is excluded by construction. The framing comes
+/// from the shared record builder, so the identity and the encoded record
+/// cannot disagree.
+///
+/// # Errors
+///
+/// Returns `CanonicalError::DuplicateOrDescendingField` or
+/// `CanonicalError::OverLimit` only if the fixed field stream were
+/// noncanonical or the record exceeded the codec size bounds; both are
+/// impossible by construction.
+fn tombstone_identity(
+    id: &str,
+    removed_catalog_revision: u64,
+    removed_time: u64,
+    provenance: &str,
+) -> Result<Vec<u8>, CanonicalError> {
+    record(
+        0,
+        1,
+        tombstone_fields(id, removed_catalog_revision, removed_time, provenance),
+    )
 }
 
 /// Encodes one canonical record from a strictly increasing field stream.
@@ -1319,6 +1417,9 @@ mod tests {
     fn endpoint_validation_rejects_userinfo_query_fragment_and_controls() {
         for (endpoint, expected) in [
             ("*********************************/v1", "invalid_endpoint"),
+            ("https:///v1", "invalid_endpoint"),
+            ("https://:8080/v1", "invalid_endpoint"),
+            ("https://[]/v1", "invalid_endpoint"),
             ("https://api.example.com/v1?key=value", "invalid_endpoint"),
             ("https://api.example.com/v1#frag", "invalid_endpoint"),
             ("https://api.example.com/v1 ", "invalid_endpoint"),
@@ -1340,6 +1441,8 @@ mod tests {
             );
         }
         assert!(validate_endpoint("https://api.example.com/v1").is_ok());
+        assert!(validate_endpoint("https://api.example.com:8443/v1").is_ok());
+        assert!(validate_endpoint("https://[2001:db8::1]:8443/v1").is_ok());
         for loopback in [
             "http://127.0.0.1:8080/v1",
             "http://127.0.0.2/v1",
@@ -1436,22 +1539,26 @@ mod tests {
     }
 
     #[test]
-    fn profile_and_kind_ids_are_limited_to_63_characters() {
+    fn profile_and_kind_ids_are_limited_to_256_characters() {
         let profile = fixture_profile();
         let mut long = profile.clone();
-        long.profile_id = "p".repeat(64);
+        long.profile_id = "p".repeat(257);
         assert_eq!(
             long.encode()
                 .expect_err("over-limit profile id is rejected")
                 .code(),
             "provider_profile_revision_invalid"
         );
-        let ok = profile.clone();
-        let mut at_boundary = ok;
-        at_boundary.profile_id = "p".repeat(63);
+        let mut at_boundary = profile.clone();
+        at_boundary.profile_id = "p".repeat(256);
         assert!(at_boundary.encode().is_ok());
+        // The bound counts characters, not bytes: a multi-byte identifier of
+        // 256 characters is 512 bytes and is still inside the single bound.
+        let mut multibyte = profile.clone();
+        multibyte.profile_id = "\u{e9}".repeat(256);
+        assert!(multibyte.encode().is_ok());
         let mut long_kind = profile;
-        long_kind.provider_kind_id = "k".repeat(64);
+        long_kind.provider_kind_id = "k".repeat(257);
         assert_eq!(
             long_kind
                 .encode()
