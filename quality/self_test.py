@@ -1821,19 +1821,77 @@ def real_api_e2e_timeouts(workflow_text: str) -> tuple[int, int]:
     return step_timeout, job_timeout
 
 
-def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
-    """The declared live-harness budget stays under the workflow timeouts.
+def rust_invocation_count(source: str, name: str) -> int:
+    """Count call sites of one function, excluding its own declaration."""
+    occurrences = len(re.findall(rf"\b{name}\(", source))
+    declarations = len(re.findall(rf"\bfn {name}\(", source))
+    return occurrences - declarations
 
-    The worst case is recomputed from the harness timing constants, the
-    transport's bounded synchronous-call cost, and the structural counts of
-    both live tests. The declared budget comment and the workflow's step and
-    job timeouts must keep the same relation, so a change to any budget
-    constant or to either timeout fails until the relation is restored.
+
+def rust_function_body(source: str, name: str) -> str:
+    """Return the body of one top-level Rust function, failing when absent."""
+    match = re.search(rf"^(?:async )?fn {name}\(", source, re.M)
+    if match is None:
+        raise RuntimeError(f"the harness must declare {name}")
+    end = source.find("\n}\n", match.end())
+    if end < 0:
+        raise RuntimeError(f"the {name} body is malformed")
+    return source[match.end():end]
+
+
+def rust_array_len(source: str, name: str) -> int:
+    """Return the number of entries in one `let <name> = [ ... ];` array."""
+    match = re.search(rf"let {name} = \[(.*?)\];", source, re.S)
+    if match is None:
+        raise RuntimeError(f"the harness must declare the {name} array")
+    return len([entry for entry in match.group(1).split(",") if entry.strip()])
+
+
+def live_harness_structure(harness: str) -> dict[str, int]:
+    """Derive the harness structural counts the live-channel budget uses.
+
+    The counts are read from the harness source instead of being written as
+    scalars here, so a seventh tool turn, a third live test, an extra
+    synchronous call per attempt, another daemon start, or another snapshot
+    read changes the recomputed worst case even when every constant stays the
+    same.
     """
+    wrapper = rust_function_body(harness, "drive_tool_turn")
+    driver = rust_function_body(harness, "drive_tool_turn_with")
+    # The `drive_tool_turn` wrapper forwards to `drive_tool_turn_with`, so its
+    # internal call is not a second live turn.
+    tool_turns = (
+        rust_invocation_count(harness, "drive_tool_turn")
+        + rust_invocation_count(harness, "drive_tool_turn_with")
+        - rust_invocation_count(wrapper, "drive_tool_turn_with")
+    )
+    direct_runs = rust_invocation_count(harness, "send_user_turn") - rust_invocation_count(
+        driver, "send_user_turn"
+    )
+    return {
+        # Every `drive_tool_turn*` call is one tool-driving live turn, and each
+        # live run outside the driver (the negative credential run) adds one.
+        "tool_runs": tool_turns + direct_runs,
+        # One readiness wait per daemon start.
+        "readiness_waits": rust_invocation_count(harness, "wait_until_ready"),
+        # Every spawned daemon is killed exactly once: a restart kills its
+        # predecessor and the test drop kills the final process.
+        "kill_windows": len(re.findall(r"LiveE2eHost::new\(", harness))
+        + len(re.findall(r"\.restart_daemon\(\)", harness)),
+        # The bounded create_session and send_user_turn of every attempt.
+        "synchronous_calls_per_attempt": rust_invocation_count(driver, "create_session")
+        + rust_invocation_count(driver, "send_user_turn"),
+        # One bounded snapshot read per session of the tool-loop fixture, plus
+        # every snapshot call site outside that loop.
+        "session_snapshots": rust_array_len(harness, "sessions")
+        + rust_invocation_count(harness, "bounded_session_snapshot")
+        - 1,
+    }
+
+
+def recomputed_live_channel_budget_millis(root: Path) -> int:
+    """Recompute the harness's worst-case live-channel budget in milliseconds."""
     harness = (root / "crates/intention-daemon/tests/real_api_e2e.rs").read_text(encoding="utf-8")
-    declared = re.search(r"Worst-case live-channel budget: (\d+) seconds", harness)
-    if declared is None:
-        raise RuntimeError("the harness must declare its worst-case live-channel budget in seconds")
     transport = (root / "crates/intention-transport/src/lib.rs").read_text(encoding="utf-8")
     turn_deadline = rust_duration_constant(harness, "TURN_DEADLINE", "secs")
     readiness_deadline = rust_duration_constant(harness, "READINESS_DEADLINE", "secs")
@@ -1844,27 +1902,38 @@ def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
     attempts = rust_u8_constant(harness, "TOOL_TURN_ATTEMPTS")
     connect_millis = rust_duration_constant(transport, "CONNECT_TIMEOUT", "millis")
     sync_io_seconds = rust_duration_constant(transport, "SYNC_IO_TIMEOUT", "secs")
-    # Structural counts of the two live tests: six advertised tool turns plus
-    # the negative credential run, one readiness wait per test plus the
-    # post-restart restart, one bounded kill window per daemon start and test
-    # drop, two synchronous calls per attempt, and one snapshot read per
-    # session.
-    tool_runs = 7
-    readiness_waits = 3
-    kill_windows = 3
-    synchronous_calls_per_attempt = 2
-    session_snapshots = 7
+    structure = live_harness_structure(harness)
     synchronous_call_millis = connect_millis + 2 * sync_io_seconds * 1_000
-    worst_case_millis = (
-        tool_runs * attempts * turn_deadline * 1_000
-        + tool_runs * attempts * synchronous_calls_per_attempt * synchronous_call_millis
-        + readiness_waits * readiness_deadline * 1_000
-        + kill_windows * kill_deadline * 1_000
+    return (
+        structure["tool_runs"] * attempts * turn_deadline * 1_000
+        + structure["tool_runs"]
+        * attempts
+        * structure["synchronous_calls_per_attempt"]
+        * synchronous_call_millis
+        + structure["readiness_waits"] * readiness_deadline * 1_000
+        + structure["kill_windows"] * kill_deadline * 1_000
         + replay_deadline * 1_000
         + replay_quiet_window * 1_000
         + attempts * replay_deadline * 1_000
-        + session_snapshots * session_read_deadline * 1_000
+        + structure["session_snapshots"] * session_read_deadline * 1_000
     )
+
+
+def validate_live_channel_budget(root: Path) -> None:
+    """Fail when the declared live budget or the workflow timeouts drift.
+
+    The worst case is recomputed from the harness timing constants, the
+    transport's bounded synchronous-call cost, and the structural counts read
+    from the harness source. The declared budget comment and the workflow's
+    step and job timeouts must keep the same relation, so a change to any
+    budget constant, to the harness structure, or to either timeout fails
+    until the relation is restored.
+    """
+    harness = (root / "crates/intention-daemon/tests/real_api_e2e.rs").read_text(encoding="utf-8")
+    declared = re.search(r"Worst-case live-channel budget: (\d+) seconds", harness)
+    if declared is None:
+        raise RuntimeError("the harness must declare its worst-case live-channel budget in seconds")
+    worst_case_millis = recomputed_live_channel_budget_millis(root)
     if worst_case_millis != int(declared.group(1)) * 1_000:
         raise RuntimeError(
             "the declared live-channel budget must equal the recomputed worst case: "
@@ -1888,6 +1957,62 @@ def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
             "the live job timeout must cover the step plus its overhead: "
             f"{job_timeout} < {step_timeout} + {minimum_job_overhead}"
         )
+
+
+def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
+    """The declared budget follows the harness structure and the workflow.
+
+    The live-channel budget must keep its declared relation to the workflow
+    step and job timeouts, and the mutation fixtures below prove that the
+    recomputation reads the harness structure: a tool turn, a per-attempt
+    synchronous call, or a snapshot read added without updating the declared
+    total must fail the same check.
+    """
+    validate_live_channel_budget(root)
+    harness_path = root / "crates/intention-daemon/tests/real_api_e2e.rs"
+
+    def add_tool_turn(source: str) -> str:
+        marker = "    let (read_session, read_run) = drive_tool_turn("
+        added = (
+            "    let (fixture_session, fixture_run) = drive_tool_turn(\n"
+            "        &host,\n"
+            '        "read",\n'
+            "        &|_| true,\n"
+            "    );\n"
+        )
+        return source.replace(marker, marker + "\n" + added, 1)
+
+    def add_attempt_call(source: str) -> str:
+        marker = '        create_session(host, session_id, &format!("{tool} turn {attempt}"));'
+        return source.replace(
+            marker,
+            marker + '\n        create_session(host, session_id, "fixture attempt call");',
+            1,
+        )
+
+    def add_snapshot_read(source: str) -> str:
+        marker = "        execute_session,\n    ];"
+        return source.replace(
+            marker, "        execute_session,\n        execute_session,\n    ];", 1
+        )
+
+    mutations = {
+        "a tool turn is added": add_tool_turn,
+        "a per-attempt synchronous call is added": add_attempt_call,
+        "a snapshot read is added": add_snapshot_read,
+    }
+    for description, mutate in mutations.items():
+        with modified(harness_path):
+            source = harness_path.read_text(encoding="utf-8")
+            mutated = mutate(source)
+            if mutated == source:
+                raise RuntimeError(f"the budget mutation fixture is stale: {description}")
+            harness_path.write_text(mutated, encoding="utf-8")
+            try:
+                validate_live_channel_budget(root)
+            except RuntimeError:
+                continue
+            raise RuntimeError(f"the budget check must fail when {description}")
 
 
 def test_slice2_tag_registry_parity(root: Path) -> None:

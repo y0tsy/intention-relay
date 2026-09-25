@@ -843,6 +843,34 @@ impl ObservedRun {
         names
     }
 
+    /// Returns the call arguments of every succeeded durable result recorded
+    /// for one tool, matched to its call by identity.
+    ///
+    /// A mutating turn binds its durable effect to these arguments so a
+    /// leftover run from an earlier evicted attempt cannot satisfy the turn's
+    /// on-disk byte check on its own.
+    fn succeeded_call_arguments(&self, tool: &str) -> Vec<&str> {
+        self.facts
+            .iter()
+            .filter_map(|result| {
+                let ModelRunFactInputDto::ToolResultRecorded {
+                    call_id,
+                    outcome: ToolResultOutcomeDto::Succeeded { .. },
+                } = result.input()
+                else {
+                    return None;
+                };
+                self.facts.iter().find_map(|call| {
+                    let ModelRunFactInputDto::ToolCallRecorded { call } = call.input() else {
+                        return None;
+                    };
+                    (call.name() == tool && call.call_id() == *call_id)
+                        .then_some(call.arguments_json())
+                })
+            })
+            .collect()
+    }
+
     /// Returns the succeeded durable result content of every recorded call of
     /// one tool, matched to its call by identity.
     fn succeeded_contents(&self, tool: &str) -> Vec<&str> {
@@ -1037,9 +1065,13 @@ async fn drive_tool_turn(
 /// durable effect does not match, and the daemon drops a subscriber that
 /// cannot keep up with a reasoning burst. Each of those consumes one attempt
 /// in a fresh session, and `prepare` restores the workspace state that an
-/// earlier attempt of a mutating turn may have changed. A completed turn whose
-/// durable facts satisfy `effect` is accepted, and any other failure is still
-/// fatal.
+/// earlier attempt of a mutating turn may have changed. A run whose subscriber
+/// the daemon evicted is not cancelled, so it can keep modifying the workspace
+/// after the next attempt's reseed; a mutating `effect` therefore binds the
+/// accepted turn to this run's own succeeded call (its target path and byte
+/// count) and never to the on-disk bytes alone, so a leftover run cannot
+/// satisfy a later attempt's check by itself. A completed turn whose durable
+/// facts satisfy `effect` is accepted, and any other failure is still fatal.
 async fn drive_tool_turn_with(
     host: &LiveE2eHost,
     tool: &str,
@@ -1352,9 +1384,17 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             let Ok(written_bytes) = std::fs::read_to_string(&written_file) else {
                 return false;
             };
+            // The effect binds to the observed run's own succeeded call for
+            // the target path and byte count: an earlier attempt's still
+            // running run may touch the file after the reseed, but it cannot
+            // record this run's durable call.
             written_bytes == written
                 && run.succeeded_contents("write").join("\n")
                     == format!("{} bytes", written_bytes.len())
+                && run
+                    .succeeded_call_arguments("write")
+                    .iter()
+                    .any(|arguments| arguments.contains("e2e-written.txt"))
         },
     )
     .await;
@@ -1384,9 +1424,16 @@ async fn real_provider_tool_loop_drives_every_advertised_tool_and_replays_after_
             let Ok(edited_bytes) = std::fs::read_to_string(&edited_file) else {
                 return false;
             };
+            // As with the write turn, the effect binds to this run's own
+            // succeeded call for the target path, so a leftover run from an
+            // evicted attempt cannot satisfy the byte check alone.
             edited_bytes.contains(&edited_source)
                 && run.succeeded_contents("edit").join("\n")
                     == format!("{} bytes", edited_bytes.len())
+                && run
+                    .succeeded_call_arguments("edit")
+                    .iter()
+                    .any(|arguments| arguments.contains("e2e-edit-source.txt"))
         },
     )
     .await;
