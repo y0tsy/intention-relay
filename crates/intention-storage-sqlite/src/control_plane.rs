@@ -24,8 +24,7 @@ use intention_storage::{
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, HeldRecoveredRunDto, HeldRunAdmissionStateDto,
     HeldRunRepositoryDto, LoadProviderCatalogPageInputDto, LoadUnavailableQueuePageInputDto,
-    MarkRecoveredRunHeldInputDto, PendingRemovalCandidateDto,
-    PersistResolvedRunProviderSelectionInputDto, PromoteUnavailableRunsInputDto,
+    MarkRecoveredRunHeldInputDto, PendingRemovalCandidateDto, PromoteUnavailableRunsInputDto,
     PromoteUnavailableRunsOutcomeDto, ProviderCatalogMaterialDto, ProviderCatalogPageDto,
     ProviderCatalogProfileEntryDto, ProviderCatalogRemovalCandidateDto,
     ProviderCatalogRemovalEvidenceDto, ProviderCatalogRemovalStatusDto,
@@ -43,10 +42,7 @@ use intention_storage::{
 use intention_types::{DtoResult, ErrorDto, RunId, SessionId};
 use sqlite::OptionalExtension;
 
-use super::{
-    FaultPoint, SqliteStorageRepository, codec_error, conflict, not_found, storage_error,
-    unavailable,
-};
+use super::{FaultPoint, SqliteStorageRepository, codec_error, conflict, not_found, storage_error};
 
 /// The provider catalog removal candidate lifetime in seconds (30 minutes).
 const REMOVAL_CANDIDATE_LIFETIME_SECONDS: i64 = 30 * 60;
@@ -2796,17 +2792,6 @@ impl SessionProviderDefaultsRepositoryDto for SqliteStorageRepository {
 }
 
 impl ProviderSelectionRepositoryDto for SqliteStorageRepository {
-    fn persist_resolved_run_provider_selection(
-        &self,
-        input: PersistResolvedRunProviderSelectionInputDto,
-    ) -> DtoResult<()> {
-        immediate_transaction!(self, |tx| {
-            insert_selection(&tx, input.session_id, input.run_id, &input.selection)?;
-            self.fault(FaultPoint::ProviderSelection)?;
-            tx.commit().map_err(storage_error)
-        })
-    }
-
     fn load_resolved_run_provider_selection(
         &self,
         session_id: SessionId,
@@ -3179,6 +3164,20 @@ impl ProviderUsageRepositoryDto for SqliteStorageRepository {
         model_id: String,
     ) -> DtoResult<Vec<ProviderUsageAggregateDto>> {
         let connection = self.connection()?;
+        // This is the revision-keyed usage view: its identity is the
+        // `(provider_profile_revision_id, model_id)` pair that the application
+        // aggregation groups by (D-04), and it deliberately carries no profile
+        // filter, because a profile revision id is derived from the provider
+        // declaration (kind, model, endpoint, capability subset) and not from
+        // the profile alias. The profile-keyed view is
+        // `load_provider_usage_by_profile`, and the profile-scoped wire path
+        // (`by_profile`) uses that read. Every row returned here still carries
+        // its own `profile_id`, so a caller that needs profile attribution can
+        // group by the full durable row identity instead of assuming one
+        // profile per revision id. Evidence: PR #36 register G.4 item 3
+        // ("`by_revision_and_model` keeps its current single-identity
+        // semantics") and ADR 0037's `provider_usage_aggregates` row
+        // ("Profile-keyed usage aggregates").
         let mut statement = connection
             .prepare(
                 "SELECT profile_id, provider_profile_revision_id, model_id, usage_period_start, usage_period_end, request_count, input_units, output_units, reasoning_units, last_run_id, updated_at FROM provider_usage_aggregates WHERE provider_profile_revision_id=?1 AND model_id=?2 ORDER BY profile_id, usage_period_start",
@@ -3268,7 +3267,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
         // acceptances are never mistaken for a pending candidate. An
         // `accepted` row under a still-pending catalog state is the
         // crash-between-commits roll-forward case (PR24-004).
-        let candidate_revision: Option<i64> = connection
+        let candidate_revision: Option<Option<i64>> = connection
             .query_row(
                 "SELECT candidate_catalog_revision_id FROM provider_catalog_state WHERE singleton_id=1",
                 [],
@@ -3276,7 +3275,10 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
             )
             .optional()
             .map_err(storage_error)?;
-        let Some(candidate_revision) = candidate_revision else {
+        // The loader reports "if any": a catalog state whose candidate
+        // revision column is SQL NULL carries no pending removal candidate,
+        // and that absence must read as `None` instead of failing the decode.
+        let Some(Some(candidate_revision)) = candidate_revision else {
             return Ok(None);
         };
         let row = connection
@@ -3455,6 +3457,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                 sqlite::params![input.candidate_handle, input.operation_id, input.accepted_at],
             )
             .map_err(storage_error)?;
+            self.fault(FaultPoint::RemovalCandidate)?;
             insert_audit(
                 &tx,
                 &input.operation_id,
@@ -3469,6 +3472,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                 input.accepted_at,
                 &AuditRecordJson::candidate_handle(Some(input.candidate_handle)),
             )?;
+            self.fault(FaultPoint::RemovalAudit)?;
             tx.commit().map_err(storage_error)
         })
     }
@@ -3503,6 +3507,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                 sqlite::params![input.candidate_handle, input.operation_id, input.rejected_at],
             )
             .map_err(storage_error)?;
+            self.fault(FaultPoint::RemovalCandidate)?;
             insert_audit(
                 &tx,
                 &input.operation_id,
@@ -3517,11 +3522,13 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                 input.rejected_at,
                 &AuditRecordJson::candidate_handle(Some(input.candidate_handle)),
             )?;
+            self.fault(FaultPoint::RemovalAudit)?;
             tx.execute(
                 "UPDATE provider_catalog_state SET status='active', updated_at=?1 WHERE singleton_id=1",
                 [input.rejected_at],
             )
             .map_err(storage_error)?;
+            self.fault(FaultPoint::RemovalState)?;
             tx.commit().map_err(storage_error)
         })
     }
@@ -3547,6 +3554,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                     sqlite::params![candidate.candidate_handle, input.operation_id, input.now],
                 )
                 .map_err(storage_error)?;
+                self.fault(FaultPoint::RemovalCandidate)?;
                 insert_audit(
                     &tx,
                     &input.operation_id,
@@ -3562,6 +3570,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                     input.now,
                     &AuditRecordJson::candidate_handle(Some(candidate.candidate_handle)),
                 )?;
+                self.fault(FaultPoint::RemovalAudit)?;
                 expired = expired.saturating_add(1);
             }
             drop(statement);
@@ -3571,6 +3580,7 @@ impl ProviderRemovalRepositoryDto for SqliteStorageRepository {
                     [input.now],
                 )
                 .map_err(storage_error)?;
+                self.fault(FaultPoint::RemovalState)?;
             }
             tx.commit().map_err(storage_error)?;
             Ok(expired)
@@ -3681,16 +3691,4 @@ impl HeldRunRepositoryDto for SqliteStorageRepository {
             admitted_at,
         }))
     }
-}
-
-/// Ensures the catalog state seed row exists after opening (defensive; the
-/// schema DDL normally creates it). Never touches pre-existing rows.
-pub fn ensure_catalog_state_seed(connection: &sqlite::Connection) -> DtoResult<()> {
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO provider_catalog_state(singleton_id, active_catalog_revision_id, candidate_catalog_revision_id, status, active_default_profile_id, candidate_handle, degraded_reason, updated_at) VALUES (1, NULL, NULL, 'preparing', NULL, NULL, NULL, 0)",
-            [],
-        )
-        .map_err(|_| unavailable())?;
-    Ok(())
 }

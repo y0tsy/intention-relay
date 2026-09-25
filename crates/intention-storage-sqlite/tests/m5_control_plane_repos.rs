@@ -29,15 +29,15 @@ use intention_storage::{
     CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     ExpireProviderCatalogRemovalCandidateInputDto, LoadProviderCatalogPageInputDto,
-    LoadUnavailableQueuePageInputDto, PersistResolvedRunProviderSelectionInputDto,
-    PromoteUnavailableRunsInputDto, ProviderCatalogRemovalEvidenceDto,
-    ProviderCatalogRemovalStatusDto, ProviderCatalogRepositoryDto, ProviderCatalogStatusDto,
-    ProviderKindDescriptorCandidateDto, ProviderProfileCandidateDto, ProviderReadinessDto,
-    ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto, ProviderUsageEventInputDto,
-    ProviderUsageRecordDto, ProviderUsageRepositoryDto, ReconcileUnavailableQueueInputDto,
-    RecordProviderUsageInputDto, RejectProviderCatalogCandidateInputDto,
-    RejectProviderCatalogRemovalInputDto, StorageRepositoryDto, TransitionRunInputDto,
-    UnavailableQueueRepositoryDto, UnavailableQueueStateDto,
+    LoadUnavailableQueuePageInputDto, PromoteUnavailableRunsInputDto,
+    ProviderCatalogRemovalEvidenceDto, ProviderCatalogRemovalStatusDto,
+    ProviderCatalogRepositoryDto, ProviderCatalogStatusDto, ProviderKindDescriptorCandidateDto,
+    ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
+    ProviderUsageEventInputDto, ProviderUsageRecordDto, ProviderUsageRepositoryDto,
+    ReconcileUnavailableQueueInputDto, RecordProviderUsageInputDto,
+    RejectProviderCatalogCandidateInputDto, RejectProviderCatalogRemovalInputDto,
+    StorageRepositoryDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
+    UnavailableQueueStateDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -1556,6 +1556,44 @@ fn removal_evidence_round_trips_escaped_identities() {
 }
 
 #[test]
+fn pending_removal_loader_reports_absence_without_a_candidate_revision() {
+    // The loader's contract is the single durable pending removal candidate
+    // "if any": an active catalog state whose candidate revision column is
+    // SQL NULL must read as `None`, not fail the decode. The R16 startup
+    // recovery fixtures read this loader after the durable pending removal
+    // was adopted, when the state no longer carries a candidate revision.
+    let (_directory, store) = repository();
+    prepare_candidate(
+        &store,
+        1,
+        "op-prep-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    accept_candidate(
+        &store,
+        1,
+        "candidate-1",
+        "op-accept-1",
+        "kind-a",
+        "kd-1",
+        "profile-a",
+        "rev-a",
+        1,
+    );
+    assert!(
+        store
+            .load_pending_removal_candidate()
+            .expect("absence reads as None")
+            .is_none(),
+        "an active catalog without a candidate revision has no pending removal"
+    );
+}
+
+#[test]
 fn malformed_removal_evidence_fails_typed_decode() {
     // P2-11: evidence that is not the expected list-of-strings shape fails
     // closed with the typed decode error instead of guessing identities.
@@ -2230,6 +2268,77 @@ fn provider_usage_recording_dedups_and_aggregates_across_periods() {
 }
 
 #[test]
+fn usage_views_pin_the_revision_keyed_and_profile_keyed_scopes() {
+    // W3-H follow-up (c): the `(revision, model)` view is deliberately not
+    // profile-filtered. Its identity is the revision-keyed pair the
+    // application aggregation groups by (D-04, register G.4 item 3), and a
+    // profile revision id is derived from the provider declaration, so two
+    // profiles can share it. The revision-keyed read must therefore return
+    // both profiles' rows with their own `profile_id`, while the
+    // profile-keyed read (`load_provider_usage_by_profile`, the wire
+    // `by_profile` path) stays scoped to the queried profile.
+    let (_directory, store) = repository();
+    let session = create(&store);
+    let run = RunId::new();
+    accept(&store, session, run, "usage scope run");
+    let event =
+        |profile: &str, usage_event_id: &str, input_units: u64| ProviderUsageEventInputDto {
+            run_id: run,
+            usage_event_id: usage_event_id.to_owned(),
+            profile_id: profile.to_owned(),
+            provider_profile_revision_id: "rev-shared".to_owned(),
+            model_id: "model-shared".to_owned(),
+            usage: ProviderUsageRecordDto {
+                input_units,
+                output_units: 0,
+                reasoning_units: 0,
+            },
+            occurred_at: 1,
+        };
+    store
+        .record_provider_usage(RecordProviderUsageInputDto {
+            session_id: session,
+            usage_period_start: 100,
+            usage_period_end: 200,
+            recorded_at: 2,
+            events: vec![
+                event("profile-a", "scope-event-a", 10),
+                event("profile-b", "scope-event-b", 20),
+            ],
+        })
+        .expect("usage records under two profiles sharing one revision identity");
+
+    let by_revision = store
+        .load_provider_usage_by_revision_and_model(
+            "rev-shared".to_owned(),
+            "model-shared".to_owned(),
+        )
+        .expect("the revision-keyed view loads");
+    assert_eq!(
+        by_revision.len(),
+        2,
+        "the revision-keyed view is not profile-filtered"
+    );
+    assert_eq!(by_revision[0].profile_id, "profile-a");
+    assert_eq!(by_revision[0].input_units, 10);
+    assert_eq!(by_revision[1].profile_id, "profile-b");
+    assert_eq!(by_revision[1].input_units, 20);
+
+    let profile_a = store
+        .load_provider_usage_by_profile("profile-a".to_owned())
+        .expect("the profile-keyed view loads");
+    assert_eq!(profile_a.len(), 1);
+    assert_eq!(profile_a[0].profile_id, "profile-a");
+    assert_eq!(profile_a[0].input_units, 10);
+    let profile_b = store
+        .load_provider_usage_by_profile("profile-b".to_owned())
+        .expect("the profile-keyed view loads");
+    assert_eq!(profile_b.len(), 1);
+    assert_eq!(profile_b[0].profile_id, "profile-b");
+    assert_eq!(profile_b[0].input_units, 20);
+}
+
+#[test]
 fn provider_usage_rejects_units_outside_the_sqlite_range() {
     let (_directory, store) = repository();
     let session = create(&store);
@@ -2713,16 +2822,21 @@ fn persisted_selection_digest_is_the_canonical_domain_identity() {
     let (directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
-    accept(&store, session_id, run_id, "run with a resolved selection");
     let selection = fixture_selection(&fixture_profile("default", "rev-0001"));
     store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: selection.clone(),
-            occurred_at: 3,
-        })
-        .expect("resolved selection persists");
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session_id,
+                TurnId::new(),
+                "run with a resolved selection",
+                run_id,
+                snapshot(),
+                time(2),
+            )
+            .expect("turn input is valid")
+            .with_provider_selection(selection.clone()),
+        )
+        .expect("run with a resolved selection persists");
     // The persisted digest column is the canonical domain identity digest, not
     // a hash of the persisted JSON text.
     let connection = raw_connection(&directory);
@@ -2741,17 +2855,16 @@ fn persisted_selection_digest_is_the_canonical_domain_identity() {
             .to_string()
     );
     // Provenance is not identity: a different selection source keeps the same
-    // persisted identity for the same run, so re-persisting is idempotent.
+    // canonical identity.
     let mut other_source = selection;
     other_source.selection_source = Some("catalog-rev-2".to_owned());
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: other_source,
-            occurred_at: 4,
-        })
-        .expect("a provenance-only change is the same identity");
+    assert_eq!(
+        other_source
+            .identity_digest()
+            .expect("selection digests")
+            .to_string(),
+        persisted
+    );
 }
 
 // ---------------------------------------------------------------------------

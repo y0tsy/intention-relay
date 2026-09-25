@@ -186,6 +186,41 @@ fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
     assert_ne!(error.retry(), ErrorRetryDto::Never);
 }
 
+#[test]
+fn backend_failure_on_the_snapshot_lookup_is_unavailable_not_not_found() {
+    // R31/R11: only a genuinely missing snapshot row is the typed
+    // `run_configuration_unavailable`; a backend read failure while loading
+    // the persisted safe selection stays transient `storage_unavailable`.
+    let (directory, repository) = repository();
+    let session_id = create_session(&repository, "snapshot-backend-failure");
+    let run_id = RunId::new();
+    repository
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session_id,
+                TurnId::new(),
+                "turn",
+                run_id,
+                snapshot("safe-model", None, 30, 2),
+                time(2),
+            )
+            .expect("turn input is valid"),
+        )
+        .expect("turn starts");
+    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
+        .expect("database reopens for the backend failure");
+    connection
+        .execute("DROP TABLE configuration_revisions", [])
+        .expect("configuration revisions drop for the backend-failure fixture");
+    drop(connection);
+    let error = repository
+        .load_run_config_snapshot(session_id, run_id)
+        .expect_err("a backend read failure is unavailable");
+    assert_eq!(error.code(), "storage_unavailable");
+    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+    assert_ne!(error.retry(), ErrorRetryDto::Never);
+}
+
 fn repository() -> (TempDir, SqliteStorageRepository) {
     let directory = TempDir::new().expect("temporary directory exists");
     let repository = SqliteStorageRepository::open(

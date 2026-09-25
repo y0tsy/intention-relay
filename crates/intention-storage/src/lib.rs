@@ -1208,15 +1208,6 @@ pub struct CommitConfigurationReloadInputDto {
     pub reloaded_at: i64,
 }
 
-/// Input persisting the resolved provider selection of one fresh run.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PersistResolvedRunProviderSelectionInputDto {
-    pub session_id: SessionId,
-    pub run_id: RunId,
-    pub selection: ProviderSelectionV1,
-    pub occurred_at: i64,
-}
-
 /// The closed state of one unavailable provider queue entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnavailableQueueStateDto {
@@ -1648,16 +1639,6 @@ pub trait SessionProviderDefaultsRepositoryDto {
 
 /// DTO-only repository contract for resolved run provider selections.
 pub trait ProviderSelectionRepositoryDto {
-    /// Persists the resolved provider selection of one fresh run.
-    ///
-    /// # Errors
-    ///
-    /// Returns a conflict error when the run already bound a different
-    /// selection, or an unavailable error when storage fails.
-    fn persist_resolved_run_provider_selection(
-        &self,
-        input: PersistResolvedRunProviderSelectionInputDto,
-    ) -> DtoResult<()>;
     /// Loads the persisted resolved provider selection of one run, if any.
     ///
     /// Returns `None` when the run has no persisted selection or the supplied
@@ -1851,16 +1832,150 @@ pub trait HeldRunRepositoryDto {
 
 #[cfg(test)]
 mod tests {
-    /// D-07 boundary guard: no storage DTO may declare an opaque encoded
-    /// record string field. The needle is assembled at runtime so this
-    /// guard's own source can neither satisfy nor trip the scan it performs.
+    #![allow(
+        clippy::expect_used,
+        reason = "Source guards use expect for precise test diagnostics."
+    )]
+    use std::path::{Path, PathBuf};
+
+    /// Returns the `pub` field declarations in one source text that are
+    /// JSON-shaped carriers: a field whose name contains `json` and whose type
+    /// mentions a string type (`String`, `&str`, or `Box<str>`), or any field
+    /// whose type is the JSON crate's untyped value, regardless of its name.
+    fn json_shaped_field_declarations(source: &str) -> Vec<String> {
+        // The JSON needles are assembled at runtime so this guard's own source
+        // can neither satisfy nor trip the scan it performs.
+        let json_fragment = ["j", "son"].concat();
+        let value_type = ["serde_", "json::Value"].concat();
+        let string_types = ["String", "str"];
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("pub "))
+            .filter(|line| {
+                let Some((name, field_type)) = line.split_once(':') else {
+                    return false;
+                };
+                let name = name.trim_start_matches("pub ").trim();
+                let field_type = field_type.trim();
+                let json_named =
+                    !name.is_empty() && name.to_ascii_lowercase().contains(&json_fragment);
+                (json_named && string_types.iter().any(|kind| field_type.contains(kind)))
+                    || field_type.contains(&value_type)
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Collects every Rust source under `root`, failing closed when any part
+    /// of the subtree cannot be read: an unreadable directory, entry, or file
+    /// aborts the scan instead of silently shrinking it.
+    fn rust_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
+        let mut sources = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            let entries = std::fs::read_dir(&directory).map_err(|error| {
+                format!(
+                    "unreadable source directory {}: {error}",
+                    directory.display()
+                )
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    format!("unreadable entry in {}: {error}", directory.display())
+                })?;
+                let path = entry.path();
+                let file_type = entry.file_type().map_err(|error| {
+                    format!("unreadable entry type {}: {error}", path.display())
+                })?;
+                if file_type.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().is_some_and(|extension| extension == "rs") {
+                    sources.push(path);
+                }
+            }
+        }
+        sources.sort();
+        Ok(sources)
+    }
+
+    /// Scans every Rust source under `root` and returns the number of scanned
+    /// files plus every JSON-shaped carrier field declaration on the crate's
+    /// DTO surface, failing closed when a source cannot be read.
+    fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String> {
+        let sources = rust_sources(root)?;
+        let scanned = sources.len();
+        let mut offenses = Vec::new();
+        for source in sources {
+            let text = std::fs::read_to_string(&source)
+                .map_err(|error| format!("unreadable source {}: {error}", source.display()))?;
+            for declaration in json_shaped_field_declarations(&text) {
+                offenses.push(format!("{}: {declaration}", source.display()));
+            }
+        }
+        Ok((scanned, offenses))
+    }
+
+    /// D-07 boundary guard: no storage DTO may declare a JSON-shaped carrier
+    /// field. The guard scans every Rust source of this crate and fails closed
+    /// when the source subtree cannot be read.
+    ///
+    /// Documented limits: only `pub` field declarations whose name and type
+    /// share a line are inspected, non-Rust files are not a DTO surface, and a
+    /// carrier hidden behind a type alias, generic wrapper, macro, or an
+    /// unrelated field name is out of scope.
     #[test]
     fn storage_dto_surface_declares_no_opaque_json_string_field() {
-        let source = include_str!("lib.rs");
-        let opaque_field = ["_j", "son: String"].concat();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let (scanned, offenses) =
+            scan_storage_source_tree(&root).expect("the storage source tree is readable");
         assert!(
-            !source.contains(&opaque_field),
-            "the storage boundary must not declare an opaque `{opaque_field}` field"
+            scanned > 0,
+            "the guard must scan at least one storage source file"
+        );
+        assert!(
+            offenses.is_empty(),
+            "the storage boundary must not declare JSON-shaped carrier fields: {offenses:#?}"
+        );
+    }
+
+    #[test]
+    fn opaque_json_guard_flags_every_json_shaped_carrier_field() {
+        let json = ["j", "son"].concat();
+        let value_type = ["serde_", "json::Value"].concat();
+        for evasion in [
+            format!("pub {json}: String,"),
+            format!("pub payload_{json}_text: String,"),
+            format!("pub payload_{json}: Box<str>,"),
+            format!("pub payload: {value_type},"),
+        ] {
+            assert_eq!(
+                json_shaped_field_declarations(&evasion),
+                vec![evasion.clone()],
+                "the guard must flag `{evasion}`"
+            );
+        }
+        for clean in [
+            "pub selection: ProviderSelectionV1,",
+            "pub revision_id: String,",
+            "pub profiles: Vec<ProviderProfileRevisionV1>,",
+            "pub payload: Box<str>,",
+        ] {
+            assert!(
+                json_shaped_field_declarations(clean).is_empty(),
+                "the guard must not flag the clean typed field `{clean}`"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_json_guard_fails_closed_on_an_unreadable_source_tree() {
+        let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("src-does-not-exist");
+        assert!(
+            scan_storage_source_tree(&missing).is_err(),
+            "an unreadable source subtree must fail the guard closed"
         );
     }
 }

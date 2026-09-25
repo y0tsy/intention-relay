@@ -22,14 +22,13 @@ use intention_storage::{
     CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
     EnqueueUnavailableRunInputDto, ExpireProviderCatalogCandidateInputDto,
     HeldRunAdmissionStateDto, HeldRunRepositoryDto, LoadProviderCatalogPageInputDto,
-    MarkRecoveredRunHeldInputDto, PersistResolvedRunProviderSelectionInputDto,
-    ProviderCatalogRemovalEvidenceDto, ProviderCatalogRepositoryDto, ProviderProfileCandidateDto,
-    ProviderReadinessDto, ProviderRemovalRepositoryDto, ProviderSelectionRepositoryDto,
-    ProviderUsageRecordDto, ProviderUsageRepositoryDto, RecordProviderUsageInputDto,
-    RecoverUnfinishedRunsInputDto, RejectProviderCatalogCandidateInputDto,
-    RemoveQueuedTurnInputDto, SessionProviderDefaultsRepositoryDto,
-    SetSessionProviderProfileInputDto, StorageRepositoryDto, ToolResultEvidenceDto,
-    ToolResultKindDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
+    MarkRecoveredRunHeldInputDto, ProviderCatalogRemovalEvidenceDto, ProviderCatalogRepositoryDto,
+    ProviderProfileCandidateDto, ProviderReadinessDto, ProviderRemovalRepositoryDto,
+    ProviderSelectionRepositoryDto, ProviderUsageRecordDto, ProviderUsageRepositoryDto,
+    RecordProviderUsageInputDto, RecoverUnfinishedRunsInputDto,
+    RejectProviderCatalogCandidateInputDto, RemoveQueuedTurnInputDto,
+    SessionProviderDefaultsRepositoryDto, SetSessionProviderProfileInputDto, StorageRepositoryDto,
+    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto, UnavailableQueueRepositoryDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
@@ -127,6 +126,30 @@ fn accept(
                 .expect("turn input is valid"),
         )
         .expect("turn commits")
+}
+
+/// Accepts one turn whose fresh run commits with the supplied resolved
+/// selection, the only production write path for a selection row.
+fn accept_with_selection(
+    store: &SqliteStorageRepository,
+    session: SessionId,
+    run: RunId,
+    selection: ProviderSelectionV1,
+) -> intention_storage::CommittedChangeDto {
+    store
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session,
+                TurnId::new(),
+                "run with a resolved selection",
+                run,
+                snapshot(),
+                time(2),
+            )
+            .expect("turn input is valid")
+            .with_provider_selection(selection),
+        )
+        .expect("turn with selection commits")
 }
 
 fn tool_event(session: SessionId, run: RunId, detail: &str, at: i64) -> ToolLifecycleEventDto {
@@ -1074,6 +1097,61 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
 }
 
 #[test]
+fn catalog_state_seed_has_one_create_path_and_survives_reopen() {
+    let directory = TempDir::new().expect("temporary directory exists");
+    let path = directory.path().join("storage.sqlite");
+    let location =
+        SqliteDatabaseLocationDto::new(path.to_string_lossy().into_owned()).expect("absolute path");
+    let store = SqliteStorageRepository::open(location.clone()).expect("database opens");
+    let fresh = state_row(&path);
+    // A fresh database carries exactly the DDL-seeded singleton.
+    assert_eq!(fresh, (1_i64, "preparing".to_owned(), None, None, 0_i64));
+    drop(store);
+    // Reopening the durable database neither creates a second row nor resets
+    // the seeded singleton.
+    let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+    assert_eq!(state_row(&path), fresh);
+    drop(reopened);
+    // The schema DDL is the only create path for the seeded singleton: a
+    // second seed statement anywhere in the crate's schema sources (the
+    // deleted defensive helper counted as one) fails this guard.
+    let seed = "INSERT OR IGNORE INTO provider_catalog_state";
+    let sources = [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/control_plane.rs"),
+    ];
+    assert_eq!(
+        sources
+            .iter()
+            .map(|source| source.matches(seed).count())
+            .sum::<usize>(),
+        1,
+        "the provider catalog state singleton must have exactly one seed statement"
+    );
+}
+
+fn state_row(path: &std::path::Path) -> (i64, String, Option<i64>, Option<i64>, i64) {
+    let connection = sqlite::Connection::open(path).expect("database reopens for inspection");
+    let row = connection
+        .query_row(
+            "SELECT singleton_id, status, active_catalog_revision_id, candidate_catalog_revision_id, updated_at FROM provider_catalog_state",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("catalog state row reads");
+    drop(connection);
+    row
+}
+
+#[test]
 fn completed_result_evidence_is_durable_across_reopen_with_redacted_payload() {
     let (directory, store) = repository();
     let session = create(&store);
@@ -1787,16 +1865,8 @@ fn resolved_run_provider_selection_round_trips_and_missing_rows_read_none() {
     let (_directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
-    accept(&store, session_id, TurnId::new(), run_id, "run");
     let selection = fixture_selection();
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: selection.clone(),
-            occurred_at: 3,
-        })
-        .expect("resolved selection persists");
+    accept_with_selection(&store, session_id, run_id, selection.clone());
     // The round trip returns the exact same selection.
     let loaded = store
         .load_resolved_run_provider_selection(session_id, run_id)
@@ -2086,77 +2156,24 @@ fn provider_selection_is_run_scoped_and_malformed_rows_fail_typed() {
     let (directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
-    accept(&store, session_id, TurnId::new(), run_id, "run");
     let selection = fixture_selection();
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: selection.clone(),
-            occurred_at: 3,
-        })
-        .expect("resolved selection persists");
-    // Persisting the identical selection for the same run is idempotent.
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: selection.clone(),
-            occurred_at: 4,
-        })
-        .expect("identical selection is idempotent");
-    // The identical selection bytes for a second, sequential run persist
-    // normally: the digest is a content fingerprint, not a global identity.
-    // The first run must first reach a terminal state so the second turn
-    // starts a fresh run instead of queuing behind it.
-    for status in [
-        RunStatusDto::Running,
-        RunStatusDto::Completing,
-        RunStatusDto::Completed,
-    ] {
-        store
-            .transition_run(TransitionRunInputDto::new(
-                session_id,
-                run_id,
-                status,
-                time(4),
-            ))
-            .expect("first run transitions");
-    }
+    accept_with_selection(&store, session_id, run_id, selection.clone());
+    // The selection is scoped to its run: an identity that never committed a
+    // selection reads None while the selected run still loads.
     let other_run = RunId::new();
     accept(&store, session_id, TurnId::new(), other_run, "other run");
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id: other_run,
-            selection: selection.clone(),
-            occurred_at: 4,
-        })
-        .expect("the identical selection persists for a second run");
+    assert!(
+        store
+            .load_resolved_run_provider_selection(session_id, other_run)
+            .expect("unselected run reads")
+            .is_none()
+    );
     assert_eq!(
         store
             .load_resolved_run_provider_selection(session_id, run_id)
-            .expect("first run selection loads")
-            .expect("first run has a selection"),
-        store
-            .load_resolved_run_provider_selection(session_id, other_run)
-            .expect("second run selection loads")
-            .expect("second run has a selection")
-    );
-    // Rebinding one run to different selection bytes is a typed conflict.
-    let mut different = selection;
-    different.model_id = "a-different-model".to_owned();
-    assert_eq!(
-        store
-            .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-                session_id,
-                run_id,
-                selection: different,
-                occurred_at: 4,
-            },)
-            .expect_err("run rebinding to different bytes is rejected")
-            .code(),
-        "provider_selection_conflict"
+            .expect("selected run loads")
+            .expect("selected run has a selection"),
+        selection
     );
     // A malformed persisted selection row fails the typed decode.
     {
@@ -2183,35 +2200,34 @@ fn provider_selection_is_run_scoped_and_malformed_rows_fail_typed() {
 fn provider_selection_invalid_domain_record_fails_the_typed_load() {
     let (directory, store) = repository();
     let session_id = create(&store);
-    let run_id = RunId::new();
-    accept(&store, session_id, TurnId::new(), run_id, "run");
     // An empty profile id fails ProviderSelectionV1::validate, so the canonical
-    // identity cannot be computed and the record is rejected at persist time.
+    // identity cannot be computed and the fresh-run writer rolls the whole
+    // acceptance back with the typed decode error.
     let mut invalid = fixture_selection();
     invalid.profile_id = String::new();
     assert!(invalid.validate().is_err());
     assert_eq!(
         store
-            .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-                session_id,
-                run_id,
-                selection: invalid,
-                occurred_at: 3,
-            })
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "invalid selection",
+                    RunId::new(),
+                    snapshot(),
+                    time(2),
+                )
+                .expect("turn input is valid")
+                .with_provider_selection(invalid),
+            )
             .expect_err("storage rejects a domain-invalid selection")
             .code(),
         "storage_decode_failed"
     );
     // A persisted row whose bytes decode structurally but violate the domain
     // contract still fails the typed load closed.
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: fixture_selection(),
-            occurred_at: 4,
-        })
-        .expect("resolved selection persists");
+    let run_id = RunId::new();
+    accept_with_selection(&store, session_id, run_id, fixture_selection());
     {
         let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
             .expect("database reopens");
@@ -3025,18 +3041,10 @@ fn safe_header_selection_and_profile_round_trip_transport_codecs() {
     let (directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
-    accept(&store, session_id, TurnId::new(), run_id, "run");
     let mut selection = fixture_selection();
     selection.credential_transport_mode = CredentialTransportMode::SafeHeader;
     selection.credential_transport_safe_header_name = Some("X-Custom-Header".to_owned());
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: selection.clone(),
-            occurred_at: 3,
-        })
-        .expect("safe header selection persists");
+    accept_with_selection(&store, session_id, run_id, selection.clone());
     assert_eq!(
         store
             .load_resolved_run_provider_selection(session_id, run_id)
@@ -3436,15 +3444,7 @@ fn malformed_selection_json_rows_fail_every_scanner_path() {
     let (directory, store) = repository();
     let session_id = create(&store);
     let run_id = RunId::new();
-    accept(&store, session_id, TurnId::new(), run_id, "run");
-    store
-        .persist_resolved_run_provider_selection(PersistResolvedRunProviderSelectionInputDto {
-            session_id,
-            run_id,
-            selection: fixture_selection(),
-            occurred_at: 3,
-        })
-        .expect("resolved selection persists");
+    accept_with_selection(&store, session_id, run_id, fixture_selection());
     let original: String = {
         let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
             .expect("database reopens");

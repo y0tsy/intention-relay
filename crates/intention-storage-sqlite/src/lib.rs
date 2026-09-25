@@ -158,7 +158,6 @@ impl SqliteStorageRepository {
         connection
             .execute_batch(&format!("{SCHEMA_SQL}{}", control_plane::SCHEMA_M5_SQL))
             .map_err(|_| unavailable())?;
-        control_plane::ensure_catalog_state_seed(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             #[cfg(test)]
@@ -1216,7 +1215,12 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 [revision_id],
                 |row| row.get(0),
             )
-            .map_err(|_| run_configuration_unavailable())?;
+            .map_err(|error| match error {
+                // The selection row is genuinely absent; a backend read
+                // failure stays transient unavailability.
+                sqlite::Error::QueryReturnedNoRows => run_configuration_unavailable(),
+                other => storage_error(other),
+            })?;
         drop(connection);
         serde_json::from_str(&snapshot).map_err(codec_error)
     }
@@ -1610,6 +1614,9 @@ pub enum FaultPoint {
     UnavailableQueue,
     UsageAggregate,
     HeldRun,
+    RemovalCandidate,
+    RemovalAudit,
+    RemovalState,
 }
 
 struct EventDraft {
@@ -2177,13 +2184,17 @@ mod tests {
         ToolLifecycleStatusDto, WorkspaceRootDto,
     };
     use intention_storage::{
-        AcceptProviderCatalogInputDto, AcceptUserTurnInputDto, AdmitHeldRecoveredRunInputDto,
-        AppendModelRunFactsInputDto, AppendProviderKindDescriptorRevisionInputDto,
-        AppendProviderProfileRevisionInputDto, AppendToolLifecycleEventInputDto,
-        CommitConfigurationReloadInputDto, ConfigurationReloadRepositoryDto, CreateSessionInputDto,
-        EnqueueUnavailableRunInputDto, HeldRunRepositoryDto, LoadProviderCatalogPageInputDto,
-        MarkRecoveredRunHeldInputDto, PromoteUnavailableRunsInputDto, ProviderCatalogRepositoryDto,
-        ProviderProfileCandidateDto, ProviderReadinessDto, StorageRepositoryDto,
+        AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
+        AcceptUserTurnInputDto, AdmitHeldRecoveredRunInputDto, AppendModelRunFactsInputDto,
+        AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
+        AppendToolLifecycleEventInputDto, CommitConfigurationReloadInputDto,
+        ConfigurationReloadRepositoryDto, CreateProviderCatalogRemovalCandidateInputDto,
+        CreateSessionInputDto, EnqueueUnavailableRunInputDto,
+        ExpireProviderCatalogRemovalCandidateInputDto, HeldRunRepositoryDto,
+        LoadProviderCatalogPageInputDto, MarkRecoveredRunHeldInputDto,
+        PromoteUnavailableRunsInputDto, ProviderCatalogRemovalEvidenceDto,
+        ProviderCatalogRepositoryDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+        ProviderRemovalRepositoryDto, RejectProviderCatalogRemovalInputDto, StorageRepositoryDto,
         ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
         UnavailableQueueRepositoryDto,
     };
@@ -3452,5 +3463,245 @@ mod tests {
             admitted.admission_state,
             intention_storage::HeldRunAdmissionStateDto::Admitted
         );
+    }
+
+    /// One durable removal-candidate row as read back through a raw
+    /// connection, so a fault fixture can compare every durable column at once.
+    #[derive(Debug, Eq, PartialEq)]
+    struct RemovalCandidateRow {
+        status: String,
+        operation_id: Option<String>,
+        completed_at: Option<i64>,
+        candidate_catalog_revision_id: i64,
+        active_catalog_revision_id: i64,
+        expires_at: i64,
+    }
+
+    fn raw_removal_candidate(
+        location: &SqliteDatabaseLocationDto,
+        handle: &str,
+    ) -> RemovalCandidateRow {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let row = connection
+            .query_row(
+                "SELECT status, operation_id, completed_at, candidate_catalog_revision_id, active_catalog_revision_id, expires_at FROM provider_catalog_removal_candidates WHERE candidate_handle=?1",
+                [handle],
+                |row| {
+                    Ok(RemovalCandidateRow {
+                        status: row.get(0)?,
+                        operation_id: row.get(1)?,
+                        completed_at: row.get(2)?,
+                        candidate_catalog_revision_id: row.get(3)?,
+                        active_catalog_revision_id: row.get(4)?,
+                        expires_at: row.get(5)?,
+                    })
+                },
+            )
+            .expect("removal candidate row reads");
+        drop(connection);
+        row
+    }
+
+    fn raw_catalog_state(location: &SqliteDatabaseLocationDto) -> (String, Option<i64>) {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let row = connection
+            .query_row(
+                "SELECT status, active_catalog_revision_id FROM provider_catalog_state WHERE singleton_id=1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .expect("catalog state row reads");
+        drop(connection);
+        row
+    }
+
+    fn create_removal_candidate(repository: &SqliteStorageRepository) {
+        repository
+            .create_provider_catalog_removal_candidate(
+                CreateProviderCatalogRemovalCandidateInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    candidate_catalog_revision_id: 2,
+                    active_catalog_revision_id: 1,
+                    created_at: 100,
+                    source_recheck: "health-recheck".to_owned(),
+                    evidence: ProviderCatalogRemovalEvidenceDto {
+                        catalog_revision_id: 2,
+                        removed_profile_ids: vec!["profile-a".to_owned()],
+                        removed_kind_ids: vec!["kind-a".to_owned()],
+                    },
+                    operation_id: "op-removal-create-1".to_owned(),
+                },
+            )
+            .expect("removal candidate creates");
+    }
+
+    #[test]
+    fn removal_accept_fault_rolls_back_candidate_and_audit_atomically() {
+        for point in [FaultPoint::RemovalCandidate, FaultPoint::RemovalAudit] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            repository.arm_fault(point);
+            let error = repository
+                .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    accepted_at: 110,
+                    operation_id: "op-removal-accept-1".to_owned(),
+                })
+                .expect_err("injected removal fault aborts the acceptance");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-accept-1'"
+                ),
+                0
+            );
+            // The rolled-back candidate is still pending and accepts durably.
+            reopened
+                .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    accepted_at: 110,
+                    operation_id: "op-removal-accept-1".to_owned(),
+                })
+                .expect("candidate accepts after the rollback");
+            let accepted = raw_removal_candidate(&location, "removal-1");
+            assert_eq!(accepted.status, "accepted");
+            assert_eq!(accepted.completed_at, Some(110));
+            assert_eq!(
+                accepted.operation_id.as_deref(),
+                Some("op-removal-accept-1")
+            );
+        }
+    }
+
+    #[test]
+    fn removal_reject_fault_rolls_back_candidate_audit_and_active_status_atomically() {
+        for point in [
+            FaultPoint::RemovalCandidate,
+            FaultPoint::RemovalAudit,
+            FaultPoint::RemovalState,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            assert_eq!(state_baseline.0, "pending_removal");
+            repository.arm_fault(point);
+            let error = repository
+                .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    rejected_at: 110,
+                    operation_id: "op-removal-reject-1".to_owned(),
+                })
+                .expect_err("injected removal fault aborts the rejection");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-reject-1'"
+                ),
+                0
+            );
+            // The rolled-back rejection still restores the active catalog.
+            reopened
+                .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    rejected_at: 110,
+                    operation_id: "op-removal-reject-1".to_owned(),
+                })
+                .expect("candidate rejects after the rollback");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1").status,
+                "rejected"
+            );
+            assert_eq!(raw_catalog_state(&location).0, "active");
+        }
+    }
+
+    #[test]
+    fn removal_expire_fault_rolls_back_candidate_audit_and_active_status_atomically() {
+        for point in [
+            FaultPoint::RemovalCandidate,
+            FaultPoint::RemovalAudit,
+            FaultPoint::RemovalState,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            assert_eq!(state_baseline.0, "pending_removal");
+            let now = candidate_baseline.expires_at;
+            repository.arm_fault(point);
+            let error = repository
+                .expire_provider_catalog_removal_candidate(
+                    ExpireProviderCatalogRemovalCandidateInputDto {
+                        now,
+                        operation_id: "op-removal-expire-1".to_owned(),
+                    },
+                )
+                .expect_err("injected removal fault aborts the expiry");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-removal-expire-1'"
+                ),
+                0
+            );
+            // The rolled-back overdue candidate still expires durably.
+            assert_eq!(
+                reopened
+                    .expire_provider_catalog_removal_candidate(
+                        ExpireProviderCatalogRemovalCandidateInputDto {
+                            now,
+                            operation_id: "op-removal-expire-1".to_owned(),
+                        },
+                    )
+                    .expect("expiry runs after the rollback"),
+                1
+            );
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1").status,
+                "expired"
+            );
+            assert_eq!(raw_catalog_state(&location).0, "active");
+        }
     }
 }
