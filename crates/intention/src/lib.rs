@@ -1559,18 +1559,16 @@ impl DaemonApplicationFacade {
                     "the prepared removal candidate is missing its revision",
                 )
             })?;
-            // R16 follow-up (differ-differ): the prepare call above may have
-            // adopted a durable, startup-rebuilt pending removal before it
-            // prepared this candidate. When the startup document changed
-            // again while that pending removal existed, the acceptance below
-            // must supersede the revision the adoption committed - the
-            // revision the adopted pending removal recorded as its candidate
-            // revision, which is the durable active revision now - instead of
-            // the pre-adoption revision read before the prepare. The
-            // controller would otherwise reject the acceptance once with
-            // `provider_catalog_revision_conflict`, so the open would fail
-            // and only self-heal on the next restart. A pending candidate
-            // never advances the active revision, so this read is also the
+            // R16 follow-up (differ-differ), corrected by R40: the open
+            // sequence adopts a durable, startup-rebuilt pending removal in
+            // `startup()` before this prepare runs, so the durable active
+            // revision read here is the revision that adoption committed. The
+            // acceptance below must supersede exactly that revision instead of
+            // the revision read before the prepare: the controller would
+            // otherwise reject the acceptance once with
+            // `provider_catalog_revision_conflict`, so the open would fail and
+            // only self-heal on the next restart. A pending candidate never
+            // advances the active revision, so this read is also the
             // pre-adoption revision when no adoption happened.
             let acceptance_active_revision = self
                 .inner
@@ -4441,11 +4439,20 @@ mod tests {
             }
         }
 
-        // The credential-rebuild path cannot reject on a declaration in a real
-        // facade: catalog profiles are always bearer, so its preflight is
-        // structurally unobservable today. The shared derivation is therefore
-        // pinned at the source: removing the declaration composition or the
-        // preflight from either construction path fails this guard.
+        // R49: the credential-rebuild boundary is driven at runtime by
+        // `credential_rebuild_boundary_rotates_the_resolved_profile_and_fails_closed`
+        // below, so it is no longer pinned only as source text. The rebuild's
+        // declaration-rejection branch stays an accepted textual limit
+        // because it is unobservable by construction: every durable catalog
+        // profile is built with a bearer declaration and no safe header
+        // (`intention-application` `build_candidate_records`), and registry
+        // activation runs this same factory preflight all-or-nothing
+        // (`PrivateRegistry::build_all`), so a safe-header profile can never
+        // be admitted and `resolve_enabled_profile` can only return a bearer
+        // declaration, which both adapter builders accept. This scan keeps
+        // the shared derivation guarded until a later slice activates
+        // safe-header transport and the rejection can be driven; replace it
+        // with that driven fixture then.
         let source = include_str!("lib.rs");
         let sections = [
             (
@@ -4484,6 +4491,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn credential_rebuild_boundary_rotates_the_resolved_profile_and_fails_closed() {
+        // R49: the credential-rebuild boundary is driven at runtime here. The
+        // port resolves the active profile through the real catalog admission
+        // port (declaration composition and adapter preflight included),
+        // swaps the private driver credential, and fails closed for a profile
+        // the active catalog does not carry without changing the committed
+        // material.
+        const REPLACEMENT_SECRET: &str = "sk-rebuild-driven-replacement-67890";
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("daemon.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let facade = open_startup_facade(&database, &config_path);
+        let port = CompositionDriverRebuildPort { facade: &facade };
+        DriverRebuildPort::rebuild(
+            &port,
+            "default",
+            PrivateCredentialMaterial::from_private_bytes(REPLACEMENT_SECRET.as_bytes().to_vec()),
+        )
+        .expect("the active declared profile rebuilds");
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET),
+            "the rebuild commits the replacement material to the private slot"
+        );
+        assert_eq!(
+            facade.inner._selected_provider.safe_kind(),
+            Some(ProviderKindDto::Openrouter),
+            "the rebuild keeps the executing driver bound"
+        );
+        let error = DriverRebuildPort::rebuild(
+            &port,
+            "profile-not-in-the-active-catalog",
+            PrivateCredentialMaterial::from_private_bytes(REPLACEMENT_SECRET.as_bytes().to_vec()),
+        )
+        .expect_err("a profile outside the active catalog fails closed");
+        assert_eq!(error.code(), "provider_profile_unavailable");
+        assert_eq!(
+            retained_credential(&facade).as_deref(),
+            Some(REPLACEMENT_SECRET),
+            "a failed rebuild leaves the committed material unchanged"
+        );
+    }
+
     /// Returns the implementation section between two unique source markers.
     fn implementation_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
         let after_start = source
@@ -4498,27 +4553,43 @@ mod tests {
 
     #[test]
     fn startup_catalog_activation_signature_stays_private_and_document_bearing() {
-        // R38: `activate_startup_catalog` is deliberately private and takes
-        // the raw startup document because only the daemon-open path calls it
-        // (E6, P3-29). The repository pins such invariants with a source
-        // guard, so this test reads its own crate source with a needle
-        // assembled from fragments (the guard's own source must not satisfy
-        // the scan).
+        // R38 with R51: `activate_startup_catalog` is deliberately private and
+        // takes the raw startup document because only the daemon-open path
+        // calls it (E6, P3-29). The guard scans the production source before
+        // the test module and pins exactly one private definition, no public
+        // method carrying the name, and exactly one other reference, so a
+        // differently named public wrapper around the helper (for example
+        // `pub fn reconcile_startup_catalog` delegating to it) adds a
+        // reference and fails. A wrapper that copies the body instead of
+        // delegating is an accepted limit of a textual guard. Needles are
+        // assembled from fragments so the guard's own source never satisfies
+        // the scan.
         let source = include_str!("lib.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("the crate source carries production code before its test module");
         let private_signature = [
             "fn activate_startup_catalog(&self, raw_toml: &str)",
             " -> DtoResult<()>",
         ]
         .concat();
         assert_eq!(
-            source.matches(&private_signature).count(),
+            production.matches(&private_signature).count(),
             1,
             "exactly one `{private_signature}` definition must exist"
         );
         let public_signature = ["pub ", "fn activate_startup_catalog"].concat();
         assert!(
-            !source.contains(&public_signature),
+            !production.contains(&public_signature),
             "`activate_startup_catalog` must never become a public facade method"
+        );
+        let helper_name = ["activate_", "startup_catalog"].concat();
+        assert_eq!(
+            production.matches(&helper_name).count(),
+            2,
+            "only the private definition and the single private daemon-open call may \
+             reference the helper; a differently named public wrapper adds a reference"
         );
     }
 
@@ -4793,9 +4864,11 @@ mod tests {
         drop(first);
 
         // The document changed again before the pending removal was accepted:
-        // the declared endpoint now differs from the pending candidate's
-        // declaration, so the startup prepare adopts revision two and prepares
-        // revision three in the same call, which the open then accepts.
+        // the restart resolves the durable removal first (R40: the candidate
+        // rebuilt from the durable rows is adopted through the normal
+        // acceptance path), and the re-derived declaration is then accepted as
+        // an ordinary replacement against the adopted revision - so only the
+        // removal itself carries a removal row.
         write_startup_document(
             &config_path,
             &startup_document(
@@ -4839,12 +4912,73 @@ mod tests {
                 .repository
                 .load_highest_removal_candidate_revision()
                 .expect("the durable removal maximum reads"),
-            3,
-            "the adopted and the accepted candidates both stay in the durable maximum"
+            2,
+            "only the adopted removal carries a removal row; the second change is an endpoint-only replacement accepted as revision three"
         );
         assert_eq!(
             restarted.provider_control_readiness(),
             intention_application::CatalogReadiness::Ready
+        );
+    }
+
+    #[test]
+    fn startup_open_adopts_a_durable_pending_removal_when_the_document_matches() {
+        // R40: the durable pending removal is resolved by the open even when
+        // the startup document still matches the declaration the removal was
+        // prepared from, so a crash residue can never leave the platform
+        // gated. The adoption closes the removal row durably, and the
+        // following reconcile re-derives the declared profile from the current
+        // document, so the document still wins.
+        let directory = TempDir::new().expect("temporary directory exists");
+        let database = directory.path().join("startup-adopt-matching.sqlite");
+        let config_path = directory.path().join("config.toml");
+        write_startup_document(
+            &config_path,
+            &startup_document("openrouter", "fixture-model", None),
+        );
+        let first = open_startup_facade(&database, &config_path);
+        assert_eq!(active_catalog_profile(&first).0, 1);
+        let prepared = prepare_removal_at_now(
+            &first,
+            "removal-startup-matching",
+            "https://api.example.invalid/v1",
+        );
+        assert_eq!(prepared.candidate_handle.as_deref(), Some("catalog-2"));
+        // Simulated crash with the document unchanged: it still declares the
+        // profile the pending removal was prepared from.
+        drop(first);
+
+        let restarted = open_startup_facade(&database, &config_path);
+        assert_eq!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready,
+            "a matching document must not leave the platform gated"
+        );
+        assert!(
+            restarted
+                .inner
+                .repository
+                .load_pending_removal_candidate()
+                .expect("pending removal reads")
+                .is_none(),
+            "the adopted candidate is durably closed"
+        );
+        let (revision, kind, model, _endpoint) = active_catalog_profile(&restarted);
+        assert_eq!(kind, "openrouter");
+        assert_eq!(model, "fixture-model");
+        assert!(
+            revision > 2,
+            "the document is re-derived on top of the adopted revision"
+        );
+        assert_eq!(
+            restarted
+                .inner
+                .repository
+                .load_provider_catalog_status()
+                .expect("catalog status reads")
+                .candidate_catalog_revision_id,
+            None,
+            "the open settles on an active revision without a pending candidate"
         );
     }
 
@@ -7207,10 +7341,12 @@ mod tests {
 
     #[test]
     fn pending_removal_survives_restart_with_durable_material_and_accepts() {
-        // PR24-003: a pending removal candidate is durable. After a restart
-        // the controller rebuilds the prepared candidate and preserves the
-        // real deadline instead of degrading to an expiry-free ghost state, so
-        // accept/reject keep working without process memory.
+        // PR24-003 under R40: a pending removal candidate is durable, and a
+        // restart resolves it through the normal acceptance path - the
+        // candidate rebuilt from the durable rows is adopted, so the platform
+        // never opens gated and the real deadline still drives expiry before
+        // the adoption. What the restart acts on is the durable material, not
+        // process memory.
         let directory = TempDir::new().expect("temporary directory exists");
         let database = directory.path().join("pending-removal-restart.sqlite");
         let first = DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
@@ -7219,40 +7355,63 @@ mod tests {
         let outcome =
             prepare_removal_at_now(&first, "removal-restart", "https://api.example.invalid/v9");
         assert!(outcome.pending_removal);
-        let candidate_handle = outcome
-            .candidate_handle
-            .expect("pending removal carries a handle");
+        assert_eq!(outcome.candidate_handle.as_deref(), Some("catalog-2"));
+        let pending = first
+            .inner
+            .repository
+            .load_pending_removal_candidate()
+            .expect("the durable candidate reads")
+            .expect("the prepared candidate is pending");
+        assert_eq!(pending.candidate_catalog_revision_id, 2);
+        assert_eq!(pending.active_catalog_revision_id, 1);
+        assert!(pending.expires_at > 0, "the durable deadline is real");
+        assert_eq!(
+            pending.removal_status,
+            intention_storage::ProviderCatalogRemovalStatusDto::Pending
+        );
         drop(first);
 
         let restarted =
             DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
                 .expect("restart facade opens");
-        let readiness = restarted.provider_control_readiness();
-        let intention_application::CatalogReadiness::PendingRemoval {
-            candidate_revision,
-            expires_at,
-        } = readiness
-        else {
-            panic!("restart preserves pending removal, got {readiness:?}");
-        };
-        assert_eq!(candidate_revision, "2");
-        assert!(expires_at > 0, "the durable deadline survives the restart");
-
-        let accept = restarted.command(ProtocolCommandDto::AcceptProviderCatalogRemoval(
-            intention_protocol::contract_families::AcceptProviderCatalogRemovalCommandDto {
-                candidate_handle,
-                expected_active_catalog_revision_id: "1".to_owned(),
-                expected_candidate_catalog_revision_id: "2".to_owned(),
-                operation_id: "accept-after-restart".to_owned(),
-            },
-        ));
-        let ProtocolCommandResultDto::Accepted(_) = accept else {
-            unreachable!("acceptance after restart is accepted")
-        };
-        assert!(matches!(
+        assert_eq!(
             restarted.provider_control_readiness(),
-            intention_application::CatalogReadiness::Ready
-        ));
+            intention_application::CatalogReadiness::Ready,
+            "the restart adopts the durable pending removal instead of opening gated"
+        );
+        let status = restarted
+            .inner
+            .repository
+            .load_provider_catalog_status()
+            .expect("catalog status reads");
+        assert_eq!(
+            status.status,
+            intention_storage::ProviderCatalogStatusDto::Active
+        );
+        assert_eq!(
+            status.active_catalog_revision_id,
+            Some(2),
+            "the adopted removal is the durable active revision"
+        );
+        assert_eq!(status.candidate_catalog_revision_id, None);
+        assert!(
+            restarted
+                .inner
+                .repository
+                .load_pending_removal_candidate()
+                .expect("pending removal reads")
+                .is_none(),
+            "the adopted candidate is durably closed"
+        );
+        assert_eq!(
+            restarted
+                .inner
+                .repository
+                .load_highest_removal_candidate_revision()
+                .expect("the durable removal maximum reads"),
+            2,
+            "the adopted candidate is the durable removal maximum"
+        );
         let projection = restarted
             .inner
             .control_plane
@@ -7399,9 +7558,10 @@ mod tests {
 
     #[test]
     fn reload_during_pending_removal_preserves_the_lifecycle_across_restart() {
-        // PR24-005: a configuration reload commit never rewrites a durable
-        // pending-removal state; after a restart the removal lifecycle (and
-        // its real deadline) survives with the reloaded configuration.
+        // PR24-005 under R40: a configuration reload commit never rewrites a
+        // durable pending-removal state. The removal is still durably pending
+        // after the commit, and the restart adopts that same durable row (with
+        // its real deadline) instead of opening gated.
         let directory = TempDir::new().expect("temporary directory exists");
         let database = directory.path().join("reload-pending-restart.sqlite");
         let startup = fixture_config_snapshot();
@@ -7433,19 +7593,50 @@ mod tests {
             45,
             "the reloaded execution policy applies to the running daemon"
         );
+        let pending = first
+            .inner
+            .repository
+            .load_pending_removal_candidate()
+            .expect("the durable candidate reads")
+            .expect("the reload commit leaves the durable pending removal in place");
+        assert_eq!(pending.candidate_catalog_revision_id, 2);
+        assert_eq!(
+            pending.removal_status,
+            intention_storage::ProviderCatalogRemovalStatusDto::Pending,
+            "the reload commit never rewrites the removal lifecycle"
+        );
+        assert!(
+            pending.expires_at > 0,
+            "the durable deadline survives the reload"
+        );
         drop(first);
 
         let restarted =
             DaemonApplicationFacade::open_for_test(&database, fixture_config_snapshot())
                 .expect("restart facade opens");
-        let intention_application::CatalogReadiness::PendingRemoval {
-            candidate_revision,
-            expires_at,
-        } = restarted.provider_control_readiness()
-        else {
-            panic!("reload must not exit the pending-removal lifecycle");
-        };
-        assert_eq!(candidate_revision, "2");
-        assert!(expires_at > 0);
+        assert_eq!(
+            restarted.provider_control_readiness(),
+            intention_application::CatalogReadiness::Ready,
+            "the restart adopts the removal the reload preserved instead of opening gated"
+        );
+        let status = restarted
+            .inner
+            .repository
+            .load_provider_catalog_status()
+            .expect("catalog status reads");
+        assert_eq!(
+            status.status,
+            intention_storage::ProviderCatalogStatusDto::Active
+        );
+        assert_eq!(status.active_catalog_revision_id, Some(2));
+        assert!(
+            restarted
+                .inner
+                .repository
+                .load_pending_removal_candidate()
+                .expect("pending removal reads")
+                .is_none(),
+            "the adopted removal is durably closed"
+        );
     }
 }
