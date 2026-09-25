@@ -1747,6 +1747,57 @@ def test_adr_0042_project_script_library_record_exists_and_is_indexed(root: Path
         )
 
 
+def test_every_adr_number_is_referenced_by_the_roadmap(root: Path) -> None:
+    decisions = root / "docs/intention-relay/decisions/README.md"
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    roadmap_text = roadmap.read_text(encoding="utf-8")
+    numbers = re.findall(r"\[(\d{4})\]\((\d{4})-[^)]+\.md\)", decisions.read_text(encoding="utf-8"))
+    indexed = sorted({number for number, target in numbers if number == target})
+    if not indexed:
+        raise RuntimeError("decisions/README.md must index the decision records")
+    missing = [number for number in indexed if number not in roadmap_text]
+    if missing:
+        raise RuntimeError(f"roadmap must reference every ADR: missing {missing}")
+
+
+def test_every_post_m4_architecture_doc_is_referenced_by_the_roadmap(root: Path) -> None:
+    architecture = root / "docs/intention-relay/architecture"
+    roadmap = architecture / "11-implementation-roadmap.md"
+    roadmap_text = roadmap.read_text(encoding="utf-8")
+    missing = []
+    for path in sorted(architecture.glob("*.md")):
+        number = path.stem.split("-", 1)[0]
+        if not number.isdigit() or int(number) < 13 or path == roadmap:
+            continue
+        if path.name not in roadmap_text:
+            missing.append(path.name)
+    if missing:
+        raise RuntimeError(
+            f"roadmap must reference every post-M4 architecture document: missing {missing}"
+        )
+
+
+def test_mandate_track_milestones_declare_required_sections(root: Path) -> None:
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    text = roadmap.read_text(encoding="utf-8")
+    for number in ("10", "11", "12"):
+        heading = f"## Milestone {number}:"
+        if heading not in text:
+            raise RuntimeError(f"roadmap must declare {heading.rstrip(':')}")
+        section = text.split(heading, 1)[1]
+        boundary = section.find("\n## ")
+        if boundary != -1:
+            section = section[:boundary]
+        for requirement in (
+            "### Deliver",
+            "### Tests first",
+            "### Acceptance outcomes",
+            "### Exit criteria",
+        ):
+            if requirement not in section:
+                raise RuntimeError(f"Milestone {number} must declare {requirement}")
+
+
 def workflow_trigger_lines(text: str) -> list[str]:
     """Return the stripped entries of the workflow's top-level `on:` block."""
     lines = text.splitlines()
@@ -2199,6 +2250,9 @@ def main() -> None:
         test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
         test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
         test_adr_0042_project_script_library_record_exists_and_is_indexed,
+        test_every_adr_number_is_referenced_by_the_roadmap,
+        test_every_post_m4_architecture_doc_is_referenced_by_the_roadmap,
+        test_mandate_track_milestones_declare_required_sections,
         test_real_api_e2e_workflow_is_manual_only,
         test_real_api_e2e_target_is_opt_in_only,
         test_real_api_e2e_budget_matches_workflow_timeouts,
