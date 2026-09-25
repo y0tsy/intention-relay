@@ -49,10 +49,18 @@ use intention_types::{
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
-const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 3] = [
+/// Capabilities the shared client advertises in its hello and requires the
+/// daemon to negotiate before any request.
+///
+/// `provider_profiles_v1` is advertised and required because every
+/// control-plane command and query the client exposes is gated on it; without
+/// the capability the daemon rejects the whole delivered control-plane surface
+/// with `provider_profiles_capability_required` before any effect (A1).
+const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 4] = [
     ProtocolCapabilityDto::SessionSubscriptions,
     ProtocolCapabilityDto::CorrelatedRequests,
     ProtocolCapabilityDto::DaemonHealth,
+    ProtocolCapabilityDto::ProviderProfilesV1,
 ];
 const RUN_STREAM_CAPABILITIES: [ProtocolCapabilityDto; 1] =
     [ProtocolCapabilityDto::RunStreamSubscriptions];

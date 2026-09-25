@@ -702,6 +702,60 @@ pub enum ProtocolQueryDto {
     GetConfigurationProjection(GetConfigurationProjectionQueryDto),
 }
 
+impl ProtocolCommandDto {
+    /// Returns whether this command belongs to the `provider_profiles_v1`
+    /// control-plane surface.
+    ///
+    /// The classification is protocol data: the exhaustive match has no
+    /// wildcard arm, so a new variant fails to compile until its author
+    /// classifies it instead of silently bypassing the capability gate
+    /// (D-03). Baseline commands stay reachable without the capability.
+    #[must_use]
+    pub const fn requires_provider_profiles(&self) -> bool {
+        match self {
+            Self::CreateSession(_)
+            | Self::SendUserTurn(_)
+            | Self::RemoveQueuedTurn(_)
+            | Self::StopRun(_)
+            | Self::SubscribeSession(_) => false,
+            Self::SetSessionProviderProfile(_)
+            | Self::AcceptProviderCatalogRemoval(_)
+            | Self::RejectProviderCatalogCandidate(_)
+            | Self::ReconcileUnavailableQueue(_)
+            | Self::AdmitRecoveredRun(_)
+            | Self::ReloadConfiguration(_)
+            | Self::RotateProviderCredentials(_)
+            | Self::SubmitRawTomlEdit(_)
+            | Self::ApplyConfigurationEdit(_) => true,
+        }
+    }
+}
+
+impl ProtocolQueryDto {
+    /// Returns whether this query belongs to the `provider_profiles_v1`
+    /// control-plane surface.
+    ///
+    /// The classification is protocol data: the exhaustive match has no
+    /// wildcard arm, so a new variant fails to compile until its author
+    /// classifies it instead of silently bypassing the capability gate
+    /// (D-03). Baseline health and session-snapshot queries stay reachable
+    /// without the capability.
+    #[must_use]
+    pub const fn requires_provider_profiles(&self) -> bool {
+        match self {
+            Self::GetDaemonHealth | Self::GetSessionSnapshot(_) => false,
+            Self::GetProviderCatalog(_)
+            | Self::GetProviderCatalogStatus(_)
+            | Self::GetSessionProviderProfile(_)
+            | Self::GetProviderUsage(_)
+            | Self::GetProviderHealthEvidence(_)
+            | Self::GetProviderDiscoveryStatus(_)
+            | Self::GetPricingPolicy(_)
+            | Self::GetConfigurationProjection(_) => true,
+        }
+    }
+}
+
 /// A typed command result independent of a transport codec.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", content = "data", rename_all = "snake_case")]
@@ -1989,7 +2043,6 @@ mod tests {
                     expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
                     expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
                     operation_id: "operation-1".to_owned(),
-                    source_recheck: true,
                 },
             ),
             ProtocolCommandDto::RejectProviderCatalogCandidate(
@@ -2002,7 +2055,6 @@ mod tests {
             ProtocolCommandDto::ReconcileUnavailableQueue(ReconcileUnavailableQueueCommandDto {
                 session_id: "session-1".to_owned(),
                 operation_id: "operation-1".to_owned(),
-                page_cursor: None,
             }),
             ProtocolCommandDto::AdmitRecoveredRun(AdmitRecoveredRunCommandDto {
                 session_id: "session-1".to_owned(),
@@ -2227,7 +2279,6 @@ mod tests {
                         expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
                         expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
                         operation_id: "operation-1".to_owned(),
-                        source_recheck: true,
                     },
                 ),
                 "accept_provider_catalog_removal",
@@ -2247,7 +2298,6 @@ mod tests {
                     crate::contract_families::ReconcileUnavailableQueueCommandDto {
                         session_id: "session-1".to_owned(),
                         operation_id: "operation-1".to_owned(),
-                        page_cursor: None,
                     },
                 ),
                 "reconcile_unavailable_queue",
@@ -2363,6 +2413,229 @@ mod tests {
                 "query wire must carry the {expected} kind, got {wire}"
             );
         }
+    }
+
+    /// D-03 (`P2-05`): the control-plane classification is protocol data with
+    /// an exhaustive match, so a new variant fails to compile until its author
+    /// decides whether the capability gate applies. This table pins every
+    /// current variant's classification and the single owner of the rejection
+    /// code.
+    #[test]
+    fn protocol_control_plane_classification_covers_every_command_and_query_variant() {
+        let schema = SchemaVersionDto::new(1, 1);
+        let schema_text = "1.1".to_owned();
+        let session = SessionId::new();
+        let commands = [
+            (
+                ProtocolCommandDto::CreateSession(CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session,
+                    WorkspaceId::new(),
+                    fixture_workspace_root(),
+                    RunModeDto::Build,
+                )),
+                false,
+            ),
+            (
+                ProtocolCommandDto::SendUserTurn(
+                    SendUserTurnCommandDto::new(session, TurnId::new(), "fixture turn")
+                        .expect("fixture turn is valid"),
+                ),
+                false,
+            ),
+            (
+                ProtocolCommandDto::RemoveQueuedTurn(RemoveQueuedTurnCommandDto::new(
+                    session,
+                    TurnId::new(),
+                )),
+                false,
+            ),
+            (
+                ProtocolCommandDto::StopRun(StopRunCommandDto::new(session, RunId::new())),
+                false,
+            ),
+            (
+                ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(
+                    schema,
+                    session,
+                    None,
+                    RunModeDto::Build,
+                )),
+                false,
+            ),
+            (
+                ProtocolCommandDto::SetSessionProviderProfile(
+                    SetSessionProviderProfileCommandDto {
+                        schema_version: schema_text.clone(),
+                        session_id: session.to_string(),
+                        profile_id: "default".to_owned(),
+                        expected_session_projection_revision: 0,
+                        operation_id: "operation-1".to_owned(),
+                    },
+                ),
+                true,
+            ),
+            (
+                ProtocolCommandDto::AcceptProviderCatalogRemoval(
+                    AcceptProviderCatalogRemovalCommandDto {
+                        candidate_handle: "candidate-1".to_owned(),
+                        expected_active_catalog_revision_id: "1".to_owned(),
+                        expected_candidate_catalog_revision_id: "2".to_owned(),
+                        operation_id: "operation-1".to_owned(),
+                    },
+                ),
+                true,
+            ),
+            (
+                ProtocolCommandDto::RejectProviderCatalogCandidate(
+                    RejectProviderCatalogCandidateCommandDto {
+                        candidate_handle: "candidate-1".to_owned(),
+                        expected_active_catalog_revision_id: "1".to_owned(),
+                        operation_id: "operation-1".to_owned(),
+                    },
+                ),
+                true,
+            ),
+            (
+                ProtocolCommandDto::ReconcileUnavailableQueue(
+                    ReconcileUnavailableQueueCommandDto {
+                        session_id: session.to_string(),
+                        operation_id: "operation-1".to_owned(),
+                    },
+                ),
+                true,
+            ),
+            (
+                ProtocolCommandDto::AdmitRecoveredRun(AdmitRecoveredRunCommandDto {
+                    session_id: session.to_string(),
+                    run_id: RunId::new().to_string(),
+                    operation_id: "operation-1".to_owned(),
+                }),
+                true,
+            ),
+            (
+                ProtocolCommandDto::ReloadConfiguration(ReloadConfigurationCommandDto {
+                    candidate_snapshot_reference: None,
+                    candidate_edit_reference: None,
+                    expected_active_config_revision: "revision-1".to_owned(),
+                    operation_id: "operation-1".to_owned(),
+                    origin: crate::contract_families::ConfigurationOriginDto::Admin,
+                }),
+                true,
+            ),
+            (
+                ProtocolCommandDto::RotateProviderCredentials(
+                    RotateProviderCredentialsCommandDto {
+                        profile_id: "default".to_owned(),
+                        provider_profile_revision_id: "revision-1".to_owned(),
+                        expected_credential_composition_revision: "0".to_owned(),
+                        operation_id: "operation-1".to_owned(),
+                    },
+                ),
+                true,
+            ),
+            (
+                ProtocolCommandDto::SubmitRawTomlEdit(RawTomlEditCommandDto {
+                    operation_id: "operation-1".to_owned(),
+                    expected_config_revision: "revision-1".to_owned(),
+                    candidate_content: "schema_version = 1".to_owned(),
+                }),
+                true,
+            ),
+            (
+                ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
+                    operation_id: "operation-1".to_owned(),
+                    expected_config_revision: "revision-1".to_owned(),
+                    operations: Vec::new(),
+                }),
+                true,
+            ),
+        ];
+        let queries = [
+            (ProtocolQueryDto::GetDaemonHealth, false),
+            (
+                ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session)),
+                false,
+            ),
+            (
+                ProtocolQueryDto::GetProviderCatalog(GetProviderCatalogQueryDto {
+                    schema_version: schema_text.clone(),
+                    page_token: None,
+                    expected_catalog_revision_id: None,
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetProviderCatalogStatus(GetProviderCatalogStatusQueryDto {
+                    schema_version: schema_text.clone(),
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetSessionProviderProfile(GetSessionProviderProfileQueryDto {
+                    schema_version: schema_text.clone(),
+                    session_id: session.to_string(),
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetProviderUsage(GetProviderUsageQueryDto {
+                    schema_version: schema_text.clone(),
+                    profile_id: "default".to_owned(),
+                    usage_period_start: 0,
+                    usage_period_end: 1,
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetProviderHealthEvidence(GetProviderHealthEvidenceQueryDto {
+                    schema_version: schema_text.clone(),
+                    provider_id: "default".to_owned(),
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetProviderDiscoveryStatus(GetProviderDiscoveryStatusQueryDto {
+                    schema_version: schema_text.clone(),
+                    attempt_id: Some("attempt-1".to_owned()),
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetPricingPolicy(GetPricingPolicyQueryDto {
+                    schema_version: schema_text.clone(),
+                    model_id: Some("fixture-model".to_owned()),
+                }),
+                true,
+            ),
+            (
+                ProtocolQueryDto::GetConfigurationProjection(GetConfigurationProjectionQueryDto {
+                    schema_version: schema_text,
+                }),
+                true,
+            ),
+        ];
+        for (command, expected) in &commands {
+            assert_eq!(
+                command.requires_provider_profiles(),
+                *expected,
+                "command classification for {command:?}"
+            );
+        }
+        for (query, expected) in &queries {
+            assert_eq!(
+                query.requires_provider_profiles(),
+                *expected,
+                "query classification for {query:?}"
+            );
+        }
+        // The negotiation helper stays the single owner of the rejection code.
+        assert_eq!(
+            crate::negotiation::require_provider_profiles(&[])
+                .expect_err("a peer without the capability fails closed")
+                .code(),
+            "provider_profiles_capability_required"
+        );
     }
 
     #[test]

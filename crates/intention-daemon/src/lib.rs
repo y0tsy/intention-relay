@@ -1163,10 +1163,11 @@ fn gated_command_result(
     remote_capabilities: &[ProtocolCapabilityDto],
     command: &ProtocolCommandDto,
 ) -> ProtocolCommandResultDto {
-    if command_requires_provider_profiles(command)
-        && !remote_capabilities.contains(&ProtocolCapabilityDto::ProviderProfilesV1)
+    if command.requires_provider_profiles()
+        && let Err(error) =
+            intention_protocol::negotiation::require_provider_profiles(remote_capabilities)
     {
-        return ProtocolCommandResultDto::Rejected(provider_profiles_capability_required());
+        return ProtocolCommandResultDto::Rejected(error);
     }
     if provider_affecting_command(command) && !control_plane_serving(facade) {
         return ProtocolCommandResultDto::Rejected(execution_not_ready());
@@ -1186,19 +1187,13 @@ fn gated_query_result(
     remote_capabilities: &[ProtocolCapabilityDto],
     query: &ProtocolQueryDto,
 ) -> ProtocolQueryResultDto {
-    if query_requires_provider_profiles(query)
-        && !remote_capabilities.contains(&ProtocolCapabilityDto::ProviderProfilesV1)
+    if query.requires_provider_profiles()
+        && let Err(error) =
+            intention_protocol::negotiation::require_provider_profiles(remote_capabilities)
     {
-        return ProtocolQueryResultDto::Rejected(provider_profiles_capability_required());
+        return ProtocolQueryResultDto::Rejected(error);
     }
     facade.query(query.clone())
-}
-
-fn provider_profiles_capability_required() -> ErrorDto {
-    ErrorDto::validation(
-        "provider_profiles_capability_required",
-        "the request requires the provider_profiles_v1 protocol capability",
-    )
 }
 
 /// Returns whether one command requires provider execution readiness.
@@ -1209,41 +1204,6 @@ const fn provider_affecting_command(command: &ProtocolCommandDto) -> bool {
             | ProtocolCommandDto::ReconcileUnavailableQueue(_)
             | ProtocolCommandDto::AdmitRecoveredRun(_)
             | ProtocolCommandDto::SendUserTurn(_)
-    )
-}
-
-/// Returns whether one command belongs to the `provider_profiles_v1` surface.
-///
-/// Baseline commands (session creation, plain user turns, queued-turn
-/// removal, stops, subscriptions) never require the capability; every Slice 2
-/// command/query that changes or reads provider control-plane state does.
-const fn command_requires_provider_profiles(command: &ProtocolCommandDto) -> bool {
-    matches!(
-        command,
-        ProtocolCommandDto::SetSessionProviderProfile(_)
-            | ProtocolCommandDto::AcceptProviderCatalogRemoval(_)
-            | ProtocolCommandDto::RejectProviderCatalogCandidate(_)
-            | ProtocolCommandDto::ReconcileUnavailableQueue(_)
-            | ProtocolCommandDto::AdmitRecoveredRun(_)
-            | ProtocolCommandDto::ReloadConfiguration(_)
-            | ProtocolCommandDto::RotateProviderCredentials(_)
-            | ProtocolCommandDto::SubmitRawTomlEdit(_)
-            | ProtocolCommandDto::ApplyConfigurationEdit(_)
-    )
-}
-
-/// Returns whether one query belongs to the `provider_profiles_v1` surface.
-const fn query_requires_provider_profiles(query: &ProtocolQueryDto) -> bool {
-    matches!(
-        query,
-        ProtocolQueryDto::GetProviderCatalog(_)
-            | ProtocolQueryDto::GetProviderCatalogStatus(_)
-            | ProtocolQueryDto::GetSessionProviderProfile(_)
-            | ProtocolQueryDto::GetProviderUsage(_)
-            | ProtocolQueryDto::GetProviderHealthEvidence(_)
-            | ProtocolQueryDto::GetProviderDiscoveryStatus(_)
-            | ProtocolQueryDto::GetPricingPolicy(_)
-            | ProtocolQueryDto::GetConfigurationProjection(_)
     )
 }
 
@@ -2446,148 +2406,51 @@ mod tests {
     }
 
     #[test]
-    fn provider_profiles_gate_classifies_every_gated_command_and_query() {
-        // PR24-002: the exhaustive request classifier gates every Slice 2
-        // command/query before any effect. Table-driven coverage keeps each
-        // arm of the classifier and both rejection branches exercised.
+    fn unnegotiated_peers_are_rejected_before_any_effect_for_gated_requests() {
+        // PR24-002 and D-03: the gate stays behavioural here, while the
+        // exhaustive per-variant classification is owned by the protocol test
+        // `protocol_control_plane_classification_covers_every_command_and_query_variant`.
         use intention_protocol::contract_families::{
-            AcceptProviderCatalogRemovalCommandDto, AdmitRecoveredRunCommandDto,
-            ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationOriginDto,
-            GetConfigurationProjectionQueryDto, GetPricingPolicyQueryDto,
-            GetProviderCatalogQueryDto, GetProviderCatalogStatusQueryDto,
-            GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto,
-            GetProviderUsageQueryDto, GetSessionProviderProfileQueryDto, RawTomlEditCommandDto,
-            ReconcileUnavailableQueueCommandDto, RejectProviderCatalogCandidateCommandDto,
-            ReloadConfigurationCommandDto, RotateProviderCredentialsCommandDto,
-            SetSessionProviderProfileCommandDto,
+            GetProviderCatalogStatusQueryDto, SetSessionProviderProfileCommandDto,
         };
-        let schema = "1.1".to_owned();
+        let (_directory, facade) = fixture_facade();
         let session_id = SessionId::new();
-        let commands: Vec<ProtocolCommandDto> = vec![
+        let gated_command =
             ProtocolCommandDto::SetSessionProviderProfile(SetSessionProviderProfileCommandDto {
-                schema_version: schema.clone(),
+                schema_version: "1.1".to_owned(),
                 session_id: session_id.to_string(),
                 profile_id: "default".to_owned(),
                 expected_session_projection_revision: 0,
                 operation_id: "op-set".to_owned(),
-            }),
-            ProtocolCommandDto::AcceptProviderCatalogRemoval(
-                AcceptProviderCatalogRemovalCommandDto {
-                    candidate_handle: "catalog-2".to_owned(),
-                    expected_active_catalog_revision_id: "1".to_owned(),
-                    expected_candidate_catalog_revision_id: "2".to_owned(),
-                    operation_id: "op-accept".to_owned(),
-                    source_recheck: false,
-                },
-            ),
-            ProtocolCommandDto::RejectProviderCatalogCandidate(
-                RejectProviderCatalogCandidateCommandDto {
-                    candidate_handle: "catalog-2".to_owned(),
-                    expected_active_catalog_revision_id: "1".to_owned(),
-                    operation_id: "op-reject".to_owned(),
-                },
-            ),
-            ProtocolCommandDto::ReconcileUnavailableQueue(ReconcileUnavailableQueueCommandDto {
-                session_id: session_id.to_string(),
-                operation_id: "op-reconcile".to_owned(),
-                page_cursor: None,
-            }),
-            ProtocolCommandDto::AdmitRecoveredRun(AdmitRecoveredRunCommandDto {
-                session_id: session_id.to_string(),
-                run_id: RunId::new().to_string(),
-                operation_id: "op-admit".to_owned(),
-            }),
-            ProtocolCommandDto::ReloadConfiguration(ReloadConfigurationCommandDto {
-                candidate_snapshot_reference: None,
-                candidate_edit_reference: None,
-                expected_active_config_revision: "revision-1".to_owned(),
-                operation_id: "op-reload".to_owned(),
-                origin: ConfigurationOriginDto::Admin,
-            }),
-            ProtocolCommandDto::RotateProviderCredentials(RotateProviderCredentialsCommandDto {
-                profile_id: "default".to_owned(),
-                provider_profile_revision_id: "rev-1".to_owned(),
-                expected_credential_composition_revision: "0".to_owned(),
-                operation_id: "op-rotate".to_owned(),
-            }),
-            ProtocolCommandDto::SubmitRawTomlEdit(RawTomlEditCommandDto {
-                operation_id: "op-raw".to_owned(),
-                expected_config_revision: "revision-1".to_owned(),
-                candidate_content: "schema_version = 1".to_owned(),
-            }),
-            ProtocolCommandDto::ApplyConfigurationEdit(ConfigurationEditCommandDto {
-                operation_id: "op-edit".to_owned(),
-                expected_config_revision: "revision-1".to_owned(),
-                operations: Vec::<ConfigurationEditOperationDto>::new(),
-            }),
-        ];
-        let queries: Vec<ProtocolQueryDto> = vec![
-            ProtocolQueryDto::GetProviderCatalog(GetProviderCatalogQueryDto {
-                schema_version: schema.clone(),
-                page_token: None,
-                expected_catalog_revision_id: None,
-            }),
+            });
+        let gated_query =
             ProtocolQueryDto::GetProviderCatalogStatus(GetProviderCatalogStatusQueryDto {
-                schema_version: schema.clone(),
-            }),
-            ProtocolQueryDto::GetSessionProviderProfile(GetSessionProviderProfileQueryDto {
-                schema_version: schema.clone(),
-                session_id: session_id.to_string(),
-            }),
-            ProtocolQueryDto::GetProviderUsage(GetProviderUsageQueryDto {
-                schema_version: schema.clone(),
-                profile_id: "default".to_owned(),
-                usage_period_start: 0,
-                usage_period_end: 0,
-            }),
-            ProtocolQueryDto::GetProviderHealthEvidence(GetProviderHealthEvidenceQueryDto {
-                schema_version: schema.clone(),
-                provider_id: "default".to_owned(),
-            }),
-            ProtocolQueryDto::GetProviderDiscoveryStatus(GetProviderDiscoveryStatusQueryDto {
-                schema_version: schema.clone(),
-                attempt_id: Some("attempt-1".to_owned()),
-            }),
-            ProtocolQueryDto::GetPricingPolicy(GetPricingPolicyQueryDto {
-                schema_version: schema.clone(),
-                model_id: Some("fixture-model".to_owned()),
-            }),
-            ProtocolQueryDto::GetConfigurationProjection(GetConfigurationProjectionQueryDto {
-                schema_version: schema,
-            }),
-        ];
-        let (_directory, facade) = fixture_facade();
-        for command in &commands {
-            let rejected = gated_command_result(&facade, &[], command);
+                schema_version: "1.1".to_owned(),
+            });
+        for capabilities in [&[][..], &[ProtocolCapabilityDto::SessionSubscriptions][..]] {
             assert!(matches!(
-                rejected,
+                gated_command_result(&facade, capabilities, &gated_command),
                 ProtocolCommandResultDto::Rejected(error)
                     if error.code() == "provider_profiles_capability_required"
             ));
-        }
-        for query in &queries {
-            let rejected = gated_query_result(&facade, &[], query);
             assert!(matches!(
-                rejected,
+                gated_query_result(&facade, capabilities, &gated_query),
                 ProtocolQueryResultDto::Rejected(error)
                     if error.code() == "provider_profiles_capability_required"
             ));
         }
-        // Baseline queries are never capability-gated, and a negotiated gated
-        // command dispatches past the capability gate to its own typed error.
-        let health = gated_query_result(
-            &facade,
-            &[ProtocolCapabilityDto::ProviderProfilesV1],
-            &ProtocolQueryDto::GetDaemonHealth,
-        );
-        assert!(matches!(health, ProtocolQueryResultDto::DaemonHealth(_)));
-        let dispatched = gated_command_result(
-            &facade,
-            &[ProtocolCapabilityDto::ProviderProfilesV1],
-            &commands[0],
-        );
+        // Baseline health stays readable without the capability, and a
+        // negotiated gated command reaches dispatch instead of the gate.
         assert!(matches!(
-            dispatched,
+            gated_query_result(&facade, &[], &ProtocolQueryDto::GetDaemonHealth),
+            ProtocolQueryResultDto::DaemonHealth(_)
+        ));
+        assert!(matches!(
+            gated_command_result(
+                &facade,
+                &[ProtocolCapabilityDto::ProviderProfilesV1],
+                &gated_command,
+            ),
             ProtocolCommandResultDto::Rejected(error)
                 if error.code() != "provider_profiles_capability_required"
         ));

@@ -129,6 +129,7 @@ fn daemon_hello() -> ProtocolHelloDto {
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
             ProtocolCapabilityDto::DaemonHealth,
+            ProtocolCapabilityDto::ProviderProfilesV1,
         ],
         "fixture-daemon",
     )

@@ -11,8 +11,8 @@
 //! client method issues and replies with the matching typed payload. The
 //! fake-secret sweep proves credential-shaped commands fail closed
 //! client-side and that no captured request or decoded projection ever
-//! carries a fake secret. The negotiation-gate test proves an unsupported
-//! peer fails closed.
+//! carries a fake secret. The hello test proves the shared client advertises
+//! `provider_profiles_v1` and still fails closed for an unsupported peer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -20,16 +20,17 @@ use std::thread;
 use intention_client::{DaemonLauncher, IntentionClient};
 use intention_protocol::contract_families::{
     ConfigurationEditCommandDto, ConfigurationEditOperationDto, ConfigurationProjectionDto,
-    CredentialRotationResultDto, GetPricingPolicyQueryDto, GetProviderDiscoveryStatusQueryDto,
-    GetProviderHealthEvidenceQueryDto, PricingObservationDto, PricingProjectionDto,
-    ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto, ProviderHealthEvidenceDto,
-    ProviderHealthProjectionDto, ProviderModelDiscoveryRecordDto, RawTomlEditCommandDto,
-    ReloadConfigurationCommandDto, ReloadTransactionDto, RotateProviderCredentialsCommandDto,
+    CredentialRotationResultDto, GetPricingPolicyQueryDto, GetProviderCatalogStatusQueryDto,
+    GetProviderDiscoveryStatusQueryDto, GetProviderHealthEvidenceQueryDto, PricingObservationDto,
+    PricingProjectionDto, ProviderAvailabilityObservation, ProviderDiscoveryProjectionDto,
+    ProviderHealthEvidenceDto, ProviderHealthProjectionDto, ProviderModelDiscoveryRecordDto,
+    RawTomlEditCommandDto, ReloadConfigurationCommandDto, ReloadTransactionDto,
+    RotateProviderCredentialsCommandDto,
 };
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandResultDto, ProtocolHelloDto,
     ProtocolMessageDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
-    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, ProtocolVersionDto,
+    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use intention_types::{DtoResult, ErrorDto, SchemaVersionDto};
@@ -559,26 +560,53 @@ fn credential_shaped_commands_fail_closed_client_side_before_connecting() {
     assert!(!error.to_string().contains(FAKE_SECRET));
 }
 
-#[test]
-fn unsupported_peer_fails_closed_at_the_negotiation_gate() {
-    assert_eq!(
-        intention_protocol::negotiation::require_provider_profiles(&[
+/// The pre-Slice-2 baseline capability set a peer that never implemented the
+/// provider control plane advertises.
+fn baseline_hello() -> ProtocolHelloDto {
+    ProtocolHelloDto::new(
+        local_protocol_version(),
+        vec![
             intention_protocol::ProtocolCapabilityDto::SessionSubscriptions,
-        ])
-        .expect_err("missing provider profiles capability fails closed")
-        .code(),
-        "provider_profiles_capability_required"
-    );
+            intention_protocol::ProtocolCapabilityDto::CorrelatedRequests,
+            intention_protocol::ProtocolCapabilityDto::DaemonHealth,
+        ],
+        "baseline-fixture-daemon",
+    )
+    .expect("baseline fixture daemon hello is valid")
+}
+
+/// A1 (`P1-02`): the shared client advertises `provider_profiles_v1` in its
+/// hello, so the real daemon's gate accepts the delivered control-plane
+/// surface, and it still fails closed when a daemon does not negotiate the
+/// capability.
+#[test]
+fn client_hello_advertises_and_requires_provider_profiles_v1() {
+    let fixture_endpoint = endpoint();
+    let listener = LocalListener::bind(fixture_endpoint.clone()).expect("fixture listener binds");
+    let server = thread::spawn(move || {
+        let mut connection = listener.accept().expect("fixture client connects");
+        let client_hello = connection
+            .receive_hello()
+            .expect("fixture client hello arrives");
+        // The client fails closed on its capability check and may drop the
+        // connection before this reply lands, so a failed send is expected.
+        let _ = connection.send_hello(&baseline_hello());
+        client_hello
+    });
+    let error = fixture_client(fixture_endpoint)
+        .provider_catalog_status(GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        })
+        .expect_err("a daemon without provider_profiles_v1 must fail closed");
+    assert_eq!(error.code(), "incompatible_protocol_capabilities");
+    let client_hello = server.join().expect("fixture server completes");
     assert!(
-        intention_protocol::negotiation::require_provider_profiles(&[
-            intention_protocol::ProtocolCapabilityDto::ProviderProfilesV1,
-        ])
-        .is_ok()
+        client_hello
+            .capabilities()
+            .contains(&intention_protocol::ProtocolCapabilityDto::ProviderProfilesV1),
+        "the shared client must advertise provider_profiles_v1 in its hello, got {:?}",
+        client_hello.capabilities()
     );
-    // The client handshake itself stays at the M3 capability baseline: the
-    // control-plane commands are additive and the daemon gate enforces the
-    // provider-profiles capability before any effect.
-    let _ = ProtocolVersionDto::new(1, 1);
 }
 
 #[test]

@@ -462,7 +462,6 @@ fn reconcile_unavailable_queue_issues_the_exact_command_variant() {
                 .reconcile_unavailable_queue(ReconcileUnavailableQueueCommandDto {
                     session_id: "session-1".to_owned(),
                     operation_id: "op-reconcile".to_owned(),
-                    page_cursor: None,
                 })
                 .expect("client command decodes the typed acceptance");
             assert_eq!(result.promoted_count, 2);
@@ -482,7 +481,6 @@ fn accept_provider_catalog_removal_issues_the_exact_command_variant() {
                     expected_active_catalog_revision_id: "1".to_owned(),
                     expected_candidate_catalog_revision_id: "2".to_owned(),
                     operation_id: "op-accept".to_owned(),
-                    source_recheck: false,
                 })
                 .expect("client command decodes the typed acceptance");
             assert_eq!(result.active_catalog_revision_id, "2");

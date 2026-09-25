@@ -27,12 +27,16 @@ use intention_domain::{
     CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunModeDto, RunSnapshotDto,
     RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
+use intention_protocol::contract_families::{
+    GetProviderCatalogStatusQueryDto, ReconcileUnavailableQueueCommandDto,
+};
 use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
     ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto,
-    SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunStreamFrameDto,
+    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto,
+    SubscribeRunCommandDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
@@ -456,12 +460,14 @@ fn excess_response() -> String {
     )
 }
 
-/// The exact capability list the shared client requires from the daemon.
+/// The exact capability list the shared client advertises and requires from
+/// the daemon.
 ///
 /// The list itself is private to `intention-client`, but its values are public
 /// protocol capabilities and the daemon's negotiation only verifies protocol
 /// version compatibility, so the fixture reconstructs the same hello with
-/// public APIs only.
+/// public APIs only. `provider_profiles_v1` is part of it because the client
+/// surfaces the gated control plane (A1).
 fn command_hello() -> ProtocolHelloDto {
     ProtocolHelloDto::new(
         local_protocol_version(),
@@ -469,10 +475,26 @@ fn command_hello() -> ProtocolHelloDto {
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
             ProtocolCapabilityDto::DaemonHealth,
+            ProtocolCapabilityDto::ProviderProfilesV1,
         ],
         "facade-e2e",
     )
     .expect("fixture command hello is valid")
+}
+
+/// The pre-Slice-2 baseline capability set, used as the negative probe for the
+/// daemon's `provider_profiles_v1` control-plane gate.
+fn baseline_hello() -> ProtocolHelloDto {
+    ProtocolHelloDto::new(
+        local_protocol_version(),
+        vec![
+            ProtocolCapabilityDto::SessionSubscriptions,
+            ProtocolCapabilityDto::CorrelatedRequests,
+            ProtocolCapabilityDto::DaemonHealth,
+        ],
+        "facade-e2e-baseline",
+    )
+    .expect("fixture baseline hello is valid")
 }
 
 fn stream_hello() -> ProtocolHelloDto {
@@ -484,15 +506,16 @@ fn stream_hello() -> ProtocolHelloDto {
     .expect("fixture stream hello is valid")
 }
 
-/// Sends one typed protocol command over a fresh negotiated connection and
+/// Sends one typed protocol payload over a fresh negotiated connection and
 /// verifies the correlated response, replicating the client's private request
 /// path with public transport and protocol APIs only.
-fn send_command(
+fn send_payload(
     endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
     payload: ProtocolRequestPayloadDto,
-) -> DtoResult<ProtocolCommandResultDto> {
+) -> DtoResult<ProtocolResponsePayloadDto> {
     let mut connection = LocalConnection::connect(endpoint)?;
-    let remote = negotiate_client(&mut connection, command_hello())?;
+    let remote = negotiate_client(&mut connection, hello)?;
     let correlation_id = CorrelationIdDto::new();
     connection.send_request(&ProtocolRequestEnvelopeDto::new(
         local_protocol_version(),
@@ -505,8 +528,28 @@ fn send_command(
     {
         return Err(invalid_response());
     }
-    match response.message().payload() {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result.clone()),
+    Ok(response.message().payload().clone())
+}
+
+/// Sends one typed protocol command with the shared client's capability set.
+fn send_command(
+    endpoint: &LocalEndpoint,
+    payload: ProtocolRequestPayloadDto,
+) -> DtoResult<ProtocolCommandResultDto> {
+    match send_payload(endpoint, command_hello(), payload)? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
+        _ => Err(invalid_response()),
+    }
+}
+
+/// Sends one typed protocol query with an explicit capability advertisement.
+fn send_query(
+    endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
+    query: ProtocolQueryDto,
+) -> DtoResult<ProtocolQueryResultDto> {
+    match send_payload(endpoint, hello, ProtocolRequestPayloadDto::Query(query))? {
+        ProtocolResponsePayloadDto::QueryResult(result) => Ok(result),
         _ => Err(invalid_response()),
     }
 }
@@ -671,6 +714,79 @@ fn assert_contiguous_facts(facts: &[ModelRunFactDto]) {
             Some(ModelRunFactInputDto::Finished { .. }) | Some(ModelRunFactInputDto::Failed { .. })
         ),
         "the final durable fact closes the run"
+    );
+}
+
+/// A1 (`P1-02`) and D-03 (`P2-05`): the real daemon accepts the shared
+/// client's gated control-plane surface end to end because the client hello
+/// advertises `provider_profiles_v1`, while the same request from a baseline
+/// peer is rejected before any effect.
+#[test]
+fn real_daemon_control_plane_gate_accepts_the_client_capability_advertisement() {
+    let host = E2eHost::new(None, "{}");
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
+
+    let session_id = SessionId::new();
+    let created = send_command(
+        &host.endpoint,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                    .expect("workspace root is absolute"),
+                RunModeDto::Build,
+            ),
+        )),
+    )
+    .expect("session creation is accepted");
+    assert!(
+        matches!(created, ProtocolCommandResultDto::Accepted(_)),
+        "the daemon accepts session creation"
+    );
+
+    // A gated query through the real client succeeds because the client hello
+    // advertises provider_profiles_v1.
+    let status = client
+        .provider_catalog_status(GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        })
+        .expect("the real daemon accepts a gated control-plane query");
+    assert_eq!(status.schema_version, "1.1");
+
+    // A gated command through the real client succeeds for the same reason.
+    let reconciled = client
+        .reconcile_unavailable_queue(ReconcileUnavailableQueueCommandDto {
+            session_id: session_id.to_string(),
+            operation_id: "op-w2b-reconcile".to_owned(),
+        })
+        .expect("the real daemon accepts a gated control-plane command");
+    assert_eq!(reconciled.session_id, session_id.to_string());
+    assert_eq!(reconciled.promoted_count, 0);
+    assert_eq!(reconciled.page_cursor, None);
+
+    // The negative probe: the same gated query from a baseline peer is
+    // rejected before any effect with the protocol helper's stable code.
+    let rejected = send_query(
+        &host.endpoint,
+        baseline_hello(),
+        ProtocolQueryDto::GetProviderCatalogStatus(GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        }),
+    )
+    .expect("the real daemon answers the gated query");
+    match rejected {
+        ProtocolQueryResultDto::Rejected(error) => {
+            assert_eq!(error.code(), "provider_profiles_capability_required");
+        }
+        other => panic!("a peer without the capability must be rejected, got {other:?}"),
+    }
+
+    assert_eq!(
+        host.provider.request_count(),
+        0,
+        "control-plane calls never execute provider work"
     );
 }
 
