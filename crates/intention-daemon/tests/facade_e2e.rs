@@ -1127,3 +1127,690 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     );
     assert_eq!(host.provider.excess_count(), 0);
 }
+
+/// In-process daemon-host plumbing over the crate's bounded test-support seams.
+///
+/// These fixtures drive one daemon host inside the measured test process
+/// through `serve_test_async_listener`, `serve_test_connection`, and
+/// `TestHostLifecycle`: the capability gates, ordinary request dispatch,
+/// recovered-run admission, the exact task registry, and the daemon-owned tool
+/// executor. They never load the platform configuration, spawn a daemon
+/// process, or bind a real user endpoint.
+#[cfg(feature = "test-support")]
+mod in_process_host {
+    use super::*;
+    use futures_util::StreamExt;
+    use intention::DaemonApplicationFacade;
+    use intention_config::{
+        ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+    };
+    use intention_daemon::{
+        DaemonToolExecutor, serve_test_async_listener, serve_test_connection, test_host_lifecycle,
+    };
+    use intention_domain::StopRunCommandDto;
+    use intention_model::{
+        FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+        ModelEventStream, ModelExecutionDriver, ModelRequestDto,
+    };
+    use intention_protocol::contract_families::AdmitRecoveredRunCommandDto;
+    use intention_protocol::{
+        ProtocolVersionDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    };
+    use intention_runtime::ToolExecutionPort;
+    use intention_transport::{AsyncLocalListener, AsyncRequestSender, LocalListener};
+    use intention_types::{ConfigRevisionId, SchemaVersionDto, ToolCallDto, ToolCallId};
+
+    /// The credential-free configuration snapshot of every in-process fixture.
+    fn fixture_snapshot() -> ConfigSnapshotDto {
+        let source = ConfigSourceDto::Explicit(
+            ConfigPathDto::parse(
+                std::env::temp_dir()
+                    .join("intention-daemon-in-process.toml")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .expect("fixture configuration path is absolute"),
+        );
+        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"",
+            source,
+        ))
+        .expect("fixture configuration resolves");
+        ConfigSnapshotDto::new(
+            SchemaVersionDto::new(1, 0),
+            ConfigRevisionId::new(),
+            intention_types::TimestampDto::from_unix_seconds(1)
+                .expect("fixture timestamp is valid"),
+            resolved,
+        )
+        .expect("fixture snapshot is credential-free")
+    }
+
+    /// Opens one isolated durable facade with the supplied provider driver.
+    fn open_facade(
+        directory: &TempDir,
+        driver: Arc<dyn ModelExecutionDriver + Send + Sync>,
+    ) -> DaemonApplicationFacade {
+        DaemonApplicationFacade::open_for_test_support_with_driver(
+            directory.path().join("in-process.sqlite"),
+            fixture_snapshot(),
+            driver,
+        )
+        .expect("fixture facade opens")
+    }
+
+    /// Seeds the one auto-accepted catalog profile every fixture turn resolves.
+    fn seed_catalog(facade: &DaemonApplicationFacade) {
+        facade
+            .seed_fixture_catalog_for_test_support(
+                "seed-1",
+                "openrouter",
+                "fixture",
+                "https://api.example.invalid/v1",
+            )
+            .expect("fixture catalog seeds");
+    }
+
+    /// Creates one ordinary fixture session rooted at the supplied workspace.
+    fn create_session(facade: &DaemonApplicationFacade, workspace: &Path) -> SessionId {
+        let session_id = SessionId::new();
+        let created = facade.command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
+                    .expect("fixture workspace is absolute"),
+                RunModeDto::Build,
+            ),
+        ));
+        assert!(
+            matches!(created, ProtocolCommandResultDto::Accepted(_)),
+            "fixture session creates: {created:?}"
+        );
+        session_id
+    }
+
+    /// Starts one durable fixture turn and returns its `Starting` run identity.
+    fn start_turn(facade: &DaemonApplicationFacade, session_id: SessionId, content: &str) -> RunId {
+        let accepted = facade.command(ProtocolCommandDto::SendUserTurn(
+            SendUserTurnCommandDto::new(session_id, TurnId::new(), content)
+                .expect("fixture turn is valid"),
+        ));
+        let ProtocolCommandResultDto::Accepted(accepted) = accepted else {
+            panic!("fixture turn is accepted: {accepted:?}")
+        };
+        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
+            panic!("fixture turn result owns a run")
+        };
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
+            panic!("fixture first turn starts a run")
+        };
+        run_id
+    }
+
+    /// Polls one durable run projection until it reaches a terminal status.
+    async fn wait_for_terminal_run(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        run_id: RunId,
+    ) -> RunStatusDto {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("fixture run replay reads")
+                .snapshot()
+                .run_projection()
+                .status();
+            if status.is_terminal() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the fixture run reaches a terminal status"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Completes every started run with one text round.
+    struct CompletedDriver;
+
+    impl ModelDriver for CompletedDriver {
+        fn capabilities(&self) -> ModelCapabilitiesDto {
+            ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        }
+    }
+
+    impl ModelExecutionDriver for CompletedDriver {
+        fn execute(
+            &self,
+            _request: ModelRequestDto,
+            _cancellation: ModelCancellationSignal,
+        ) -> ModelEventStream {
+            Box::pin(futures_util::stream::iter(vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("in-process fixture output")
+                    .expect("fixture text is valid")),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ]))
+        }
+    }
+
+    /// Blocks one execution round until the fixture releases it.
+    struct BlockingDriver {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl BlockingDriver {
+        fn new() -> Self {
+            Self {
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+            }
+        }
+    }
+
+    impl ModelDriver for BlockingDriver {
+        fn capabilities(&self) -> ModelCapabilitiesDto {
+            ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        }
+    }
+
+    impl ModelExecutionDriver for BlockingDriver {
+        fn execute(
+            &self,
+            _request: ModelRequestDto,
+            _cancellation: ModelCancellationSignal,
+        ) -> ModelEventStream {
+            self.entered.notify_one();
+            let release = Arc::clone(&self.release);
+            Box::pin(
+                futures_util::stream::once(async move {
+                    release.notified().await;
+                    Ok(ModelEventDto::started())
+                })
+                .chain(futures_util::stream::iter(vec![
+                    Ok(ModelEventDto::text_delta("released fixture output")
+                        .expect("fixture text is valid")),
+                    Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+                ])),
+            )
+        }
+    }
+
+    /// Sends one typed request over an already negotiated fixture client.
+    async fn send_typed_request(
+        requests: &mut AsyncRequestSender,
+        payload: ProtocolRequestPayloadDto,
+    ) -> CorrelationIdDto {
+        let correlation_id = CorrelationIdDto::new();
+        requests
+            .send(&ProtocolRequestEnvelopeDto::new(
+                local_protocol_version(),
+                correlation_id,
+                ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
+            ))
+            .await
+            .expect("fixture request sends");
+        correlation_id
+    }
+
+    /// A fixture hello that is compatible in every capability but its version.
+    fn version_mismatched_hello() -> ProtocolHelloDto {
+        let current = local_protocol_version();
+        ProtocolHelloDto::new(
+            ProtocolVersionDto::new(current.major() + 1, current.minor()),
+            vec![ProtocolCapabilityDto::DaemonHealth],
+            "in-process-mismatched",
+        )
+        .expect("fixture hello is valid")
+    }
+
+    #[tokio::test]
+    async fn in_process_listener_dispatches_queries_subscriptions_and_recovered_admission() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = open_facade(&directory, Arc::new(CompletedDriver));
+        seed_catalog(&facade);
+        let workspace = TempDir::new().expect("temporary workspace exists");
+        let session_id = create_session(&facade, workspace.path());
+        let run_id = start_turn(&facade, session_id, "held in-process fixture turn");
+        facade
+            .mark_recovered_run_held_for_daemon(session_id, run_id)
+            .expect("fixture run is held for explicit admission");
+
+        let endpoint = unique_endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+        let server = tokio::spawn(serve_test_async_listener(listener, facade.clone(), 2));
+
+        // A peer that declares another protocol version is dropped during the
+        // hello exchange, before any request could reach a gate or an effect.
+        let mismatched = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("version-mismatched peer connects");
+        assert!(
+            mismatched
+                .negotiate(version_mismatched_hello())
+                .await
+                .is_err(),
+            "the daemon rejects a version-mismatched peer"
+        );
+
+        // A negotiated peer dispatches a baseline health query, the session
+        // subscription command, and the held-run admission whose accepted
+        // command the host then admits as one real execution.
+        let connection = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("ordinary peer connects");
+        let (_remote, mut requests, mut responses) = connection
+            .negotiate(command_hello())
+            .await
+            .expect("ordinary peer negotiates");
+
+        let health_correlation = send_typed_request(
+            &mut requests,
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+        )
+        .await;
+        let health_response = responses.receive().await.expect("health response arrives");
+        assert_eq!(health_response.correlation_id(), health_correlation);
+        assert!(matches!(
+            health_response.message().payload(),
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health))
+                if health.readiness() == DaemonReadinessDto::Ready
+        ));
+
+        let subscription_correlation = send_typed_request(
+            &mut requests,
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
+                SubscribeSessionCommandDto::new(
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                    session_id,
+                    None,
+                    RunModeDto::Build,
+                ),
+            )),
+        )
+        .await;
+        let subscription_response = responses
+            .receive()
+            .await
+            .expect("subscription response arrives");
+        assert_eq!(
+            subscription_response.correlation_id(),
+            subscription_correlation
+        );
+        assert!(matches!(
+            subscription_response.message().payload(),
+            ProtocolResponsePayloadDto::Subscription(
+                SessionSubscriptionResponseDto::SnapshotAndTail { .. }
+            )
+        ));
+
+        let admission_correlation = send_typed_request(
+            &mut requests,
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::AdmitRecoveredRun(
+                AdmitRecoveredRunCommandDto {
+                    session_id: session_id.to_string(),
+                    run_id: run_id.to_string(),
+                    operation_id: "in-process-admit-1".to_owned(),
+                },
+            )),
+        )
+        .await;
+        let admission_response = responses
+            .receive()
+            .await
+            .expect("admission response arrives");
+        assert_eq!(admission_response.correlation_id(), admission_correlation);
+        assert!(matches!(
+            admission_response.message().payload(),
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
+                if matches!(
+                    accepted.result(),
+                    ProtocolAcceptedResultDto::AdmitRecoveredRun(_)
+                )
+        ));
+
+        server.await.expect("host accepts both fixture peers");
+        assert_eq!(
+            wait_for_terminal_run(&facade, session_id, run_id).await,
+            RunStatusDto::Completed,
+            "the admitted recovered run executes to completion"
+        );
+    }
+
+    #[test]
+    fn in_process_blocking_seam_serves_one_request_per_connection_and_drops_broken_peers() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = open_facade(&directory, Arc::new(CompletedDriver));
+        seed_catalog(&facade);
+        let workspace = TempDir::new().expect("temporary workspace exists");
+        let session_id = create_session(&facade, workspace.path());
+
+        let endpoint = unique_endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+        let server = thread::spawn(move || {
+            for _ in 0..4 {
+                let connection = listener.accept().expect("fixture peer connects");
+                serve_test_connection(connection, facade.clone());
+            }
+        });
+
+        // A version-mismatched peer is dropped during the hello exchange.
+        let mut mismatched = LocalConnection::connect(&endpoint).expect("fixture peer connects");
+        assert!(
+            negotiate_client(&mut mismatched, version_mismatched_hello()).is_err(),
+            "the daemon rejects a version-mismatched peer"
+        );
+
+        // A negotiated peer that never sends a request is dropped silently.
+        let mut silent = LocalConnection::connect(&endpoint).expect("fixture peer connects");
+        negotiate_client(&mut silent, baseline_hello()).expect("baseline peer negotiates");
+        drop(silent);
+
+        // A session subscription command is answered from the durable
+        // subscription surface instead of the ordinary command dispatch.
+        assert!(matches!(
+            send_payload(
+                &endpoint,
+                command_hello(),
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
+                    SubscribeSessionCommandDto::new(
+                        intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
+                        session_id,
+                        None,
+                        RunModeDto::Build,
+                    ),
+                )),
+            )
+            .expect("subscription response arrives"),
+            ProtocolResponsePayloadDto::Subscription(
+                SessionSubscriptionResponseDto::SnapshotAndTail { .. }
+            )
+        ));
+
+        // An ordinary command reaches the durable command dispatch.
+        let wire_workspace = TempDir::new().expect("temporary workspace exists");
+        let created = send_payload(
+            &endpoint,
+            command_hello(),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    SessionId::new(),
+                    WorkspaceId::new(),
+                    WorkspaceRootDto::parse(wire_workspace.path().to_string_lossy().into_owned())
+                        .expect("fixture workspace is absolute"),
+                    RunModeDto::Build,
+                ),
+            )),
+        )
+        .expect("command response arrives");
+        assert!(
+            matches!(
+                created,
+                ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(_))
+            ),
+            "ordinary command dispatch accepts the create-session command: {created:?}"
+        );
+
+        server.join().expect("fixture server completes");
+    }
+
+    #[tokio::test]
+    async fn in_process_terminalizer_retries_a_rearmed_injection_through_the_durable_path() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = open_facade(&directory, Arc::new(CompletedDriver));
+        seed_catalog(&facade);
+        let workspace = TempDir::new().expect("temporary workspace exists");
+        let session_id = create_session(&facade, workspace.path());
+        let run_id = start_turn(&facade, session_id, "cancelled in-process fixture turn");
+
+        let host = test_host_lifecycle(facade.clone());
+        let endpoint = unique_endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+        let server_host = host.clone();
+        let server = tokio::spawn(async move {
+            server_host.serve_connections(listener, 1).await;
+        });
+
+        // The unregistered Starting run is cancelled over the wire, so the host
+        // owns the terminalization and its first durable step fails.
+        host.inject_terminalizer_failure_once();
+        let connection = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("stop peer connects");
+        let (_remote, mut requests, mut responses) = connection
+            .negotiate(command_hello())
+            .await
+            .expect("stop peer negotiates");
+        let correlation = send_typed_request(
+            &mut requests,
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
+                StopRunCommandDto::new(session_id, run_id),
+            )),
+        )
+        .await;
+        let response = responses.receive().await.expect("stop response arrives");
+        assert_eq!(response.correlation_id(), correlation);
+        assert!(matches!(
+            response.message().payload(),
+            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
+                if matches!(accepted.result(), ProtocolAcceptedResultDto::StopRun(_))
+        ));
+        server.await.expect("host accepts the stop peer");
+
+        tokio::time::timeout(Duration::from_secs(2), host.wait_for_terminalizer_failure())
+            .await
+            .expect("the injected terminalizer failure is observed");
+        assert_eq!(host.terminalizer_attempts(), 1);
+        assert_eq!(host.task_count(), 1);
+
+        // Re-arming the exact injection while the terminalizer is parked makes
+        // the second attempt fail too, so the retry takes the rate-limited
+        // delay before the third attempt commits the durable Cancelled state.
+        host.inject_terminalizer_failure_once();
+        host.release_terminalizer_retry();
+        tokio::time::timeout(Duration::from_secs(2), host.wait_for_terminalizer_failure())
+            .await
+            .expect("the re-armed terminalizer failure is observed");
+        assert_eq!(host.terminalizer_attempts(), 2);
+        host.release_terminalizer_retry();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            host.wait_for_terminalizer_completion(),
+        )
+        .await
+        .expect("the released terminalizer reaches durable completion");
+        assert_eq!(host.terminalizer_attempts(), 3);
+        assert_eq!(host.task_count(), 0);
+        assert_eq!(
+            wait_for_terminal_run(&facade, session_id, run_id).await,
+            RunStatusDto::Cancelled
+        );
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn in_process_lifecycle_waits_for_registered_work_and_reports_unknown_completions() {
+        let directory = TempDir::new().expect("temporary directory exists");
+        let driver = Arc::new(BlockingDriver::new());
+        let facade = open_facade(&directory, driver.clone());
+        seed_catalog(&facade);
+        let workspace = TempDir::new().expect("temporary workspace exists");
+        let session_id = create_session(&facade, workspace.path());
+        let run_id = start_turn(&facade, session_id, "blocked in-process fixture turn");
+        let host = test_host_lifecycle(facade.clone());
+
+        // The completion watch is exact: an unregistered run never signals.
+        assert!(
+            !host
+                .wait_for_execution_completion(SessionId::new(), RunId::new())
+                .await,
+            "an unregistered run owns no completion watch"
+        );
+
+        host.admit_starting_run(session_id, run_id);
+        tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
+            .await
+            .expect("the admitted execution reaches the driver");
+        assert_eq!(host.task_count(), 1);
+
+        // The registry still owns the blocked execution, so fixture cleanup
+        // waits for the terminal commit before it returns.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), host.wait_for_task_cleanup())
+                .await
+                .is_err(),
+            "cleanup waits while the exact execution is registered"
+        );
+        driver.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), host.wait_for_task_cleanup())
+            .await
+            .expect("the released execution cleans its registry entry");
+        assert!(
+            host.wait_for_execution_completion(session_id, run_id).await,
+            "the registered execution reports completion"
+        );
+        assert_eq!(host.task_count(), 0);
+        assert_eq!(
+            wait_for_terminal_run(&facade, session_id, run_id).await,
+            RunStatusDto::Completed
+        );
+        host.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn in_process_tool_executor_normalizes_every_projection_and_rejects_unknown_names() {
+        let workspace = TempDir::new().expect("temporary workspace exists");
+        std::fs::write(
+            workspace.path().join("hello.txt"),
+            "hello from in-process fixture",
+        )
+        .expect("workspace fixture writes");
+        let large_bytes = 200 * 1024;
+        std::fs::write(workspace.path().join("large.txt"), "x".repeat(large_bytes))
+            .expect("workspace fixture writes");
+        let directory = TempDir::new().expect("temporary directory exists");
+        let facade = open_facade(&directory, Arc::new(CompletedDriver));
+        seed_catalog(&facade);
+        let session_id = create_session(&facade, workspace.path());
+        let run_id = start_turn(&facade, session_id, "in-process tool fixture turn");
+        let executor = DaemonToolExecutor::new(facade.clone());
+
+        let read = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+                    .expect("fixture call is valid"),
+            )
+            .await
+            .expect("the read tool result normalizes");
+        assert!(matches!(
+            read,
+            ToolResultOutcomeDto::Succeeded { content } if content == "hello from in-process fixture"
+        ));
+
+        // A bounded read above the tool output bound carries the explicit
+        // truncation marker in its normalized durable content.
+        let truncated = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"large.txt"}"#)
+                    .expect("fixture call is valid"),
+            )
+            .await
+            .expect("the truncated read result normalizes");
+        let ToolResultOutcomeDto::Succeeded { content } = truncated else {
+            panic!("the truncated read succeeds with bounded content")
+        };
+        assert!(content.ends_with("[truncated]"));
+        assert!(
+            content.len() < large_bytes,
+            "the truncated read stays within the tool output bound"
+        );
+
+        // Glob normalizes a bounded workspace-relative path list.
+        let glob = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(ToolCallId::new(), "glob", r#"{"pattern":"*.txt"}"#)
+                    .expect("fixture call is valid"),
+            )
+            .await
+            .expect("the glob tool result normalizes");
+        let ToolResultOutcomeDto::Succeeded { content } = glob else {
+            panic!("the glob result succeeds with a path list")
+        };
+        let paths: Vec<String> =
+            serde_json::from_str(&content).expect("normalized glob content is a path list");
+        assert!(paths.contains(&"hello.txt".to_owned()));
+        assert!(paths.contains(&"large.txt".to_owned()));
+
+        // Grep normalizes its typed matches.
+        let grep = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(
+                    ToolCallId::new(),
+                    "grep",
+                    r#"{"pattern":"in-process","path":"hello.txt"}"#,
+                )
+                .expect("fixture call is valid"),
+            )
+            .await
+            .expect("the grep tool result normalizes");
+        let ToolResultOutcomeDto::Succeeded { content } = grep else {
+            panic!("the grep result succeeds with typed matches")
+        };
+        let matches: Vec<serde_json::Value> =
+            serde_json::from_str(&content).expect("normalized grep content is a match list");
+        assert!(
+            matches
+                .iter()
+                .any(|entry| entry["path"] == "hello.txt" && entry["line"] == 1),
+            "the normalized grep match keeps its workspace-relative identity"
+        );
+
+        // Write normalizes to its byte-count mutation summary.
+        let written = "written by the daemon tool path";
+        let write = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(
+                    ToolCallId::new(),
+                    "write",
+                    serde_json::json!({"path": "written.txt", "content": written}).to_string(),
+                )
+                .expect("fixture call is valid"),
+            )
+            .await
+            .expect("the write tool result normalizes");
+        assert!(matches!(
+            write,
+            ToolResultOutcomeDto::Succeeded { content }
+                if content == format!("{} bytes", written.len())
+        ));
+
+        // An unregistered tool name is a typed decode failure, never a silent
+        // fallthrough to another tool.
+        let error = executor
+            .execute_tool(
+                session_id,
+                run_id,
+                ToolCallDto::new(ToolCallId::new(), "not-a-registered-tool", "{}")
+                    .expect("fixture call is valid"),
+            )
+            .await
+            .expect_err("an unregistered tool name is rejected");
+        assert_eq!(error.code(), "unknown_tool");
+    }
+}

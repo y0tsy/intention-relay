@@ -3,16 +3,31 @@
 //! The daemon owns the local listener and typed connection hosting. It delegates
 //! health, query, command, and replay-only subscription meaning to the durable
 //! composition facade.
+//!
+//! The daemon also owns the continual-harness side of architecture 26: the
+//! schedule tick cadence, the project time zone applied to non-archived rules,
+//! the live concurrency signal observed before every admission, the durable
+//! journal read surface, and restart recovery. Every one of those is applied
+//! through [`HarnessScheduleHost`], and restart recovery never resumes,
+//! reattaches, retries, or reruns an interrupted launch: a later attempt is a
+//! separately admitted launch with new identities.
 
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use intention::DaemonApplicationFacade;
+use intention::{
+    DaemonApplicationFacade, HarnessRestartRecoveryDto, HarnessScheduleTickOutcomeDto,
+    HarnessScheduleTickRequestDto, ProgrammaticReservationRecoveryDto,
+    harness_repo::HarnessJournalRecordDto,
+};
 use intention_domain::{RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto};
 use intention_model::ModelCancellationSignal;
 use intention_protocol::{
@@ -51,7 +66,198 @@ const CANCELLATION_TERMINALIZER_RETRY_DELAY: Duration = Duration::from_millis(25
 const PUBLICATION_RETRY_ATTEMPTS: usize = 6;
 const PUBLICATION_RETRY_DELAY: Duration = Duration::from_millis(100);
 
+/// The daemon-owned cadence of one continual-harness scheduling tick.
+///
+/// The durable grid never moves: a tick that observes several missed interval
+/// slots still admits at most one coalesced reason with its exact newest slot.
+const HARNESS_SCHEDULE_TICK_CADENCE: Duration = Duration::from_secs(60);
+
+/// The daemon-owned project time zone applied to non-archived harness rules.
+///
+/// A non-archived rule follows this zone; an archived rule keeps the zone
+/// recorded by its immutable revision.
+const HARNESS_PROJECT_TIME_ZONE: &str = "UTC";
+
 type RunKey = (SessionId, RunId);
+
+/// The daemon-owned continual-harness scheduling, journal, and recovery surface.
+///
+/// The daemon owns the tick cadence, the project time zone, the live
+/// concurrency signal, the journal read surface, and restart recovery; the
+/// durable capture, the single coalesced admission per rule, the counters, and
+/// every journal append stay with the composition. The surface carries
+/// daemon-assigned identities and times only: no credential, filesystem path,
+/// grant, or provider resource crosses it, and an observed interrupted launch
+/// is never resumed, reattached, retried, or rerun.
+#[derive(Clone)]
+pub struct HarnessScheduleHost {
+    facade: DaemonApplicationFacade,
+    rules: Arc<Mutex<Vec<String>>>,
+    concurrency_available: Arc<AtomicBool>,
+}
+
+impl HarnessScheduleHost {
+    /// Creates the daemon-owned harness surface over one open facade.
+    ///
+    /// A freshly created surface observes no occupied harness slot until the
+    /// daemon records a live observation.
+    #[must_use]
+    pub fn new(facade: DaemonApplicationFacade) -> Self {
+        Self {
+            facade,
+            rules: Arc::new(Mutex::new(Vec::new())),
+            concurrency_available: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Returns the daemon-owned cadence of one harness scheduling tick.
+    #[must_use]
+    pub const fn tick_cadence(&self) -> Duration {
+        HARNESS_SCHEDULE_TICK_CADENCE
+    }
+
+    /// Returns the daemon-owned project time zone of non-archived rules.
+    #[must_use]
+    pub const fn project_time_zone(&self) -> &'static str {
+        HARNESS_PROJECT_TIME_ZONE
+    }
+
+    /// Records the daemon's live concurrency observation.
+    ///
+    /// An occupied signal retains the durable pending reason instead of
+    /// launching, and the next observation re-reads the daemon's own registry.
+    pub fn observe_concurrency(&self, available: bool) {
+        self.concurrency_available
+            .store(available, Ordering::Release);
+    }
+
+    /// Returns whether the daemon currently observes a free harness slot.
+    #[must_use]
+    pub fn concurrency_available(&self) -> bool {
+        self.concurrency_available.load(Ordering::Acquire)
+    }
+
+    /// Records one harness rule the daemon schedules at its own cadence.
+    ///
+    /// A repeated observation of the equal identity changes nothing, so a
+    /// re-observed rule is never scheduled twice.
+    pub fn observe_rule(&self, harness_id: &str) {
+        if let Ok(mut rules) = self.rules.lock()
+            && !rules.contains(&harness_id.to_owned())
+        {
+            rules.push(harness_id.to_owned());
+        }
+    }
+
+    /// Returns the harness rules this daemon currently schedules.
+    #[must_use]
+    pub fn observed_rules(&self) -> Vec<String> {
+        self.rules
+            .lock()
+            .map_or_else(|_| Vec::new(), |rules| rules.clone())
+    }
+
+    /// Applies one daemon-owned cadence pass over every observed rule.
+    ///
+    /// A rule whose tick fails is isolated: the pass continues with the next
+    /// observed rule, and the failing rule keeps its durable state unchanged.
+    pub fn schedule_pass(&self, observed_at_ms: u64) {
+        for harness_id in self.observed_rules() {
+            let _ = self.tick(&harness_id, observed_at_ms);
+        }
+    }
+
+    /// Performs one daemon-owned harness scheduling tick for one rule.
+    ///
+    /// The tick captures every due observation of the daemon-owned scheduling
+    /// grid, admits at most one launch from the single coalesced pending reason
+    /// with a fresh daemon-assigned ordinary run identity, and observes the
+    /// daemon's live concurrency signal first, so an occupied daemon slot
+    /// retains the reason instead of launching.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed boundary, schedule, capture, admission, and journal
+    /// failures of the durable tick.
+    pub fn tick(
+        &self,
+        harness_id: &str,
+        observed_at_ms: u64,
+    ) -> DtoResult<HarnessScheduleTickOutcomeDto> {
+        self.facade
+            .harness_schedule_tick_for_daemon(HarnessScheduleTickRequestDto {
+                harness_id: harness_id.to_owned(),
+                observed_at_ms,
+                project_time_zone: HARNESS_PROJECT_TIME_ZONE.to_owned(),
+                daemon_concurrency_available: self.concurrency_available(),
+                proposed_run_id: RunId::new(),
+            })
+    }
+
+    /// Loads one bounded page of one session's durable harness journal.
+    ///
+    /// The journal stays readable after a client reconnect or a daemon
+    /// restart, and a read is scoped to the owning session of the rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed identity, ownership, page, and durable journal read
+    /// failures.
+    pub fn load_journal(
+        &self,
+        session_id: SessionId,
+        harness_id: &str,
+        after_sequence: u64,
+        limit: u64,
+    ) -> DtoResult<Vec<HarnessJournalRecordDto>> {
+        self.facade.load_harness_journal_for_session_for_daemon(
+            session_id,
+            harness_id,
+            after_sequence,
+            limit,
+        )
+    }
+
+    /// Leaves one observed interrupted harness launch in its `Interrupted`
+    /// outcome.
+    ///
+    /// Restart recovery never resumes, retries, reattaches, or reruns the
+    /// interrupted launch, and it schedules no successor: a later attempt is a
+    /// separately admitted launch with new identities and new capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed identity and durable recovery failures of the
+    /// interrupted run-terminal commit.
+    pub fn recover_interrupted_launch(
+        &self,
+        harness_id: &str,
+        interrupted_run_id: &str,
+        occurred_at_ms: u64,
+    ) -> DtoResult<HarnessRestartRecoveryDto> {
+        self.facade.recover_interrupted_harness_launch_for_daemon(
+            harness_id,
+            interrupted_run_id,
+            occurred_at_ms,
+        )
+    }
+
+    /// Applies the startup recovery disposition of one root run's outstanding
+    /// programmatic-policy reservations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed identity and durable recovery failures of the
+    /// reservation recovery.
+    pub fn recover_policy_reservations(
+        &self,
+        root_run_id: &str,
+        recovered_at_ms: u64,
+    ) -> DtoResult<Vec<ProgrammaticReservationRecoveryDto>> {
+        self.facade
+            .recover_programmatic_policy_reservations_for_daemon(root_run_id, recovered_at_ms)
+    }
+}
 
 struct TokioTime;
 
@@ -110,6 +316,7 @@ impl Default for HostData {
 
 struct HostState {
     facade: DaemonApplicationFacade,
+    harness: HarnessScheduleHost,
     data: Mutex<HostData>,
     publication_gate: Mutex<()>,
     #[cfg(any(test, feature = "test-support"))]
@@ -135,6 +342,7 @@ struct HostState {
 #[cfg(test)]
 fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
     Arc::new(HostState {
+        harness: HarnessScheduleHost::new(facade.clone()),
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
@@ -160,6 +368,38 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
 }
 
 impl HostState {
+    /// Returns whether the daemon currently owns a free harness service slot.
+    ///
+    /// The daemon owns the concurrency signal: while any admitted run is
+    /// registered, no harness launch is admitted and the durable pending
+    /// reason is retained for a later tick. A failed registry read observes no
+    /// free slot, so the signal fails closed instead of over-admitting.
+    fn daemon_concurrency_available(&self) -> bool {
+        self.data.lock().is_ok_and(|data| data.tasks.is_empty())
+    }
+
+    /// Starts the daemon-owned harness scheduling cadence.
+    ///
+    /// Every cadence tick observes the daemon's own concurrency signal and
+    /// applies one scheduling pass over the harness rules the daemon observed.
+    /// A clock failure skips the pass instead of admitting a launch with a
+    /// fabricated time, and a failing rule is isolated by the pass.
+    fn spawn_harness_schedule_cadence(self: &Arc<Self>) {
+        let host = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut cadence = tokio::time::interval(HARNESS_SCHEDULE_TICK_CADENCE);
+            loop {
+                cadence.tick().await;
+                let Ok(observed_at_ms) = unix_milliseconds() else {
+                    continue;
+                };
+                host.harness
+                    .observe_concurrency(host.daemon_concurrency_available());
+                host.harness.schedule_pass(observed_at_ms);
+            }
+        });
+    }
+
     /// Returns whether one run is held pending explicit admission.
     ///
     /// A failed lookup is surfaced as an error instead of being defaulted, so
@@ -1033,6 +1273,7 @@ async fn serve_async_listener(
     facade: DaemonApplicationFacade,
 ) -> DtoResult<()> {
     let host = Arc::new(HostState {
+        harness: HarnessScheduleHost::new(facade.clone()),
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
@@ -1055,6 +1296,7 @@ async fn serve_async_listener(
         #[cfg(any(test, feature = "test-support"))]
         held_lookup_failures: AtomicUsize::new(0),
     });
+    host.spawn_harness_schedule_cadence();
     loop {
         let connection = listener.accept().await?;
         let host = Arc::clone(&host);
@@ -1370,6 +1612,7 @@ pub async fn serve_test_async_connection(
     facade: DaemonApplicationFacade,
 ) {
     let host = Arc::new(HostState {
+        harness: HarnessScheduleHost::new(facade.clone()),
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
@@ -1407,6 +1650,7 @@ pub async fn serve_test_async_listener(
     connection_count: usize,
 ) {
     let host = Arc::new(HostState {
+        harness: HarnessScheduleHost::new(facade.clone()),
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
@@ -1443,6 +1687,7 @@ pub async fn serve_test_async_listener_with_first_append_gate(
     first_append_gate: Arc<dyn ModelRunFirstAppendGate>,
 ) {
     let host = Arc::new(HostState {
+        harness: HarnessScheduleHost::new(facade.clone()),
         facade,
         data: Mutex::new(HostData::default()),
         publication_gate: Mutex::new(()),
@@ -1489,6 +1734,7 @@ pub struct TestHostLifecycle {
 pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle {
     TestHostLifecycle {
         host: Arc::new(HostState {
+            harness: HarnessScheduleHost::new(facade.clone()),
             facade,
             data: Mutex::new(HostData::default()),
             publication_gate: Mutex::new(()),
@@ -1684,6 +1930,25 @@ fn unix_timestamp() -> DtoResult<TimestampDto> {
             "the daemon clock is unavailable",
         )
     })?)
+}
+
+/// Returns the daemon's current time in Unix milliseconds.
+fn unix_milliseconds() -> DtoResult<u64> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            ErrorDto::unavailable(
+                "daemon_clock_unavailable",
+                "the daemon clock is unavailable",
+            )
+        })?
+        .as_millis();
+    u64::try_from(millis).map_err(|_| {
+        ErrorDto::unavailable(
+            "daemon_clock_unavailable",
+            "the daemon clock is unavailable",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1898,6 +2163,31 @@ mod tests {
             "daemon-host-test",
         )
         .expect("fixture hello is valid")
+    }
+
+    #[tokio::test]
+    async fn host_concurrency_signal_reflects_its_registered_execution_registry() {
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(PendingDriver));
+        let host = host_for_test(facade.clone());
+        assert!(
+            host.daemon_concurrency_available(),
+            "an idle host owns a free harness service slot"
+        );
+        let (session_id, run_id) = create_and_start(&facade);
+        host.schedule_if_starting(session_id, run_id);
+        assert_eq!(
+            host.data
+                .lock()
+                .expect("fixture registry remains available")
+                .tasks
+                .len(),
+            1,
+            "the admitted run registers exactly one execution"
+        );
+        assert!(
+            !host.daemon_concurrency_available(),
+            "a registered execution occupies the daemon-owned harness slot"
+        );
     }
 
     #[tokio::test]
