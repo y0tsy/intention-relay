@@ -32,8 +32,9 @@ use intention_domain::{
     ContextPreservationCapability, CredentialTransportMode as DomainCredentialTransportMode,
     DomainEventDto, ModelCapabilitySetV1, ModelInputCapability, ProviderDriverContractRevisionDto,
     ProviderKindDescriptorRevisionV1, ProviderProfileRevisionV1, ProviderSelectionV1,
-    ReasoningCapability, RunModeDto, SendUserTurnCommandDto, SessionProjectionDto,
-    StructuredOutputCapability, WorkspaceRootDto, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
+    ReasoningCapability, RunModeDto, RunProjectionDto, RunStatusChangedEventDto, RunStatusDto,
+    SendUserTurnCommandDto, SessionProjectionDto, StructuredOutputCapability, WorkspaceRootDto,
+    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
 use intention_protocol::contract_families::{
     AcceptProviderCatalogRemovalAcceptedDto, AcceptProviderCatalogRemovalCommandDto,
@@ -47,6 +48,7 @@ use intention_protocol::contract_families::{
     SessionProviderProfileChangedEventDto, SetSessionProviderProfileCommandDto,
     UsageAggregationDto,
 };
+use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto, AcceptUserTurnInputDto,
@@ -74,9 +76,9 @@ use intention_storage::{
     UnavailableRunQueueEntryDto,
 };
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, EventEnvelopeDto, ProjectId,
-    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
-    TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, EventEnvelopeDto, EventId,
+    EventMetadataDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 
 const CREDENTIAL: &str = "sk-test-sweep-12345";
@@ -1599,12 +1601,23 @@ impl ProviderSelectionRepositoryDto for FakeSelections {
 
 struct FakeDispatch {
     calls: RefCell<Vec<ScheduleModelRunDto>>,
+    /// When set, the daemon boundary refuses the scheduled work.
+    fail: bool,
 }
 
 impl FakeDispatch {
     const fn new() -> Self {
         Self {
             calls: RefCell::new(Vec::new()),
+            fail: false,
+        }
+    }
+
+    /// Returns a dispatch boundary that refuses every scheduled run.
+    const fn failing() -> Self {
+        Self {
+            calls: RefCell::new(Vec::new()),
+            fail: true,
         }
     }
 
@@ -1616,6 +1629,12 @@ impl FakeDispatch {
 impl ModelRunDispatchPort for FakeDispatch {
     fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()> {
         self.calls.borrow_mut().push(input);
+        if self.fail {
+            return Err(unavailable(
+                "fixture_dispatch_unavailable",
+                "the scheduled model run cannot be admitted",
+            ));
+        }
         Ok(())
     }
 }
@@ -1629,6 +1648,12 @@ struct FakeAppRepo {
     defaults: FakeDefaults,
     accepted: RefCell<Option<AcceptUserTurnInputDto>>,
     change: CommittedChangeDto,
+    /// When set, the starting-run model context cannot be read.
+    context_fault: bool,
+    /// When set, the starting-run model context reports another run identity.
+    context_run_override: Option<RunId>,
+    /// When set, the committed acceptance omits its turn outcome.
+    omit_turn_outcome: bool,
 }
 
 impl FakeAppRepo {
@@ -1638,6 +1663,9 @@ impl FakeAppRepo {
             defaults,
             accepted: RefCell::new(None),
             change,
+            context_fault: false,
+            context_run_override: None,
+            omit_turn_outcome: false,
         }
     }
 }
@@ -1669,6 +1697,62 @@ fn queued_change(session_id: SessionId) -> CommittedChangeDto {
     .expect("fixture queued change is valid")
 }
 
+fn started_change(
+    session_id: SessionId,
+    run_id: RunId,
+    with_run_event: bool,
+) -> CommittedChangeDto {
+    let run = RunProjectionDto::new(
+        session_id,
+        run_id,
+        TurnId::new(),
+        RunStatusDto::Running,
+        ConfigRevisionId::new(),
+    );
+    let projection = SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+        Some(run.config_revision_id()),
+        Some(run),
+        Vec::new(),
+        SessionEventSequenceDto::new(1),
+    )
+    .expect("fixture projection is valid");
+    // `started_run_committed_in` reads the committed events, so the fixture
+    // proves both the committed-run case and the accepted-but-uncommitted one.
+    let events = if with_run_event {
+        vec![EventEnvelopeDto::new(
+            EventMetadataDto::new(
+                SchemaVersionDto::new(1, 0),
+                EventId::new(),
+                session_id,
+                Some(run_id),
+                None,
+                SessionEventSequenceDto::new(1),
+                time(),
+            ),
+            DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
+                session_id,
+                run_id,
+                RunStatusDto::Running,
+                time(),
+            )),
+        )]
+    } else {
+        Vec::new()
+    };
+    CommittedChangeDto::new(
+        projection.clone(),
+        projection.at_sequence(),
+        events,
+        Some(AcceptedTurnOutcomeDto::Started(run)),
+    )
+    .expect("fixture started change is valid")
+}
+
 impl StorageRepositoryDto for FakeAppRepo {
     fn create_session(&self, _input: CreateSessionInputDto) -> DtoResult<CommittedChangeDto> {
         Err(unavailable("fixture_unused", "session storage is unused"))
@@ -1676,6 +1760,20 @@ impl StorageRepositoryDto for FakeAppRepo {
 
     fn accept_user_turn(&self, input: AcceptUserTurnInputDto) -> DtoResult<CommittedChangeDto> {
         *self.accepted.borrow_mut() = Some(input);
+        if self.omit_turn_outcome {
+            return CommittedChangeDto::new(
+                self.change.projection().clone(),
+                self.change.position(),
+                self.change.events().to_vec(),
+                None,
+            )
+            .map_err(|_| {
+                unavailable(
+                    "fixture_invalid_change",
+                    "the fixture change without an outcome is invalid",
+                )
+            });
+        }
         Ok(self.change.clone())
     }
 
@@ -1718,12 +1816,24 @@ impl StorageRepositoryDto for FakeAppRepo {
         session_id: SessionId,
         run_id: RunId,
     ) -> DtoResult<StartingRunModelContextDto> {
+        if self.context_fault {
+            return Err(unavailable(
+                "fixture_context_unavailable",
+                "the starting run model context is unavailable",
+            ));
+        }
+        // The fixture context carries an earlier assistant message so the
+        // schedule path maps every closed model-context role.
         StartingRunModelContextDto::new(
             session_id,
-            run_id,
+            self.context_run_override.unwrap_or(run_id),
             fixture_snapshot(),
             vec![
                 ModelContextMessageDto::new(ModelContextRoleDto::User, "hello")
+                    .expect("fixture context message is valid"),
+                ModelContextMessageDto::new(ModelContextRoleDto::Assistant, "earlier reply")
+                    .expect("fixture context message is valid"),
+                ModelContextMessageDto::new(ModelContextRoleDto::User, "hello again")
                     .expect("fixture context message is valid"),
             ],
         )
@@ -1962,10 +2072,7 @@ fn provider_selection_from_attaches_the_resolved_selection_to_the_durable_input(
             &dispatch,
         )
         .expect("selected turn acceptance succeeds");
-    assert!(matches!(
-        result,
-        intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(_)
-    ));
+    assert!(matches!(result, ProtocolAcceptedResultDto::SendUserTurn(_)));
     let accepted_borrow = repo.accepted.borrow();
     let accepted_ref = accepted_borrow
         .as_ref()
@@ -2051,6 +2158,228 @@ fn provider_selection_from_preserves_the_safe_header_transport() {
         Some("x-auth-header")
     );
     assert_eq!(dispatch.call_count(), 0);
+}
+
+/// Runs one live user-turn acceptance with the supplied resolved profile and
+/// returns the typed failure of the durable selection build.
+///
+/// The protocol selection checks run first: every profile used by the caller
+/// below passes them and fails only the domain canonical validation, so the
+/// returned error is the boundary mapping of that canonical error.
+fn live_user_turn_selection_error(profile: ResolvedProfileDto) -> ErrorDto {
+    let session_id = SessionId::new();
+    let repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        queued_change(session_id),
+    );
+    let dispatch = FakeDispatch::new();
+    let port = FakeAdmissionPort::with("default", Ok(profile));
+    let turn = SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
+        .expect("fixture command is valid")
+        .with_profile_override("default", None)
+        .expect("fixture override is valid");
+    let error = ApplicationService::new(&repo)
+        .send_user_turn_and_schedule_with_provider_selection(
+            turn,
+            SendUserTurnWorkflowInputDto::new(RunId::new(), fixture_snapshot(), time()),
+            &port,
+            &dispatch,
+        )
+        .expect_err("the invalid resolved profile fails the durable selection build");
+    // No durable turn acceptance and no scheduling happen for a rejected
+    // selection.
+    assert!(repo.accepted.borrow().is_none());
+    assert_eq!(dispatch.call_count(), 0);
+    error
+}
+
+#[test]
+fn provider_selection_from_maps_reachable_domain_validation_failures() {
+    // A non-HTTPS/HTTP endpoint is invalid execution metadata for the domain
+    // canonical record; the protocol shape checks do not classify schemes.
+    let mut invalid_endpoint = resolved_profile("default", "rev-0001");
+    invalid_endpoint.normalized_effective_endpoint = "ftp://api.example.invalid/v1".to_owned();
+    assert_eq!(
+        live_user_turn_selection_error(invalid_endpoint).code(),
+        "invalid_endpoint"
+    );
+
+    // An empty provider kind is not the `openai` alias, so only the domain
+    // canonical kind policy rejects it.
+    let mut invalid_kind = resolved_profile("default", "rev-0001");
+    invalid_kind.kind_id = String::new();
+    assert_eq!(
+        live_user_turn_selection_error(invalid_kind).code(),
+        "invalid_provider_kind"
+    );
+
+    // A credential-shaped endpoint path passes the identifier-role protocol
+    // scan and is rejected by the domain secret-value policy.
+    let mut credential_bearing = resolved_profile("default", "rev-0001");
+    credential_bearing.normalized_effective_endpoint =
+        "https://api.example.invalid/secret-path".to_owned();
+    let error = live_user_turn_selection_error(credential_bearing);
+    assert_eq!(error.code(), "credentials_forbidden");
+    assert!(!error.to_string().contains("secret-path"));
+}
+
+// ============================================================================
+// Started-turn scheduling path
+// ============================================================================
+
+/// Runs one live user-turn acceptance whose durable change is the repository's
+/// supplied commit.
+fn accept_live_turn(
+    repo: &FakeAppRepo,
+    port: &FakeAdmissionPort,
+    dispatch: &FakeDispatch,
+    session_id: SessionId,
+) -> DtoResult<ProtocolAcceptedResultDto> {
+    let turn = SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
+        .expect("fixture command is valid")
+        .with_profile_override("default", None)
+        .expect("fixture override is valid");
+    ApplicationService::new(repo).send_user_turn_and_schedule_with_provider_selection(
+        turn,
+        SendUserTurnWorkflowInputDto::new(RunId::new(), fixture_snapshot(), time()),
+        port,
+        dispatch,
+    )
+}
+
+#[test]
+fn a_started_turn_is_scheduled_with_the_full_model_context() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        started_change(session_id, run_id, true),
+    );
+    let dispatch = FakeDispatch::new();
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let result = accept_live_turn(&repo, &port, &dispatch, session_id)
+        .expect("the committed started turn is scheduled");
+    let calls = dispatch.calls.borrow();
+    let schedule = calls.first().expect("the started run was dispatched");
+    assert_eq!(schedule.session_id(), session_id);
+    assert_eq!(schedule.run_id(), run_id);
+    assert_eq!(schedule.request().model(), "fixture");
+    let roles = schedule
+        .request()
+        .messages()
+        .iter()
+        .map(intention_runtime::ModelMessageDto::role)
+        .collect::<Vec<ModelRoleDto>>();
+    assert_eq!(
+        roles,
+        [
+            ModelRoleDto::User,
+            ModelRoleDto::Assistant,
+            ModelRoleDto::User
+        ],
+        "every closed context role reaches the scheduled request in durable order"
+    );
+    drop(calls);
+    let ProtocolAcceptedResultDto::SendUserTurn(accepted) = result else {
+        unreachable!("turn acceptance always returns user-turn acceptance")
+    };
+    let SendUserTurnOutcomeDto::Started {
+        run_id: accepted_run,
+        ..
+    } = accepted.outcome()
+    else {
+        unreachable!("a committed started outcome reports the started run")
+    };
+    assert_eq!(accepted_run, run_id);
+    assert_eq!(dispatch.call_count(), 1);
+}
+
+#[test]
+fn an_uncommitted_started_outcome_never_schedules() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        started_change(session_id, run_id, false),
+    );
+    let dispatch = FakeDispatch::new();
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let result = accept_live_turn(&repo, &port, &dispatch, session_id)
+        .expect("the accepted outcome is preserved without committed run events");
+    assert!(matches!(result, ProtocolAcceptedResultDto::SendUserTurn(_)));
+    assert_eq!(
+        dispatch.call_count(),
+        0,
+        "an accepted outcome without its committed run event is never scheduled"
+    );
+}
+
+#[test]
+fn an_unreadable_or_mismatched_model_context_preserves_the_accepted_turn() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+
+    for context_fault in [true, false] {
+        let mut repo = FakeAppRepo::new(
+            seeded_catalog(),
+            FakeDefaults::new(),
+            started_change(session_id, run_id, true),
+        );
+        repo.context_fault = context_fault;
+        repo.context_run_override = (!context_fault).then(RunId::new);
+        let dispatch = FakeDispatch::new();
+        let result = accept_live_turn(&repo, &port, &dispatch, session_id)
+            .expect("the durable acceptance survives an unusable model context");
+        assert!(matches!(result, ProtocolAcceptedResultDto::SendUserTurn(_)));
+        assert_eq!(dispatch.call_count(), 0);
+        assert!(
+            repo.accepted.borrow().is_some(),
+            "the accepted turn stays durable"
+        );
+    }
+}
+
+#[test]
+fn a_refused_dispatch_preserves_the_accepted_turn() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        started_change(session_id, run_id, true),
+    );
+    let dispatch = FakeDispatch::failing();
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let result = accept_live_turn(&repo, &port, &dispatch, session_id)
+        .expect("a refused schedule never replaces the durable acceptance");
+    assert!(matches!(result, ProtocolAcceptedResultDto::SendUserTurn(_)));
+    assert_eq!(dispatch.call_count(), 1);
+    assert!(repo.accepted.borrow().is_some());
+}
+
+#[test]
+fn an_acceptance_without_a_turn_outcome_is_reported_as_malformed() {
+    let session_id = SessionId::new();
+    let mut repo = FakeAppRepo::new(
+        seeded_catalog(),
+        FakeDefaults::new(),
+        queued_change(session_id),
+    );
+    repo.omit_turn_outcome = true;
+    let dispatch = FakeDispatch::new();
+    let port = FakeAdmissionPort::with("default", Ok(resolved_profile("default", "rev-0001")));
+    let error = accept_live_turn(&repo, &port, &dispatch, session_id)
+        .expect_err("a durable acceptance must carry its turn outcome");
+    assert_eq!(error.code(), "missing_accepted_turn_outcome");
+    assert_eq!(
+        dispatch.call_count(),
+        0,
+        "no scheduling happens without a typed durable outcome"
+    );
 }
 
 // ============================================================================
@@ -2806,6 +3135,23 @@ fn by_revision_and_model_aggregates_in_period_aggregates_only() {
 }
 
 #[test]
+fn by_revision_and_model_rejects_an_identity_without_in_period_usage() {
+    // The durable query selects exactly one identity; an identity that
+    // produced no in-period usage yields no aggregation and must fail closed
+    // instead of projecting an empty or partial total.
+    let usage = FakeUsage::new();
+    usage.seed_aggregate("default", "rev-0002", "model-a", 100, 200);
+    let error = UsageService::new(&usage)
+        .by_revision_and_model(
+            &usage_query("default"),
+            "rev-0001".to_owned(),
+            "model-a".to_owned(),
+        )
+        .expect_err("an identity without in-period usage is rejected");
+    assert_eq!(error.code(), "provider_usage_invalid");
+}
+
+#[test]
 fn by_profile_rejects_an_invalid_query() {
     let usage = FakeUsage::new();
     let mut query = usage_query("default");
@@ -3204,6 +3550,28 @@ fn removal_accept_rejects_an_invalid_command() {
         .accept(accept_command(""), 1_100)
         .expect_err("blank candidate handle is rejected");
     assert_eq!(error.code(), "provider_catalog_removal_invalid");
+}
+
+#[test]
+fn removal_accept_and_reject_propagate_controller_errors() {
+    let fake = seeded_catalog();
+    let (controller, outcome) = removal_controller(&fake, 1_000);
+    assert!(outcome.candidate_handle.is_some(), "a pending row exists");
+    let error = RemovalService::new(&controller)
+        .accept(accept_command("unknown-handle"), 1_100)
+        .expect_err("an unknown removal candidate is rejected");
+    assert_eq!(error.code(), "provider_catalog_removal_not_found");
+    let error = RemovalService::new(&controller)
+        .reject(
+            RejectProviderCatalogCandidateCommandDto {
+                candidate_handle: "unknown-handle".to_owned(),
+                expected_active_catalog_revision_id: "1".to_owned(),
+                operation_id: "op-reject".to_owned(),
+            },
+            1_100,
+        )
+        .expect_err("an unknown removal candidate cannot be rejected");
+    assert_eq!(error.code(), "provider_catalog_removal_not_found");
 }
 
 #[test]

@@ -17,16 +17,24 @@
 //! variant must be handled rather than defaulted).
 
 use std::cell::RefCell;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use intention_application::{
-    ConfigurationReloadService, CredentialRotationService, DiscoveryPort, DiscoveryScopeDto,
-    DriverRebuildPort, HealthProbePort, PricingPolicyService, PrivateCredentialMaterial,
-    PrivateCredentialPort, ProviderDiscoveryService, ProviderHealthService, ReloadCandidateDto,
-    ReloadCommitOutcomeDto, SafeBindingSource, SafeCompositionBindingDto,
+    ConfigurationReloadService, ControlPlaneGate, ControlPlaneState, CredentialRotationService,
+    DiscoveryPort, DiscoveryScopeDto, DriverRebuildPort, HealthProbePort, ModelRunDriverHandle,
+    PricingPolicyService, PrivateCredentialMaterial, PrivateCredentialPort,
+    PrivateProviderProfileMaterial, PrivateRegistry, PrivateRegistryKey, ProviderDiscoveryService,
+    ProviderDriverFactory, ProviderHealthService, ReloadCandidateDto, ReloadCommitOutcomeDto,
+    SafeBindingSource, SafeCompositionBindingDto,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
+};
+use intention_domain::{
+    CredentialTransportMode as DomainCredentialTransportMode, ProviderDriverContractRevisionDto,
+    ProviderProfileRevisionV1, ProviderSelectionV1,
+    provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
 };
 use intention_protocol::contract_families::{
     ConfigurationProjectionDto, ConfigurationReloadStatusDto, CredentialRotationResultDto,
@@ -490,6 +498,12 @@ fn health_check_projects_evidence_without_touching_any_run_or_selection_state() 
             None,
         ),
         (
+            FakeHealthProbe::new(Ok(ProviderAvailabilityObservation::Unknown)),
+            ProviderAvailabilityObservation::Unknown,
+            None,
+            None,
+        ),
+        (
             FakeHealthProbe::new(Ok(ProviderAvailabilityObservation::Unavailable)),
             ProviderAvailabilityObservation::Unavailable,
             Some("provider_health_unavailable"),
@@ -840,4 +854,290 @@ fn configuration_projection_carries_the_closed_typed_reload_status() {
         ConfigurationReloadStatusDto::Active => {}
     }
     assert_eq!(reload_status, &ConfigurationReloadStatusDto::Active);
+}
+
+// ============================================================================
+// Discovery scope vocabulary
+// ============================================================================
+
+#[test]
+fn discovery_scope_labels_name_every_closed_scope() {
+    // The scope label is the deterministic safe attempt label: it names the
+    // scope kind and the scoped identity and never carries a routing decision.
+    assert_eq!(DiscoveryScopeDto::AllModels.as_str(), "all");
+    assert_eq!(
+        DiscoveryScopeDto::Kind {
+            kind_id: "responses".to_owned(),
+        }
+        .as_str(),
+        "kind:responses"
+    );
+    assert_eq!(
+        DiscoveryScopeDto::Model {
+            model_id: "model-a".to_owned(),
+        }
+        .as_str(),
+        "model:model-a"
+    );
+}
+
+#[test]
+fn discovery_rejects_an_invalid_scope_and_attempt_reference() {
+    let service: ProviderDiscoveryService = ProviderDiscoveryService;
+    let port = FakeDiscoveryPort::new(Ok(vec![discovery_record("gpt-4o")]));
+
+    // A control-bearing scope label is rejected before any port call.
+    let control_scope = service
+        .start(
+            DiscoveryScopeDto::Kind {
+                kind_id: "responses\u{7}".to_owned(),
+            },
+            &port,
+            100,
+        )
+        .expect_err("a control-bearing scope label is rejected");
+    assert_eq!(control_scope.code(), "provider_discovery_invalid");
+    assert!(port.calls().is_empty());
+
+    // An over-long scope label is rejected before any port call.
+    let over_long_scope = service
+        .start(
+            DiscoveryScopeDto::Model {
+                model_id: "m".repeat(300),
+            },
+            &port,
+            100,
+        )
+        .expect_err("an over-long scope label is rejected");
+    assert_eq!(over_long_scope.code(), "provider_discovery_invalid");
+    assert!(port.calls().is_empty());
+
+    // The status reference is validated with the same closed rules: a blank
+    // or control-bearing attempt reference never projects attempt state.
+    for attempt_id in [String::new(), " \t".to_owned(), "\u{7}".to_owned()] {
+        let error = service
+            .status(attempt_id, &port, 200)
+            .expect_err("an invalid attempt reference is rejected");
+        assert_eq!(error.code(), "provider_discovery_invalid");
+    }
+    assert!(port.calls().is_empty());
+}
+
+// ============================================================================
+// Control-plane gate and private registry
+// ============================================================================
+
+fn driver_contract(family: &str, major: u64, minor: u64) -> ProviderDriverContractRevisionDto {
+    ProviderDriverContractRevisionDto {
+        driver_family: family.to_owned(),
+        major,
+        minor,
+    }
+}
+
+fn registry_material(kind: &str) -> PrivateProviderProfileMaterial {
+    PrivateProviderProfileMaterial {
+        profile: ProviderProfileRevisionV1 {
+            profile_id: "default".to_owned(),
+            revision_id: "rev-0001".to_owned(),
+            provider_kind_id: kind.to_owned(),
+            model_id: "model-a".to_owned(),
+            endpoint: ENDPOINT.to_owned(),
+            credential_transport_mode: DomainCredentialTransportMode::Bearer,
+            safe_header_name: None,
+            capability_taxonomy_revision: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+            reasoning_compatibility_id: None,
+            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+            driver_contract_revision: driver_contract(kind, 1, 0),
+        },
+        selection: ProviderSelectionV1 {
+            selection_canonicalization_version:
+                intention_domain::provider_selection::PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                    .to_owned(),
+            profile_id: "default".to_owned(),
+            provider_profile_revision_id: "rev-0001".to_owned(),
+            kind_id: kind.to_owned(),
+            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+            model_id: "model-a".to_owned(),
+            normalized_effective_endpoint: ENDPOINT.to_owned(),
+            credential_transport_mode: DomainCredentialTransportMode::Bearer,
+            credential_transport_safe_header_name: None,
+            declared_model_capability_subset: vec!["text_input".to_owned()],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "execution-timeout-30-attempts-2".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            provider_driver_contract_revision: "responses-1.0".to_owned(),
+            selection_source: Some("catalog_runtime".to_owned()),
+        },
+        endpoint: ENDPOINT.to_owned(),
+        private_credential_reference: 7,
+    }
+}
+
+fn registry_key(kind: &str) -> PrivateRegistryKey {
+    PrivateRegistryKey {
+        profile_id: "default".to_owned(),
+        profile_revision_id: "rev-0001".to_owned(),
+        kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+        driver_contract: driver_contract(kind, 1, 0),
+    }
+}
+
+struct StubHandle;
+
+impl ModelRunDriverHandle for StubHandle {}
+
+/// A fixture handle whose drop intentionally panics: replacing the registry map
+/// drops the replaced handles while the registry lock is held, which is the only
+/// way an external test can observe the poisoned-registry recovery path.
+struct PoisonOnDropHandle;
+
+impl ModelRunDriverHandle for PoisonOnDropHandle {}
+
+impl Drop for PoisonOnDropHandle {
+    fn drop(&mut self) {
+        // A refused fixture construction standing in for a driver that panics
+        // during teardown.
+        unreachable!("the replaced fixture handle never drops cleanly");
+    }
+}
+
+struct StubFactory {
+    kind: &'static str,
+    supports: bool,
+}
+
+impl ProviderDriverFactory for StubFactory {
+    fn kind(&self) -> &str {
+        self.kind
+    }
+
+    fn supports_contract(&self, _contract: &ProviderDriverContractRevisionDto) -> bool {
+        self.supports
+    }
+
+    fn build(
+        &self,
+        _profile: PrivateProviderProfileMaterial,
+    ) -> DtoResult<Box<dyn ModelRunDriverHandle + Send + Sync>> {
+        Ok(Box::new(StubHandle))
+    }
+}
+
+#[test]
+fn control_plane_defaults_start_uninitialized_and_empty() {
+    // `ControlPlaneState::default` is the documented uninitialized state, and
+    // `ControlPlaneGate::default` is the gate over exactly that state; the
+    // private state fields stay inaccessible to this boundary, so the test
+    // pins the constructors through their shared state transitions.
+    let initial = ControlPlaneState::default();
+    let gate = ControlPlaneGate::default();
+    gate.run_exclusive(move |gate_state| {
+        *gate_state = initial;
+        Ok(())
+    })
+    .expect("the default gate accepts an exclusive transition");
+    assert_eq!(
+        gate.read(|_gate_state| 7).expect("the default gate reads"),
+        7
+    );
+
+    // The private registry default is the empty registry and never holds a
+    // credential-bearing entry.
+    let registry = PrivateRegistry::default();
+    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
+    assert!(registry.lookup(&registry_key("responses")).is_none());
+}
+
+#[test]
+fn a_poisoned_gate_lock_degrades_transitions_and_reads() {
+    let gate = ControlPlaneGate::new();
+    // A panic inside one exclusive transition poisons the gate lock; both
+    // boundary methods must then fail closed with the typed unavailable error.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        gate.run_exclusive(|_gate_state| -> DtoResult<()> {
+            unreachable!("the fixture transition panics while holding the gate lock");
+        })
+        .expect("the panicking transition never returns");
+    }));
+    assert!(panicked.is_err(), "the fixture transition must panic");
+
+    let transition_error = gate
+        .run_exclusive(|_gate_state| Ok(()))
+        .expect_err("the poisoned gate rejects exclusive transitions");
+    assert_eq!(transition_error.code(), "catalog_gate_unavailable");
+    let read_error = gate
+        .read(|_gate_state| ())
+        .expect_err("the poisoned gate rejects reads");
+    assert_eq!(read_error.code(), "catalog_gate_unavailable");
+}
+
+#[test]
+fn registry_build_all_rejects_an_unsupported_driver_contract() {
+    let factories: Vec<Box<dyn ProviderDriverFactory>> = vec![Box::new(StubFactory {
+        kind: "responses",
+        supports: false,
+    })];
+    let error = PrivateRegistry::build_all(
+        &factories,
+        vec![(registry_key("responses"), registry_material("responses"))],
+    )
+    .err()
+    .expect("an unsupported driver contract is rejected");
+    assert_eq!(error.code(), "provider_driver_contract_incompatible");
+}
+
+#[test]
+fn registry_build_all_rejects_a_provider_kind_without_a_factory() {
+    let error = PrivateRegistry::build_all(
+        &[],
+        vec![(registry_key("responses"), registry_material("responses"))],
+    )
+    .err()
+    .expect("a kind without a registered factory is rejected");
+    assert_eq!(error.code(), "provider_driver_unavailable");
+}
+
+#[test]
+fn registry_activate_reports_a_poisoned_registry_lock() {
+    let registry = PrivateRegistry::new();
+    // The installed map carries the deliberately panicking fixture handle; the
+    // next swap replaces the whole map while holding the registry lock and
+    // drops the replaced handle at exactly that point, which poisons the lock.
+    registry
+        .activate(HashMap::from([(
+            registry_key("responses"),
+            Arc::new(PoisonOnDropHandle) as Arc<dyn ModelRunDriverHandle + Send + Sync>,
+        )]))
+        .expect("the poison map installs");
+    assert_eq!(registry.len(), 1);
+    assert!(!registry.is_empty());
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry
+            .activate(HashMap::new())
+            .expect("the poisoning swap never returns");
+    }));
+    assert!(panicked.is_err(), "the replaced fixture handle must panic");
+
+    // Every later boundary must fail closed instead of serving a partially
+    // replaced registry: the swap reports the typed unavailable error and the
+    // read boundaries report the empty, unadmitted registry.
+    let error = registry
+        .activate(HashMap::new())
+        .expect_err("the poisoned registry rejects every later swap");
+    assert_eq!(error.code(), "provider_registry_unavailable");
+    assert!(registry.lookup(&registry_key("responses")).is_none());
+    assert_eq!(registry.len(), 0);
+    assert!(registry.is_empty());
+}
+
+#[test]
+fn private_credential_material_round_trips_private_bytes() {
+    let material = PrivateCredentialMaterial::from_private_bytes(FAKE_SECRET.as_bytes().to_vec());
+    assert_eq!(
+        material.into_private_bytes(),
+        FAKE_SECRET.as_bytes().to_vec()
+    );
 }

@@ -12,7 +12,7 @@
 
 use std::cell::RefCell;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use intention_application::{
     CatalogAcceptanceOutcomeDto, CatalogCandidateOutcomeDto, CatalogProviderDeclarationDto,
@@ -239,6 +239,25 @@ struct TestHandle;
 
 impl ModelRunDriverHandle for TestHandle {}
 
+/// A driver handle that poisons a registry lock when it is dropped inside one.
+struct PanicOnDropHandle {
+    armed: Option<Arc<AtomicBool>>,
+}
+
+impl ModelRunDriverHandle for PanicOnDropHandle {}
+
+impl Drop for PanicOnDropHandle {
+    fn drop(&mut self) {
+        if self
+            .armed
+            .as_ref()
+            .is_some_and(|armed| armed.swap(false, Ordering::SeqCst))
+        {
+            unreachable!("the armed fixture handle is dropped inside a registry critical section");
+        }
+    }
+}
+
 struct CountingFactory {
     kind: String,
     contract_family: String,
@@ -246,6 +265,7 @@ struct CountingFactory {
     max_minor: u64,
     builds: Arc<AtomicUsize>,
     fail_build: bool,
+    armed: Option<Arc<AtomicBool>>,
 }
 
 impl CountingFactory {
@@ -263,12 +283,20 @@ impl CountingFactory {
             max_minor,
             builds,
             fail_build: false,
+            armed: None,
         }
     }
 
     /// Returns a factory variant whose driver build always fails.
     const fn failing(mut self) -> Self {
         self.fail_build = true;
+        self
+    }
+
+    /// Returns a factory variant that builds handles panicking when dropped
+    /// while the shared arm flag is set.
+    fn armed_handle(mut self, armed: Arc<AtomicBool>) -> Self {
+        self.armed = Some(armed);
         self
     }
 }
@@ -295,7 +323,16 @@ impl ProviderDriverFactory for CountingFactory {
                 "the injected driver factory build fails",
             ));
         }
-        Ok(Box::new(TestHandle))
+        self.armed.as_ref().map_or_else(
+            || -> DtoResult<Box<dyn ModelRunDriverHandle + Send + Sync>> {
+                Ok(Box::new(TestHandle))
+            },
+            |armed| {
+                Ok(Box::new(PanicOnDropHandle {
+                    armed: Some(armed.clone()),
+                }))
+            },
+        )
     }
 }
 
@@ -348,6 +385,15 @@ struct FakeCatalog {
     accept_fault: bool,
     removal_load_fault: bool,
     removal_expire_fault: bool,
+    /// When set, every catalog status read fails.
+    status_fault: bool,
+    /// When set, the status read at this zero-based load index fails.
+    status_fault_at: Option<usize>,
+    status_loads: RefCell<usize>,
+    /// When set, the active catalog material reports this revision instead.
+    material_revision_override: Option<u64>,
+    /// When set, the prepared candidate material cannot be read.
+    prepared_material_fault: bool,
 }
 
 impl FakeCatalog {
@@ -359,6 +405,11 @@ impl FakeCatalog {
             accept_fault: false,
             removal_load_fault: false,
             removal_expire_fault: false,
+            status_fault: false,
+            status_fault_at: None,
+            status_loads: RefCell::new(0),
+            material_revision_override: None,
+            prepared_material_fault: false,
         }
     }
 
@@ -390,6 +441,16 @@ impl FakeCatalog {
         state.status = ProviderCatalogStatusDto::ActivationRecoveryRequired;
         state.active_catalog_revision_id = Some(revision);
         state.candidate_catalog_revision_id = Some(revision);
+        state.updated_at = 1;
+    }
+
+    /// Seeds the recovery-required state of a catalog whose accepted revision
+    /// was lost, so exact recovery has no revision to recover from.
+    fn seed_recovery_required_without_accepted_revision(&self) {
+        let mut state = self.state.borrow_mut();
+        state.status = ProviderCatalogStatusDto::ActivationRecoveryRequired;
+        state.active_catalog_revision_id = None;
+        state.candidate_catalog_revision_id = None;
         state.updated_at = 1;
     }
 
@@ -523,6 +584,18 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
     }
 
     fn load_provider_catalog_status(&self) -> DtoResult<ProviderCatalogStateDto> {
+        let load = {
+            let mut loads = self.status_loads.borrow_mut();
+            let load = *loads;
+            *loads += 1;
+            load
+        };
+        if self.status_fault || self.status_fault_at == Some(load) {
+            return Err(unavailable(
+                "injected_status_fault",
+                "the injected catalog status read fails",
+            ));
+        }
         let state = self.state.borrow();
         Ok(ProviderCatalogStateDto {
             active_catalog_revision_id: state.active_catalog_revision_id,
@@ -695,10 +768,20 @@ impl ProviderCatalogRepositoryDto for &FakeCatalog {
             ));
         }
         let state = self.state.borrow();
-        material_at(&state)
+        let mut material = material_at(&state)?;
+        if let Some(revision) = self.material_revision_override {
+            material.catalog_revision_id = revision;
+        }
+        Ok(material)
     }
 
     fn load_prepared_catalog_material(&self) -> DtoResult<ProviderCatalogMaterialDto> {
+        if self.prepared_material_fault {
+            return Err(unavailable(
+                "injected_prepared_material_fault",
+                "the prepared provider catalog material is unavailable",
+            ));
+        }
         let state = self.state.borrow();
         let Some(revision) = state.candidate_catalog_revision_id else {
             return Err(not_found(
@@ -2567,4 +2650,417 @@ fn rejection_of_an_unknown_handle_is_rejected() {
         .reject_pending("unknown-handle".to_owned(), "op-reject".to_owned(), 1_100)
         .expect_err("unknown handles are rejected");
     assert_eq!(error.code(), "provider_catalog_removal_not_found");
+}
+
+// ============================================================================
+// Unavailable storage, inconsistent durable state, and a poisoned registry
+// ============================================================================
+
+#[test]
+fn startup_blocks_when_the_catalog_status_cannot_be_read() {
+    let mut fake = seeded_catalog();
+    fake.status_fault = true;
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller.startup(1_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "injected_status_fault".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn startup_blocks_when_the_status_reload_after_expiry_fails() {
+    // The post-expiry read is the third status load of the restart: the first
+    // drives the pending decision and the expiry pass reloads the status
+    // internally before it can commit the durable expiry.
+    let mut fake = seeded_catalog();
+    let (_, _) = removal_controller(&fake, 1_000);
+    fake.status_fault_at = Some(4);
+    let restarted = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = restarted
+        .startup(1_000 + 30 * 60 + 1)
+        .expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "injected_status_fault".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_blocks_when_a_pending_removal_has_no_active_catalog() {
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    assert!(outcome.candidate_handle.is_some(), "a pending row exists");
+    {
+        let mut state = fake.state.borrow_mut();
+        state.active_catalog_revision_id = None;
+        state.active_kinds = Vec::new();
+        state.active_profiles = Vec::new();
+    }
+    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let startup = restarted.startup(2_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "catalog_state_inconsistent_pending_without_active".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_blocks_when_the_active_material_revision_disagrees() {
+    let mut fake = seeded_catalog();
+    fake.material_revision_override = Some(7);
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller.startup(1_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "catalog_state_inconsistent".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn startup_blocks_when_the_rebuilt_pending_candidate_material_is_unavailable() {
+    let mut fake = seeded_catalog();
+    let (_, _) = removal_controller(&fake, 1_000);
+    fake.prepared_material_fault = true;
+    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let startup = restarted.startup(2_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "catalog_state_inconsistent_candidate_material".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_blocks_when_rolling_forward_finds_unavailable_prepared_material() {
+    let mut fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    (&fake)
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: handle,
+            accepted_at: 1_200,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+    fake.prepared_material_fault = true;
+    let restarted = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let startup = restarted.startup(2_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "catalog_state_inconsistent_roll_forward".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_blocks_when_rolling_forward_cannot_build_the_registry() {
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    (&fake)
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: handle,
+            accepted_at: 1_200,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+    // Only the removed kind's factory is registered, so the rolled-forward
+    // replacement registry cannot be built.
+    let restarted = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = restarted.startup(2_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "provider_driver_unavailable".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn startup_reports_recovery_unavailable_without_an_accepted_revision() {
+    let fake = seeded_catalog();
+    fake.seed_recovery_required_without_accepted_revision();
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller.startup(1_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: "0".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn startup_recovery_reports_failure_when_the_registry_cannot_be_built() {
+    let fake = seeded_catalog();
+    fake.seed_recovery_required(1);
+    let controller = fake.build_controller(Vec::new());
+    let startup = controller.startup(1_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: "1".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn startup_recovery_reports_failure_when_the_recovery_evidence_cannot_be_recorded() {
+    let mut fake = seeded_catalog();
+    fake.seed_recovery_required(1);
+    fake.accept_fault = true;
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let startup = controller.startup(1_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: "1".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn accepting_without_a_prepared_removal_and_with_an_unknown_candidate_is_rejected() {
+    let fake = seeded_catalog();
+    let controller = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let error = controller
+        .accept_pending(
+            "any-handle".to_owned(),
+            "1".to_owned(),
+            "2".to_owned(),
+            "op-accept".to_owned(),
+            1_100,
+        )
+        .expect_err("no pending removal candidate is prepared");
+    assert_eq!(error.code(), "provider_catalog_removal_not_pending");
+    drop(controller);
+
+    let fake = seeded_catalog();
+    let (controller, outcome) = removal_controller(&fake, 1_000);
+    assert!(outcome.candidate_handle.is_some(), "a pending row exists");
+    let error = controller
+        .accept_pending(
+            "unknown-handle".to_owned(),
+            "1".to_owned(),
+            "2".to_owned(),
+            "op-accept".to_owned(),
+            1_100,
+        )
+        .expect_err("an unknown handle is not found");
+    assert_eq!(error.code(), "provider_catalog_removal_not_found");
+}
+
+#[test]
+fn rejecting_without_a_prepared_removal_is_rejected() {
+    let fake = seeded_catalog();
+    let controller = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let error = controller
+        .reject_pending("any-handle".to_owned(), "op-reject".to_owned(), 1_100)
+        .expect_err("no pending removal candidate is prepared");
+    assert_eq!(error.code(), "provider_catalog_removal_not_pending");
+}
+
+#[test]
+fn candidate_preparation_propagates_an_unavailable_active_material_read() {
+    let mut fake = FakeCatalog::new();
+    fake.material_fault = true;
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let controller = fake.build_controller(vec![responses_factory(Arc::new(AtomicUsize::new(0)))]);
+    let error = controller
+        .prepare_candidate(base_source(&previous, "model-b"), 1_000)
+        .expect_err("an unavailable active material read is reported");
+    assert_eq!(error.code(), "injected_material_fault");
+}
+
+#[test]
+fn a_disabled_declaration_is_admitted_as_unavailable_with_its_derived_endpoint() {
+    let previous = snapshot("openrouter", "model-b", ENDPOINT, ConfigRevisionId::new());
+    let fake = FakeCatalog::new();
+    let controller = fake.build_controller(both_factories(Arc::new(AtomicUsize::new(0))));
+    let outcome = controller
+        .prepare_candidate(
+            source(
+                "op-disabled",
+                1_024,
+                vec![
+                    declaration("responses", "model-a", Some(ENDPOINT), true),
+                    declaration("generic-chat-completion-api", "model-b", None, false),
+                ],
+                candidate("openrouter", "model-b", ENDPOINT, &previous),
+                previous,
+            ),
+            1_000,
+        )
+        .expect("the two-declaration candidate activates");
+    assert_eq!(
+        outcome.readiness,
+        intention_application::CatalogReadiness::Ready
+    );
+    let material = fake.active_material().expect("material loads");
+    assert_eq!(material.profiles.len(), 2);
+    let disabled = &material.profiles[1];
+    assert_eq!(disabled.profile.profile_id, "profile-1");
+    assert_eq!(
+        disabled.profile.endpoint,
+        "https://generic-chat-completion-api.api.example.invalid/v1"
+    );
+    assert!(!disabled.enabled);
+    assert_eq!(disabled.readiness, ProviderReadinessDto::Disabled);
+    // The disabled profile is admitted as an entry but cannot be looked up.
+    let error = controller
+        .registry_lookup(&key_for(&disabled.profile))
+        .expect_err("a disabled profile is not available");
+    assert_eq!(error.code(), "provider_profile_unavailable");
+    let enabled = controller
+        .registry_lookup(&key_for(&material.profiles[0].profile))
+        .expect("the enabled profile is admitted");
+    assert_eq!(enabled.profile_id, "default");
+}
+
+/// Returns a factory that builds handles panicking when dropped while armed.
+fn armed_responses_factory(armed: Arc<AtomicBool>) -> Box<dyn ProviderDriverFactory> {
+    Box::new(
+        CountingFactory::new(
+            "responses",
+            "responses",
+            1,
+            2,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .armed_handle(armed),
+    )
+}
+
+/// Returns a factory for the removal candidate kind that builds handles
+/// panicking when dropped while armed.
+fn armed_generic_chat_factory(armed: Arc<AtomicBool>) -> Box<dyn ProviderDriverFactory> {
+    Box::new(
+        CountingFactory::new(
+            "generic-chat-completion-api",
+            "generic-chat-completion-api",
+            1,
+            2,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .armed_handle(armed),
+    )
+}
+
+/// Returns a controller whose private-registry lock is poisoned by dropping an
+/// armed driver handle inside a registry replacement.
+fn poisoned_registry_controller<'a>(
+    fake: &'a FakeCatalog,
+    factories: Vec<Box<dyn ProviderDriverFactory>>,
+) -> RemovalController<'a> {
+    let controller = fake.build_controller(factories);
+    controller
+        .startup(1_000)
+        .expect("the first startup activates the armed handle");
+    let poisoned =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.startup(2_000)));
+    assert!(
+        poisoned.is_err(),
+        "dropping the armed handle inside the replacement poisons the registry lock"
+    );
+    controller
+}
+
+#[test]
+fn a_poisoned_private_registry_blocks_startup_registry_activation() {
+    let fake = seeded_catalog();
+    let armed = Arc::new(AtomicBool::new(true));
+    let controller = poisoned_registry_controller(&fake, vec![armed_responses_factory(armed)]);
+    let startup = controller.startup(3_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "provider_registry_unavailable".to_owned(),
+        }
+    );
+    assert_eq!(startup.entry_count, 0);
+}
+
+#[test]
+fn a_poisoned_private_registry_degrades_acceptance_to_recovery_required() {
+    let fake = seeded_catalog();
+    let armed = Arc::new(AtomicBool::new(true));
+    let controller = poisoned_registry_controller(&fake, vec![armed_responses_factory(armed)]);
+    let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
+    let accepted = controller
+        .prepare_candidate(base_source(&previous, "model-b"), 3_000)
+        .expect("the durable acceptance still commits");
+    assert_eq!(
+        accepted.readiness,
+        intention_application::CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: "2".to_owned(),
+        }
+    );
+    // The durable catalog advanced even though this process could not install
+    // the replacement registry, so readiness reports what recovery must fix.
+    let state = (&fake)
+        .load_provider_catalog_status()
+        .expect("status loads");
+    assert_eq!(state.active_catalog_revision_id, Some(2));
+    let projection = controller.inspect().expect("inspect succeeds");
+    assert_eq!(projection.entry_count, 0);
+}
+
+#[test]
+fn a_poisoned_private_registry_blocks_roll_forward_activation() {
+    let fake = seeded_catalog();
+    let (_, outcome) = removal_controller(&fake, 1_000);
+    let handle = outcome.candidate_handle.expect("removal handle exists");
+    (&fake)
+        .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+            candidate_handle: handle,
+            accepted_at: 1_200,
+            operation_id: "crash-window-removal-accept".to_owned(),
+        })
+        .expect("removal acceptance commits before the crash");
+    let armed = Arc::new(AtomicBool::new(true));
+    let controller = poisoned_registry_controller(&fake, vec![armed_generic_chat_factory(armed)]);
+    // Re-arm the durable crash window for the poisoned roll-forward attempt.
+    {
+        let mut state = fake.state.borrow_mut();
+        state.status = ProviderCatalogStatusDto::PendingRemoval;
+        state.candidate_catalog_revision_id = Some(2);
+    }
+    let startup = controller.startup(4_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::Blocked {
+            reason: "provider_registry_unavailable".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_poisoned_private_registry_reports_recovery_required_for_recovery_activation() {
+    let fake = seeded_catalog();
+    fake.seed_recovery_required(1);
+    let armed = Arc::new(AtomicBool::new(true));
+    let controller = poisoned_registry_controller(&fake, vec![armed_responses_factory(armed)]);
+    fake.seed_recovery_required(1);
+    let startup = controller.startup(4_000).expect("startup degrades safely");
+    assert_eq!(
+        startup.readiness,
+        intention_application::CatalogReadiness::ActivationRecoveryRequired {
+            accepted_revision: "1".to_owned(),
+        }
+    );
 }

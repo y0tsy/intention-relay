@@ -9,7 +9,7 @@ use std::fs;
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
     InvokeLocalToolInputDto, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationInputDto, ToolResultPublicationPort,
+    ToolResultPublicationInputDto, ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -2772,5 +2772,88 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     drop(evidence);
     assert!(publisher.publications.borrow().is_empty());
 
+    let _ = fs::remove_dir_all(root);
+}
+
+// ============================================================================
+// Composition-owned workspace boundary
+// ============================================================================
+
+/// Records every resolution attempt and refuses the authorized workspace.
+struct RefusingBoundary<'a> {
+    attempts: &'a RefCell<usize>,
+}
+
+impl WorkspaceBoundaryPort for RefusingBoundary<'_> {
+    fn resolve(&self, _workspace: &WorkspaceRoot) -> DtoResult<()> {
+        *self.attempts.borrow_mut() += 1;
+        Err(ErrorDto::unavailable(
+            "workspace_unavailable",
+            "the workspace boundary refused resolution",
+        ))
+    }
+}
+
+#[test]
+fn workspace_boundary_refusal_rejects_the_invocation_before_execution() {
+    let root = hello_tool_root("boundary");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let attempts = RefCell::new(0_usize);
+    let error = ApplicationService::new(&repository)
+        .with_workspace_boundary(RefusingBoundary {
+            attempts: &attempts,
+        })
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "hello.txt",
+        ))
+        .expect_err("a refused workspace never reaches execution");
+
+    assert_eq!(error.code(), "workspace_unavailable");
+    assert_eq!(*attempts.borrow(), 1, "the boundary resolves exactly once");
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 2, "admission and rejection are both durable");
+    let terminal = events.last().expect("terminal event");
+    assert_eq!(
+        terminal.status(),
+        &intention_domain::ToolLifecycleStatusDto::Rejected
+    );
+    assert_eq!(terminal.detail(), "workspace_unavailable");
+    drop(events);
+    let evidence = repository.result_evidence.borrow();
+    assert!(
+        evidence.iter().all(Option::is_none),
+        "no result evidence exists before execution"
+    );
+    drop(evidence);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn durable_read_evidence_escapes_every_control_character() {
+    let root = hello_tool_root("escapes");
+    fs::write(root.join("control.txt"), "\u{8}\t\u{c}\r\u{1}plain").expect("control fixture");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    ApplicationService::new(&repository)
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "control.txt",
+        ))
+        .expect("control characters stay valid tool text");
+
+    let evidence = repository.result_evidence.borrow();
+    let completed = evidence
+        .iter()
+        .flatten()
+        .next()
+        .expect("completed evidence commits atomically");
+    // The canonical document escapes every C0 character, so no raw control
+    // byte ever reaches durable storage.
+    assert_eq!(
+        completed.content(),
+        "{\"result\":\"read\",\"value\":{\"text\":\"\\b\\t\\f\\r\\u0001plain\",\"truncated\":false}}"
+    );
+    assert_eq!(completed.kind(), ToolResultKindDto::Read);
+    drop(evidence);
     let _ = fs::remove_dir_all(root);
 }
