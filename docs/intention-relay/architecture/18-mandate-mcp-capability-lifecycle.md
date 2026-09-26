@@ -10,6 +10,14 @@
 - Reconciliation topics: `MCP-001..017`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
+- Slice 3 ledger activation: the `mcp-method-catalog-selection-v1` (`0x0205`)
+  canonical selection record is wired for M5+ Slice 3 by
+  [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) (typed selection in
+  `run-execution-meaning-v4` slot 9) with hermetic DTO contract tests
+  (`intention-protocol` `m5_slice3_wire_contracts`); MCP source, discovery,
+  capability, selection, invocation, disposal, and recovery behavior,
+  ownership, and the delivery milestone remain with this architecture
+  (Milestone 12).
 
 
 **Approved future architecture, documentation-only.** This document is the sole detailed owner for future Mandate MCP source proposals, discovery, normalized capabilities, run-local capability selections, invocation, safe projections, disposal, recovery, and compatibility. It does not authorize an MCP client, network connection, local process, crate, schema migration, wire implementation, feature profile, UI, or production MCP work.

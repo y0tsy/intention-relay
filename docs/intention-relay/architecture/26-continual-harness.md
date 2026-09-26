@@ -9,14 +9,16 @@
 - Detail decisions: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (closed safe failures and selection-record detail), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (autonomous goal mode, post-disconnect work, export).
 - Reconciliation topics: `CHR-001..013`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+- Status: activated for M5+ Slice 3 by [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) (autonomous harness goal mode, goal-directed rule revisions, post-disconnect capture/coalescing and durable journal).
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for the future continual-harness model: user-managed durable
-rules, trigger capture, schedule and time semantics, delegated dossiers,
-verified checkpoints, read-and-delegate execution classes, code-owned bounds,
-and harness recovery. It does not authorize a crate, implementation, storage
-migration, public protocol change, configuration schema, or delivery scope.
+**Activated for M5+ Slice 3 by ADR 0044.** This document is the sole detailed
+owner for the continual-harness model: user-managed durable rules, trigger
+capture, schedule and time semantics, delegated dossiers, verified checkpoints,
+read-and-delegate execution classes, code-owned bounds, harness recovery,
+autonomous harness goal mode, and the post-disconnect work contract. Slice 3
+activates the harness model as specified below. It does not authorize an
+implementation beyond the activated Slice 3 contracts, a storage migration, a
+public protocol change, a configuration schema, or a delivery scope.
 
 It applies to future fresh runs only. M3/M4 bytes, queue tickets, sessions,
 runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
@@ -246,6 +248,31 @@ provider resource, process topology, or raw transcript. Every listed failure is
 known before an external effect; unknown-effect evidence is retained for work
 that had already started.
 
+## Autonomous harness goal mode
+
+A goal-directed rule revision may continue against one active Goal. Each launch
+is separately admitted as a fresh goal-directed run against that active Goal
+and is never a free-running autonomous agent: it passes the ordinary admission
+path and carries its own `ContinualHarnessSelectionV1` and goal-run selection.
+A coalesced reason from a goal-directed rule uses the newest active revision
+exactly as the rule model defines. A non-active, unavailable, or incompatible
+Goal fails closed before admission and before any provider, tool, process,
+kernel, child, bridge, scheduler, or external effect. The mode creates no Goal,
+gate, evidence record, verifier authority, or Goal lifecycle transition, and it
+never turns a rule, trigger, or dossier into one.
+
+## Post-disconnect work contract
+
+Trigger capture and coalescing are client-independent: the daemon captures and
+coalesces durable reasons while no client is connected, and a reconnect never
+redelivers them as a second launch. The harness journal remains durable,
+versioned, and readable after reconnect under the publication and recovery
+rules below. Disconnection or reconnection never resumes, retries, reattaches,
+or reruns a provider request, tool, process, kernel action, child agent, bridge
+operation, or external action; unfinished work follows the existing
+`Interrupted` recovery contract, and a later attempt is a separately admitted
+launch with new identities.
+
 ## Cancellation, recovery, and publication
 
 Run cancellation uses the existing two-step lifecycle and cascades through the
@@ -273,25 +300,27 @@ acquires no synthetic harness facts.
 
 This document depends on architectures 13, 15, 16, 22, 24, and 27 plus decisions
 0001, 0008, 0014, 0021, and 0022. It does not define bounded autonomous
-continuation or an autonomous harness goal mode; work, continuation, or requeue
-after client disconnection; attachments, images, binary, rich-MIME, or
-multimodal payloads; a plug-in, extension, skill/MCP installation, or dynamic
-tool registration system; administration of long-lived processes, workers,
-leases, attach/detach, force-kill, or supervisor recovery; physical deletion,
-export, garbage collection, or destructive history cleanup. Autonomous harness
-goal mode, work/continuation/requeue after client disconnection, and export are
-accepted post-M5 future directions under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
-executed in Milestone 5+: goal-directed rule continuation is separately
-admitted and never a free-running agent; post-disconnect work is an explicit
-durable contract that never silently resumes old external work; export is
-bounded and credential-free. None of these directions are activated here. Each
-of the remaining exclusions requires a separate future decision.
+continuation; attachments, images, binary, rich-MIME, or multimodal payloads; a
+plug-in, extension, skill/MCP installation, or dynamic tool registration
+system; administration of long-lived processes, workers, leases, attach/detach,
+force-kill, or supervisor recovery; physical deletion, export, garbage
+collection, or destructive history cleanup. Autonomous harness goal mode and
+post-disconnect work are activated for M5+ Slice 3 by
+[ADR 0044](../decisions/0044-m5plus-slice3-harness.md) as defined above:
+goal-directed rule continuation is separately admitted and never a free-running
+agent; post-disconnect work is an explicit durable contract that never silently
+resumes old external work. Export remains an accepted post-M5 future direction
+under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md),
+bounded and credential-free. Each of the remaining exclusions requires a
+separate future decision.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
-`make verify`, and Linux/Windows CI. Required evidence includes:
+`make verify`, and Linux/Windows CI.
+[ADR 0044](../decisions/0044-m5plus-slice3-harness.md) is the Slice 3
+activating specification for the contracts activated above. Required evidence
+includes:
 
 - rule lifecycle, revision immutability, pause/resume/archive, and
   archive-rejected-while-active fixtures;

@@ -8,16 +8,17 @@
 - Decision record: [`0022`](../decisions/0022-programmatic-caller-policy-directions.md).
 - Reconciliation topics: `PCP-001..008`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+- Status: activated for M5+ Slice 3 by [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) (two closed root origins, the typed `0x0201` field-1 root-origin rework binding run-execution-meaning v4 field 10, corridors and reservations).
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for the future programmatic-caller policy and admission model:
-root origins and durable provenance, durable policy identity/scope/narrowing,
-admission decisions and typed input constraints, confirmation and bounded
-corridors, policy lifecycle and live tightening, run and calendar limits with
-reservations, and run-selection compatibility. It does not authorize a crate,
-implementation, protocol, storage migration, configuration, network connection,
-local process, or delivery scope.
+**Activated for M5+ Slice 3 by ADR 0044.** This document is the sole detailed
+owner for the programmatic-caller policy and admission model: root origins and
+durable provenance, durable policy identity/scope/narrowing, admission
+decisions and typed input constraints, confirmation and bounded corridors,
+policy lifecycle and live tightening, run and calendar limits with
+reservations, and run-selection compatibility. Slice 3 activates the model as
+specified below. It does not authorize an implementation beyond the activated
+Slice 3 contracts, a protocol change, storage migration, configuration, network
+connection, local process, or delivery scope.
 
 It applies to future fresh runs only. M3/M4 bytes, queue tickets, sessions,
 runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
@@ -52,18 +53,24 @@ boundary, not an account or a caller-selected principal.
 Every programmatic action has one daemon-assigned root origin:
 
 ```text
-ProgrammaticCallerRootOriginDto
+ProgrammaticCallerRootOriginV1
   InteractiveUser { originating_turn_id }
   ContinualHarness { harness_id, rule_revision, trigger_reason_id }
 ```
 
 `InteractiveUser` is the root of an ordinary user-admitted run and all of its
 descendants. `ContinualHarness` is the root of one separately admitted harness
-launch and all of its descendants. These values are not account identities,
-credentials, operating-system identities, or user-supplied input. No third root
-exists in this first scope: a protocol peer, detached Python task, child agent,
-MCP service, provider, bridge channel, queued item, replay, and daemon recovery
-cannot become an independent root.
+launch and all of its descendants. `ProgrammaticCallerPolicySelectionV1` carries
+this typed closed record at its field 1 `root_origin` (tag `0x0201`), and the
+selection binds `run-execution-meaning-v4` field 10; the former Slice 1
+`ExecutionKind` shape of field 1 is removed and fails closed under the
+single-version policy. `AgentActivitySelectionV1` keeps its own unchanged
+`ExecutionKind` root origin (`0x0202`) and does not use this record.
+These values are not account identities, credentials, operating-system
+identities, or user-supplied input. No third root exists in this first scope: a
+protocol peer, detached Python task, child agent, MCP service, provider, bridge
+channel, queued item, replay, and daemon recovery cannot become an independent
+root.
 
 The policy distinguishes only the root origin. The daemon nevertheless retains
 the exact internal calling path as immutable audit provenance:
@@ -436,12 +443,20 @@ the separately versioned activity selection at tag 11:
 
 ```text
 ProgrammaticCallerPolicySelectionV1
-  root_origin
+  root_origin = ProgrammaticCallerRootOriginV1 { ... }
   effective_policy_snapshot_reference
   policy_selection_digest
   inherited_scope_provenance
   fixed_run_limits
 ```
+
+`root_origin` is the nested typed closed `ProgrammaticCallerRootOriginV1` record
+defined above, not a bare execution kind. This selection binds
+`run-execution-meaning-v4` field 10 under its `0x0201` tag, and the rework
+preserves the existing policy boundary: it applies to ordinary fresh runs,
+remains historical-only for new Mandate work where it conflicts, and never
+gates Mandate direct admission under
+[architecture 15](15-tool-registry-and-mandate-tool-loop.md).
 
 `RunExecutionMeaningDto.programmatic_caller_policy_selection` is `Disabled`
 only for historical M4 and earlier post-M4 selection versions. Every new
@@ -517,7 +532,10 @@ new policy decoder, or production activation.
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
-`make verify`, and Linux/Windows CI. Required evidence includes:
+`make verify`, and Linux/Windows CI.
+[ADR 0044](../decisions/0044-m5plus-slice3-harness.md) is the Slice 3
+activating specification for the contracts activated above. Required evidence
+includes:
 
 - root-origin and provenance fixtures with no third root and no raw-input
   leakage;

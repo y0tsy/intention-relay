@@ -466,13 +466,16 @@ activated by earlier slices in this order:
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
    execution classes; the 15 closed `harness_*` safe failures; the two closed
    root origins; corridors and reservations; the Goal tree and Verification
-   Mandates; and Build-mode autonomous continuation. The slice also activates
+   Mandates. The slice also activates
    the contract records its ledger reservations name: the tool-descriptor,
    tool-registry, and model-tool-loop revisions (ADR 0025, architecture 15),
    the bridge-invocation and MCP-method-catalog selections (ADR 0027,
    architectures 19/18), and the harness-side accepted directions of
    [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md)
    (autonomous harness goal mode and work/requeue after client disconnection).
+   **Activated by
+   [ADR 0044](../decisions/0044-m5plus-slice3-harness.md); Slice 3 is
+   complete.**
 4. **UI foundation** — session branching, activity/notification, reasoning/
    catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
    0028/0029/0032/0033/0034): `session_fork_v1`; activity journal and
@@ -537,6 +540,21 @@ nothing.
   conclusion bounds; class resolution; corridor admission and reservation
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
   cancellation cascade and restart `Interrupted`;
+  **implemented (ADR 0044); evidence anchors:**
+  `crates/intention-domain/tests/m5_slice3_canonical.rs`,
+  `crates/intention-domain/tests/m5_harness_domain.rs`,
+  `crates/intention-domain/tests/m5_policy_domain.rs`,
+  `crates/intention-domain/tests/m5_goal_domain.rs`,
+  `crates/intention-domain/tests/m5_verification_domain.rs`, the updated
+  `crates/intention-domain/tests/m5_control_plane_canonical.rs`,
+  `crates/intention-protocol/tests/m5_slice3_wire_contracts.rs`,
+  `crates/intention-storage-sqlite/tests/m5_slice3_repos.rs`, the updated
+  `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`,
+  `crates/intention-application/tests/m5_harness_runtime.rs`,
+  `crates/intention-application/tests/m5_policy_admission.rs`,
+  `crates/intention-application/tests/m5_goal_runtime.rs`,
+  `crates/intention-daemon/tests/m5_slice3_recovery.rs`, and
+  `crates/intention-client/tests/m5_slice3_client.rs`;
 - slice 4: fork boundary/snapshot/rate-limit; activity journal/notification
   bounds and urgent dedup; reasoning history and paged delivery; replay/
   resync; adapter parity;
@@ -577,8 +595,8 @@ nothing.
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
-  together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
-  3-5 remain;
+  together. Slice 1 (ADR 0036), Slice 2 (ADR 0037), and Slice 3 (ADR 0044)
+  are complete; slices 4-5 remain;
 - the fifth slice's contracts are declared by its activating specification and
   prove that instruction text is advisory-only, bounded, digest-bound, and
   materialized for frozen context, with no untrusted material entering the

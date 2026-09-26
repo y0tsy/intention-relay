@@ -66,6 +66,32 @@ scheduler, persistence authority, or sandbox. Fork wire commands remain Slice 4
 even though the override fields exist on the fork DTOs and the resolution
 service is implemented.
 
+## M5+ Slice 3 harness, policy, and Goal ownership
+
+| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Root-origin rework, typed v4 slots, and Slice 3 contract records | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_slice3_canonical`, `m5_slice3_wire_contracts` | Existing declared tiers |
+| Continual-harness rules, triggers, dossiers, checkpoints, and classes (architecture 26) | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_harness_domain`, `m5_harness_runtime` | Existing declared tiers |
+| Programmatic-caller policy, corridors, and reservations (architecture 27) | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_policy_domain`, `m5_policy_admission` | Existing declared tiers |
+| Goal tree, lifecycle, and leading-goal selection (architecture 28) | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_goal_domain`, `m5_goal_runtime` | Existing declared tiers |
+| Verification Mandates, authority, and gates (architectures 28/17) | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_verification_domain` | Existing declared tiers |
+| Current storage schema and durable harness/policy/Goal rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `m5_slice3_repos`, `sqlite_contracts` (current-schema tests) | Existing declared tiers |
+| Daemon hosting and Slice 3 recovery | `intention-daemon` | domain codec | domain registry | storage owners | protocol | `m5_slice3_recovery` | Existing declared tiers |
+| Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `m5_slice3_client` | Existing declared tiers |
+| Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
+
+Slice 3 adds the `intention-domain` modules `slice3_selections.rs`,
+`harness.rs`, `programmatic_policy.rs`, `goal_domain.rs`, and
+`verification.rs`, the
+`intention-storage-sqlite` repositories `harness_repo.rs`,
+`programmatic_policy_repo.rs`, and `goal_repo.rs`, and the
+`intention-application` services `harness.rs`, `programmatic_policy.rs`, and
+`goal_domain.rs`. No new crate, dependency, feature profile, coverage tier, or
+exclusion is introduced, and no second runtime, registry, scheduler,
+persistence authority, or sandbox exists. The tool-descriptor, tool-registry,
+model-tool-loop, bridge-invocation, and MCP-method-catalog behaviors remain
+owned by architectures 15/19 (Milestone 11) and architecture 18 (Milestone 12).
+
 ## M5+ Slice 5 instruction-source ownership
 
 | Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |

@@ -10,6 +10,13 @@
 - Reconciliation topics: `BRG-001..016`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
+- Slice 3 ledger activation: the `bridge-invocation-v1` (`0x0304`) contract
+  record is ledger-activated for M5+ Slice 3 by
+  [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) as a frozen public wire
+  family with hermetic DTO contract tests (`intention-protocol`
+  `m5_slice3_wire_contracts`); bridge attachment, grant, operation, ingress,
+  delivery, cancellation, and recovery behavior, ownership, and the delivery
+  milestone remain with this architecture (Milestone 11).
 
 
 **Approved future architecture, documentation-only.** This document is the sole

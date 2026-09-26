@@ -61,3 +61,4 @@ provenance.
 | [0041](0041-same-run-reasoning-round-trip.md) | Accepted | Same-run provider reasoning round-trip (ordinary production tool loop) |
 | [0042](0042-project-script-library-for-kernel-cells.md) | Accepted | Project script library for kernel cells (`.ir/scripts` persistence of agent-authored kernel modules) |
 | [0043](0043-instruction-sources-and-system-context.md) | Accepted | Instruction sources and system context (deployment instruction profile, workspace `AGENTS.md`, user-editable fragments, `Mode`/`Vfr` contributions, immutable effective instruction projection) |
+| [0044](0044-m5plus-slice3-harness.md) | Accepted | M5+ Slice 3 harness activation and activating specification |

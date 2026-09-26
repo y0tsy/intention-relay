@@ -188,6 +188,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
 | Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
 | Instruction sources and system context | architecture 30, architecture 21, architecture 23, architecture 08 | decision 0043 |
+| M5+ Slice 3 harness, policy, and Goal activation | architecture 26, architecture 27, architecture 28, architecture 17, architecture 14, roadmap, quality gates | decision 0044 |
 | Selected legacy product baseline | `docs/intention-relay/legacy-baseline/` (read-only capability evidence; superseded only by an explicit decision) | decision 0038 |
 | Legacy Antibusy session prompts | `docs/intention-relay/legacy-antibusy-prompts/` (read-only source copy to adapt, never consumed unchanged; the adaptation is owned by architecture 30) | decision 0043 for the adaptation, decision 0038 for retention |
 | Archived Antibusy audit | `docs/reference/archive/legacy-antibusy-audit/` (archived content superset of the selected baseline; provenance only and never an override; its delta is recorded in the baseline manifest) | decision 0038 |

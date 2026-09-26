@@ -294,6 +294,29 @@ reconciliation limit fixtures, catalog acceptance/recovery fixtures,
 control-plane safe-projection fixtures, and current-schema creation fixtures
 anchored in ADR 0037.
 
+### M5+ Slice 3 test targets and evidence requirements
+
+The M5+ Slice 3 harness activation
+([ADR 0044](../decisions/0044-m5plus-slice3-harness.md)) adds the following
+integration test targets to the machine-readable policy:
+`intention-domain` `m5_slice3_canonical`, `m5_harness_domain`,
+`m5_policy_domain`, `m5_goal_domain`, `m5_verification_domain`;
+`intention-protocol` `m5_slice3_wire_contracts`; `intention-storage-sqlite`
+`m5_slice3_repos`; `intention-application` `m5_harness_runtime`,
+`m5_policy_admission`, `m5_goal_runtime`; `intention-daemon`
+`m5_slice3_recovery`; `intention-client` `m5_slice3_client`. The updated
+targets are `intention-domain` `m5_control_plane_canonical` and
+`intention-storage-sqlite` `sqlite_contracts`. No new CI job, Makefile target,
+crate, dependency, feature profile, coverage tier, or exclusion is added: the
+existing check count and the `make quick`, `make verify`, `docs-check`, and
+`architecture` gates remain the Slice 3 acceptance gate. Slice 3 required
+evidence is the harness rule/trigger/coalescing/catch-up fixtures,
+dossier/checkpoint/conclusion bound fixtures, class-resolution fixtures,
+corridor admission and reservation atomicity fixtures, Goal tree/DAG/lifecycle
+fixtures, verifier authority and gate fixtures, cancellation cascade and
+restart `Interrupted` fixtures, and the hermetic DTO contract tests for the
+Slice 3 canonical selections and frozen wire families, anchored in ADR 0044.
+
 ### Opt-in live-provider e2e
 
 [ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md) adds one ignored

@@ -9,16 +9,18 @@
 - Detail decisions: [`0030`](../decisions/0030-continual-harness-safe-failures-and-selection-record-detail.md) (harness selection-record content), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (post-disconnect work).
 - Reconciliation topics: `GOL-004..013, VGT-001..006`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+- Status: activated for M5+ Slice 3 by [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) (Goal acceptance/evidence plane, the unified five-operation verifier family shared with architecture 17, leading-goal run selection `0x0203`).
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for the future Goal aggregate domain: Goal identity, scope, and
-tree; Goal lifecycle, readiness, and user decision; leading-goal run selection;
-delegated Verification Mandates; verification gates and evidence; working
-memory, roles, and templates; model proposals and user confirmation; the
+**Activated for M5+ Slice 3 by ADR 0044.** This document is the sole detailed
+owner for the Goal aggregate domain: Goal identity, scope, and tree; Goal
+lifecycle, readiness, and user decision; leading-goal run selection; delegated
+Verification Mandates; verification gates and evidence; working memory, roles,
+and templates; model proposals and user confirmation; the
 conversation-compaction working form; and Goal-domain bounds and closed safe
-failures. It does not authorize a crate, implementation, storage migration,
-public protocol change, configuration schema, or delivery scope.
+failures. Slice 3 activates the Goal acceptance/evidence plane as specified
+below. It does not authorize an implementation beyond the activated Slice 3
+contracts, a storage migration, public protocol change, configuration schema,
+or delivery scope.
 
 It applies to future fresh runs only. M3/M4 bytes, queue tickets, sessions,
 runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
@@ -206,6 +208,17 @@ own revisioned prompt/objective, tools, provider, runs, activity identity,
 checkpoints, child work, evidence, and recovery. Its prompt is independent and
 never a security boundary; it has no inherited authority.
 
+The verifier model is one family shared with
+[architecture 17](17-mandate-child-graph-and-delegated-verifier-authority.md#separately-issued-delegated-verifier-authority):
+the canonical `VerifierAuthorityV1` and `VerifierAuditBaselineV1` records live
+there under
+[architecture 14](14-run-execution-meaning-and-historical-compatibility.md#canonical-record-and-digest-policy)
+canonical framing, and the five operations `MarkNeedsRework`, `MarkComplete`,
+`Stop`, `ReviseFull`, and `ResolveUnknownEffect` are the only verifier
+operations. `Pause` and `Resume` are user-lifecycle operations without verifier
+authority. The Goal-facing surface is the public projection DTO family below,
+and Mandate-scoped authority transactions stay M11.
+
 ```text
 VerificationMandateAuthorityDto
   authority_id
@@ -249,7 +262,7 @@ VerificationAuditEvidenceDto
   canonical_evidence_digest
 
 VerificationTargetOperationDto
-  MarkCompleted
+  MarkComplete
   MarkNeedsRework
   Pause
   Resume
@@ -493,15 +506,13 @@ refinement_draft_too_large
 They disclose no credential, path, raw external response, private process
 resource, grant, full memory/Skill/role/template content, model proposal text,
 provider resource, or implementation detail. The package continues to exclude
-autonomous continuation, work after client disconnection,
-attachments/images/binary/rich-MIME input, dynamic extensions and
-installation, dynamic tool registration, physical deletion, and administration
-of long-lived workers, leases, attach/detach, force-kill, or supervisor
-recovery. Work/continuation/requeue after client disconnection is an accepted
-post-M5 future direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
-executed in Milestone 5+ as an explicit durable contract that never silently
-resumes old external work; it is not activated here.
+autonomous continuation, attachments/images/binary/rich-MIME input, dynamic
+extensions and installation, dynamic tool registration, physical deletion, and
+administration of long-lived workers, leases, attach/detach, force-kill, or
+supervisor recovery. Work/continuation/requeue after client disconnection is
+activated for M5+ Slice 3 by
+[ADR 0044](../decisions/0044-m5plus-slice3-harness.md) as an explicit durable
+contract that never silently resumes old external work.
 
 ## Compatibility and historical preservation
 
@@ -526,7 +537,10 @@ Cargo, Makefile/CI, or production activation.
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
-`make verify`, and Linux/Windows CI. Required evidence includes:
+`make verify`, and Linux/Windows CI.
+[ADR 0044](../decisions/0044-m5plus-slice3-harness.md) is the Slice 3
+activating specification for the contracts activated above. Required evidence
+includes:
 
 - Goal identity/scope/tree, obligatory children, DAG integrity, and
   no-cross-project fixtures;

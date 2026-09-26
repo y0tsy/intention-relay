@@ -76,6 +76,38 @@ audit history readable where its own records remain supported. No state may
 infer a kind from a model name, provider, current configuration, registry,
 ancestry, Goal, Skill, MCP source, bridge, kernel, prompt or adapter.
 
+## Run-execution-meaning v4
+
+`run-execution-meaning-v4` is the single live record version
+([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md));
+its fixed field table is:
+
+| Field | Semantic selection | Owner or state |
+| ---: | --- | --- |
+| 1 | `resolved_provider_selection` | Provider evolution; unchanged |
+| 2 | `model_capability_set` | Provider evolution; unchanged |
+| 3 | `context_projection_selection` | Context package; unchanged |
+| 4 | `tool_execution_selection` | Tool registry and tool-loop package; unchanged |
+| 5 | `reasoning_history_manifest_reference` | Provider evolution; unchanged |
+| 6 | `terminal_provenance_references` | Terminal owner; unchanged |
+| 7 | `harness_selection` = `DisabledOr<ContinualHarnessSelectionV1>` (tag `0x0204`) | Architecture 26 |
+| 8 | `goal_selection` = `DisabledOr<GoalRunSelectionV1>` (tag `0x0203`) | Architecture 28 |
+| 9 | `mcp_selection` = `DisabledOr<McpMethodCatalogSelectionV1>` (tag `0x0205`) | Architecture 18 |
+| 10 | `programmatic_caller_policy_selection` = `DisabledOr<ProgrammaticCallerPolicySelectionV1>` (tag `0x0201`) | Architecture 27 |
+| 11 | `agent_activity_selection` = `AgentActivitySelectionV1` (tag `0x0202`) | Architecture 24; unchanged |
+
+Fields 1-6 and 11 are unchanged. Slice 3 binds fields 7-10 to the
+continual-harness, goal-run, MCP method catalog, and programmatic-caller policy
+selections ([ADR 0044](../decisions/0044-m5plus-slice3-harness.md)). The
+`0x0201` field-1 rework makes `ProgrammaticCallerPolicySelectionV1.root_origin`
+the nested typed closed `ProgrammaticCallerRootOriginV1` record
+(`InteractiveUser { originating_turn_id }` or
+`ContinualHarness { harness_id, rule_revision, trigger_reason_id }`), while
+`AgentActivitySelectionV1.root_origin` remains `ExecutionKind`. Historical
+M3/M4 runs and non-harness runs acquire no synthetic record: a `Disabled`
+optional selection is a closed value, never filled in from current state at
+read, replay, or recovery time.
+
 ## Mandate execution meaning
 
 `MandateRunExecutionMeaningV1` is an independent credential-free canonical

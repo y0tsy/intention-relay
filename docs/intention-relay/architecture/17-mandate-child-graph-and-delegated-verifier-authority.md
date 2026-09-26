@@ -16,6 +16,8 @@
 
 It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider selection, tool-call denial, replay, recovery, bytes, IDs, UUIDs, digests, cursors, events, and snapshots retain their recorded ordinary semantics. Retained RLM child/activity material remains research and historical provenance, not future Mandate graph authority.
 
+The verifier records (`VerifierAuthorityV1`, `VerifierAuditBaselineV1`) and the five delegated operations are the single unified verifier family: M5+ Slice 3 ([ADR 0044](../decisions/0044-m5plus-slice3-harness.md)) delivers the Goal acceptance/evidence plane and the Goal-facing public projection DTOs described by architecture 28 against these same records and operations. `Pause` and `Resume` remain user-lifecycle operations and carry no verifier authority. Behavior, ownership, and Mandate-scoped authority transactions stay with this document and milestone 10.
+
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle, reason validity/order, fresh admission, uncertainty, and user-conflict precedence. Architecture 14 owns the execution envelope, canonical framing, digest, decoder, and compatibility outcomes. Architecture 15 owns the fixed `sub_agent` registry slot, frozen selection, direct tool admission, and generic tool-loop evidence. Architecture 16 owns durable reevaluation, readiness, candidate selection, and admission handoff.
@@ -146,6 +148,13 @@ VerifierAuditBaselineV1
   audit_contract_reference
   canonical_digest
 ```
+
+The canonical `VerifierAuthorityV1` and `VerifierAuditBaselineV1` records and
+the five-operation set are the single verifier model shared with
+[architecture 28](28-goal-domain-and-verification.md#delegated-verification-mandates)'s
+Goal-facing public projection surface; Slice 3 delivers the Goal
+acceptance/evidence plane. Behavior, canonical records, and ownership remain
+with this document, and the Mandate-scoped authority transactions stay M11.
 
 Authority revisions, target sets, audit baselines, evidence, verdicts, mutations, and reconciliation records are immutable. A target set is explicit and never expands through parent/child, ancestry, descendants, siblings, Goals, sessions, branches, activity, or shared evidence. A verifier cannot target itself. Its children may gather evidence but cannot inherit, relay, consume, amplify, or exercise target-mutation authority.
 

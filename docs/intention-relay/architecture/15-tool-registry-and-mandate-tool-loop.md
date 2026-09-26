@@ -10,6 +10,14 @@
 - Reconciliation topics: `TLS-002..011, MTL-001..007`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
+- Slice 3 ledger activation: the `tool-descriptor-revision` (`0x0301`),
+  `tool-registry-revision` (`0x0302`), and `model-tool-loop-v1` (`0x0303`)
+  contract records are ledger-activated for M5+ Slice 3 by
+  [ADR 0044](../decisions/0044-m5plus-slice3-harness.md) as frozen public wire
+  families with hermetic DTO contract tests (`intention-protocol`
+  `m5_slice3_wire_contracts`); descriptor, registry, direct-admission, and loop
+  behavior, ownership, and the delivery milestone remain with this architecture
+  (Milestone 11).
 
 
 **Approved future architecture, documentation-only.** This document is the sole detailed authority for the future unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate-scoped `WorkspaceRoot` semantics, model-to-tool-to-model loop, and tool-effect recovery boundary. It does not authorize a crate, schema migration, wire implementation, runtime, or production tool execution.
