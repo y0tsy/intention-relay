@@ -33,3 +33,26 @@ The following prompt contributions are not static text used universally by every
 - MCP prompts and active-skill additions, which depend on runtime configuration and state.
 
 The exact source files above were unchanged in the legacy working tree when this copy was made.
+
+## Adaptation map
+
+The four static sources are adapted, never consumed unchanged
+([architecture 30](../architecture/30-instruction-sources-and-system-context.md),
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)):
+
+| Legacy source | Instruction kind in architecture 30 | What changes |
+| --- | --- | --- |
+| `IdentitySource` (`identity.md`) | `Identity` | The product framing becomes Intention Relay: a local-first single-user daemon with typed client adapters, not the legacy Tauri-only application. |
+| `GuidelinesSource` (`guidelines.md`) | `Guidelines` | Behavioural guidance keeps its advisory meaning; it cannot create authority, and repository content, tool output, and fetched material stay untrusted data. |
+| `ToolUsageSource` (`tool_usage.md`) | `ToolUsage` | Tool names and semantics follow the frozen Intention Relay registry (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and the `WorkspaceRoot` rules, not the legacy tool set. |
+| `CodingConventionsSource` (`coding_conventions.md`) | `CodingConventions` | Conventions stay project-facing guidance and cannot grant permissions; the repository's Makefile quality pipeline stays the only quality authority. |
+
+The legacy priority order becomes the fixed canonical assembly order of
+architecture 30's profile and projection (identity, guidelines, tool usage,
+coding conventions), and the legacy 100,000-character cap becomes the total
+projection bound. The contributions named under "Not copied" keep separate
+owners: workspace `AGENTS.md` is the `ProjectInstructions` source of architecture
+30, memory-derived material stays with architecture 21, mode templates with
+architecture 07, VFR instructions with architecture 06, and few-shot examples,
+date/Git-derived context, and MCP-provided prompts are recorded in the deferred
+and excluded register (`EXC-059..065`).
