@@ -159,7 +159,7 @@ jobs:
 
       - name: Install pinned quality tools
         if: matrix.tools != ''
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
+        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5
         with:
           tool: ${{ matrix.tools }}
           fallback: cargo-binstall

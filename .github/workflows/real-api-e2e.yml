@@ -72,7 +72,7 @@ jobs:
           toolchain: 1.97.1
 
       - name: Install pinned quality tools
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc
+        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5
         with:
           tool: cargo-nextest@0.9.140
           fallback: cargo-binstall
