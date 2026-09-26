@@ -526,7 +526,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_goal_runtime", "m5_harness_runtime", "m5_policy_admission", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -540,7 +540,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_goal_runtime", "m5_harness_runtime", "m5_policy_admission", "m5_session_selection"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
@@ -2209,6 +2209,135 @@ def test_slice2_reconciliation_rows_exist(root: Path) -> None:
         raise RuntimeError("evidence register must reference ADR 0037")
 
 
+def test_adr_0044_slice3_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0044 must exist as the M5+ Slice 3 harness record")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    if "[0044](0044-m5plus-slice3-harness.md)" not in readme.read_text(encoding="utf-8"):
+        raise RuntimeError("decisions/README.md must index ADR 0044")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    if "decision 0044" not in reconciliation.read_text(encoding="utf-8"):
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0044")
+
+
+def test_slice3_tag_registry_parity(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    text = adr.read_text(encoding="utf-8")
+    for row in (
+        "| `programmatic-caller-policy-selection-v1` | `0x0201` | Wired (Slice 3 field-1 rework) |",
+        "| `goal-run-selection-v1` | `0x0203` | Wired (Slice 3) |",
+        "| `continual-harness-selection-v1` | `0x0204` | Wired (Slice 3) |",
+        "| `mcp-method-catalog-selection-v1` | `0x0205` | Wired (Slice 3) |",
+        "| `tool-descriptor-revision` | `0x0301` | Wired (Slice 3) |",
+        "| `tool-registry-revision` | `0x0302` | Wired (Slice 3) |",
+        "| `model-tool-loop-v1` | `0x0303` | Wired (Slice 3) |",
+        "| `bridge-invocation-v1` | `0x0304` | Wired (Slice 3) |",
+        "| `agent-notification-record-v1` | `0x0505` | ReservedForSlice4 |",
+    ):
+        if row not in text:
+            raise RuntimeError(f"ADR 0044 tag registry must contain row {row!r}")
+    if "16 `Wired`, 0 `ReservedForSlice3`, and 8" not in text:
+        raise RuntimeError("ADR 0044 must declare the post-Slice-3 tag totals")
+
+
+def test_slice3_storage_schema_declared_single_live(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    text = adr.read_text(encoding="utf-8")
+    if "SQLite storage schema | Logical version 1" not in text:
+        raise RuntimeError(
+            "ADR 0044 must declare the single live SQLite storage schema (logical version 1)"
+        )
+    if "no migration" not in text:
+        raise RuntimeError("ADR 0044 must declare that Slice 3 carries no migration")
+
+
+def test_slice3_protocol_versions_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    text = adr.read_text(encoding="utf-8")
+    if "Local protocol | 1.1, unchanged" not in text:
+        raise RuntimeError("ADR 0044 must declare local protocol 1.1 unchanged")
+    if "Public DTO schema | 1.1, additive, unchanged" not in text:
+        raise RuntimeError("ADR 0044 must declare public DTO schema 1.1 unchanged")
+    if "No new negotiated capability" not in text:
+        raise RuntimeError("ADR 0044 must declare that no new capability is negotiated")
+
+
+def test_slice3_test_targets_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    text = adr.read_text(encoding="utf-8")
+    for target in (
+        "m5_slice3_canonical",
+        "m5_harness_domain",
+        "m5_policy_domain",
+        "m5_goal_domain",
+        "m5_verification_domain",
+        "m5_slice3_wire_contracts",
+        "m5_slice3_repos",
+        "m5_slice3_contracts",
+        "m5_slice3_goal_contracts",
+        "m5_harness_runtime",
+        "m5_policy_admission",
+        "m5_goal_runtime",
+        "m5_slice3_recovery",
+        "m5_slice3_client",
+    ):
+        if f"tests/{target}.rs" not in text:
+            raise RuntimeError(f"ADR 0044 must declare the test target {target!r}")
+
+
+def test_slice3_policy_declares_new_test_targets(root: Path) -> None:
+    policy = (root / "quality/architecture.toml").read_text(encoding="utf-8")
+    for target in (
+        "m5_slice3_canonical",
+        "m5_harness_domain",
+        "m5_policy_domain",
+        "m5_goal_domain",
+        "m5_verification_domain",
+        "m5_slice3_wire_contracts",
+        "m5_slice3_repos",
+        "m5_slice3_contracts",
+        "m5_slice3_goal_contracts",
+        "m5_harness_runtime",
+        "m5_policy_admission",
+        "m5_goal_runtime",
+        "m5_slice3_recovery",
+        "m5_slice3_client",
+    ):
+        if target not in policy:
+            raise RuntimeError(
+                f"quality/architecture.toml must declare the Slice 3 test target {target!r}"
+            )
+
+
+def test_slice3_no_new_crate(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0044-m5plus-slice3-harness.md"
+    text = adr.read_text(encoding="utf-8")
+    if "No new crate, dependency, feature" not in text:
+        raise RuntimeError("ADR 0044 must declare that no new crate is introduced")
+
+
+def test_slice3_reconciliation_rows_exist(root: Path) -> None:
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    if "| SL3-001 |" not in matrix_text or "| SL3-010 |" not in matrix_text:
+        raise RuntimeError("source-of-truth matrix must carry SL3-001..010 rows")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    evidence_text = evidence.read_text(encoding="utf-8")
+    if "| EVD-072 |" not in evidence_text:
+        raise RuntimeError("evidence register must carry the EVD-072 row")
+    if "0044-m5plus-slice3-harness.md" not in evidence_text:
+        raise RuntimeError("evidence register must reference ADR 0044")
+    deferred = root / "docs/intention-relay/reconciliation/deferred-excluded-register.md"
+    deferred_text = deferred.read_text(encoding="utf-8")
+    for topic in ("EXC-041", "EXC-042"):
+        if f"| {topic} |" not in deferred_text or "Activated for M5+ Slice 3 by ADR 0044" not in deferred_text:
+            raise RuntimeError(f"deferred register must activate {topic} for Slice 3")
+    contradictions = root / "docs/intention-relay/reconciliation/contradiction-register.md"
+    if "CON-074" not in contradictions.read_text(encoding="utf-8"):
+        raise RuntimeError("contradiction register must carry the CON-074 resolution")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
@@ -2292,6 +2421,14 @@ def main() -> None:
         test_slice2_test_targets_declared,
         test_slice2_no_new_crate,
         test_slice2_reconciliation_rows_exist,
+        test_adr_0044_slice3_record_exists_and_is_indexed,
+        test_slice3_tag_registry_parity,
+        test_slice3_storage_schema_declared_single_live,
+        test_slice3_protocol_versions_declared,
+        test_slice3_test_targets_declared,
+        test_slice3_policy_declares_new_test_targets,
+        test_slice3_no_new_crate,
+        test_slice3_reconciliation_rows_exist,
     ]
     standalone_tests = [
         test_unused_dependency,
