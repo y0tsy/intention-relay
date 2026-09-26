@@ -403,7 +403,7 @@ session-selection, and base-tool contracts adopted by
 claim delivery of Milestones 6-9; it is their declared prerequisite in the
 dependency graph and activates only preparatory foundation work, never direct
 M6-M9 boundary implementation. The post-M4 Mandate packages (architectures
-13-21) are not part of these four slices: they are delivered by the
+13-21) are not part of these five slices: they are delivered by the
 Mandate-track milestones 10-12, which consume this milestone's foundation and
 whose contract records the slices below name. The full authoritative package review of
 2026-08-30 confirmed that the [`m4plus_concept.md`](../m4plus_concept.md)
@@ -420,7 +420,8 @@ inspection, and per-call cancellation
 ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md)).
 A new edition of this milestone, prepared as the complete foundation for all
 subsequent milestones, is delivered as a pre-approved sequence of activating
-slices (contracts/versions, control plane, harness, UI foundation) approved
+slices (contracts/versions, control plane, harness, UI foundation, and
+instruction sources and system context) approved
 together as one package. The activation decision is recorded in
 [ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md).
 
@@ -482,13 +483,29 @@ activated by earlier slices in this order:
    cross-workspace clone/rebind (architecture 23), activity numeric-limit
    classification (architecture 24), and the physical deletion/GC retention
    policy for historical work under architecture 04's retention rules.
+5. **Instruction sources and system context** — the instruction channel of
+   [architecture 30](30-instruction-sources-and-system-context.md), adopted by
+   [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md): the
+   closed instruction source kinds and scopes, the deployment instruction
+   profile adapted from the legacy Antibusy static prompt set, user-editable
+   fragments at user, project, and session scope, workspace `AGENTS.md` project
+   instructions read through the `WorkspaceRoot` boundary, and the reserved
+   `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable
+   profile revisions with canonical digests; canonical assembly and the
+   effective instruction projection, frozen at admission, delivered through the
+   existing `system_context` channel, materialized into fork, plan, and handoff
+   records, and recorded as safe usage provenance; intrinsic bounds, closed
+   safe failures, channel closure, and digest-only observability; and the
+   control-plane editing and preview surface that Milestone 6 consumes. Its
+   activating specification declares the instruction contract families under
+   the Slice 1 ledger policy and changes no earlier slice.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
 inside its slice, each with its own contract, transaction, and outcome test.
 The post-M4 Mandate packages of architectures 13-21 are delivered by the
 Mandate-track milestones 10-12 declared in the dependency graph; that track
-consumes this milestone's foundation, adds no fifth slice, and renumbers
+consumes this milestone's foundation, adds no slice of its own, and renumbers
 nothing.
 
 ### Tests first
@@ -523,6 +540,17 @@ nothing.
 - slice 4: fork boundary/snapshot/rate-limit; activity journal/notification
   bounds and urgent dedup; reasoning history and paged delivery; replay/
   resync; adapter parity;
+- slice 5: deterministic canonical assembly, ordering, separators, and digest
+  stability; profile revision immutability for every edit operation with typed
+  validation failures; intrinsic-bound rejection for the total projection, one
+  fragment, the fragment count, and workspace instructions; an absent
+  `AGENTS.md` contributing nothing and an unreadable, boundary-escaping,
+  non-text, or oversized one failing closed; projection freeze, reuse across
+  steps, and verbatim fork and handoff inheritance with no current-state
+  re-derivation; channel closure against Skill, memory, tool, repository, and
+  provider material; credential-free, activity-free, and raw-payload-free
+  surfaces; preview non-admission; and the control-plane editing and preview
+  contract with TUI/REPL equivalence;
 - shared: M3/M4 byte/meaning/replay/recovery preservation and fake-secret
   regression across logs, errors, snapshots, events, and adapter DTOs for
   every slice.
@@ -550,7 +578,11 @@ nothing.
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
   together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
-  3-4 remain;
+  3-5 remain;
+- the fifth slice's contracts are declared by its activating specification and
+  prove that instruction text is advisory-only, bounded, digest-bound, and
+  materialized for frozen context, with no untrusted material entering the
+  instruction channel and no authority created (ADR 0043);
 - the ordinary request-side tool advertisement (ADR 0039) is complete:
   request construction advertises the six active registered tools in registry
   order as validated typed definitions, forces the `tool_calls` capability,
@@ -580,7 +612,7 @@ nothing.
 
 ### Exit criteria
 
-- all four slices are complete in order; every slice is fully ready before the
+- all five slices are complete in order; every slice is fully ready before the
   next slice begins shipping;
 - the contract ledger declares every post-M5 protocol, schema, DTO,
   execution-meaning, configuration, migration, compatibility, and error
@@ -594,6 +626,9 @@ nothing.
 - the Mandate-track milestones 10-12 are declared as this milestone's
   successors for the post-M4 Mandate packages, and their activating
   specifications, contracts, and evidence remain owned by those milestones;
+- the instruction channel is delivered as the fifth slice, and M7 and M8
+  consume only its declared `Mode` and `Vfr` contributions while M12 keeps the
+  Skill and context-disclosure boundary (ADR 0043);
 - the M5+ evidence package passes the repository quality gates.
 
 ## Reserved declarations carried by M6-M9
@@ -626,6 +661,8 @@ records the deleted groups so no M6-M9 slice claims them:
 - `intention-tauri` bootstrap/native bridge using only `intention-client`;
 - minimal Svelte UI to create/open a session, send a turn, render streamed state, reconnect, and render safe activity/notification/acknowledgement projections;
 - TUI/REPL remains a contract-equivalent client.
+- instruction-fragment editing and effective-projection preview in the primary
+  UI over the fifth Milestone 5+ slice's control-plane surface (ADR 0043);
 - post-M4 activity/UI implementation remains separately activated: its
   contracts are delivered by the Milestone 5+ UI-foundation slice
   (ADR 0029/0032) and this milestone consumes them, while the durable
@@ -643,6 +680,9 @@ records the deleted groups so no M6-M9 slice claims them:
 - Tauri and TUI can observe the same daemon-owned session;
 - closing Tauri does not stop daemon-owned work;
 - no Tauri crate imports application/runtime/storage implementation APIs;
+- the primary UI can list, create, edit, reorder, enable, disable, and re-scope
+  instruction fragments and preview the effective projection over the typed
+  control-plane surface, with TUI/REPL equivalence;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
 ## Milestone 7: Plan/Build policies, physical plans, and Build Autopilot
@@ -655,7 +695,7 @@ records the deleted groups so no M6-M9 slice claims them:
 - model-safe body projection;
 - plan submission/approval/rejection state flow;
 - Plan-mode normal filesystem mutation restrictions;
-- Plan `execute` availability with advisory focus instruction and trusted-local audit;
+- Plan `execute` availability with advisory focus instruction and trusted-local audit; the focus instruction is the `Mode` contribution of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - automatic same-Session fresh Build start after approval;
 - optional full-context implementation handoff to a new Session.
 
@@ -687,7 +727,7 @@ not redefine the loop.
 
 ### Deliver
 
-- VFR hook, mapping, expansion/raw tools, model instructions;
+- VFR hook, mapping, expansion/raw tools, model instructions as the `Vfr` contribution of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - Headroom hook, CCR retention contract, retrieve tool;
 - deterministic composition with workspace/tool pipeline;
 - adapter/model representation policy.
@@ -1861,3 +1901,52 @@ profile, quality-policy target, or implementation milestone.
   activating specification, never resumes old external work, and never
   rewrites historical bytes; M3/M4 bytes remain unchanged; and
 - activation remains excluded pending a later M5+ specification.
+
+## Post-M5 instruction sources and system-context package
+
+**Documentation-only package extending architectures 30, 00, 02, 04, 06, 07,
+08, 09, 14, 21, 23, and 25.** It creates
+[the authoritative instruction-source contract](30-instruction-sources-and-system-context.md)
+and [decision 0043](../decisions/0043-instruction-sources-and-system-context.md),
+and it amends
+[decision 0035](../decisions/0035-m5plus-complete-foundation-activation.md) with
+the fifth activating slice. It activates no crate, schema, migration, protocol
+implementation, feature profile, quality-policy target, or production behavior.
+
+### Deliver
+
+- the closed instruction source kinds and scopes: the deployment instruction
+  profile adapted from the legacy Antibusy static prompt set, user-editable
+  fragments at user, project, and session scope, workspace `AGENTS.md` project
+  instructions read through the `WorkspaceRoot` boundary, and the reserved
+  `Mode` and `Vfr` contributions of architectures 07 and 06;
+- immutable profile revisions with canonical digests under exactly one live
+  configuration format version, with no migration and no second format;
+- canonical assembly and the immutable effective instruction projection, frozen
+  at admission, delivered through the existing `system_context` channel,
+  materialized into fork, plan, and handoff records, and recorded as safe usage
+  provenance;
+- intrinsic bounds, the closed `instruction_*` safe failures, channel closure
+  against Skill, memory, tool, repository, and provider material, and
+  digest-only observability;
+- the control-plane editing and preview surface of architecture 25, consumed by
+  the primary UI in Milestone 6; and
+- the delivery mapping: the fifth Milestone 5+ slice activates the mechanism,
+  Milestone 7 consumes the `Mode` contribution, Milestone 8 the `Vfr`
+  contribution, and Milestone 12 keeps the Skill and context-disclosure
+  boundary unchanged.
+
+### Exit criteria
+
+- the fifth slice's activating specification declares exact crates,
+  DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
+  outcome evidence, and wires the instruction contract families into the live
+  ledger;
+- instruction text is advisory-only: no instruction source grants authority, no
+  untrusted material enters the instruction channel, and M3/M4 bytes and
+  meanings remain unchanged;
+- profile revisions and materialized projections are immutable,
+  deterministically digested, and never re-derived from current configuration,
+  current project files, or current session state; and
+- the reconciliation registers carry the package's topic, slice, evidence,
+  contradiction, compatibility, deferral, and ownership rows.

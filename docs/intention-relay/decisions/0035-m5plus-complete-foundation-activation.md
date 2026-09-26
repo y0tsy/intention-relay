@@ -13,6 +13,10 @@ requirement the later milestones consume. It does not activate implementation:
 no crate, schema, migration, protocol, feature profile, or quality-policy
 target is activated by this decision.
 
+Amended 2026-09-26 by [ADR 0043](0043-instruction-sources-and-system-context.md):
+the pre-approved slice sequence gains a fifth activating slice, instruction
+sources and system context, without changing slices 1-4.
+
 ## Decision
 
 Milestone 5+ is the single activation home for the full post-M5 stack
@@ -20,7 +24,7 @@ Milestone 5+ is the single activation home for the full post-M5 stack
 prerequisite of Milestones 6-9 in the roadmap dependency graph
 (`K[M5+] --> F/G/H/I`). The post-M4 Mandate packages (architectures 13-21) are
 delivered by the separate Mandate-track milestones 10-12, which consume this
-milestone's foundation and whose contract records the four slices below name;
+milestone's foundation and whose contract records the five slices below name;
 the Mandate track does not extend the slice sequence or renumber M6-M9. The
 milestone is delivered as a pre-approved sequence
 of activating slices, all approved together as one package:
@@ -59,6 +63,17 @@ of activating slices, all approved together as one package:
    notification projections, normalized reasoning delivery, the legacy M4
    selection bridge, RLM packaging and export, and the exact typed
    client/protocol surface that M6 consumes.
+5. **Instruction sources and system context** — the instruction channel added
+   by [ADR 0043](0043-instruction-sources-and-system-context.md) and owned by
+   [architecture 30](../architecture/30-instruction-sources-and-system-context.md):
+   the closed instruction source kinds and scopes, the deployment instruction
+   profile adapted from the legacy Antibusy static prompt set, user-editable
+   fragments, workspace `AGENTS.md` project instructions, the reserved `Mode`
+   and `Vfr` contributions, canonical assembly, the immutable effective
+   instruction projection with its digests, intrinsic bounds, closed
+   `instruction_*` safe failures, and digest-only observability. Its activating
+   specification declares the instruction contract families under the Slice 1
+   ledger policy without changing slices 1-4.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
@@ -153,7 +168,7 @@ without any retroactive contract change.
 
 ## Non-goals
 
-This decision does not implement the four slices; it does not change M3/M4
+This decision does not implement the five slices; it does not change M3/M4
 behavior; it does not renumber M5-M9; it does not activate a crate, schema,
 migration, protocol, or feature. The slices remain non-authorizing until their
 own activating specifications are accepted at the start of Milestone 5+.
