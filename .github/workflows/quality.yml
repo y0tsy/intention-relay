@@ -166,7 +166,7 @@ jobs:
 
       - name: Enable sccache object cache for coverage builds
         if: matrix.scope == 'coverage'
-        uses: mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: "v0.17.0"
 
