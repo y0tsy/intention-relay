@@ -17,10 +17,9 @@ use intention_domain::{RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResul
 use intention_model::ModelCancellationSignal;
 use intention_protocol::{
     ProtocolAcceptedDto, ProtocolCapabilityDto, ProtocolCommandDto, ProtocolCommandResultDto,
-    ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponseEnvelopeDto,
-    ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto,
-    RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
+    ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto, ProtocolRequestPayloadDto,
+    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto,
+    RunResyncReasonDto, RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
 };
 #[cfg(any(test, feature = "test-support"))]
 use intention_runtime::ModelRunFirstAppendGate;
@@ -128,8 +127,6 @@ struct HostState {
     terminalizer_completed: tokio::sync::Notify,
     #[cfg(any(test, feature = "test-support"))]
     task_completed: tokio::sync::Notify,
-    #[cfg(any(test, feature = "test-support"))]
-    held_lookup_failures: AtomicUsize,
 }
 
 #[cfg(test)]
@@ -154,45 +151,12 @@ fn host_for_test(facade: DaemonApplicationFacade) -> Arc<HostState> {
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        held_lookup_failures: AtomicUsize::new(0),
     })
 }
 
 impl HostState {
-    /// Returns whether one run is held pending explicit admission.
-    ///
-    /// A failed lookup is surfaced as an error instead of being defaulted, so
-    /// the admission path can fail closed on the held marker.
-    fn recovered_run_held(&self, session_id: SessionId, run_id: RunId) -> DtoResult<bool> {
-        #[cfg(any(test, feature = "test-support"))]
-        if self
-            .held_lookup_failures
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
-            return Err(ErrorDto::unavailable(
-                "injected_held_lookup_failure",
-                "a deterministic held-lookup failure was injected",
-            ));
-        }
-        self.facade
-            .is_recovered_run_held_for_daemon(session_id, run_id)
-    }
-
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
-        // Recovery-promoted runs held pending explicit admission are never
-        // auto-scheduled; they are admitted only through the
-        // AdmitRecoveredRun command, after which the held marker clears. The
-        // marker is bypassed only on a positive `false`, so a failed lookup
-        // leaves the run held instead of scheduling it and failing it.
-        match self.recovered_run_held(session_id, run_id) {
-            Ok(false) => {}
-            Ok(true) | Err(_) => return,
-        }
         // Admission and StopRun share this registry lock. Once admission begins,
         // it either registers an executor before StopRun can persist Cancelling,
         // or StopRun installs its own terminalization task before a later
@@ -474,12 +438,6 @@ impl HostState {
         self.terminalizer_failures.store(1, Ordering::Release);
     }
 
-    /// Arms one deterministic held-lookup failure for the in-crate unit tests.
-    #[cfg(test)]
-    fn inject_held_lookup_failure_once(&self) {
-        self.held_lookup_failures.store(1, Ordering::Release);
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     fn terminalizer_attempts(&self) -> usize {
         self.terminalizer_attempts.load(Ordering::Acquire)
@@ -557,16 +515,12 @@ impl HostState {
 
     /// Runs the consolidated terminal side effects for one run that just
     /// reached a durable terminal state: publish the terminal snapshot
-    /// (retrying transient read failures boundedly), promote
-    /// unavailable-provider queue entries FIFO, and schedule a current
+    /// (retrying transient read failures boundedly) and schedule a current
     /// Starting successor exactly once (PR24-007/014).
     fn on_terminal(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         if !self.publish_current(session_id, run_id) {
             self.spawn_bounded_publication_retry(session_id, run_id);
         }
-        let _ = self
-            .facade
-            .promote_unavailable_runs_for_daemon(session_id, run_id);
         if let Ok(Some(promoted)) = self.facade.current_starting_run_for_daemon(session_id) {
             self.schedule_if_starting(session_id, promoted);
         }
@@ -844,8 +798,8 @@ impl ModelRunCommitObserver for HostCommitObserver {
     fn observe_model_run_commit(&self, committed: ModelRunCommitDto) {
         if committed.snapshot().run_projection().status().is_terminal() {
             // Consolidated terminal side effects: bounded terminal
-            // publication, FIFO unavailable-provider promotion, and exact
-            // once scheduling of a current Starting successor (PR24-007/014).
+            // publication and exact once scheduling of a current Starting
+            // successor (PR24-007/014).
             self.host
                 .on_terminal(committed.session_id(), committed.run_id());
             return;
@@ -1022,9 +976,6 @@ pub fn run(endpoint: LocalEndpoint) -> DtoResult<()> {
     // Tokio reactor context when it wraps the Unix socket listener.
     let listener = runtime.block_on(async { AsyncLocalListener::bind(endpoint) })?;
     let facade = DaemonApplicationFacade::open_platform()?;
-    // Catalog startup runs after storage opens and unfinished runs are
-    // interrupted; a degraded outcome leaves the control plane read-only.
-    facade.provider_control_startup()?;
     runtime.block_on(serve_async_listener(listener, facade))
 }
 
@@ -1052,8 +1003,6 @@ async fn serve_async_listener(
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        held_lookup_failures: AtomicUsize::new(0),
     });
     loop {
         let connection = listener.accept().await?;
@@ -1072,16 +1021,13 @@ async fn serve_async_connection(
         Ok(hello) => hello,
         Err(_) => return,
     };
-    let (remote, roles) = match connection.negotiate_by_capability(hello).await {
+    let (_, roles) = match connection.negotiate_by_capability(hello).await {
         Ok(roles) => roles,
         Err(_) => return,
     };
-    // The remote capability set is retained per connection and gates every
-    // Slice 2 command/query before any effect (PR24-002).
-    let remote_capabilities = Arc::from(remote.capabilities().to_vec());
     match roles {
         AsyncDaemonConnectionRoles::Ordinary(requests, responses) => {
-            serve_async_ordinary(requests, responses, host, remote_capabilities).await;
+            serve_async_ordinary(requests, responses, host).await;
         }
         AsyncDaemonConnectionRoles::RunStream(requests, frames) => {
             serve_async_run_stream(requests, frames, host).await;
@@ -1093,7 +1039,6 @@ async fn serve_async_ordinary(
     mut requests: AsyncRequestReceiver,
     mut responses: intention_transport::AsyncResponseSender,
     host: Arc<HostState>,
-    remote_capabilities: Arc<Vec<ProtocolCapabilityDto>>,
 ) {
     while let Ok(request) = requests.receive().await {
         let payload = match request.message().payload() {
@@ -1113,7 +1058,7 @@ async fn serve_async_ordinary(
                 ProtocolResponsePayloadDto::CommandResult(result)
             }
             ProtocolRequestPayloadDto::Command(command) => {
-                let result = gated_command_result(&host.facade, &remote_capabilities, command);
+                let result = host.facade.command(command.clone());
                 if let ProtocolCommandDto::SendUserTurn(_) = command
                     && let ProtocolCommandResultDto::Accepted(accepted) = &result
                     && let intention_protocol::ProtocolAcceptedResultDto::SendUserTurn(turn) =
@@ -1123,18 +1068,11 @@ async fn serve_async_ordinary(
                 {
                     host.schedule_if_starting(turn.session_id(), run_id);
                 }
-                if let ProtocolCommandDto::AdmitRecoveredRun(command) = command
-                    && let ProtocolCommandResultDto::Accepted(_) = &result
-                    && let Ok(session_id) = SessionId::parse(&command.session_id)
-                    && let Ok(run_id) = RunId::parse(&command.run_id)
-                {
-                    host.schedule_if_starting(session_id, run_id);
-                }
                 ProtocolResponsePayloadDto::CommandResult(result)
             }
-            ProtocolRequestPayloadDto::Query(query) => ProtocolResponsePayloadDto::QueryResult(
-                gated_query_result(&host.facade, &remote_capabilities, query),
-            ),
+            ProtocolRequestPayloadDto::Query(query) => {
+                ProtocolResponsePayloadDto::QueryResult(host.facade.query(query.clone()))
+            }
         };
         let response = ProtocolResponseEnvelopeDto::new(
             local_protocol_version(),
@@ -1145,92 +1083,6 @@ async fn serve_async_ordinary(
             return;
         }
     }
-}
-
-/// Dispatches one ordinary command through the capability and degraded-mode
-/// gates.
-///
-/// A Slice 2 command whose remote peer did not negotiate
-/// `provider_profiles_v1` is rejected before any effect with
-/// `provider_profiles_capability_required`. While the provider control plane
-/// is degraded, every provider state change, fresh provider-backed admission,
-/// promotion, and default change is rejected with `execution_not_ready`;
-/// accept/reject of the one pending removal candidate, health, and all reads
-/// remain allowed. Capability failure is always observed before readiness
-/// failure (PR24-002).
-fn gated_command_result(
-    facade: &DaemonApplicationFacade,
-    remote_capabilities: &[ProtocolCapabilityDto],
-    command: &ProtocolCommandDto,
-) -> ProtocolCommandResultDto {
-    if command.requires_provider_profiles()
-        && let Err(error) =
-            intention_protocol::negotiation::require_provider_profiles(remote_capabilities)
-    {
-        return ProtocolCommandResultDto::Rejected(error);
-    }
-    if provider_affecting_command(command) && !control_plane_serving(facade) {
-        return ProtocolCommandResultDto::Rejected(execution_not_ready());
-    }
-    facade.command(command.clone())
-}
-
-/// Dispatches one query through the capability gate.
-///
-/// Control-plane queries are readable for peers that negotiated
-/// `provider_profiles_v1` and are rejected with
-/// `provider_profiles_capability_required` for peers that did not, so a peer
-/// observes exactly its own negotiated capability (PR24-002). Baseline
-/// health and session-snapshot queries are never gated.
-fn gated_query_result(
-    facade: &DaemonApplicationFacade,
-    remote_capabilities: &[ProtocolCapabilityDto],
-    query: &ProtocolQueryDto,
-) -> ProtocolQueryResultDto {
-    if query.requires_provider_profiles()
-        && let Err(error) =
-            intention_protocol::negotiation::require_provider_profiles(remote_capabilities)
-    {
-        return ProtocolQueryResultDto::Rejected(error);
-    }
-    facade.query(query.clone())
-}
-
-/// Returns whether one command requires provider execution readiness.
-const fn provider_affecting_command(command: &ProtocolCommandDto) -> bool {
-    matches!(
-        command,
-        ProtocolCommandDto::SetSessionProviderProfile(_)
-            | ProtocolCommandDto::ReconcileUnavailableQueue(_)
-            | ProtocolCommandDto::AdmitRecoveredRun(_)
-            | ProtocolCommandDto::SendUserTurn(_)
-    )
-}
-
-/// Returns whether the provider control plane may serve provider-backed work.
-fn control_plane_serving(facade: &DaemonApplicationFacade) -> bool {
-    matches!(
-        facade.provider_control_readiness(),
-        intention::CatalogReadiness::Ready
-            | intention::CatalogReadiness::Uninitialized
-            | intention::CatalogReadiness::Loading
-    )
-}
-
-fn execution_not_ready() -> ErrorDto {
-    ErrorDto::new(
-        "execution_not_ready",
-        intention_types::ErrorCategoryDto::Unavailable,
-        "the provider control plane is degraded and read-only",
-        intention_types::ErrorRetryDto::Delayed,
-        None,
-    )
-    .unwrap_or_else(|_| {
-        ErrorDto::unavailable(
-            "execution_not_ready",
-            "the provider control plane is degraded and read-only",
-        )
-    })
 }
 
 async fn serve_async_run_stream(
@@ -1349,7 +1201,6 @@ fn daemon_hello() -> DtoResult<ProtocolHelloDto> {
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
             ProtocolCapabilityDto::DaemonHealth,
-            ProtocolCapabilityDto::ProviderProfilesV1,
             ProtocolCapabilityDto::RunStreamSubscriptions,
         ],
         "intention-daemon",
@@ -1389,8 +1240,6 @@ pub async fn serve_test_async_connection(
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        held_lookup_failures: AtomicUsize::new(0),
     });
     serve_async_connection(connection, host).await;
 }
@@ -1419,8 +1268,6 @@ pub async fn serve_test_async_listener(
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        held_lookup_failures: AtomicUsize::new(0),
     });
     for _ in 0..connection_count {
         let Ok(connection) = listener.accept().await else {
@@ -1455,8 +1302,6 @@ pub async fn serve_test_async_listener_with_first_append_gate(
         terminalizer_completed: tokio::sync::Notify::new(),
         #[cfg(any(test, feature = "test-support"))]
         task_completed: tokio::sync::Notify::new(),
-        #[cfg(any(test, feature = "test-support"))]
-        held_lookup_failures: AtomicUsize::new(0),
     });
     for _ in 0..connection_count {
         let Ok(connection) = listener.accept().await else {
@@ -1501,8 +1346,6 @@ pub fn test_host_lifecycle(facade: DaemonApplicationFacade) -> TestHostLifecycle
             terminalizer_completed: tokio::sync::Notify::new(),
             #[cfg(any(test, feature = "test-support"))]
             task_completed: tokio::sync::Notify::new(),
-            #[cfg(any(test, feature = "test-support"))]
-            held_lookup_failures: AtomicUsize::new(0),
         }),
         connection_tasks: Arc::new(Mutex::new(Vec::new())),
     }
@@ -1842,21 +1685,7 @@ mod tests {
         }
     }
 
-    /// Seeds one auto-accepted provider catalog revision with an enabled
-    /// `default` profile so user turns resolve a provider selection.
-    fn seed_catalog(facade: &DaemonApplicationFacade) {
-        facade
-            .seed_fixture_catalog_for_test_support(
-                "seed-1",
-                "openrouter",
-                "fixture-model",
-                "https://api.example.invalid/v1",
-            )
-            .expect("fixture catalog seeds")
-    }
-
     fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
-        seed_catalog(facade);
         let session_id = SessionId::new();
         assert!(matches!(
             facade.command(ProtocolCommandDto::CreateSession(
@@ -1912,7 +1741,6 @@ mod tests {
     #[tokio::test]
     async fn async_host_keeps_m3_requests_and_run_streams_on_one_listener() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
-        seed_catalog(&facade);
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let host = host_for_test(facade);
@@ -2141,44 +1969,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn held_lookup_failure_leaves_the_held_run_unadmitted_and_unterminal() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        facade
-            .mark_recovered_run_held_for_daemon(session_id, run_id)
-            .expect("fixture run is held for explicit admission");
-        let host = host_for_test(facade.clone());
-        host.inject_held_lookup_failure_once();
-
-        host.schedule_if_starting(session_id, run_id);
-
-        assert!(
-            host.data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .is_empty(),
-            "a failed held lookup never admits an executor"
-        );
-        assert_eq!(
-            facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
-                .expect("held run replay reads")
-                .snapshot()
-                .run_projection()
-                .status(),
-            RunStatusDto::Starting,
-            "the held run is never terminalized by a failed lookup"
-        );
-        assert!(
-            facade
-                .is_recovered_run_held_for_daemon(session_id, run_id)
-                .expect("held status reads after the injected failure"),
-            "the run stays held for explicit admission"
-        );
-    }
-
-    #[tokio::test]
     async fn host_stop_without_an_admitted_task_terminalizes_and_cleans_the_registry() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
@@ -2403,59 +2193,6 @@ mod tests {
         host.wait_for_terminalizer_completion().await;
         assert_eq!(host.terminalizer_attempts(), 2);
         assert_eq!(host.data.lock().expect("host data").tasks.len(), 0);
-    }
-
-    #[test]
-    fn unnegotiated_peers_are_rejected_before_any_effect_for_gated_requests() {
-        // PR24-002: the gate stays behavioural here, while the
-        // exhaustive per-variant classification is owned by the protocol test
-        // `protocol_control_plane_classification_covers_every_command_and_query_variant`.
-        use intention_protocol::contract_families::{
-            GetProviderCatalogStatusQueryDto, SetSessionProviderProfileCommandDto,
-        };
-        let (_directory, facade) = fixture_facade();
-        let session_id = SessionId::new();
-        let gated_command =
-            ProtocolCommandDto::SetSessionProviderProfile(SetSessionProviderProfileCommandDto {
-                schema_version: "1.1".to_owned(),
-                session_id: session_id.to_string(),
-                profile_id: "default".to_owned(),
-                expected_session_projection_revision: 0,
-                operation_id: "op-set".to_owned(),
-            });
-        let gated_query =
-            ProtocolQueryDto::GetProviderCatalogStatus(GetProviderCatalogStatusQueryDto {
-                schema_version: "1.1".to_owned(),
-            });
-        for capabilities in [&[][..], &[ProtocolCapabilityDto::SessionSubscriptions][..]] {
-            assert!(matches!(
-                gated_command_result(&facade, capabilities, &gated_command),
-                ProtocolCommandResultDto::Rejected(error)
-                    if error.code() == "provider_profiles_capability_required"
-            ));
-            assert!(matches!(
-                gated_query_result(&facade, capabilities, &gated_query),
-                ProtocolQueryResultDto::Rejected(error)
-                    if error.code() == "provider_profiles_capability_required"
-            ));
-        }
-        // Baseline health stays readable without the capability, and a
-        // negotiated gated command reaches dispatch instead of the capability
-        // gate: the fixture facade has no active catalog, so dispatch rejects
-        // the profile resolution with exactly `catalog_not_ready`.
-        assert!(matches!(
-            gated_query_result(&facade, &[], &ProtocolQueryDto::GetDaemonHealth),
-            ProtocolQueryResultDto::DaemonHealth(_)
-        ));
-        assert!(matches!(
-            gated_command_result(
-                &facade,
-                &[ProtocolCapabilityDto::ProviderProfilesV1],
-                &gated_command,
-            ),
-            ProtocolCommandResultDto::Rejected(error)
-                if error.code() == "catalog_not_ready"
-        ));
     }
 
     #[test]

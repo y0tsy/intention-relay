@@ -33,14 +33,6 @@ fn facade() -> (TempDir, intention::DaemonApplicationFacade) {
     let directory = TempDir::new().expect("temporary directory exists");
     let facade = open_facade(directory.path().join("relay.sqlite"), snapshot())
         .expect("durable facade opens");
-    facade
-        .seed_fixture_catalog_for_test_support(
-            "seed-1",
-            "openrouter",
-            "fixture",
-            "https://api.example.invalid/v1",
-        )
-        .expect("fixture catalog seeds");
     (directory, facade)
 }
 
