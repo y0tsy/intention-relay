@@ -4,6 +4,8 @@
 //! transport implementation access. It retains only reconnect projection state;
 //! daemon authority remains remote.
 
+pub mod slice3;
+
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
