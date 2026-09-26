@@ -261,7 +261,7 @@ filtered run state.
 ### Tests first
 
 - DTO/event and compatible persisted-fixture tests for `WorkspaceId`, projections, queue tickets, and explicit event taxonomy;
-- supported/future-schema SQLite migration fixtures; safe canonical config-snapshot persistence; and same-revision equal-snapshot idempotency versus typed different-snapshot conflict;
+- supported/future-schema SQLite fixtures proving the current schema opens directly and any other schema version is rejected (the migration chain is removed by [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)); safe canonical config-snapshot persistence; and same-revision equal-snapshot idempotency versus typed different-snapshot conflict;
 - transaction fault-injection outcome tests after event, projection, and snapshot writes, proving rollback at each stage;
 - run state-machine tests, including mandatory `Starting -> Cancelling -> Cancelled` behavior;
 - durable queue acceptance/idempotency/removal and atomic terminal-promotion tests that retain the queued turn's proposed `RunId`, snapshot, and revision after a daemon config change;
@@ -453,7 +453,7 @@ activated by earlier slices in this order:
    and reconciliation; `provider_profiles_v1`; pending-removal and degraded
    recovery; and the provider reasoning/catalog surface. **Activated by
    [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); Slice 2 is
-   complete. The D-16 audit removed the unconsumed typed preservation-control,
+   complete. The unconsumed-surface audit (2026-09) removed the unconsumed typed preservation-control,
    server-side-parser, Responses reasoning-mode, reasoning-usage, and
    model-capability-envelope contracts, the protocol-only reasoning/header/
    parser duplicates, the eight producer-less control-plane event DTOs, and
@@ -598,7 +598,7 @@ nothing.
 
 ## Reserved declarations carried by M6-M9
 
-The D-16 audit (2026-09) keeps exactly one audited surface for this block and
+The unconsumed-surface audit (2026-09) (2026-09) keeps exactly one audited surface for this block and
 records the deleted groups so no M6-M9 slice claims them:
 
 - **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed
@@ -610,15 +610,13 @@ records the deleted groups so no M6-M9 slice claims them:
   [`m4plus_concept.md`](../m4plus_concept.md) (session selection, runs, queues,
   and usage),
   [architecture 29](29-provider-session-and-profiles-protocol.md) (session
-  selection, runs, queues, and usage), and `pr24-review-1.md` R19 ("Anchor the
-  durable session-event delivery as a declared future slice in the audit").
+  selection, runs, queues, and usage).
   Until Milestone 6 lands the layer, the event stays boundary-validated with
   no durable copy.
 - **Deleted groups — no M6-M9 slice claims them.** The protocol reasoning/
-  header/parser duplicates (P2-06), the eight producer-less control-plane
-  event DTOs (P2-07), the six unconsumed model types (P2-15), and the
-  `provider_profile_tombstoned` wire code (R36) were deleted by the D-16
-  audit; the durable `configuration_audit.audit_kind` rows remain the owner of
+  header/parser duplicates, the eight producer-less control-plane event DTOs,
+  the six unconsumed model types, and the `provider_profile_tombstoned` wire
+  code were deleted by the unconsumed-surface audit (2026-09); the durable `configuration_audit.audit_kind` rows remain the owner of
   catalog audit evidence.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
@@ -1657,7 +1655,7 @@ profile, quality-policy target, or implementation milestone.
 - `ReasoningHistoryTransferDto`/`TextualHistoryV1`/`ReasoningHistoryManifestDto`/
   `ReasoningHistoryBound` with the 4-MiB aggregate bound;
 - reported-usage accounting without double-count (the typed
-  `ReasoningUsageDto` was removed as unconsumed by the D-16 audit);
+  `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09));
 - `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (256-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
@@ -1803,7 +1801,7 @@ profile, quality-policy target, or implementation milestone.
   discovery (architecture 25);
 - arbitrary authentication headers, plus the recorded provider-native
   preservation-control and server-side-parser directions whose typed contracts
-  were removed as unconsumed by the D-16 audit (architecture 22);
+  were removed by the unconsumed-surface audit (2026-09) (architecture 22);
 - tool-result and child-agent execution in forks, export, and cross-workspace
   clone/rebind (architectures 23/24/26);
 - autonomous harness goal mode and work/requeue after client disconnection

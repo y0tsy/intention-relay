@@ -2,7 +2,7 @@
 
 ## Status
 
-**Decided architectural policy for v1.** This document defines the non-negotiable rules that all later architecture and implementation work must follow.
+**Decided architectural policy for v1.** This document defines the non-negotiable rules that all later architecture and implementation work must follow. Principles 1–11 govern v1, which is delivered through M5; principles 12–28 are the post-M5+ binding specification for the Mandate track and its ordinary-run extensions, and each is implemented only to the extent its owning milestone has landed.
 
 ## Scope
 
@@ -52,7 +52,7 @@ A crate is not considered complete because it compiles or has unit tests. Each d
 
 ### 11. Reproducible quality gates are architectural
 
-Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, immediate tiered coverage requirements, feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates, and `make ci` is the sole CI verification gate after explicit runner setup. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
+Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, immediate tiered coverage requirements, feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-selftest`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and `make ci` is the local single-pass alias for the same full gate. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Scope boundaries
 
@@ -96,17 +96,26 @@ The implementation must demonstrably provide:
 
 ## Implementation-required decisions
 
-The following are required before their owning implementation slice begins, but are not settled by this document:
+The following are required before their owning implementation slice begins.
+The first table is settled by delivered work and names the current source of
+truth; the second is still open and stays owned by the named slice.
+
+### Settled by delivered work
+
+| Topic | Settled decision and source |
+| --- | --- |
+| Queue execution | The repository atomically promotes the oldest eligible queued turn, tickets are never reused, removal and inspection stay explicit, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Queue"). |
+| Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
+| AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md). |
+| Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |
+| Provider retries | Runtime owns at most one retry for a delayed or retryable provider failure before any durable fact, with a fixed 250 ms delay and `max_attempts` 1..=2 / `attempt_timeout_seconds` 1..=60 ([architecture 08](08-model-protocol-and-providers.md), [architecture 09](09-configuration-security-and-observability.md)). |
+
+### Still open
 
 | Topic | Decision required |
 | --- | --- |
-| Queue execution | Exact promotion, deletion, and retry behavior for queued user turns. |
-| Risk policy | The precise list of actions that require a confirmation in Build or Plan mode. |
-| AppData location | Platform-specific path resolution and migration strategy. |
-| Plan revision mechanics | Whether an edit produces a full file revision, a patch record, or both. |
-| Event retention | Retention, compaction, and replay thresholds for event logs and stream deltas. |
-| CCR backend | Initial memory/SQLite retention strategy, limits, and expiry behavior. |
-| Provider retries | Ownership and policy for provider retryable errors and backoff. |
+| Event retention | Retention, compaction, and replay thresholds for event logs and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 9. |
+| CCR backend | Initial memory/SQLite retention strategy, limits, and expiry behavior ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). Milestone 8 owns the delivered backend. |
 
 ## Deferred decisions
 
@@ -124,8 +133,13 @@ Before implementation starts, the team must create the architectural test matrix
 
 ## Post-M4 foundation principles
 
-The following principles govern future authoritative M4+ packages without
-changing closed M4 or current ordinary-run behavior.
+The following principles (12–28) are the binding specification for the
+post-M5+ Mandate track and the ordinary-run extensions that accompany it. They
+govern future authoritative M4+ packages without changing closed M4 or current
+ordinary-run behavior, and each is implemented only where a milestone has
+landed: principle 27's provider-selection evidence is delivered by the M5+
+Slice 2 control plane, while principles 12–26 and 28 are held by the Mandate
+milestones (roadmap M10–M12) and their owning architecture documents 15–23.
 
 ### 12. Execution kinds are explicit
 
