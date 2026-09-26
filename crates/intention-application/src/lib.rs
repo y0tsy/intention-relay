@@ -22,41 +22,12 @@ use intention_runtime::{
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, ModelContextRoleDto, ProviderCatalogRepositoryDto,
-    RemoveQueuedTurnInputDto, SessionProviderDefaultsRepositoryDto, StorageRepositoryDto,
+    CreateSessionInputDto, ModelContextRoleDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
     ToolResultEvidenceDto, ToolResultKindDto,
 };
 use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
 use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
-
-pub mod provider_catalog;
-pub mod provider_control_plane;
-pub mod provider_gate;
-pub mod provider_registry;
-pub mod session_selection;
-
-pub use provider_catalog::{
-    CatalogAcceptanceOutcomeDto, CatalogCandidateOutcomeDto, CatalogProviderDeclarationDto,
-    CatalogSourceInputDto, CatalogStartupOutcomeDto, ProviderAdmissionDto,
-    ProviderCatalogController, ProviderCatalogProjectionDto,
-};
-pub use provider_control_plane::{
-    ConfigurationReloadService, CredentialRotationService, DiscoveryPort, DiscoveryScopeDto,
-    DriverRebuildPort, HealthProbePort, PricingPolicyService, PrivateCredentialMaterial,
-    PrivateCredentialPort, ProviderDiscoveryService, ProviderHealthService, ReloadCandidateDto,
-    ReloadCommitOutcomeDto, SafeBindingSource, SafeCompositionBindingDto,
-};
-pub use provider_gate::{CatalogReadiness, ControlPlaneGate, ControlPlaneState};
-pub use provider_registry::{
-    MAX_ACTIVE_PRIVATE_ENTRIES, ModelRunDriverHandle, PrivateProviderProfileMaterial,
-    PrivateRegistry, PrivateRegistryKey, ProviderDriverFactory, private_credential_reference,
-};
-pub use session_selection::{
-    CatalogAdmissionPort, CatalogReadService, ControlPlaneReadinessPort, DegradedModeService,
-    HeldRunService, RemovalService, ResolvedProfileDto, SelectionResolutionService,
-    SessionProfileService, UnavailableQueueService, UsageService,
-};
 
 /// Explicit durable values selected for a create-session workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -857,30 +828,37 @@ where
         ))
     }
 
-    /// Accepts and schedules a user turn after resolving its provider selection.
+    /// Accepts a user turn and schedules an exactly-started run only after its initial commit.
     ///
-    /// Selection resolution runs before the durable commit; scheduling
-    /// follows the same post-commit rules as the selection-less scheduling
-    /// path it replaced. The repository is the sole idempotency authority.
+    /// Queued outcomes and idempotent retry evidence never load model context or
+    /// dispatch. Any post-commit context or dispatch failure is durably recorded
+    /// against the exact `Starting` run and this method still returns the original
+    /// acceptance.
     ///
     /// # Errors
     ///
-    /// Returns the typed resolution error before any commit, or an admission
-    /// or malformed durable-acceptance error.
-    pub fn send_user_turn_and_schedule_with_provider_selection<Dispatch>(
+    /// Returns an admission or malformed durable-acceptance error. Post-commit
+    /// scheduling failures deliberately preserve the committed acceptance result.
+    pub fn send_user_turn_and_schedule<Dispatch>(
         &self,
         command: SendUserTurnCommandDto,
         input: SendUserTurnWorkflowInputDto,
-        port: &impl CatalogAdmissionPort,
         dispatch: &Dispatch,
     ) -> DtoResult<ProtocolAcceptedResultDto>
     where
         Dispatch: ModelRunDispatchPort,
-        Repository: SessionProviderDefaultsRepositoryDto + ProviderCatalogRepositoryDto,
     {
         let occurred_at = input.occurred_at();
-        let accept = self.accept_user_turn_input_with_selection(&command, &input, port)?;
-        let change = self.repository.accept_user_turn(accept)?;
+        let change = self
+            .repository
+            .accept_user_turn(AcceptUserTurnInputDto::new(
+                command.session_id(),
+                command.turn_id(),
+                command.content(),
+                input.proposed_run_id,
+                input.config_snapshot,
+                input.occurred_at,
+            )?)?;
         let accepted = accepted_user_turn(&command, &change)?;
         let ProtocolAcceptedResultDto::SendUserTurn(accepted_turn) = accepted else {
             unreachable!("accepted user turn always returns user-turn acceptance")
@@ -1045,50 +1023,6 @@ where
             query.session_id(),
             projection.at_sequence(),
             projection,
-        )
-    }
-
-    /// Resolves and builds the durable turn-acceptance input for one turn.
-    ///
-    /// The effective profile is resolved before any durable commit; a failed
-    /// or absent resolution returns its typed error so no commit happens.
-    /// Every accepted turn carries a resolved provider selection.
-    fn accept_user_turn_input_with_selection(
-        &self,
-        command: &SendUserTurnCommandDto,
-        input: &SendUserTurnWorkflowInputDto,
-        port: &impl CatalogAdmissionPort,
-    ) -> DtoResult<AcceptUserTurnInputDto>
-    where
-        Repository: SessionProviderDefaultsRepositoryDto + ProviderCatalogRepositoryDto,
-    {
-        let session_default = self
-            .repository
-            .get_session_provider_profile(command.session_id())?
-            .map(|default| default.profile_id);
-        let global_default = self
-            .repository
-            .load_provider_catalog_status()
-            .ok()
-            .and_then(|state| state.active_default_profile_id);
-        let selection = crate::SelectionResolutionService.resolve_for_turn(
-            command,
-            session_default,
-            global_default,
-            port,
-        )?;
-        let base = AcceptUserTurnInputDto::new(
-            command.session_id(),
-            command.turn_id(),
-            command.content(),
-            input.proposed_run_id,
-            input.config_snapshot.clone(),
-            input.occurred_at,
-        )?;
-        Ok(
-            base.with_provider_selection(crate::session_selection::provider_selection_from(
-                &selection,
-            )?),
         )
     }
 }
