@@ -498,7 +498,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [zerocopy 0.8.57](https://github.com/google/zerocopy)
+- [zerocopy 0.8.59](https://github.com/google/zerocopy)
 
 ```text
                                  Apache License
@@ -709,7 +709,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [rustls-platform-verifier 0.7.0](https://github.com/rustls/rustls-platform-verifier)
+- [rustls-platform-verifier 0.7.1](https://github.com/rustls/rustls-platform-verifier)
 
 ```text
                                  Apache License
@@ -2832,13 +2832,13 @@ limitations under the License.
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
 - [base64 0.23.1](https://github.com/marshallpierce/rust-base64)
 - [bitflags 2.13.2](https://github.com/bitflags/bitflags)
-- [cc 1.4.7](https://github.com/rust-lang/cc-rs)
+- [cc 1.5.1](https://github.com/rust-lang/cc-rs)
 - [cfg-if 1.0.5](https://github.com/rust-lang/cfg-if)
 - [cmake 0.1.58](https://github.com/rust-lang/cmake-rs)
 - [displaydoc 0.2.7](https://github.com/yaahc/displaydoc)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
 - [fastrand 2.5.0](https://github.com/smol-rs/fastrand)
-- [find-msvc-tools 0.1.13](https://github.com/rust-lang/cc-rs)
+- [find-msvc-tools 0.1.14](https://github.com/rust-lang/cc-rs)
 - [fnv 1.0.7](https://github.com/servo/rust-fnv)
 - [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
 - [fs4 1.1.0](https://github.com/al8n/fs4)
@@ -2865,7 +2865,7 @@ limitations under the License.
 - [rustls 0.23.45](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
 - [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
-- [smallvec 1.16.1](https://github.com/servo/rust-smallvec)
+- [smallvec 1.16.2](https://github.com/servo/rust-smallvec)
 - [socket2 0.6.5](https://github.com/rust-lang/socket2)
 - [stable_deref_trait 1.2.1](https://github.com/storyyeller/stable_deref_trait)
 - [syn 1.0.109](https://github.com/dtolnay/syn)
@@ -4363,9 +4363,9 @@ limitations under the License.
 - [syn 3.0.6](https://github.com/dtolnay/syn)
 - [sync_wrapper 1.0.2](https://github.com/Actyx/sync_wrapper)
 - [thiserror-impl 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror-impl 2.0.20](https://github.com/dtolnay/thiserror)
+- [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror 2.0.20](https://github.com/dtolnay/thiserror)
+- [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
 - [unicode-ident 1.0.26](https://github.com/dtolnay/unicode-ident)
 - [widestring 1.2.1](https://github.com/VoidStarKat/widestring-rs)
 
@@ -5099,7 +5099,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### Used by
 
-- [hyper-util 0.1.20](https://github.com/hyperium/hyper-util)
+- [hyper-util 0.1.21](https://github.com/hyperium/hyper-util)
 
 ```text
 Copyright (c) 2023-2025 Sean McArthur
