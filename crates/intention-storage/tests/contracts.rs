@@ -12,13 +12,15 @@ use intention_storage::{
     AcceptProviderCatalogRemovalInputDto, AcceptUserTurnInputDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
     CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
-    ExpireProviderCatalogRemovalCandidateInputDto, ModelContextMessageDto, ModelContextRoleDto,
-    ProviderRemovalRepositoryDto, RecoverUnfinishedRunsInputDto,
-    RejectProviderCatalogRemovalInputDto, RemoveQueuedTurnInputDto, StartingRunModelContextDto,
-    StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    ExpireProviderCatalogRemovalCandidateInputDto, MAX_SAFE_CONTENT_BYTES, MAX_SAFE_LABEL_CHARS,
+    ModelContextMessageDto, ModelContextRoleDto, ProviderRemovalRepositoryDto,
+    RecoverUnfinishedRunsInputDto, RejectProviderCatalogRemovalInputDto, RemoveQueuedTurnInputDto,
+    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
+    TransitionRunInputDto, validate_safe_content, validate_safe_digest, validate_safe_label,
+    validate_safe_labels,
 };
 use intention_types::{
-    ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -626,5 +628,92 @@ fn removal_repository_default_loaders_keep_in_memory_fakes_safe() {
             .load_pending_removal_candidate()
             .expect("default pending loader reads")
             .is_none()
+    );
+}
+
+fn rejection_code<T: std::fmt::Debug>(result: DtoResult<T>) -> String {
+    result
+        .expect_err("the boundary rejects before a durable write")
+        .code()
+        .to_owned()
+}
+
+#[test]
+fn slice3_safe_text_helpers_accept_canonical_values_and_reject_closed_boundaries() {
+    validate_safe_label("invalid_harness_rule", "harness-rule-1").expect("a safe label passes");
+    validate_safe_labels(
+        "harness_source_unavailable",
+        &["source-a".to_owned(), "source-b".to_owned()],
+        2,
+    )
+    .expect("bounded safe labels pass");
+    validate_safe_digest(
+        "harness_revision_conflict",
+        &format!("sha256:{}", "a".repeat(64)),
+    )
+    .expect("a canonical digest passes");
+    validate_safe_content(
+        "harness_source_unavailable",
+        "harness_result_too_large",
+        "safe harness summary",
+    )
+    .expect("safe content passes");
+
+    assert_eq!(
+        rejection_code(validate_safe_label("invalid_harness_rule", "  ")),
+        "invalid_harness_rule"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_label(
+            "invalid_harness_rule",
+            &"x".repeat(MAX_SAFE_LABEL_CHARS + 1)
+        )),
+        "invalid_harness_rule"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_label("invalid_harness_rule", "line\nbreak")),
+        "invalid_harness_rule"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_label("invalid_harness_rule", "api_key=live")),
+        "credentials_forbidden"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_labels(
+            "harness_source_unavailable",
+            &["a".to_owned(), "b".to_owned(), "c".to_owned()],
+            2
+        )),
+        "harness_source_unavailable"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_digest(
+            "harness_revision_conflict",
+            "sha256:xyz"
+        )),
+        "harness_revision_conflict"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_digest(
+            "harness_revision_conflict",
+            &format!("sha256:{}", "A".repeat(64))
+        )),
+        "harness_revision_conflict"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_content(
+            "harness_source_unavailable",
+            "harness_result_too_large",
+            &"x".repeat(MAX_SAFE_CONTENT_BYTES + 1)
+        )),
+        "harness_result_too_large"
+    );
+    assert_eq!(
+        rejection_code(validate_safe_content(
+            "harness_source_unavailable",
+            "harness_result_too_large",
+            "password=hunter2"
+        )),
+        "credentials_forbidden"
     );
 }

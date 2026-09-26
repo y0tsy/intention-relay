@@ -1829,3 +1829,118 @@ pub trait HeldRunRepositoryDto {
     /// Returns an unavailable error when the record cannot be read.
     fn load_held_recovered_run(&self, run_id: RunId) -> DtoResult<Option<HeldRecoveredRunDto>>;
 }
+
+/// Maximum characters of one storage-bound safe label.
+pub const MAX_SAFE_LABEL_CHARS: usize = 128;
+
+/// Maximum bytes of one storage-bound safe content value.
+pub const MAX_SAFE_CONTENT_BYTES: usize = 4096;
+
+/// The credential rejection code shared with every other safe boundary.
+const CREDENTIALS_FORBIDDEN: &str = "credentials_forbidden";
+
+/// Validates one storage-bound safe label.
+///
+/// # Errors
+///
+/// Returns a validation error carrying `code` for a blank or control-bearing
+/// label, a label over [`MAX_SAFE_LABEL_CHARS`], and `credentials_forbidden`
+/// for a credential-shaped label.
+pub fn validate_safe_label(code: &'static str, value: &str) -> DtoResult<()> {
+    if value.trim().is_empty() || intention_domain::canonical::contains_control_or_nul(value) {
+        return Err(ErrorDto::validation(
+            code,
+            "a safe label must be non-blank and control-free",
+        ));
+    }
+    if value.chars().count() > MAX_SAFE_LABEL_CHARS {
+        return Err(ErrorDto::validation(
+            code,
+            "a safe label must stay inside its closed bound",
+        ));
+    }
+    if intention_domain::canonical::contains_credential_shape(value) {
+        return Err(ErrorDto::validation(
+            CREDENTIALS_FORBIDDEN,
+            "credentials are forbidden",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one ordered list of storage-bound safe labels.
+///
+/// # Errors
+///
+/// Returns a validation error carrying `code` when the list exceeds `max`
+/// entries or any entry is not a safe label.
+pub fn validate_safe_labels(code: &'static str, values: &[String], max: usize) -> DtoResult<()> {
+    if values.len() > max {
+        return Err(ErrorDto::validation(
+            code,
+            "a bounded label list stays inside its closed bound",
+        ));
+    }
+    for value in values {
+        validate_safe_label(code, value)?;
+    }
+    Ok(())
+}
+
+/// Validates one canonical `sha256:<64 lowercase hex>` digest value.
+///
+/// # Errors
+///
+/// Returns a validation error carrying `code` for any other digest shape.
+pub fn validate_safe_digest(code: &'static str, value: &str) -> DtoResult<()> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(ErrorDto::validation(
+            code,
+            "a safe digest is sha256:<64 lowercase hex>",
+        ));
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ErrorDto::validation(
+            code,
+            "a safe digest is sha256:<64 lowercase hex>",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates one storage-bound safe content value.
+///
+/// # Errors
+///
+/// Returns a validation error carrying `invalid_code` for a blank or
+/// control-bearing value, `too_large_code` over [`MAX_SAFE_CONTENT_BYTES`], and
+/// `credentials_forbidden` for a credential-shaped value.
+pub fn validate_safe_content(
+    invalid_code: &'static str,
+    too_large_code: &'static str,
+    value: &str,
+) -> DtoResult<()> {
+    if value.trim().is_empty() || intention_domain::canonical::contains_control_or_nul(value) {
+        return Err(ErrorDto::validation(
+            invalid_code,
+            "safe content must be non-blank and control-free",
+        ));
+    }
+    if value.len() > MAX_SAFE_CONTENT_BYTES {
+        return Err(ErrorDto::validation(
+            too_large_code,
+            "safe content exceeds its byte bound",
+        ));
+    }
+    if intention_domain::canonical::contains_credential_shape(value) {
+        return Err(ErrorDto::validation(
+            CREDENTIALS_FORBIDDEN,
+            "credentials are forbidden",
+        ));
+    }
+    Ok(())
+}
