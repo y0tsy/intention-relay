@@ -31,9 +31,9 @@ It supersedes nothing. It amends two recorded positions:
   that leaves prompt assembly undefined; instruction assembly is now owned by
   architecture 30 while architecture 21 keeps Goals, Skills, context manifests,
   memory, and compaction;
-- the four-slice sequence of
-  [ADR 0035](0035-m5plus-complete-foundation-activation.md), which gains the
-  fifth slice declared below.
+- the five-slice sequence of
+  [ADR 0035](0035-m5plus-complete-foundation-activation.md), whose fifth slice
+  this decision declares.
 
 The M3/M4 baseline, the closed M4 charter, the current model contract, and the
 recorded `system_context` channel keep their meaning. This decision answers a

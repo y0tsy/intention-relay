@@ -588,7 +588,7 @@ nothing.
   order as validated typed definitions, forces the `tool_calls` capability,
   and both current adapters translate them without `tool_choice`; hermetic
   evidence is anchored at EVD-062, and this retrospective completion does not
-  advance slices 3-4;
+  advance slices 3-5;
 - the ordinary same-run provider reasoning round-trip
   ([ADR 0041](../decisions/0041-same-run-reasoning-round-trip.md)) is complete:
   the generic Chat Completions adapter consumes typed `reasoning_content`
@@ -596,7 +596,7 @@ nothing.
   round's accepted reasoning on the same-run assistant tool-call continuation
   as transient request state with no durable representation; the OpenRouter
   adapter ignores the attachment by design, and this retrospective completion
-  does not advance slices 3-4; hermetic evidence is anchored at EVD-064, and
+  does not advance slices 3-5; hermetic evidence is anchored at EVD-064, and
   the recorded live run remains the controller's manual live-evidence
   obligation;
 - the opt-in live-provider e2e channel
