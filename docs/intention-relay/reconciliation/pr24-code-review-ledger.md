@@ -1,5 +1,10 @@
 # PR 24 code-review ledger
 
+> Status note: PR #24 was closed without merge on 2026-09-23. Its branch content
+> was carried into `main` by PR #36 (squash commit `37bad4e`). This ledger stays
+> the evidence for the three PR #24 review waves, including the `PR24-0xx` ids
+> that the source comments cite.
+
 ## Status and review baseline
 
 This ledger records the findings from three read-only review waves over pull

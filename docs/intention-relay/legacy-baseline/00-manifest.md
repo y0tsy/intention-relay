@@ -40,3 +40,13 @@ The source repository had pre-existing user changes. This audit writes only to `
 - `07-naming-brief.md`: verified product definition for naming.
 - `08-audit-gaps.md`: limitations and remaining validation work.
 - `evidence/`: scoped evidence reports.
+
+## Archived superset and known delta
+
+This baseline is the selection made from the 2026-07-31 audit; the same audit is
+archived at `docs/reference/archive/legacy-antibusy-audit/`. The archived copy is
+a content superset: it additionally records custom shell tools, configured
+lifecycle hooks, the absence of a working Files panel, and the absence of direct
+manual sub-agent spawning. It is provenance only and never overrides this
+baseline. Adopting any of those rows is a product decision that has not been
+made, so the two copies stay side by side until that decision exists.
