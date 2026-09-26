@@ -1,12 +1,18 @@
 # Intention Relay
 
 Intention Relay is a local-first, single-user Rust workspace for a daemon-owned
-coding-agent system. The repository now contains the approved architecture,
-M0 quality foundation, the **M1 contracts, configuration, and workspace
-skeleton**, and the **M1+ quality policy hardening** that enforces workspace
-graphs, executable test targets, public API signatures, and coverage-exception
-semantics. M2 now delivers the local protocol, shared client, daemon-bootstrap
-fixture, and TUI proof over private per-user IPC.
+coding-agent system. The approved architecture, the quality foundation, and the
+milestones M0 through M5 are closed, and the M5+ retrospective stack
+(ADR 0037-0042: the provider control plane, the no-backward-compatibility
+removal program, request-side tool advertisement, the opt-in live-provider
+channel, the same-run reasoning round trip, and the project script library for
+kernel cells) is merged. The
+[implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md)
+is the current delivery plan: milestones M6-M9 and the Mandate track M10-M12
+remain to be executed, each behind its own approved activating specification.
+
+The milestone sections below keep the milestone-era contract rationale (M1
+workspace, M2 transport) and are historical where they describe planned work.
 
 ## M2 local daemon fixture
 
@@ -17,9 +23,11 @@ on Windows. Endpoint identifiers are logical safe names, derived below the
 current user's platform runtime or application-configuration location; endpoint
 filesystem paths never enter public DTOs or safe errors. On Unix, endpoint
 parents are created with `0700` permissions and listener sockets with `0600`.
-The mandatory CI matrix runs `make ci` on Linux and Windows; Windows executes
-the named-pipe transport fixture, while Unix permission assertions remain
-platform-specific.
+The mandatory CI matrix runs the per-phase gates on Linux and Windows
+(`make ci-lint-arch` and `make ci-test` on both, plus the Linux-only
+`ci-coverage-*`, `ci-selftest`, and `ci-deps` gates) and requires all nine
+status checks; Windows executes the named-pipe transport fixture, while Unix
+permission assertions remain platform-specific.
 
 The private transport codec is bounded, length-prefixed UTF-8 JSON with a
 maximum frame payload of 1 MiB. Each connection performs protocol hello, serves
@@ -41,7 +49,8 @@ deferred.
 
 M2's composition facade is deliberately an in-memory, non-durable health and
 session fixture. Durable sessions, event persistence, snapshots, queues, and
-restart recovery remain M3; model runs and provider execution remain M4. The
+restart recovery are delivered by M3; model runs and provider execution are
+delivered by M4. The
 M2 protocol adds health/readiness, correlated request/response envelopes,
 snapshot-and-tail or resync subscription recovery, and optional run-scoped
 subscriptions. The TUI proof uses only the shared client in production and its
@@ -58,9 +67,10 @@ The four active Tier-A crates establish public, DTO-first boundaries:
 | `intention-protocol` | Versioned local-protocol handshake, command/query wrappers, and compatibility checks. |
 | `intention-config` | TOML parse, v0-to-v1 migration, validation, path selection, and redacted public configuration projection. |
 
-Every other planned v1 crate exists as a compile-only M1 skeleton. This makes
-the approved crate map executable without introducing premature implementations
-for later milestones. `quality-harness` remains a non-production member that
+At the M1 baseline every other planned v1 crate existed as a compile-only
+skeleton. That made the approved crate map executable without introducing
+premature implementations for later milestones; every crate in the map is
+implemented today. `quality-harness` remains a non-production member that
 continues to prove the quality pipeline.
 
 The allowed active dependency graph is intentionally narrow:
@@ -118,5 +128,8 @@ and no hidden dependency or tool installation.
 - [`docs/intention-relay/architecture/`](docs/intention-relay/architecture/README.md):
   crate map, DTO policy, security/configuration policy, quality gates, TTD, and
   milestone roadmap.
+- [`docs/intention-relay/reconciliation/`](docs/intention-relay/reconciliation/README.md):
+  the post-M4 authority, compatibility, ownership, evidence, and
+  delivery-boundary registers, including the review ledgers.
 - [`docs/reference/`](docs/reference/README.md): preserved research material,
   not an implementation dependency.

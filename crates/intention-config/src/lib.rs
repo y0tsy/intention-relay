@@ -221,7 +221,7 @@ pub enum ProviderKindDto {
 impl ProviderKindDto {
     /// Every typed provider kind, in stable id order.
     ///
-    /// The array is the single id-to-kind mapping authority (R37): both this
+    /// The array is the single id-to-kind mapping authority: both this
     /// crate's TOML deserialization and the composition's catalog id
     /// resolution consume [`Self::from_id`] instead of re-listing the ids.
     pub const ALL: [Self; 2] = [Self::Openrouter, Self::GenericChatCompletionApi];
@@ -786,7 +786,7 @@ impl<'de> Deserialize<'de> for ProviderKindDto {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        // One id-to-kind owner (R37): the typed kind resolves its own id set,
+        // One id-to-kind owner: the typed kind resolves its own id set,
         // so this boundary cannot drift from the composition's dispatch.
         Self::from_id(&value).ok_or_else(|| serde::de::Error::custom("unsupported provider kind"))
     }
@@ -927,7 +927,7 @@ credential = \"{credential}\"
 
     #[test]
     fn provider_kind_ids_resolve_through_the_single_mapping_owner() {
-        // R37: the id-to-kind mapping has one owner (`ProviderKindDto`), which
+        // The id-to-kind mapping has one owner (`ProviderKindDto`), which
         // both this boundary's deserialization and the composition's catalog
         // dispatch consume.
         assert_eq!(ProviderKindDto::ALL.len(), 2);
@@ -1069,17 +1069,17 @@ credential = \"{credential}\"
             Some("http://127.0.0.1.evil.example.com/v1"),
             Some("http://localhost.evil.example.com/v1"),
             // An HTTPS endpoint without an authority has no host to reach
-            // (P3-03): the domain validator rejects it and the config layer
+            // The domain validator rejects it and the config layer
             // reports the same typed code.
             Some("https:///v1"),
             Some("https://:8080/v1"),
-            // R25: a non-empty authority whose host is malformed names no
+            // A non-empty authority whose host is malformed names no
             // reachable host either. The backslash is doubled because the
             // fixture embeds the value in a TOML basic string.
             Some("https://]/v1"),
             Some("https://[::1]]/v1"),
             Some("https://exa\\\\mple.com/v1"),
-            // R48: an unbracketed authority with a non-numeric port and a
+            // An unbracketed authority with a non-numeric port and a
             // host carrying a non-breaking space (U+00A0) name no reachable
             // host; the config layer reports the domain validator's verdict.
             Some("https://api.example.com:notaport/v1"),

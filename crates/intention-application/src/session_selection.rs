@@ -680,7 +680,7 @@ impl<'a> UsageService<'a> {
     /// `(provider_profile_revision_id, model_id)` identity that produced
     /// in-period usage, strictly sorted by that identity, so no total is
     /// attributed to an identity that did not produce it and the durable row
-    /// order never changes the result (P2-12, option A).
+    /// order never changes the result.
     ///
     /// # Errors
     ///
@@ -736,7 +736,7 @@ impl<'a> UsageService<'a> {
 ///
 /// Each entry sums only the rows of its own identity, and the entries are
 /// strictly sorted by identity, so the durable row order never influences any
-/// reported field (P2-12, option A). Out-of-period rows are dropped.
+/// reported field. Out-of-period rows are dropped.
 fn aggregate_usage(
     query: &GetProviderUsageQueryDto,
     aggregates: Vec<intention_storage::ProviderUsageAggregateDto>,

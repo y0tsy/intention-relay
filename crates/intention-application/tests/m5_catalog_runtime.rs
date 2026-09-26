@@ -266,7 +266,7 @@ impl CountingFactory {
         }
     }
 
-    /// Returns a factory variant whose driver build always fails (D-05).
+    /// Returns a factory variant whose driver build always fails.
     const fn failing(mut self) -> Self {
         self.fail_build = true;
         self
@@ -1284,7 +1284,7 @@ fn non_removal_candidate_is_auto_accepted_and_activated() {
 
 #[test]
 fn failed_registry_build_leaves_no_durable_catalog_advance() {
-    // D-05: the replacement registry is fully built before the durable
+    // The replacement registry is fully built before the durable
     // acceptance, so a failing factory build cannot leave a committed catalog
     // that the in-memory registry does not serve.
     let previous = snapshot("openrouter", "model-a", ENDPOINT, ConfigRevisionId::new());
@@ -1376,7 +1376,7 @@ fn pending_removal_creation_carries_a_thirty_minute_expiry() {
 
 #[test]
 fn startup_adopts_a_rebuilt_pending_removal_from_durable_rows() {
-    // PR24-003 + R40: the pending removal is durable and the restart is the
+    // PR24-003: the pending removal is durable and the restart is the
     // operator act the pending state waits for. `startup()` rebuilds the
     // candidate from durable rows - the dropped controller's process memory
     // is gone - and adopts it through the normal acceptance path, so the
@@ -1438,7 +1438,7 @@ fn startup_adopts_a_rebuilt_pending_removal_from_durable_rows() {
 
 #[test]
 fn a_same_process_pending_removal_still_waits_for_the_explicit_resolution() {
-    // R40: only the startup path resolves a durable crash residue. A pending
+    // Only the startup path resolves a durable crash residue. A pending
     // removal prepared in this process still awaits the explicit accept or
     // reject, so a later candidate keeps the conflict and rejection stays a
     // working resolution path.
@@ -1485,7 +1485,7 @@ fn a_same_process_pending_removal_still_waits_for_the_explicit_resolution() {
 
 #[test]
 fn the_two_change_sequence_observes_the_intermediate_adoption() {
-    // R53 (differ-differ): the two-change sequence is one startup adoption of
+    // The two-change sequence is one startup adoption of
     // the durable pending removal followed by one second change prepared on
     // top of the revision that adoption committed. The fixture observes the
     // intermediate adoption itself - the durable removal row and the baseline
@@ -1587,7 +1587,7 @@ fn the_two_change_sequence_observes_the_intermediate_adoption() {
 
 #[test]
 fn the_removed_source_recheck_input_stays_out_of_the_request_surface() {
-    // P3-17/R22: the removal acceptance request never consumed
+    // The removal acceptance request never consumed
     // `source_recheck`; the storage-side provenance literal stays in the
     // application and storage crates. This guard fails if the removed input
     // returns to the wire contract, the client, or the daemon request
@@ -1722,7 +1722,7 @@ fn startup_blocks_when_pending_removal_state_has_no_durable_row() {
 
 #[test]
 fn startup_degrades_when_the_pending_removal_row_cannot_be_read() {
-    // P3-24/R3: a transient storage failure while reading the durable pending
+    // A transient storage failure while reading the durable pending
     // removal row degrades to a typed blocked readiness instead of aborting
     // startup.
     let mut fake = seeded_catalog();
@@ -1743,7 +1743,7 @@ fn startup_degrades_when_the_pending_removal_row_cannot_be_read() {
 
 #[test]
 fn startup_degrades_when_pending_removal_expiry_cannot_be_committed() {
-    // P3-24/R3: a transient storage failure during the startup expiry pass
+    // A transient storage failure during the startup expiry pass
     // degrades to a typed blocked readiness instead of aborting startup.
     let mut fake = seeded_catalog();
     let (_, _) = removal_controller(&fake, 1_000);
@@ -1762,7 +1762,7 @@ fn startup_degrades_when_pending_removal_expiry_cannot_be_committed() {
 
 #[test]
 fn startup_degrades_when_roll_forward_acceptance_fails() {
-    // P3-24/R3: a storage failure while rolling an accepted removal forward
+    // A storage failure while rolling an accepted removal forward
     // degrades to a typed blocked readiness carrying the failing error code.
     let mut fake = seeded_catalog();
     let (_, outcome) = removal_controller(&fake, 1_000);
@@ -1905,7 +1905,7 @@ fn reintroduced_identifiers_are_admitted_after_a_later_removal_acceptance() {
 
 #[test]
 fn removed_profile_is_not_admitted_after_removal_acceptance() {
-    // P3-16: admission authority is the current active membership; the
+    // Admission authority is the current active membership; the
     // durable removal history is never consulted by registry_lookup.
     let fake = seeded_catalog();
     let (controller, outcome) = removal_controller(&fake, 1_000);
@@ -2415,8 +2415,8 @@ fn identifier_bounds_count_characters_at_the_wire_and_canonical_layers() {
     let outside = "\u{e9}".repeat(257);
     // Inside the single documented canonical bound a multi-byte identifier is
     // accepted by the public wire DTO and by the canonical identity record, so
-    // neither layer rejects a value the document promises (D-13, Appendix H.1:
-    // both layers count characters and enforce 256).
+    // neither layer rejects a value the document promises (both layers count
+    // characters and enforce 256).
     assert!(wire_profile_revision(&inside).validate().is_ok());
     assert!(
         seed_profile(

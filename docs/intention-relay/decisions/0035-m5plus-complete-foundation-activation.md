@@ -43,7 +43,7 @@ of activating slices, all approved together as one package:
    raw-TOML/configuration editing, arbitrary authentication headers, session
    defaults and per-turn/fork overrides, unavailable-queue promotion and
    reconciliation, `provider_profiles_v1`, pending-removal and degraded
-   recovery, and the provider reasoning/catalog surface. The D-16 audit
+   recovery, and the provider reasoning/catalog surface. The unconsumed-surface audit (2026-09)
    removed the unconsumed provider-native preservation-control and
    server-side-parser contracts, the Responses reasoning-mode projection, the
    reasoning-usage DTOs, and the model-capability envelope.

@@ -713,7 +713,7 @@ fn validation_collects_typed_issues_for_malformed_v1_documents() {
 
 #[test]
 fn candidate_kind_validation_consumes_the_single_id_owner() {
-    // R50: the raw-candidate field validator resolves ids through
+    // The raw-candidate field validator resolves ids through
     // `ProviderKindDto::from_id` instead of a second literal list, so every id
     // the single owner carries is accepted and an unregistered id is rejected
     // at the field. A reintroduced literal list that drifts from
@@ -913,7 +913,7 @@ fn restore_credential_document_escapes_values_and_rejects_unsuitable_documents()
         "the restored value is the exact private credential, not a mangled text"
     );
 
-    // E8 (P3-12): a document that cannot carry the credential table fails with
+    // A document that cannot carry the credential table fails with
     // a typed validation error instead of being returned unchanged, so a
     // caller can distinguish "no credential configured" from "this path
     // cannot edit the document".
@@ -933,7 +933,7 @@ fn restore_credential_document_escapes_values_and_rejects_unsuitable_documents()
 
 #[test]
 fn typed_edit_rendering_escapes_values_and_preserves_untouched_fields() {
-    // D-10 (P3-28): the document is rendered from the safe snapshot as a TOML
+    // The document is rendered from the safe snapshot as a TOML
     // AST, so a field the edit does not name survives and a value carrying
     // TOML-significant characters is escaped instead of producing an
     // unparseable document.

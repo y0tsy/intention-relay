@@ -3166,7 +3166,7 @@ impl ProviderUsageRepositoryDto for SqliteStorageRepository {
         let connection = self.connection()?;
         // This is the revision-keyed usage view: its identity is the
         // `(provider_profile_revision_id, model_id)` pair that the application
-        // aggregation groups by (D-04), and it deliberately carries no profile
+        // aggregation groups by identity, and it deliberately carries no profile
         // filter, because a profile revision id is derived from the provider
         // declaration (kind, model, endpoint, capability subset) and not from
         // the profile alias. The profile-keyed view is

@@ -54,7 +54,7 @@ const STARTUP_RETRY: Duration = Duration::from_millis(25);
 /// `provider_profiles_v1` is advertised and required because every
 /// control-plane command and query the client exposes is gated on it; without
 /// the capability the daemon rejects the whole delivered control-plane surface
-/// with `provider_profiles_capability_required` before any effect (A1).
+/// with `provider_profiles_capability_required` before any effect.
 const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 4] = [
     ProtocolCapabilityDto::SessionSubscriptions,
     ProtocolCapabilityDto::CorrelatedRequests,

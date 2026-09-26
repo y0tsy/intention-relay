@@ -337,7 +337,7 @@ fn control_plane_acceptance_and_query_results_round_trip_through_wire_payloads()
 
 #[test]
 fn removed_control_plane_request_fields_are_absent_from_the_wire() {
-    // D-11 (P2-04): the durable reconciliation marker is the single paging
+    // The durable reconciliation marker is the single paging
     // authority, so the request no longer carries a page cursor.
     let reconcile = serde_json::to_value(ReconcileUnavailableQueueCommandDto {
         session_id: "session-1".to_owned(),
@@ -348,7 +348,7 @@ fn removed_control_plane_request_fields_are_absent_from_the_wire() {
         reconcile.get("page_cursor").is_none(),
         "the reconciliation request must not carry a page cursor: {reconcile}"
     );
-    // P3-17: the removal acceptance command never consumed `source_recheck`.
+    // The removal acceptance command never consumed `source_recheck`.
     let accept = serde_json::to_value(AcceptProviderCatalogRemovalCommandDto {
         candidate_handle: "candidate-1".to_owned(),
         expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
@@ -364,7 +364,7 @@ fn removed_control_plane_request_fields_are_absent_from_the_wire() {
 
 #[test]
 fn the_health_evidence_profile_revision_is_optional_and_never_fabricated() {
-    // D-09 (P3-20): the profile revision stays absent until the catalog
+    // The profile revision stays absent until the catalog
     // binding is genuinely wired into the health path, and a synthesized
     // `health-profile-*` identity is never produced.
     let absent = ProviderHealthEvidenceDto {
@@ -651,7 +651,7 @@ fn control_plane_decode_rejects_invalid_catalog_frames_with_typed_codes() {
 
 #[test]
 fn control_plane_decode_rejects_invalid_family_frames_with_typed_codes() {
-    // D-14 (P3-08): the reload status is a closed enum, so an unknown wire
+    // The reload status is a closed enum, so an unknown wire
     // value is rejected at decode with the family's typed code.
     let unknown_reload_status = CONFIGURATION_PROJECTION.replace("\"active\"", "\"stale\"");
     let wrong_version = CONFIGURATION_PROJECTION

@@ -765,7 +765,7 @@ fn provider_profile_rejects_endpoint_userinfo_query_fragment() {
         "https://api.example.com/v1#x",
         "https://api.example.com/\x01",
         // An absolute endpoint without a host cannot ever connect, so it is
-        // rejected at admission instead of inside a provider driver (E1).
+        // rejected at admission instead of inside a provider driver.
         "https:///v1",
         "https://:8080/v1",
     ] {
@@ -980,7 +980,7 @@ fn no_competing_selection_digest_computation_exists() {
     let guard = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("m5_control_plane_canonical.rs");
-    // R4: the scan starts at the repository root, so a Rust source outside the
+    // The scan starts at the repository root, so a Rust source outside the
     // crate tree is covered, while the build `target` directory is not.
     let crates_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1029,8 +1029,8 @@ fn removed_domain_surfaces_do_not_reappear() {
     let guard = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("m5_control_plane_canonical.rs");
-    // P2-01 removed the unconsumed reasoning DTO/validator surface, P3-01
-    // removed the provider-native dialect table, and P3-05 removed the stale
+    // The unconsumed reasoning DTO/validator surface, the provider-native
+    // dialect table, and the stale tombstone wording were removed, so the
     // tombstone wording. The matches below are exact literals, so a renamed
     // reintroduction is outside the guard's shape. The guard scans every `.rs`
     // file under the repository root except the build `target` directory and
@@ -1088,7 +1088,7 @@ fn removed_domain_surfaces_do_not_reappear() {
 /// Returns every `.rs` source path under the repository root except build
 /// `target` directories.
 ///
-/// The walk fails closed (R35): a directory or entry the process cannot read
+/// The walk fails closed: a directory or entry the process cannot read
 /// aborts the guard with an error instead of silently shrinking the scan,
 /// because a guard that skips what it cannot read reports success while
 /// covering less. The callers surface that error as a test failure.
@@ -1112,7 +1112,7 @@ fn workspace_rust_sources() -> Vec<std::path::PathBuf> {
 /// Collects every `.rs` source path under `directory` into `found`.
 ///
 /// Fails with the offending path when a subtree cannot be read, so an
-/// unreadable directory can never be skipped silently (R35).
+/// unreadable directory can never be skipped silently.
 fn collect_rust_sources(
     directory: &std::path::Path,
     found: &mut Vec<std::path::PathBuf>,
@@ -1135,7 +1135,7 @@ fn collect_rust_sources(
 
 #[test]
 fn source_guard_fails_closed_when_a_subtree_cannot_be_read() {
-    // R35: a regular file is the deterministic unreadable-subtree case on
+    // A regular file is the deterministic unreadable-subtree case on
     // every platform (`read_dir` fails with NotADirectory). The guard must
     // report the failure instead of silently scanning less.
     let directory = std::env::temp_dir().join(format!(
@@ -1375,7 +1375,7 @@ fn provider_profile_tombstones_are_append_only_removal_history() {
 
 #[test]
 fn profile_and_kind_tombstones_share_one_framing_codec() {
-    // P3-06: both tombstone families delegate to one codec, so equivalent
+    // Both tombstone families delegate to one codec, so equivalent
     // fields produce identical framing bytes and identity digests.
     let profile = ProviderProfileTombstoneDto::new("shared-identifier", 3, 100, "removal-accepted")
         .expect("profile tombstone is valid");

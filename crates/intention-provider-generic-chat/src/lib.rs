@@ -531,7 +531,7 @@ where
     /// message content, and never enters an error payload. An empty value is
     /// exactly what the normalized reasoning-delta constructor rejects, which
     /// is why this adapter has no reasoning failure class of its own: no
-    /// provider value reaches it as a failure (PR24 P3-30).
+    /// provider value reaches it as a failure.
     fn accept_reasoning(&mut self, reasoning: String) {
         match ModelEventDto::reasoning_delta_categorized(
             ReasoningFragmentCategoryDto::Primary,
@@ -1268,7 +1268,7 @@ mod tests {
         // throttling and server faults are transient, every other client
         // rejection is permanent, whatever the provider's optional `type`
         // string says. An untyped 400 must therefore never be retried to the
-        // attempt maximum (PR24 P2-16).
+        // attempt maximum.
         for (status, kind, expected) in [
             (http::StatusCode::BAD_REQUEST, None, ErrorRetryDto::Never),
             (
@@ -1792,7 +1792,7 @@ mod tests {
         // A gateway may answer with a reason this adapter does not know (for
         // example `stop_sequence`, `max_tokens`, or a vendor-specific value).
         // The chunk must decode and the response must complete with the closed
-        // `Unknown` reason instead of failing the whole response (PR24 P3-31).
+        // `Unknown` reason instead of failing the whole response.
         for reason in ["stop_sequence", "max_tokens", "vendor_specific_reason"] {
             let mut state =
                 GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());

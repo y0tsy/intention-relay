@@ -73,7 +73,7 @@ profile. The baseline quality-gate output records: `intention-application`
 
 | Requirement | Automated proof and recorded result |
 | --- | --- |
-| Bundled SQLite and migrations | `sqlite_contracts` covers supported/future schema behavior and migration safety. `make verify`, Linux CI, and Windows CI passed with `rusqlite 0.40.1` using the bundled feature and `rusqlite_migration 2.6.0`. |
+| Bundled SQLite and migrations | `sqlite_contracts` covers supported/future schema behavior and migration safety. `make verify`, Linux CI, and Windows CI passed with `rusqlite 0.40.1` using the bundled feature and `rusqlite_migration 2.6.0`. Superseded by ADR 0038: the `rusqlite_migration` dependency and the migration chain were removed; storage keeps exactly one live schema version and rejects any other. |
 | Active ownership and dependencies | `make architecture` and `quality-self-test` passed locally and in the green matrix, proving active M3 crate policy, intended config edges, and public DTO boundaries. |
 | Canonical config snapshots | Config/storage/composition contract suites prove credential-free `ConfigSnapshotDto` persistence: same revision plus equal snapshot is idempotent; the same revision plus different snapshot returns a typed conflict; started/promoted run selection remains immutable. |
 | Workspace identity | M3 domain contracts prove durable `WorkspaceId` with declared `WorkspaceRootDto`. M5 filesystem containment is not claimed. |

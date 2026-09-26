@@ -76,7 +76,8 @@ and [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospectiv
 ### M5+ typed-edit rendering and reload status
 
 Controlled reload renders typed-edit candidate documents inside
-`intention-config` (accepted decision D-10 / `P3-28`). The configuration crate
+`intention-config` (the accepted decision: render from the safe snapshot
+AST inside the crate). The configuration crate
 builds the document from the active safe `ConfigSnapshotDto` as a TOML value
 tree and serializes it with the TOML serializer
 (`render_edited_configuration`), so:
@@ -104,7 +105,7 @@ mistake for a configured one.
 status the current production path produces). It is validated by serde at
 decode: an unknown status is rejected with
 `configuration_projection_invalid`, and a consumer can match the status
-exhaustively (accepted decision D-14 / `P3-08`).
+exhaustively (the accepted decision: a closed enum).
 
 ## Open-text provider credentials
 

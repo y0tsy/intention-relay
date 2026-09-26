@@ -2407,7 +2407,7 @@ mod tests {
 
     #[test]
     fn unnegotiated_peers_are_rejected_before_any_effect_for_gated_requests() {
-        // PR24-002 and D-03: the gate stays behavioural here, while the
+        // PR24-002: the gate stays behavioural here, while the
         // exhaustive per-variant classification is owned by the protocol test
         // `protocol_control_plane_classification_covers_every_command_and_query_variant`.
         use intention_protocol::contract_families::{

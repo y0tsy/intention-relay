@@ -1348,7 +1348,7 @@ fn removal_candidate_creation_enforces_single_pending_and_accept_flow() {
 
 #[test]
 fn removal_candidate_rejects_evidence_for_a_different_revision() {
-    // D-07: the typed evidence is validated at admission instead of being
+    // The typed evidence is validated at admission instead of being
     // persisted verbatim; evidence for another revision is rejected typed.
     let (directory, store) = repository();
     let error = store
@@ -1479,7 +1479,7 @@ fn prepared_candidate_material_and_pending_loader_cover_restart_surfaces() {
 
 #[test]
 fn removal_evidence_round_trips_escaped_identities() {
-    // P2-11/P3-15: the removal-evidence codec escapes quotes and backslashes.
+    // The removal-evidence codec escapes quotes and backslashes.
     // The typed loader must decode the persisted bytes back to the original
     // identities instead of slicing the quoted span.
     let (directory, store) = repository();
@@ -1559,7 +1559,7 @@ fn removal_evidence_round_trips_escaped_identities() {
 fn pending_removal_loader_reports_absence_without_a_candidate_revision() {
     // The loader's contract is the single durable pending removal candidate
     // "if any": an active catalog state whose candidate revision column is
-    // SQL NULL must read as `None`, not fail the decode. The R16 startup
+    // SQL NULL must read as `None`, not fail the decode. The startup
     // recovery fixtures read this loader after the durable pending removal
     // was adopted, when the state no longer carries a candidate revision.
     let (_directory, store) = repository();
@@ -1595,7 +1595,7 @@ fn pending_removal_loader_reports_absence_without_a_candidate_revision() {
 
 #[test]
 fn malformed_removal_evidence_fails_typed_decode() {
-    // P2-11: evidence that is not the expected list-of-strings shape fails
+    // Evidence that is not the expected list-of-strings shape fails
     // closed with the typed decode error instead of guessing identities.
     let (directory, store) = repository();
     prepare_candidate(
@@ -1899,7 +1899,7 @@ fn unavailable_queue_enqueue_is_idempotent_and_pages_fifo() {
 
 #[test]
 fn unavailable_queue_enqueue_rejects_an_invalid_typed_selection() {
-    // D-07: the writer path admits a typed selection, validates it, and never
+    // The writer path admits a typed selection, validates it, and never
     // persists caller-supplied encoded text verbatim.
     let (directory, store) = repository();
     let session = create(&store);
@@ -2271,7 +2271,7 @@ fn provider_usage_recording_dedups_and_aggregates_across_periods() {
 fn usage_views_pin_the_revision_keyed_and_profile_keyed_scopes() {
     // W3-H follow-up (c): the `(revision, model)` view is deliberately not
     // profile-filtered. Its identity is the revision-keyed pair the
-    // application aggregation groups by (D-04, register G.4 item 3), and a
+    // application aggregation groups by identity (revision, model), and a
     // profile revision id is derived from the provider declaration, so two
     // profiles can share it. The revision-keyed read must therefore return
     // both profiles' rows with their own `profile_id`, while the

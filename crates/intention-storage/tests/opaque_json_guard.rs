@@ -3,9 +3,9 @@
     reason = "Source guards use expect for precise test diagnostics."
 )]
 
-// The D-07 storage boundary guard scans source text, so it lives in this
+// The storage boundary guard scans source text, so it lives in this
 // integration target instead of the library test module: the crate's
-// coverage denominator stays about the library the guard protects. R44
+// coverage denominator stays about the library the guard protects.
 // widened it from a `pub`-line scan to a struct-body parser that resolves
 // same-crate aliases and fails closed.
 
@@ -416,7 +416,7 @@ fn scan_storage_source_tree(root: &Path) -> Result<(usize, Vec<String>), String>
     Ok((scanned, offenses))
 }
 
-/// D-07 boundary guard: no storage DTO may declare a JSON-shaped carrier
+/// The storage boundary guard: no storage DTO may declare a JSON-shaped carrier
 /// field. The guard scans every Rust source of this crate, whatever the
 /// directory, parses each struct body whatever the field visibility and
 /// layout, resolves same-crate type aliases, and fails closed when the

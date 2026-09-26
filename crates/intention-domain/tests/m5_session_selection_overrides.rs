@@ -133,7 +133,7 @@ fn wire_json_with_expected_revision_but_no_override_is_rejected() {
 
 #[test]
 fn wire_json_without_override_keys_is_rejected() {
-    // E4: absence is a decode error; only the current shape carries both keys.
+    // Absence is a decode error; only the current shape carries both keys.
     let session_id = SessionId::new();
     let turn_id = TurnId::new();
     let wire =
