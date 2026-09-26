@@ -1071,7 +1071,7 @@ async fn serve_async_ordinary(
                 ProtocolResponsePayloadDto::CommandResult(result)
             }
             ProtocolRequestPayloadDto::Query(query) => {
-                ProtocolResponsePayloadDto::QueryResult(host.facade.query(query.clone()))
+                ProtocolResponsePayloadDto::QueryResult(host.facade.query(*query))
             }
         };
         let response = ProtocolResponseEnvelopeDto::new(
@@ -1500,7 +1500,7 @@ fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFa
             _ => ProtocolResponsePayloadDto::CommandResult(facade.command(command.clone())),
         },
         ProtocolRequestPayloadDto::Query(query) => {
-            ProtocolResponsePayloadDto::QueryResult(facade.query(query.clone()))
+            ProtocolResponsePayloadDto::QueryResult(facade.query(*query))
         }
     };
     let response = ProtocolResponseEnvelopeDto::new(
