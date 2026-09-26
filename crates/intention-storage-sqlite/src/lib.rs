@@ -34,11 +34,12 @@ const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
 const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
 
-/// The complete current storage schema (logical version 1): the M3 base
-/// tables, the M4 run-cursor, model-fact, and model-snapshot tables (with the
-/// cursor-zero seed for existing runs), and the tool-result table. `open()`
-/// appends `control_plane::SCHEMA_M5_SQL` and creates the whole schema in a
-/// single batch; there is no migration chain and no version gate.
+/// The M3/M4 base part of the current storage schema (logical version 1): the
+/// M3 base tables, the M4 run-cursor, model-fact, and model-snapshot tables
+/// (with the cursor-zero seed for existing runs), and the tool-result table.
+/// `open()` appends the control-plane and Slice 3 module schema constants and
+/// creates the whole schema in a single batch; there is no migration chain and
+/// no version gate.
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS projects (project_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
@@ -156,7 +157,13 @@ impl SqliteStorageRepository {
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(storage_error)?;
         connection
-            .execute_batch(&format!("{SCHEMA_SQL}{}", control_plane::SCHEMA_M5_SQL))
+            .execute_batch(&format!(
+                "{SCHEMA_SQL}{}{}{}{}",
+                control_plane::SCHEMA_M5_SQL,
+                harness_repo::SCHEMA_HARNESS_SQL,
+                programmatic_policy_repo::SCHEMA_POLICY_SQL,
+                goal_repo::SCHEMA_GOAL_SQL
+            ))
             .map_err(|_| unavailable())?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -566,6 +573,9 @@ macro_rules! immediate_transaction {
 }
 
 mod control_plane;
+mod goal_repo;
+mod harness_repo;
+mod programmatic_policy_repo;
 
 impl StorageRepositoryDto for SqliteStorageRepository {
     fn append_tool_lifecycle_event(
