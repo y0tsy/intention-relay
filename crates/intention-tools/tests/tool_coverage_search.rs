@@ -40,13 +40,14 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
         GrepScope::Workspace,
     ] {
         let result = service
-            .dispatch(
+            .dispatch_with_cancellation(
                 ToolCallId::new(),
                 ToolInput::Grep(GrepInput {
                     pattern: text("needle"),
                     scope: Some(scope),
                     path: None,
                 }),
+                CancellationSignal::new(),
             )
             .unwrap();
         assert!(matches!(result, ToolResult::Grep(v) if !v.matches.is_empty()));
@@ -64,26 +65,28 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
     ] {
         assert!(
             service
-                .dispatch(
+                .dispatch_with_cancellation(
                     ToolCallId::new(),
                     ToolInput::Grep(GrepInput {
                         pattern: text("needle"),
                         scope: Some(scope),
                         path: None,
-                    })
+                    }),
+                    CancellationSignal::new()
                 )
                 .is_err()
         );
     }
     assert_eq!(
         service
-            .dispatch(
+            .dispatch_with_cancellation(
                 ToolCallId::new(),
                 ToolInput::Grep(GrepInput {
                     pattern: text("needle"),
                     scope: None,
                     path: None,
-                })
+                }),
+                CancellationSignal::new()
             )
             .unwrap_err()
             .code(),
@@ -99,7 +102,7 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
     bytes.extend_from_slice(&[0xff, b'\n']);
     std::fs::write(dir.path().join("bad.bin"), bytes).unwrap();
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
@@ -108,6 +111,7 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
                 }),
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     let ToolResult::Grep(result) = result else {
@@ -121,13 +125,14 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
         std::fs::write(dir.path().join(format!("many/{i}.txt")), "needle\n").unwrap();
     }
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::Directory { path: path("many") }),
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     let ToolResult::Grep(result) = result else {
@@ -145,11 +150,12 @@ fn glob_skips_filtered_entries_and_truncates_matches() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("linked")).unwrap();
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Glob(GlobInput {
                 pattern: text("**/*.txt"),
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     let ToolResult::Glob(result) = result else {
@@ -165,11 +171,12 @@ fn glob_skips_filtered_entries_and_truncates_matches() {
         std::fs::write(dir.path().join(format!("many/{i}.txt")), "x").unwrap();
     }
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Glob(GlobInput {
                 pattern: text("many/*.txt"),
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     let ToolResult::Glob(result) = result else {

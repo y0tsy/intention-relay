@@ -16,6 +16,10 @@
       "endpoint": "https://example.invalid/v1",
       "credential_configured": true
     },
+    "provider_execution": {
+      "attempt_timeout_seconds": 30,
+      "max_attempts": 2
+    },
     "source_kind": "explicit"
   }
 }

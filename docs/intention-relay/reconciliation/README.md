@@ -74,10 +74,11 @@ implementation specification can be prepared:
   content inspection, and per-call cancellation
   ([ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md));
 - post-M5 accepted execution directions: raw-TOML/configuration editing, model
-  discovery, arbitrary headers, provider-native preservation, server-side
-  parser, fork tool-result/child-agent execution, export, cross-workspace
-  clone/rebind, autonomous harness goal mode, post-disconnect work, and RLM
-  packaging
+  discovery, arbitrary headers, fork tool-result/child-agent execution, export,
+  cross-workspace clone/rebind, autonomous harness goal mode, post-disconnect
+  work, and RLM packaging; the recorded provider-native preservation and
+  server-side parser directions have no typed contract after the unconsumed-surface audit (2026-09)
+  removed them as unconsumed
   ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
 - post-M5 accepted retained-deferral directions: rich MIME/raw kernel output
   projection, physical deletion/GC of historical work, worker/process
@@ -86,9 +87,32 @@ implementation specification can be prepared:
   ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
 - post-M5 complete foundation activation: Milestone 5+ as the hard
   prerequisite of M6-M9 and the single activation home for the complete
-  post-M5 stack, delivered as one pre-approved four-slice sequence
-  (contracts/versions, control plane, harness, UI foundation)
-  ([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md)).
+  post-M5 stack, delivered as one pre-approved five-slice sequence
+  (contracts/versions, control plane, harness, UI foundation, instruction
+  sources and system context)
+  ([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md));
+- post-M5 instruction sources and system context: the deployment instruction
+  profile adapted from the legacy static prompt set, user-editable fragments,
+  workspace `AGENTS.md` project instructions, the `Mode`/`Vfr` contributions,
+  canonical assembly, and the immutable effective instruction projection with
+  its digests and closed failures
+  ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md),
+  [architecture 30](../architecture/30-instruction-sources-and-system-context.md));
+- M5+ Slice 1 contract ledger: the frozen and activated contracts/versions,
+  capabilities, tags, fields, ownership, and preservation ledger
+  ([ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md)); and
+- M5+ Slice 2 control-plane activation: controlled live reload, credential
+  rotation, health checks, discovery, pricing, raw-TOML/configuration
+  editing, session defaults and per-turn/fork overrides, unavailable-queue
+  promotion/reconciliation, `provider_profiles_v1`, pending-removal/degraded
+  recovery, and the reasoning/catalog surface, with the SQLite control-plane
+  tables as part of the single live schema (logical version 1) created
+  directly on open (no 3-to-4 migration chain)
+  ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); and
+- M5+ no-backward-compatibility policy: the single-version rule for every
+  versioned system and the removal of legacy, fallback, and migration
+  machinery
+  ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -104,6 +128,7 @@ provider, reasoning, fork, kernel, activity, notification, and UI packages.
 | [Concept supersession index](concept-supersession-index.md) | Provenance coverage and supersession mapping for selected concept headings. |
 | [Evidence register](evidence-register.md) | Exact evidence anchors and verified/planned status. |
 | [Deferred and excluded register](deferred-excluded-register.md) | Atomic non-authorized deferred and excluded claims. |
+| [PR #24 code-review ledger](pr24-code-review-ledger.md) | Findings from the three read-only review waves over the closed PR #24 branch; its content was carried into `main` by PR #36. |
 | [Decision records](../decisions/README.md) | Accepted Foundation decisions and their rationale. |
 
 ## Review baseline
@@ -154,7 +179,27 @@ following map is navigation and provenance; it does not restate their rules:
 | Accepted deferred directions (activity metadata, content inspection, per-call cancellation) | architectures 24/22/19 | decision 0032 |
 | Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
 | Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
-| M5+ complete foundation activation | architectures 25-30, 23, 22, 24, roadmap | decision 0035 |
+| M5+ complete foundation activation | architectures 25-29, 23, 22, 24, roadmap | decision 0035 |
+| M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
+| M5+ Slice 2 control-plane activation | architectures 25/29/22, roadmap, quality gates | decision 0037 |
+| No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
+| Request-side tool advertisement | architecture 08, architecture 05 | decision 0039 |
+| Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
+| Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
+| Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
+| Instruction sources and system context | architecture 30, architecture 21, architecture 23, architecture 08 | decision 0043 |
+| Selected legacy product baseline | `docs/intention-relay/legacy-baseline/` (read-only capability evidence; superseded only by an explicit decision) | decision 0038 |
+| Legacy Antibusy session prompts | `docs/intention-relay/legacy-antibusy-prompts/` (read-only source copy to adapt, never consumed unchanged; the adaptation is owned by architecture 30) | decision 0043 for the adaptation, decision 0038 for retention |
+| Archived Antibusy audit | `docs/reference/archive/legacy-antibusy-audit/` (archived content superset of the selected baseline; provenance only and never an override; its delta is recorded in the baseline manifest) | decision 0038 |
+| Prime Agent research | `docs/reference/prime-agent-research/` (non-authoritative background material) | — |
+
+Mandate-track delivery ownership: the post-M4 Mandate packages and their
+decisions (0001-0004, 0006-0013, 0025, 0027, and 0042) are delivered by the
+Mandate-track milestones — Milestone 10 owns the Mandate lifecycle,
+execution-meaning, and scheduler packages (architectures 13/14/16), Milestone
+11 the tool-registry, child/verifier, and bridge packages (architectures
+15/17/19), and Milestone 12 the MCP, kernel, and context packages
+(architectures 18/20/21, with the remaining architecture 22 provider work).
 
 Use the [source-of-truth matrix](source-of-truth-matrix.md) for topic ownership,
 the [contradiction register](contradiction-register.md) for conflict resolution,

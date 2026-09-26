@@ -9,11 +9,13 @@ use intention_domain::{
     ToolLifecycleStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
-    AppendToolLifecycleEventInputDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    AcceptProviderCatalogRemovalInputDto, AcceptUserTurnInputDto, AppendModelRunFactsInputDto,
+    AppendModelRunFactsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
+    CreateProviderCatalogRemovalCandidateInputDto, CreateSessionInputDto,
+    ExpireProviderCatalogRemovalCandidateInputDto, ModelContextMessageDto, ModelContextRoleDto,
+    ProviderRemovalRepositoryDto, RecoverUnfinishedRunsInputDto,
+    RejectProviderCatalogRemovalInputDto, RemoveQueuedTurnInputDto, StartingRunModelContextDto,
+    StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId,
@@ -575,4 +577,54 @@ fn tool_result_evidence_respects_typed_identity_and_terminal_boundaries() {
         .with_result(evidence.clone())
         .expect("terminal lifecycle status carries evidence");
     assert_eq!(input.result(), Some(&evidence));
+}
+
+/// A removal repository probe that relies on the trait's default loaders.
+struct RemovalProbe;
+
+impl ProviderRemovalRepositoryDto for RemovalProbe {
+    fn create_provider_catalog_removal_candidate(
+        &self,
+        _input: CreateProviderCatalogRemovalCandidateInputDto,
+    ) -> intention_types::DtoResult<()> {
+        Ok(())
+    }
+    fn accept_provider_catalog_removal(
+        &self,
+        _input: AcceptProviderCatalogRemovalInputDto,
+    ) -> intention_types::DtoResult<()> {
+        Ok(())
+    }
+    fn reject_provider_catalog_removal(
+        &self,
+        _input: RejectProviderCatalogRemovalInputDto,
+    ) -> intention_types::DtoResult<()> {
+        Ok(())
+    }
+    fn expire_provider_catalog_removal_candidate(
+        &self,
+        _input: ExpireProviderCatalogRemovalCandidateInputDto,
+    ) -> intention_types::DtoResult<u64> {
+        Ok(0)
+    }
+}
+
+#[test]
+fn removal_repository_default_loaders_keep_in_memory_fakes_safe() {
+    // PR24-003/006: the durable pending-row and monotonic-revision loaders
+    // default to a safe in-memory answer so legacy fakes behave without
+    // process memory while the SQLite repository overrides both.
+    let probe = RemovalProbe;
+    assert_eq!(
+        probe
+            .load_highest_removal_candidate_revision()
+            .expect("default highest revision reads"),
+        0
+    );
+    assert!(
+        probe
+            .load_pending_removal_candidate()
+            .expect("default pending loader reads")
+            .is_none()
+    );
 }

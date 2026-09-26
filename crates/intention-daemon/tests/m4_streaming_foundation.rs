@@ -17,6 +17,7 @@ use intention_application::ScheduleModelRunDto;
 #[cfg(feature = "test-support")]
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
+use intention_daemon::DaemonToolExecutor;
 use intention_domain::{GetSessionSnapshotQueryDto, RunStatusDto, SendUserTurnCommandDto};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
@@ -38,7 +39,7 @@ use intention_runtime::{
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 #[cfg(feature = "test-support")]
-use intention_types::{CorrelationIdDto, SchemaVersionDto};
+use intention_types::CorrelationIdDto;
 use intention_types::{RunId, SessionId, TimestampDto, TurnId};
 use tempfile::TempDir;
 
@@ -230,6 +231,14 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
+    facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 
@@ -308,7 +317,7 @@ fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("fixture result is a turn")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -348,7 +357,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
                     SendUserTurnCommandDto::new(session_id, TurnId::new(), "host turn")
                         .expect("turn is valid"),
@@ -367,7 +376,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
     else {
         panic!("host accepts the turn")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("host response contains a run")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -407,7 +416,7 @@ async fn stop_run_through_host(endpoint: &LocalEndpoint, session_id: SessionId, 
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
                     intention_domain::StopRunCommandDto::new(session_id, run_id),
                 )),
@@ -458,7 +467,7 @@ async fn send_queued_turn_through_host(
             local_protocol_version(),
             correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
                     SendUserTurnCommandDto::new(session_id, turn_id, "queued host turn")
                         .expect("queued turn is valid"),
@@ -477,7 +486,7 @@ async fn send_queued_turn_through_host(
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
             if matches!(
                 accepted.result(),
-                Some(ProtocolAcceptedResultDto::SendUserTurn(turn))
+                ProtocolAcceptedResultDto::SendUserTurn(turn)
                     if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
             )
     ));
@@ -491,11 +500,12 @@ async fn injected_driver_executes_through_the_facade_bridge_and_observes_only_co
     let observer = RecordingObserver::default();
 
     let outcome = facade
-        .execute_scheduled_model_run_for_daemon(
+        .execute_scheduled_model_run_for_daemon_with_tool_executor(
             schedule(session_id, run_id, snapshot),
             ModelCancellationSignal::new(),
             &TokioTime,
             &observer,
+            &DaemonToolExecutor::new(facade.clone()),
         )
         .await
         .expect("scripted execution completes");
@@ -539,7 +549,7 @@ async fn real_async_host_returns_current_run_snapshot_and_accepts_repeated_repla
     let client = RunStreamClient::new(endpoint, "m4-host-test").expect("stream client is valid");
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            intention_types::SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -597,7 +607,7 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
         RunStreamClient::new(endpoint, "m4-host-outcome-test").expect("stream client is valid");
     let mut subscription = client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -643,7 +653,7 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
 
     let mut reconnected = client
         .subscribe(SubscribeRunCommandDto::new(
-            SchemaVersionDto::new(1, 0),
+            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
             session_id,
             run_id,
             None,
@@ -856,6 +866,14 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         first_driver.clone(),
     )
     .expect("first durable host facade opens");
+    first_facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     let session_id = SessionId::new();
     assert!(matches!(
         first_facade.command(ProtocolCommandDto::CreateSession(
@@ -970,9 +988,9 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
             local_protocol_version(),
             replay_correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 SubscribeRunCommandDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     first_run,
                     None,
@@ -991,9 +1009,9 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
             local_protocol_version(),
             error_correlation,
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                 SubscribeRunCommandDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
                     session_id,
                     RunId::new(),
                     None,
@@ -1262,8 +1280,9 @@ fn daemon_stop_seam_persists_cancelling_without_direct_terminalization() {
     assert!(matches!(
         facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
         ProtocolQueryResultDto::SessionSnapshot(snapshot)
-            if snapshot.projection().is_some_and(|projection| {
-                projection.active_run().is_some_and(|run| run.status() == RunStatusDto::Cancelling)
-            })
+            if snapshot
+                .projection()
+                .active_run()
+                .is_some_and(|run| run.status() == RunStatusDto::Cancelling)
     ));
 }

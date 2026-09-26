@@ -27,12 +27,16 @@ use intention_domain::{
     CreateSessionCommandDto, ModelRunFactDto, ModelRunFactInputDto, RunModeDto, RunSnapshotDto,
     RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
+use intention_protocol::contract_families::{
+    GetProviderCatalogStatusQueryDto, ReconcileUnavailableQueueCommandDto,
+};
 use intention_protocol::{
     DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
     ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto,
-    SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestEnvelopeDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunStreamFrameDto,
+    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto,
+    SubscribeRunCommandDto,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
@@ -85,18 +89,12 @@ impl E2eHost {
 
     /// Kills the current daemon and starts a fresh process with identical
     /// environment, state directories, and endpoint.
+    ///
+    /// The kill is a hard kill: the daemon cannot run its listener Drop, so
+    /// its Unix socket file survives. The transport reclaims the stale socket
+    /// on the next bind (PR24-010); the fixture no longer deletes it by hand.
     fn restart_daemon(&mut self) {
         self.kill_daemon();
-        #[cfg(unix)]
-        {
-            // A hard-killed daemon cannot run its listener Drop, so its Unix
-            // socket file survives. The endpoint instance id is unique to this
-            // test process, so removing that exact path only ever removes the
-            // file this fixture's daemon created.
-            if let Some(path) = endpoint_socket_path(&self.endpoint) {
-                let _ = std::fs::remove_file(path);
-            }
-        }
         self.daemon = Some(spawn_daemon(
             &self.endpoint,
             self.config_home.path(),
@@ -385,6 +383,12 @@ fn handle_provider_request(
     thread::sleep(Duration::from_millis(500));
     let request_number = requests.fetch_add(1, Ordering::AcqRel) + 1;
     let body_text = String::from_utf8_lossy(&body);
+    if request_number == 1 {
+        assert!(
+            body_text.contains(r#""tools":["#) && body_text.contains(r#""name":"read""#),
+            "the first provider request advertises tools including read: {body_text}"
+        );
+    }
     if request_number <= 2 {
         let response = if body_text.contains("\"role\":\"tool\"") {
             text_response
@@ -456,12 +460,14 @@ fn excess_response() -> String {
     )
 }
 
-/// The exact capability list the shared client requires from the daemon.
+/// The exact capability list the shared client advertises and requires from
+/// the daemon.
 ///
 /// The list itself is private to `intention-client`, but its values are public
 /// protocol capabilities and the daemon's negotiation only verifies protocol
 /// version compatibility, so the fixture reconstructs the same hello with
-/// public APIs only.
+/// public APIs only. `provider_profiles_v1` is part of it because the client
+/// surfaces the gated control plane.
 fn command_hello() -> ProtocolHelloDto {
     ProtocolHelloDto::new(
         local_protocol_version(),
@@ -469,10 +475,26 @@ fn command_hello() -> ProtocolHelloDto {
             ProtocolCapabilityDto::SessionSubscriptions,
             ProtocolCapabilityDto::CorrelatedRequests,
             ProtocolCapabilityDto::DaemonHealth,
+            ProtocolCapabilityDto::ProviderProfilesV1,
         ],
         "facade-e2e",
     )
     .expect("fixture command hello is valid")
+}
+
+/// The pre-Slice-2 baseline capability set, used as the negative probe for the
+/// daemon's `provider_profiles_v1` control-plane gate.
+fn baseline_hello() -> ProtocolHelloDto {
+    ProtocolHelloDto::new(
+        local_protocol_version(),
+        vec![
+            ProtocolCapabilityDto::SessionSubscriptions,
+            ProtocolCapabilityDto::CorrelatedRequests,
+            ProtocolCapabilityDto::DaemonHealth,
+        ],
+        "facade-e2e-baseline",
+    )
+    .expect("fixture baseline hello is valid")
 }
 
 fn stream_hello() -> ProtocolHelloDto {
@@ -484,15 +506,16 @@ fn stream_hello() -> ProtocolHelloDto {
     .expect("fixture stream hello is valid")
 }
 
-/// Sends one typed protocol command over a fresh negotiated connection and
+/// Sends one typed protocol payload over a fresh negotiated connection and
 /// verifies the correlated response, replicating the client's private request
 /// path with public transport and protocol APIs only.
-fn send_command(
+fn send_payload(
     endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
     payload: ProtocolRequestPayloadDto,
-) -> DtoResult<ProtocolCommandResultDto> {
+) -> DtoResult<ProtocolResponsePayloadDto> {
     let mut connection = LocalConnection::connect(endpoint)?;
-    let remote = negotiate_client(&mut connection, command_hello())?;
+    let remote = negotiate_client(&mut connection, hello)?;
     let correlation_id = CorrelationIdDto::new();
     connection.send_request(&ProtocolRequestEnvelopeDto::new(
         local_protocol_version(),
@@ -505,8 +528,40 @@ fn send_command(
     {
         return Err(invalid_response());
     }
-    match response.message().payload() {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result.clone()),
+    Ok(response.message().payload().clone())
+}
+
+/// Sends one typed protocol command with the shared client's capability set.
+fn send_command(
+    endpoint: &LocalEndpoint,
+    payload: ProtocolRequestPayloadDto,
+) -> DtoResult<ProtocolCommandResultDto> {
+    match send_payload(endpoint, command_hello(), payload)? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
+        _ => Err(invalid_response()),
+    }
+}
+
+/// Sends one typed protocol command with an explicit capability advertisement.
+fn send_command_with_hello(
+    endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
+    command: ProtocolCommandDto,
+) -> DtoResult<ProtocolCommandResultDto> {
+    match send_payload(endpoint, hello, ProtocolRequestPayloadDto::Command(command))? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
+        _ => Err(invalid_response()),
+    }
+}
+
+/// Sends one typed protocol query with an explicit capability advertisement.
+fn send_query(
+    endpoint: &LocalEndpoint,
+    hello: ProtocolHelloDto,
+    query: ProtocolQueryDto,
+) -> DtoResult<ProtocolQueryResultDto> {
+    match send_payload(endpoint, hello, ProtocolRequestPayloadDto::Query(query))? {
+        ProtocolResponsePayloadDto::QueryResult(result) => Ok(result),
         _ => Err(invalid_response()),
     }
 }
@@ -674,6 +729,98 @@ fn assert_contiguous_facts(facts: &[ModelRunFactDto]) {
     );
 }
 
+/// The real daemon accepts the shared
+/// client's gated control-plane surface end to end because the client hello
+/// advertises `provider_profiles_v1`, while the same request from a baseline
+/// peer is rejected before any effect.
+#[test]
+fn real_daemon_control_plane_gate_accepts_the_client_capability_advertisement() {
+    let host = E2eHost::new(None, "{}");
+    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20));
+
+    let session_id = SessionId::new();
+    let created = send_command(
+        &host.endpoint,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                ProjectId::new(),
+                session_id,
+                WorkspaceId::new(),
+                WorkspaceRootDto::parse(host.workspace.path().to_string_lossy().into_owned())
+                    .expect("workspace root is absolute"),
+                RunModeDto::Build,
+            ),
+        )),
+    )
+    .expect("session creation is accepted");
+    assert!(
+        matches!(created, ProtocolCommandResultDto::Accepted(_)),
+        "the daemon accepts session creation"
+    );
+
+    // A gated query through the real client succeeds because the client hello
+    // advertises provider_profiles_v1.
+    let status = client
+        .provider_catalog_status(GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        })
+        .expect("the real daemon accepts a gated control-plane query");
+    assert_eq!(status.schema_version, "1.1");
+
+    // A gated command through the real client succeeds for the same reason.
+    let reconciled = client
+        .reconcile_unavailable_queue(ReconcileUnavailableQueueCommandDto {
+            session_id: session_id.to_string(),
+            operation_id: "op-w2b-reconcile".to_owned(),
+        })
+        .expect("the real daemon accepts a gated control-plane command");
+    assert_eq!(reconciled.session_id, session_id.to_string());
+    assert_eq!(reconciled.promoted_count, 0);
+    assert_eq!(reconciled.page_cursor, None);
+
+    // The negative probe: the same gated query from a baseline peer is
+    // rejected before any effect with the protocol helper's stable code.
+    let rejected = send_query(
+        &host.endpoint,
+        baseline_hello(),
+        ProtocolQueryDto::GetProviderCatalogStatus(GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        }),
+    )
+    .expect("the real daemon answers the gated query");
+    match rejected {
+        ProtocolQueryResultDto::Rejected(error) => {
+            assert_eq!(error.code(), "provider_profiles_capability_required");
+        }
+        other => panic!("a peer without the capability must be rejected, got {other:?}"),
+    }
+
+    // The same gate rejects a gated command from a baseline peer before any
+    // effect, through the same negotiated request path the positive command
+    // above uses.
+    let rejected = send_command_with_hello(
+        &host.endpoint,
+        baseline_hello(),
+        ProtocolCommandDto::ReconcileUnavailableQueue(ReconcileUnavailableQueueCommandDto {
+            session_id: session_id.to_string(),
+            operation_id: "op-w2b-reconcile-baseline".to_owned(),
+        }),
+    )
+    .expect("the real daemon answers the gated command");
+    match rejected {
+        ProtocolCommandResultDto::Rejected(error) => {
+            assert_eq!(error.code(), "provider_profiles_capability_required");
+        }
+        other => panic!("a peer without the capability must be rejected, got {other:?}"),
+    }
+
+    assert_eq!(
+        host.provider.request_count(),
+        0,
+        "control-plane calls never execute provider work"
+    );
+}
+
 #[tokio::test]
 async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let mut host = E2eHost::new(
@@ -713,7 +860,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("user turn starts a run, got: {result:?}")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("user turn result starts a run, got: {accepted:?}")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -926,7 +1073,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("user turn starts a run, got: {result:?}")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("user turn result starts a run, got: {accepted:?}")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {

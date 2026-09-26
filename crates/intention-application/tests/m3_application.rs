@@ -23,7 +23,7 @@ use intention_domain::{
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
 };
-use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
+use intention_protocol::ProtocolAcceptedResultDto;
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
@@ -768,79 +768,6 @@ fn post_effect_transform_is_applied_sequentially_and_invalid_outcome_fails_termi
 }
 
 #[test]
-fn send_user_turn_maps_durable_started_outcome_and_retries_without_local_enforcement() {
-    let session_id = SessionId::new();
-    let turn_id = TurnId::new();
-    let run_id = RunId::new();
-    let config = snapshot();
-    let committed = change(
-        projection(
-            session_id,
-            Some(RunProjectionDto::new(
-                session_id,
-                run_id,
-                turn_id,
-                RunStatusDto::Starting,
-                config.revision_id(),
-            )),
-            Vec::new(),
-            2,
-        ),
-        Some(AcceptedTurnOutcomeDto::Started(RunProjectionDto::new(
-            session_id,
-            run_id,
-            turn_id,
-            RunStatusDto::Starting,
-            config.revision_id(),
-        ))),
-    );
-    let repository = FakeRepository::with_accepted(Ok(committed));
-    let application = ApplicationService::new(&repository);
-    let command =
-        SendUserTurnCommandDto::new(session_id, turn_id, "hello").expect("fixture turn is valid");
-    let workflow = SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time());
-
-    for _ in 0..2 {
-        let result = application
-            .send_user_turn(command.clone(), workflow.clone())
-            .expect("repository acceptance maps");
-        assert_eq!(
-            result,
-            ProtocolAcceptedResultDto::SendUserTurn(
-                intention_protocol::SendUserTurnAcceptedDto::new(
-                    session_id,
-                    turn_id,
-                    SessionEventSequenceDto::new(2),
-                    SendUserTurnOutcomeDto::Started {
-                        run_id,
-                        config_revision_id: workflow.config_snapshot().revision_id(),
-                    },
-                ),
-            )
-        );
-    }
-    assert_eq!(repository.accepted_inputs.borrow().len(), 2);
-}
-
-#[test]
-fn send_user_turn_propagates_repository_idempotency_conflict() {
-    let repository = FakeRepository::with_accepted(Err(ErrorDto::validation(
-        "turn_idempotency_conflict",
-        "the accepted turn identity has different durable content",
-    )));
-    let application = ApplicationService::new(&repository);
-
-    let error = application
-        .send_user_turn(
-            SendUserTurnCommandDto::new(SessionId::new(), TurnId::new(), "different")
-                .expect("fixture turn is valid"),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
-        )
-        .expect_err("repository conflict must remain typed");
-    assert_eq!(error.code(), "turn_idempotency_conflict");
-}
-
-#[test]
 fn workflows_expose_their_explicit_durable_inputs() {
     let command = CreateSessionCommandDto::new(
         ProjectId::new(),
@@ -1134,23 +1061,6 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
 }
 
 #[test]
-fn send_user_turn_rejects_missing_durable_outcome() {
-    let session_id = SessionId::new();
-    let repository = FakeRepository::with_accepted(Ok(change(
-        projection(session_id, None, Vec::new(), 1),
-        None,
-    )));
-    let error = ApplicationService::new(&repository)
-        .send_user_turn(
-            SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
-                .expect("fixture turn is valid"),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
-        )
-        .expect_err("accepted commits require a durable outcome");
-    assert_eq!(error.code(), "missing_accepted_turn_outcome");
-}
-
-#[test]
 fn stop_and_snapshot_workflows_map_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -1191,7 +1101,7 @@ fn stop_and_snapshot_workflows_map_durable_results() {
         .get_session_snapshot(GetSessionSnapshotQueryDto::new(session_id))
         .expect("snapshot maps");
     assert_eq!(snapshot.session_id(), session_id);
-    assert_eq!(snapshot.projection(), Some(&state));
+    assert_eq!(snapshot.projection(), &state);
 }
 
 #[test]
@@ -1226,7 +1136,7 @@ fn application_exposes_run_tail_and_propagates_read_errors() {
 }
 
 #[test]
-fn create_and_remove_workflows_map_committed_queue_results() {
+fn create_and_remove_workflows_map_committed_results() {
     let session_id = SessionId::new();
     let queued_turn = TurnId::new();
     let repository = FakeRepository::with_accepted(Ok(change(
@@ -1252,18 +1162,6 @@ fn create_and_remove_workflows_map_committed_queue_results() {
     assert!(matches!(
         created,
         ProtocolAcceptedResultDto::CreateSession(_)
-    ));
-    let queued = application
-        .send_user_turn(
-            SendUserTurnCommandDto::new(session_id, queued_turn, "queued")
-                .expect("fixture turn is valid"),
-            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
-        )
-        .expect("queue maps");
-    assert!(matches!(
-        queued,
-        ProtocolAcceptedResultDto::SendUserTurn(value)
-            if value.outcome() == SendUserTurnOutcomeDto::Queued { queue_position: QueuePositionDto::new(4) }
     ));
     let removed = application
         .remove_queued_turn(

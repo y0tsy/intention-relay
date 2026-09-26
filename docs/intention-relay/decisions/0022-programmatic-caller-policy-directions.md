@@ -32,7 +32,8 @@ package:
 - run and calendar limits with atomic reservations, idempotent equal-replay,
   release-on-known-pre-effect, permanent-on-start, and
   `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery;
-- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v3`/v4 with
+- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v4` (the
+  single live record; the historical v3 record is removed by ADR 0038) with
   `Disabled` only for historical M4, and 22 closed `ErrorDto` safe failures.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after

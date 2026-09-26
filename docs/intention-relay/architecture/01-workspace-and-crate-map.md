@@ -27,7 +27,7 @@ This document assigns ownership within the Rust workspace and defines allowed de
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
 | `intention-runtime` | Deterministic session/run lifecycle decisions, cancellation, terminal promotion, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
 | `intention-storage` | DTO-only semantic repository methods, atomic committed-change evidence, snapshots, event-log contracts, and persisted config-snapshot inputs. | Config, domain, types. |
-| `intention-storage-sqlite` | Bundled SQLite schema, `rusqlite_migration` migrations, semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
+| `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, migrations, resolved config/snapshot DTOs. | Types, domain as needed. |
 | `intention-model` | Provider-neutral model DTOs and driver trait. | Types, domain DTOs where required. |
 | `intention-provider-openrouter` | OpenRouter SDK translation. | Model, config, types. |
@@ -86,7 +86,7 @@ flowchart BT
 ## M3 ownership decisions
 
 - `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn, transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot/tail reads, and configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend resource.
-- `intention-storage-sqlite` owns bundled SQLite opening, schema migration through `rusqlite_migration`, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId -> WorkspaceRootDto` association; workspace containment remains M5 policy ownership.
+- `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId -> WorkspaceRootDto` association; workspace containment remains M5 policy ownership.
 - `intention-runtime` decides valid state edges and performs the required `Starting -> Cancelling -> Cancelled` cancellation path. The repository, not runtime or callers, atomically chooses the lowest queue ticket after every terminal transition, including recovery. It has no provider, tool, timer, stream, or scheduler dependency in M3.
 - `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected database/snapshot and durable-event inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam. Release production APIs and the daemon binary expose no fixture mode.
 

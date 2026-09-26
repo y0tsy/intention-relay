@@ -5,9 +5,12 @@
 M5 is closed at the immutable merged baseline `bf40567` (`feat(tools):
 production model-tool loop with daemon-host E2E`, PR #14, merged to `main` on
 2026-08-29). The baseline passed the full Linux/Windows `make ci` matrix (run
-33265408980, 9/9 jobs green), and the current `main` head `b930c14` remains
-green (run 33273389437, 9/9 jobs; local `make quick` 527/527 on 2026-08-30).
-No immutable M4+ concept document is changed by this closeout. The
+33265408980, 9/9 jobs green), and the `main` head at closeout time `b930c14`
+was green (run 33273389437, 9/9 jobs; local `make quick` 527/527 on
+2026-08-30); later milestones have since moved `main` past that head. No
+immutable M4+ concept document was changed by this closeout (the M5+
+documentation waves later edited the concept, which is outside this closeout's
+scope). The
 implementation activates six executable tools (`read`, `write`, `edit`,
 `execute`, `glob`, and `grep`), fail-closed `WorkspaceRoot` resolution, typed
 deterministic hooks, and the daemon-owned production model-tool loop (ADR
@@ -19,13 +22,13 @@ recorded in the CI verification section.
 
 | Item | Value |
 | --- | --- |
-| Implementation baseline | Closed at the immutable merged baseline `bf40567` (PR #14, merged to `main` 2026-08-29); current `main` head `b930c14`. Historical rows below describe the pre-merge worktree after `299d922`. |
-| Current repository state | Historical pre-merge rows describe the dirty worktree after `299d922`; the current `main` worktree is clean at `b930c14` (closeout recorded 2026-08-30). |
+| Implementation baseline | Closed at the immutable merged baseline `bf40567` (PR #14, merged to `main` 2026-08-29); the `main` head at closeout time was `b930c14`. Historical rows below describe the pre-merge worktree after `299d922`. |
+| Current repository state | Historical pre-merge rows describe the dirty worktree after `299d922`; the `main` worktree was clean at `b930c14` (closeout recorded 2026-08-30). |
 | Full quality gate | Historical (2026-08-26/27, pre-merge worktree): `make quick` — pass; `make verify` — pass. Post-merge: local `make quick` — pass, 527/527 tests, executed 2026-08-30 at `b930c14`; full `make ci` matrix green via CI runs 33265408980 and 33273389437 (see CI verification) |
 | Full test result | Historical: 501 tests passed, 0 failed, 0 skipped. Post-merge: 527 tests passed, 0 failed, 0 skipped (local `make quick`, 2026-08-30 at `b930c14`) |
 | Focused verification | `cargo test -p intention-tools -p intention-workspace -p intention-hooks` — exit status `0`, executed 2026-08-26 in the current worktree |
 | Focused result | 32 tests passed, 0 failed, 0 ignored; all three package doctest suites passed |
-| Application/runtime integration verification | `cargo test -p intention-application --test m3_application --test m4_application_scheduling && cargo test -p intention-runtime --test m4_model_execution` — exit status `0`, executed 2026-08-27 in the current worktree |
+| Application/runtime integration verification | `cargo test -p intention-application --test m3_application && cargo test -p intention-runtime --test m4_model_execution` — exit status `0`, executed 2026-08-27 in the current worktree (command updated under ADR 0038 Wave 7: the removed `m4_application_scheduling` target no longer appears) |
 | Application/runtime integration result | 54 tests passed, 0 failed, 0 ignored across the real application workflow, scheduling boundary, and model execution path |
 | Documentation verification | Markdown/Mermaid/navigation/secret check: `python3 quality/check_docs.py` — exit status `0`, executed 2026-08-27 in this dirty worktree after repairing the secret-shaped literal assignment fixture in `crates/intention-tools/tests/tool_contracts.rs` (the fixture now builds its recognizable fake credential at runtime; the scanner itself is unchanged). The prior full `make docs-check` result remains a 2026-08-26 run on an earlier tree, and Rust-doc profile verification (`quality/run_profiles.py doc`) is still not evidenced for this dirty tree. |
 | Architecture and public-API verification | `python3 quality/check_architecture.py` and `python3 quality/check_public_api.py` — pass |
@@ -39,7 +42,7 @@ recorded in the CI verification section.
 | Coverage scope and result | `default`, `no_default`, and `all` feature profiles; current report shows `intention-tools` at 90%+ actual coverage. Threshold evaluation passed with the configured profile scope. |
 | Coverage policy exception | None. All Tier B crates, including `intention-tools` and `intention-hooks`, use the standard 90% line threshold. |
 | CI matrix | Merged-baseline and current-head CI evidence is recorded in the CI verification section below; the historical `bd3ab01`/`e915e12` row (run 33186533012) is retained there as the pre-loop baseline evidence |
-| Immutable documents | `m4plus_concept.md` and other immutable documents were not edited |
+| Immutable documents | `m4plus_concept.md` and other immutable documents were not edited within this closeout scope (the M5+ documentation waves edited the concept afterwards, outside this record) |
 
 ## Acceptance evidence
 

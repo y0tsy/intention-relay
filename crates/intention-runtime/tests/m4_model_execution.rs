@@ -12,7 +12,7 @@ use intention_config::{
 use intention_domain::{
     ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
     RunEventTailPageDto, RunModeDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStatusDto,
-    SessionProjectionDto, WorkspaceRootDto,
+    SessionProjectionDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
@@ -22,6 +22,7 @@ use intention_model::{
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
     ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
+    ToolExecutionPort,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
@@ -368,6 +369,30 @@ impl ModelExecutionDriver for ScriptedDriver {
     }
 }
 
+/// A tool executor that the M4 execution fixtures never invoke.
+///
+/// The tool executor is mandatory on every executor; these fixtures exercise
+/// provider rounds that never emit a tool call.
+struct NeverInvokedToolExecutor;
+
+impl ToolExecutionPort for NeverInvokedToolExecutor {
+    fn execute_tool(
+        &self,
+        _session_id: intention_types::SessionId,
+        _run_id: intention_types::RunId,
+        _call: intention_model::ToolCallDto,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = DtoResult<ToolResultOutcomeDto>> + Send + '_>,
+    > {
+        Box::pin(async {
+            Err(ErrorDto::validation(
+                "fixture_tool_unexpected",
+                "m4 execution fixtures never invoke the tool executor",
+            ))
+        })
+    }
+}
+
 fn execute(
     repository: &FakeRepository,
     driver: &ScriptedDriver,
@@ -376,8 +401,9 @@ fn execute(
     signal: ModelCancellationSignal,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     let clock = ImmediateTime::new();
+    let tool_executor = NeverInvokedToolExecutor;
     futures_executor::block_on(
-        ModelRunExecutionService::new(repository, driver, &clock).execute(
+        ModelRunExecutionService::new(repository, driver, &clock, &tool_executor).execute(
             ModelRunExecutionInputDto::new(
                 repository.session_id,
                 repository.run_id,
@@ -425,14 +451,20 @@ fn observer_receives_only_successful_fact_appends_and_completion_transition() {
     let observer = RecordingCommitObserver::new();
 
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::with_commit_observer(&repository, &driver, &clock, &observer)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+        ModelRunExecutionService::with_commit_observer(
+            &repository,
+            &driver,
+            &clock,
+            &observer,
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            ModelCancellationSignal::new(),
+        )),
     )
     .expect("execution completes");
 
@@ -484,14 +516,20 @@ fn observer_is_not_called_when_a_durable_append_fails() {
     let observer = RecordingCommitObserver::new();
 
     let error = futures_executor::block_on(
-        ModelRunExecutionService::with_commit_observer(&repository, &driver, &clock, &observer)
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
+        ModelRunExecutionService::with_commit_observer(
+            &repository,
+            &driver,
+            &clock,
+            &observer,
+            &NeverInvokedToolExecutor,
+        )
+        .execute(ModelRunExecutionInputDto::new(
+            session_id,
+            run_id,
+            request(run_id, "fixture"),
+            config,
+            ModelCancellationSignal::new(),
+        )),
     )
     .expect_err("failed append must abort execution");
 
@@ -551,6 +589,12 @@ fn streams_ordered_facts_splits_utf8_content_and_completes_in_two_stages() {
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta(content).expect("text is valid")),
         Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
+        Ok(ModelEventDto::reasoning_delta_categorized(
+            intention_model::ReasoningFragmentCategoryDto::Detail,
+            "detail",
+        )
+        .expect("detail reasoning is valid")),
+        Ok(ModelEventDto::reasoning_summary_delta("summary").expect("summary is valid")),
         Ok(ModelEventDto::usage(
             UsageDto::reported(1, 2, 3).expect("usage is valid"),
         )),
@@ -567,7 +611,7 @@ fn streams_ordered_facts_splits_utf8_content_and_completes_in_two_stages() {
     assert_eq!(
         outcome,
         ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(6)
+            cursor: RunEventCursorDto::new(8)
         }
     );
     let appends = repository.appends.borrow();
@@ -617,49 +661,6 @@ fn streams_ordered_facts_splits_utf8_content_and_completes_in_two_stages() {
         repository.transitions.borrow()[0].status(),
         RunStatusDto::Completed
     );
-}
-
-#[test]
-fn tool_call_flushes_content_then_records_denial_and_fails() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = snapshot("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let call = intention_model::ToolCallDto::new(intention_types::ToolCallId::new(), "tool", "{}")
-        .expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::text_delta("text").expect("text is valid")),
-        Ok(ModelEventDto::tool_call(call)),
-        Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-    ]);
-    let outcome = execute(
-        &repository,
-        &driver,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("tool denial commits");
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Failed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::AssistantContentAppended { .. }]
-    ));
-    assert!(matches!(
-        appends[2].facts(),
-        [
-            ModelRunFactInputDto::ToolCallRecorded { .. },
-            ModelRunFactInputDto::Failed { .. }
-        ]
-    ));
-    assert_eq!(appends[2].status(), Some(RunStatusDto::Failed));
 }
 
 #[test]
@@ -814,15 +815,14 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     };
     let clock = ImmediateTime::new();
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::new(&repository, &driver, &clock).execute(
-            ModelRunExecutionInputDto::new(
+        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
+            .execute(ModelRunExecutionInputDto::new(
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
                 config,
                 ModelCancellationSignal::new(),
-            ),
-        ),
+            )),
     )
     .expect("retry completes");
     assert!(matches!(
@@ -1100,15 +1100,14 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     let clock = ImmediateTime::new();
 
     let outcome = futures_executor::block_on(
-        ModelRunExecutionService::new(&repository, &driver, &clock).execute(
-            ModelRunExecutionInputDto::new(
+        ModelRunExecutionService::new(&repository, &driver, &clock, &NeverInvokedToolExecutor)
+            .execute(ModelRunExecutionInputDto::new(
                 session_id,
                 run_id,
                 request(run_id, "fixture"),
                 config,
                 ModelCancellationSignal::new(),
-            ),
-        ),
+            )),
     )
     .expect("exhausted timeouts become a durable failure");
 

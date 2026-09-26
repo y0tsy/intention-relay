@@ -18,7 +18,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
 | Event DTO | Immutable fact that occurred. | `RunStartedEventDto`, `PlanUpdatedEventDto`. |
 | Persistence DTO | Storage-safe representation of a record/snapshot/event. | `PersistedRunDto`, `RunSnapshotDto`. |
-| Provider DTO | Provider-neutral model request/stream/error contract. | `ModelRequestDto`, `ModelEventDto`. |
+| Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
 | Durable model fact DTO | Typed append-only provider/model evidence, safe run projection, and scoped replay. | `ModelRunFactDto`, `RunSnapshotDto`, `RunReplayDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
 | Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInvocationDto`, `ToolResultDto`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
@@ -113,13 +113,19 @@ The following must not cross a boundary as public inputs or outputs:
 - bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
 - implementation error types that reveal secrets or topology.
 
-Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. `intention-types` owns the shared safe usage, finish-reason, tool-call, and provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
+Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. A request also advertises tool definitions as validated JSON-object parameter text (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is transient request state with no durable representation (ADR 0039). A request may additionally carry the current round's accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may attach it to the assistant tool-call message of the same-run continuation (ADR 0041), and it is never durable history, message text, or cross-turn transfer. `intention-types` owns the shared safe usage, finish-reason, tool-call, and provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
 
 M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-scoped snapshot carries its compatible M3 `RunProjectionDto`, dedicated `RunEventCursorDto`, bounded assistant-turn content, optional normalized usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only contiguous typed facts strictly after a cursor. M4's dedicated wire family keeps this scope separate from M3 session replay: `SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunReplayDto`, `RunResyncDto`, or a safe `ErrorDto`; subsequent `RunLiveBatchDto`, `RunSnapshotFrameDto`, and `RunResyncDto` are uncorrelated `RunStreamFrameDto` values. Live batches are non-empty, run-scoped, positive-cursor contiguous ranges, while snapshot frames are daemon-authoritative status checkpoints. `RunResyncReasonDto` is closed and rejects unknown variants; `run_replay_not_found` remains a safe error rather than a resync.
 
 ## Validation ownership
 
-Public DTO deserialization is a validation boundary. A wire decoder must deserialize into validated types or a private raw shape followed by `TryFrom`/constructor validation; derived `Deserialize` must not bypass declared non-blank, path, ID, timestamp, pagination, schema, or closed-enum invariants.
+Public DTO deserialization is a validation boundary. Structural shape is always established on decode: required fields, field types, and closed enum variants are validated at the wire boundary and cannot be bypassed by a decoder.
+
+The semantic half of the boundary rule is scoped to the Slice 2 control-plane command, query, projection, and event DTO families that declare invariants beyond those field types. For them, semantic invariants are enforced on decode and again at admission: a decoder must not produce a structurally valid but semantically invalid control-plane DTO, and the admitting authority re-runs the same `validate()` before any effect because it cannot assume the producer decoded through the same boundary. The mechanism for DTOs with public fields is a private raw shape plus a manual `Deserialize` that builds the value, calls `validate()`, and maps the typed error through `de::Error::custom`, so the rejection surfaces as a typed decode error; DTOs with private fields use a validating constructor instead, including the control-plane `schema_version` text families, whose value must equal the current DTO schema version exactly.
+
+The 31 pre-Slice-2 public DTOs that declare invariants beyond their field types are not yet covered by decode-time enforcement: they still rely on admission-time validation. Extending decode-time enforcement to them is recorded as a follow-up card and is not claimed by this rule; the card covers the 31 pre-Slice-2 invariant DTOs.
+
+The error category follows the boundary that detected a version mismatch: the transport handshake fails an incompatible major protocol version as `incompatible_protocol_version` with `ErrorDto { category: unavailable }` (architecture 03, "Protocol lifecycle"), while the same code is a `validation` failure at a public DTO decode boundary. The difference is intentional and is not an open gap; a caller that needs one category per code would require a new decision.
 
 Validation occurs at the earliest boundary that has the necessary context:
 
@@ -157,10 +163,20 @@ A live event is emitted only after the storage commit succeeds. The command resu
 ## Versioning and compatibility
 
 - Every transport and persisted event schema has an explicit version.
-- Changes are additive by default. Supported legacy payloads may omit additive fields such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields decode as `None`.
-- Public M1 DTOs tolerate unknown additive JSON fields unless a closed configuration schema explicitly documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and incompatible schema/protocol majors always fail safely.
-- Daemon/client protocol negotiation rejects incompatible major versions with a typed error.
-- SQLite migrations and persisted DTO decoders must preserve enough information to read prior supported records.
+- Changes are additive by default. Current payloads may omit additive fields
+  such as `ErrorDto.detail` and `ErrorDto.correlation_id`; omitted fields
+  decode as `None`.
+- Public DTOs tolerate unknown additive JSON fields unless a closed
+  configuration schema explicitly documents `deny_unknown_fields`. Required
+  fields, invalid types, invalid IDs, unknown closed variants, and any
+  schema/protocol version other than the current one always fail safely.
+- Daemon/client protocol negotiation accepts only the exact current protocol
+  version (1.1) and rejects any other version with a typed error; the public
+  DTO schema compares by exact equality (no same-major tolerance).
+- SQLite storage is the single live schema (logical version 1) created
+  directly on open; there is no migration chain, no version gate, and no
+  opening of older schemas, and persisted rows keep their recorded bytes and
+  meaning.
 - Provider DTOs are versioned independently from provider SDK models.
 
 ## Contract tests required before implementation
@@ -232,6 +248,17 @@ and `ModelToolExchangeDto`. Architecture 15 owns their semantics; architecture
 widen historical M4 tool facts, expose provider-native IDs, raw paths, secrets,
 SDK resources, or recreate stored selection from a current registry.
 
+The future instruction-source families include `InstructionSourceV1`,
+`InstructionProfileRevisionV1`, and `InstructionProjectionV1`
+([architecture 30](30-instruction-sources-and-system-context.md),
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). They
+carry bounded credential-free instruction text with its declared kind, scope,
+order, audience, and canonical digests; they carry no tool, policy, admission,
+provider, or other authority, and no untrusted material may enter them.
+Architecture 30 owns their semantics, architecture 14 owns canonical framing,
+digest, decoder, and compatibility rules, and the Slice 5 activating ledger
+assigns their contract versions and tags.
+
 ### Historical compatibility classes
 
 - **Execution compatibility:** a supported record may execute only under its
@@ -244,8 +271,9 @@ SDK resources, or recreate stored selection from a current registry.
 
 Historical M3/M4 and ordinary records must not receive synthetic Mandate,
 verifier, Skill, MCP, child, activity, policy, profile, or execution-kind
-fields. Future migrations may add bridges or projections but may not rewrite old
-payload bytes, IDs, digests, cursors, snapshots, or event envelopes. Unknown or
+fields. The single live storage schema may evolve in place to add tables,
+bridges, or projections but may not rewrite old payload bytes, IDs, digests,
+cursors, snapshots, or event envelopes. Unknown or
 corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 
@@ -300,6 +328,11 @@ cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
 payloads, SDK/client resources, remote continuation state, or private endpoint
 input. Architecture 22 owns their semantics; architecture 14 retains canonical
 framing, digest, decoding, and compatibility ownership.
+
+The provider identifier fields `profile_id`, `revision_id`, `provider_kind_id`,
+and `model_id` are bounded at 256 characters, not bytes, at both the public wire
+boundary and the canonical identity record, so one value cannot pass one
+boundary and fail the other.
 
 ## Post-M4 session branching DTO boundary
 

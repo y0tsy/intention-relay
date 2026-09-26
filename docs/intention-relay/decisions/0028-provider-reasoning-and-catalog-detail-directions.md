@@ -19,8 +19,8 @@ The following detail from
   `TextualHistoryV1 { compatibility_id }`, `ReasoningHistoryManifestDto`,
   `ReasoningHistoryBound`, 4-MiB aggregate bound,
   `reasoning_history_unavailable`/`incompatible`/`too_large`);
-- reasoning usage accounting (`ReasoningUsageDto`, absent-never-zero, no
-  double-count, no price/currency);
+- reported-usage accounting with no double-count and no price/currency (the
+  typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09));
 - `normalized_reasoning_stream_v1` paged initial delivery
   (`RunReasoningHistoryPageDto`/`RunReasoningHistoryCompletedDto`, 256 facts /
   512 KiB per page, `normalized_reasoning_stream_required`);
@@ -29,11 +29,10 @@ The following detail from
   `message.thinking`, thinking activation, `reasoning_effort`/
   `thinking_budget`/`thinking_token_budget`);
 - reasoning in branches (`inherited_reasoning_history_references`);
-- catalog lifecycle limits (63-char IDs, 128 profiles, 32 kinds, 512 KiB raw
+- catalog lifecycle limits (256-character IDs counted as characters, 128
+  profiles, 32 kinds, 512 KiB raw
   candidate, 32 issues, 30-minute removal, 8 promotions, 32 reconciliation),
   tombstones, and the closed audit taxonomy; and
-- the legacy M4 selection bridge (`LegacyM4SelectionBindingDto`,
-  `historical_selection_corrupt`);
 - the normalized-reasoning-stream detail: the closed provider/model/domain/
   durable correspondence (`ModelEventDto::ReasoningDelta { category, content }`,
   `ModelEventDto::ReasoningSummaryDelta { content }`,
@@ -42,26 +41,26 @@ The following detail from
   domain `ReasoningDeltaRecorded`/`ReasoningSummaryDeltaRecorded` variants),
   the closed `provider_reasoning_stream_invalid` failure, the fixed 4-MiB
   combined per-run reasoning-output bound with
-  `reasoning_output_limit_exceeded`, the historical M4
-  `ReasoningDeltaRecorded { content }` decoding as historical `Primary`
-  reasoning evidence without rewriting its stored bytes, and the descriptor
-  owning the fixed field-path and array-index order for values originating in
-  one native response;
+  `reasoning_output_limit_exceeded`, `category` required on the wire with no
+  defaulting to `Primary` per
+  [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md), and the
+  descriptor owning the fixed field-path and array-index order for values
+  originating in one native response;
 - the unified model-capability taxonomy value `model-capability-taxonomy-v1`
   and the supersession note that the concept2 `reasoning_history_transfer`
   field name is research-only (architecture 22 owns
   `LocalDurableHistoryV1 { reasoning_input_contract }`);
-- the initial capability-slice detail: the closed supported sets of
-  `reasoning_effort` and `reasoning.mode`, and the resolved-reasoning-policy
-  contents (closed fragment-category and summary support, the
-  `ReasoningHistoryTransferDto` mode, `compatibility_id` when transfer is
-  enabled, the fixed 4-MiB output/history limits, and the optional
-  reasoning-usage interpretation);
-- the bounded `responses` v1 detail: the closed `ReasoningEffortDto` values
+- the initial capability-slice detail: the closed supported set of
+  `reasoning_effort` and the resolved-reasoning-policy contents (closed
+  fragment-category and summary support, the `ReasoningHistoryTransferDto`
+  mode, `compatibility_id` when transfer is enabled, and the fixed 4-MiB
+  output/history limits);
+- the bounded `responses` v1 detail: the closed `ReasoningEffortLevel` values
   (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and the
-  Responses-specific closed reasoning-mode projection (`standard` or `pro`),
-  and the automatic-provider-reasoning-summary default request for a
-  summary-supporting `responses` profile.
+  automatic-provider-reasoning-summary default request for a
+  summary-supporting `responses` profile. The typed Responses reasoning-mode
+  projection and the protocol-side effort copy were removed as unconsumed by
+  the unconsumed-surface audit (2026-09).
 
 The session-selection layer (session defaults/overrides, `provider_profiles_v1`,
 promotion/reconciliation, held recovered-run admission) is owned by
@@ -76,8 +75,8 @@ a later activating specification, and is bound to Milestone 5+ in the roadmap.
 ## Rationale
 
 The authoritative package review of 2026-08-30 confirmed the reasoning history,
-usage, paged delivery, dialect catalog, catalog limits, and legacy bridge are
-present in `m4plus_concept.md` but absent from architecture 22, and that the
+usage, paged delivery, dialect catalog, and catalog limits are present in
+`m4plus_concept.md` but absent from architecture 22, and that the
 session-selection layer was explicitly excluded. This decision adopts the detail
 so the authoritative documentation fully covers the features, while preserving
 the project rule that no feature is documented as implemented without code
@@ -90,25 +89,28 @@ evidence.
 2. A run is never silently sent without required history; the complete required
    history must transfer as a whole (4 MiB) or the dependent run is rejected
    before provider work.
-3. A missing reasoning usage component is never zero; the same source `RunId`
-   is never charged or counted twice.
+3. Reported usage is never double-counted: the same source `RunId` is never
+   charged or counted twice.
 4. `normalized_reasoning_stream_v1` is additive and negotiated; a client never
    receives live reasoning before the initial history completes; unnegotiated
    peers fail closed with `normalized_reasoning_stream_required`.
 5. The dialect catalog is closed and typed; no encrypted/opaque payloads, raw
    provider JSON, or generic request templates.
 6. Catalog/profile/kind rows are immutable append-only history; tombstones are
-   permanent; a tombstoned ID cannot be reintroduced.
-7. The legacy M4 bridge is additive: original IDs, snapshot JSON, and UUIDs are
-   never replaced; a missing/corrupt binding is `historical_selection_corrupt`.
+   append-only removal history, and a removed ID is admitted again only when a
+   later accepted catalog reintroduces it.
+7. The legacy M4 selection bridge is removed by
+   [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): no legacy
+   selection binding is materialized for historical runs, and no synthetic
+   provider selection or binding is ever created.
 8. The normalized reasoning stream has one shared `RunEventCursorDto`; a
    malformed, duplicate-where-forbidden, out-of-order, or post-terminal value
    fails closed with `provider_reasoning_stream_invalid`, and the combined
    reasoning fragments and summaries of one run are bounded at 4 MiB with
    `reasoning_output_limit_exceeded`.
-9. `ReasoningEffortDto` and the `standard`/`pro` mode are closed; a profile may
-   select only values declared in its model subset, and an unsupported effort
-   or mode fails preflight before outbound work.
+9. `ReasoningEffortLevel` is closed; a profile may select only values declared
+   in its model subset, and an unsupported effort fails preflight before
+   outbound work.
 10. For a summary-supporting `responses` profile, the default request asks for
     an automatic provider reasoning summary; a returned summary becomes a
     distinct tail-only `ReasoningSummaryDelta`, never raw chain-of-thought and

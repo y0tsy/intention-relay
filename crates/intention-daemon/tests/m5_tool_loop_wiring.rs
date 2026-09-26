@@ -22,7 +22,7 @@ use intention_domain::{
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ToolCallDto,
+    ModelToolDefinitionDto, ToolCallDto,
 };
 use intention_protocol::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
@@ -132,6 +132,14 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
+    facade
+        .seed_fixture_catalog_for_test_support(
+            "seed-1",
+            "openrouter",
+            "fixture",
+            "https://api.example.invalid/v1",
+        )
+        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 
@@ -161,6 +169,23 @@ fn intention_test_snapshot() -> ConfigSnapshotDto {
     .expect("fixture snapshot is valid")
 }
 
+/// The exact model-visible tool definitions the application advertises.
+fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
+    intention_tools::model_visible_descriptors()
+        .iter()
+        .map(|descriptor| {
+            ModelToolDefinitionDto::new(
+                descriptor.id().as_str(),
+                descriptor.description(),
+                descriptor
+                    .model_parameters_schema()
+                    .expect("model-visible descriptors advertise parameter schemas"),
+            )
+            .expect("fixture tool definition is valid")
+        })
+        .collect()
+}
+
 fn schedule(
     session_id: SessionId,
     run_id: RunId,
@@ -176,7 +201,9 @@ fn schedule(
             None,
             None,
         )
-        .expect("request is valid"),
+        .expect("request is valid")
+        .with_tools(advertised_tool_definitions())
+        .expect("tool advertisement is valid"),
         snapshot,
     )
     .expect("schedule is valid")
@@ -208,7 +235,7 @@ fn started_run(facade: &DaemonApplicationFacade, session_id: SessionId) -> RunId
     let ProtocolCommandResultDto::Accepted(accepted) = result else {
         panic!("fixture turn starts")
     };
-    let Some(ProtocolAcceptedResultDto::SendUserTurn(turn)) = accepted.result() else {
+    let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
         panic!("fixture result is a turn")
     };
     let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
@@ -280,6 +307,19 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
     );
     let requests = driver.requests();
     assert_eq!(requests.len(), 2);
+    let advertised_names: Vec<&str> = requests[0]
+        .tools()
+        .iter()
+        .map(|definition| definition.name())
+        .collect();
+    let model_visible_names: Vec<&str> = intention_tools::model_visible_descriptors()
+        .iter()
+        .map(|descriptor| descriptor.id().as_str())
+        .collect();
+    assert_eq!(
+        advertised_names, model_visible_names,
+        "round one observes every model-visible tool definition in registry order"
+    );
     assert_eq!(
         requests[1].messages(),
         vec![

@@ -29,7 +29,7 @@ fn t(s: &str) -> BoundedText {
     BoundedText::new(s).unwrap()
 }
 fn call(service: &ToolService, input: ToolInput) -> intention_types::DtoResult<ToolResult> {
-    service.dispatch(ToolCallId::new(), input)
+    service.dispatch_with_cancellation(ToolCallId::new(), input, CancellationSignal::new())
 }
 
 #[test]

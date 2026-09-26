@@ -296,15 +296,4 @@ fn tool_result_fact_wire_shape_and_outcome_safety_are_validated() {
         serde_json::from_str(&serde_json::to_string(&fact).expect("fact serializes"))
             .expect("fact deserializes");
     assert_eq!(decoded, fact);
-
-    let legacy: ModelRunFactDto = serde_json::from_value(serde_json::json!({
-        "cursor": 1,
-        "kind": "tool_call_recorded",
-        "call": {"call_id": call_id, "name": "inspect", "arguments_json": "{}"}
-    }))
-    .expect("legacy tool-call wire still decodes");
-    assert_eq!(
-        legacy.kind(),
-        intention_domain::ModelRunFactKindDto::ToolCallRecorded
-    );
 }

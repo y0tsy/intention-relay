@@ -132,6 +132,13 @@ from `execute`, which is available for convenient investigation and may alter
 state beyond tool-level path policy. Plan therefore has a product focus, not a
 shell containment guarantee.
 
+Mode does not currently filter the tool definitions advertised in model
+requests: both Plan and Build requests advertise all six active registered
+tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based
+advertisement filtering is future Mandate work and is not part of the ordinary
+request path (ADR 0039); runtime tool policy, including Plan-mode `write` and
+`edit` denial, remains enforced at execution and is unchanged.
+
 ### Plan focus instruction
 
 The daemon injects a short stable instruction into Plan model requests:
@@ -142,6 +149,14 @@ You are in Plan mode. Focus on investigation, decomposition, design, and plan au
 
 This instruction is advisory. It cannot authorize, prevent, or prove the absence
 of shell, process, filesystem, network, or external effects.
+
+This instruction is the `Mode` contribution of the effective instruction
+projection ([architecture 30](30-instruction-sources-and-system-context.md),
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)):
+architecture 30 owns the assembly order, the canonical digest, and the
+materialization of the projection, while this document keeps the instruction
+text and its advisory meaning. The contribution cannot widen or narrow tool
+policy, and a Build run's projection never inherits the Plan contribution.
 
 ## Plan lifecycle
 

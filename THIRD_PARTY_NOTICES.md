@@ -498,7 +498,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [zerocopy 0.8.56](https://github.com/google/zerocopy)
+- [zerocopy 0.8.59](https://github.com/google/zerocopy)
 
 ```text
                                  Apache License
@@ -709,7 +709,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [rustls-platform-verifier 0.7.0](https://github.com/rustls/rustls-platform-verifier)
+- [rustls-platform-verifier 0.7.1](https://github.com/rustls/rustls-platform-verifier)
 
 ```text
                                  Apache License
@@ -919,7 +919,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 #### Used by
 
-- [ipnet 2.12.1](https://github.com/krisprice/ipnet)
+- [ipnet 2.12.2](https://github.com/krisprice/ipnet)
 
 ```text
                                  Apache License
@@ -1135,7 +1135,7 @@ PERFORMANCE OF THIS SOFTWARE.
 - [fallible-iterator 0.3.0](https://github.com/sfackler/rust-fallible-iterator)
 - [fallible-streaming-iterator 0.1.9](https://github.com/sfackler/fallible-streaming-iterator)
 - [serde_spanned 1.1.1](https://github.com/toml-rs/toml)
-- [toml 1.1.4+spec-1.1.0](https://github.com/toml-rs/toml)
+- [toml 1.1.6+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_datetime 1.1.1+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_parser 1.1.3+spec-1.1.0](https://github.com/toml-rs/toml)
 - [toml_writer 1.1.2+spec-1.1.0](https://github.com/toml-rs/toml)
@@ -1778,7 +1778,7 @@ limitations under the License.
 #### Used by
 
 - [reqwest 0.12.28](https://github.com/seanmonstar/reqwest)
-- [reqwest 0.13.4](https://github.com/seanmonstar/reqwest)
+- [reqwest 0.13.5](https://github.com/seanmonstar/reqwest)
 
 ```text
                               Apache License
@@ -2198,7 +2198,7 @@ limitations under the License.
 
 #### Used by
 
-- [tokio-rustls 0.26.4](https://github.com/rustls/tokio-rustls)
+- [tokio-rustls 0.26.5](https://github.com/rustls/tokio-rustls)
 
 ```text
                               Apache License
@@ -2830,21 +2830,22 @@ limitations under the License.
 
 - [atomic-waker 1.1.2](https://github.com/smol-rs/atomic-waker)
 - [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
-- [bitflags 2.13.1](https://github.com/bitflags/bitflags)
-- [cc 1.4.4](https://github.com/rust-lang/cc-rs)
-- [cfg-if 1.0.4](https://github.com/rust-lang/cfg-if)
+- [base64 0.23.1](https://github.com/marshallpierce/rust-base64)
+- [bitflags 2.13.2](https://github.com/bitflags/bitflags)
+- [cc 1.5.1](https://github.com/rust-lang/cc-rs)
+- [cfg-if 1.0.5](https://github.com/rust-lang/cfg-if)
 - [cmake 0.1.58](https://github.com/rust-lang/cmake-rs)
 - [displaydoc 0.2.7](https://github.com/yaahc/displaydoc)
 - [errno 0.3.14](https://github.com/lambda-fairy/rust-errno)
 - [fastrand 2.5.0](https://github.com/smol-rs/fastrand)
-- [find-msvc-tools 0.1.11](https://github.com/rust-lang/cc-rs)
+- [find-msvc-tools 0.1.14](https://github.com/rust-lang/cc-rs)
 - [fnv 1.0.7](https://github.com/servo/rust-fnv)
 - [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
 - [fs4 1.1.0](https://github.com/al8n/fs4)
 - [glob 0.3.4](https://github.com/rust-lang/glob)
 - [hashbrown 0.17.1](https://github.com/rust-lang/hashbrown)
 - [httparse 1.10.1](https://github.com/seanmonstar/httparse)
-- [hyper-rustls 0.27.9](https://github.com/rustls/hyper-rustls)
+- [hyper-rustls 0.27.10](https://github.com/rustls/hyper-rustls)
 - [idna 1.1.0](https://github.com/servo/rust-url/)
 - [idna_adapter 1.2.2](https://github.com/hsivonen/idna_adapter)
 - [jobserver 0.1.35](https://github.com/rust-lang/jobserver-rs)
@@ -2859,19 +2860,19 @@ limitations under the License.
 - [percent-encoding 2.3.2](https://github.com/servo/rust-url/)
 - [pkg-config 0.3.34](https://github.com/rust-lang/pkg-config-rs)
 - [ring 0.17.14](https://github.com/briansmith/ring)
-- [rustix 1.1.4](https://github.com/bytecodealliance/rustix)
+- [rustix 1.1.5](https://github.com/bytecodealliance/rustix)
 - [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
-- [rustls 0.23.43](https://github.com/rustls/rustls)
+- [rustls 0.23.45](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
 - [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
-- [smallvec 1.15.2](https://github.com/servo/rust-smallvec)
+- [smallvec 1.16.2](https://github.com/servo/rust-smallvec)
 - [socket2 0.6.5](https://github.com/rust-lang/socket2)
 - [stable_deref_trait 1.2.1](https://github.com/storyyeller/stable_deref_trait)
 - [syn 1.0.109](https://github.com/dtolnay/syn)
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
 - [unicase 2.9.0](https://github.com/seanmonstar/unicase)
 - [url 2.5.8](https://github.com/servo/rust-url)
-- [uuid 1.26.0](https://github.com/uuid-rs/uuid)
+- [uuid 1.26.1](https://github.com/uuid-rs/uuid)
 
 ```text
                               Apache License
@@ -3081,7 +3082,7 @@ limitations under the License.
 
 #### Used by
 
-- [hashlink 0.12.1](https://github.com/djc/hashlink)
+- [hashlink 0.12.2](https://github.com/djc/hashlink)
 
 ```text
                               Apache License
@@ -3502,10 +3503,10 @@ limitations under the License.
 
 - [block-buffer 0.12.1](https://github.com/RustCrypto/utils)
 - [const-oid 0.10.2](https://github.com/RustCrypto/formats)
-- [cpufeatures 0.3.0](https://github.com/RustCrypto/utils)
+- [cpufeatures 0.3.1](https://github.com/RustCrypto/utils)
 - [crypto-common 0.2.2](https://github.com/RustCrypto/traits)
 - [digest 0.11.3](https://github.com/RustCrypto/traits)
-- [hybrid-array 0.4.14](https://github.com/RustCrypto/hybrid-array)
+- [hybrid-array 0.4.15](https://github.com/RustCrypto/hybrid-array)
 - [sha2 0.11.0](https://github.com/RustCrypto/hashes)
 
 ```text
@@ -4335,12 +4336,12 @@ limitations under the License.
 
 #### Used by
 
-- [aws-lc-sys 0.44.0](https://github.com/aws/aws-lc-rs)
+- [aws-lc-sys 0.45.0](https://github.com/aws/aws-lc-rs)
 - [dunce 1.0.5](https://gitlab.com/kornelski/dunce)
 - [dyn-clone 1.0.20](https://github.com/dtolnay/dyn-clone)
 - [eventsource-stream 0.2.3](https://github.com/jpopesculian/eventsource-stream)
 - [ident_case 1.0.1](https://github.com/TedDriggs/ident_case)
-- [interprocess 2.4.3](https://github.com/kotauskas/interprocess)
+- [interprocess 2.4.4](https://github.com/kotauskas/interprocess)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.189](https://github.com/rust-lang/libc)
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
@@ -4350,7 +4351,6 @@ limitations under the License.
 - [rand_chacha 0.9.0](https://github.com/rust-random/rand)
 - [ref-cast-impl 1.0.27](https://github.com/dtolnay/ref-cast)
 - [ref-cast 1.0.27](https://github.com/dtolnay/ref-cast)
-- [rusqlite_migration 2.6.0](https://github.com/cljoly/rusqlite_migration)
 - [ryu 1.0.23](https://github.com/dtolnay/ryu)
 - [serde 1.0.229](https://github.com/serde-rs/serde)
 - [serde_core 1.0.229](https://github.com/serde-rs/serde)
@@ -4360,13 +4360,13 @@ limitations under the License.
 - [serde_urlencoded 0.7.1](https://github.com/nox/serde_urlencoded)
 - [shlex 2.0.1](https://github.com/comex/rust-shlex)
 - [syn 2.0.119](https://github.com/dtolnay/syn)
-- [syn 3.0.4](https://github.com/dtolnay/syn)
+- [syn 3.0.6](https://github.com/dtolnay/syn)
 - [sync_wrapper 1.0.2](https://github.com/Actyx/sync_wrapper)
 - [thiserror-impl 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror-impl 2.0.20](https://github.com/dtolnay/thiserror)
+- [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
-- [thiserror 2.0.20](https://github.com/dtolnay/thiserror)
-- [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
+- [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
+- [unicode-ident 1.0.26](https://github.com/dtolnay/unicode-ident)
 - [widestring 1.2.1](https://github.com/VoidStarKat/widestring-rs)
 
 ```text
@@ -4488,7 +4488,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #### Used by
 
-- [aws-lc-sys 0.44.0](https://github.com/aws/aws-lc-rs)
+- [aws-lc-sys 0.45.0](https://github.com/aws/aws-lc-rs)
 
 ```text
 Copyright (c) <year> <owner>.
@@ -4652,8 +4652,8 @@ third-party/chromium/LICENSE.
 
 #### Used by
 
-- [aws-lc-rs 1.18.0](https://github.com/aws/aws-lc-rs)
-- [aws-lc-sys 0.44.0](https://github.com/aws/aws-lc-rs)
+- [aws-lc-rs 1.18.1](https://github.com/aws/aws-lc-rs)
+- [aws-lc-sys 0.45.0](https://github.com/aws/aws-lc-rs)
 
 ```text
 ISC License:
@@ -4701,7 +4701,7 @@ THE SOFTWARE.
 
 #### Used by
 
-- [mio 1.2.2](https://github.com/tokio-rs/mio)
+- [mio 1.2.3](https://github.com/tokio-rs/mio)
 
 ```text
 Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -4787,7 +4787,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #### Used by
 
-- [hyper 1.11.0](https://github.com/hyperium/hyper)
+- [hyper 1.11.1](https://github.com/hyperium/hyper)
 
 ```text
 Copyright (c) 2014-2026 Sean McArthur
@@ -5099,7 +5099,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### Used by
 
-- [hyper-util 0.1.20](https://github.com/hyperium/hyper-util)
+- [hyper-util 0.1.21](https://github.com/hyperium/hyper-util)
 
 ```text
 Copyright (c) 2023-2025 Sean McArthur
@@ -5127,7 +5127,7 @@ THE SOFTWARE.
 
 #### Used by
 
-- [synstructure 0.13.2](https://github.com/mystor/synstructure)
+- [synstructure 0.14.0](https://github.com/mystor/synstructure)
 
 ```text
 Copyright 2016 Nika Layzell
@@ -5268,7 +5268,7 @@ SOFTWARE.
 #### Used by
 
 - [async-openai-macros 0.3.0](https://github.com/64bit/async-openai)
-- [async-openai 0.41.3](https://github.com/64bit/async-openai)
+- [async-openai 0.42.0](https://github.com/64bit/async-openai)
 
 ```text
 MIT License
@@ -5327,7 +5327,7 @@ SOFTWARE.
 
 #### Used by
 
-- [openrouter-rs 0.14.0](https://github.com/realmorrisliu/openrouter-rs)
+- [openrouter-rs 0.16.0](https://github.com/realmorrisliu/openrouter-rs)
 - [zmij 1.0.23](https://github.com/dtolnay/zmij)
 
 ```text
@@ -5449,7 +5449,7 @@ SOFTWARE.
 
 #### Used by
 
-- [aws-lc-sys 0.44.0](https://github.com/aws/aws-lc-rs)
+- [aws-lc-sys 0.45.0](https://github.com/aws/aws-lc-rs)
 
 ```text
 The MIT License (MIT)
@@ -5541,7 +5541,7 @@ THE SOFTWARE.
 
 #### Used by
 
-- [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
+- [unicode-ident 1.0.26](https://github.com/dtolnay/unicode-ident)
 
 ```text
 UNICODE LICENSE V3
@@ -5600,9 +5600,9 @@ authorization of the copyright holder.
 - [potential_utf 0.1.6](https://github.com/unicode-org/icu4x)
 - [tinystr 0.8.4](https://github.com/unicode-org/icu4x)
 - [writeable 0.6.4](https://github.com/unicode-org/icu4x)
-- [yoke-derive 0.8.2](https://github.com/unicode-org/icu4x)
+- [yoke-derive 0.8.3](https://github.com/unicode-org/icu4x)
 - [yoke 0.8.3](https://github.com/unicode-org/icu4x)
-- [zerofrom-derive 0.1.7](https://github.com/unicode-org/icu4x)
+- [zerofrom-derive 0.1.8](https://github.com/unicode-org/icu4x)
 - [zerofrom 0.1.8](https://github.com/unicode-org/icu4x)
 - [zerotrie 0.2.5](https://github.com/unicode-org/icu4x)
 - [zerovec-derive 0.11.6](https://github.com/unicode-org/icu4x)

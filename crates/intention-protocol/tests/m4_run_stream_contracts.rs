@@ -54,7 +54,7 @@ fn run_stream_dtos_round_trip_and_preserve_all_resync_reasons() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let subscription = SubscribeRunCommandDto::new(
-        SchemaVersionDto::new(1, 0),
+        SchemaVersionDto::new(1, 1),
         session_id,
         run_id,
         Some(RunEventCursorDto::new(2)),

@@ -93,6 +93,7 @@ flowchart TD
 1. [Plan and Build modes](07-plan-and-build-modes.md)
 2. [Model protocol and providers](08-model-protocol-and-providers.md)
 3. [Configuration, security, and observability](09-configuration-security-and-observability.md)
+4. [Instruction sources and system context](30-instruction-sources-and-system-context.md)
 
 ### Delivery
 
@@ -107,6 +108,7 @@ flowchart TD
 9. [M2 closure evidence](../closeout/m2-closure-evidence.md)
 10. [M3 closure evidence](../closeout/m3-closure-evidence.md)
 11. [M4 closure evidence](../closeout/m4-closure-evidence.md)
+12. [M5 closure evidence](../closeout/m5-closure-evidence.md)
 
 ## Document map
 
@@ -131,6 +133,8 @@ flowchart TD
   B --> Q
   M --> Q
   G --> Q
+  G --> I30[30 Instructions]
+  I30 --> M
   Q --> R[11 Roadmap]
 ```
 
@@ -279,9 +283,12 @@ lifecycle authority, persistence authority, sandbox, or privilege boundary.
 
 [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md) is the
 sole detailed authority for future private kernel epochs, cells, namespace
-checkpoints, safe projections, and kernel recovery. It consumes the Gateway/RLM
-bridge and the one capability path; it is not a second runtime, registry,
-lifecycle authority, sandbox, or privilege boundary.
+checkpoints, safe projections, and kernel recovery, and for the kernel-side
+import surface and script-import evidence of the project script library
+(`.ir/scripts`, [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md));
+the library's path convention and tools stay with architectures 05 and 15. It
+consumes the Gateway/RLM bridge and the one capability path; it is not a second
+runtime, registry, lifecycle authority, sandbox, or privilege boundary.
 
 ### Goals, Skills, context, memory, and compaction owner
 
@@ -374,3 +381,18 @@ recovery-promoted run admission, adopted by
 [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)
 and activated under Milestone 5+. It cannot become a second runtime, registry,
 scheduler, catalog, persistence authority, or sandbox.
+
+### Instruction sources and system context owner
+
+[Instruction sources and system context](30-instruction-sources-and-system-context.md)
+is the sole detailed authority for the accepted instruction channel of a model
+request: the closed instruction source kinds and scopes, the deployment
+profile, workspace project instructions, user-editable fragments, the `Mode`
+and `Vfr` contributions of architectures 07 and 06, canonical assembly, the
+immutable effective instruction projection with its digests, intrinsic bounds,
+closed failures, and digest-only observability, adopted by
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) and
+activated under Milestone 5+ (fifth slice). Instruction text is advisory and
+cannot become tool, policy, admission, Mandate, child, verifier, MCP, bridge,
+kernel, provider, scheduler, or reconciliation authority, and no untrusted
+material may enter the instruction channel.

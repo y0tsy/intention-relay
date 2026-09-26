@@ -1,0 +1,114 @@
+name: Real API E2E
+
+# Manual-only live-provider workflow: dispatched by hand from the Actions tab,
+# never triggered by push, pull_request, or schedule, and never a required
+# status check. It runs the `#[ignore]`d `real_api_e2e` integration tests in
+# the intention-daemon crate against a real provider endpoint, using the
+# REAL_API_E2E_PROVIDER_KEY repository secret. The credential reaches the
+# tests only through step environment variables, is never interpolated into
+# `run:` script text, and is never written into logs or uploaded reports.
+# Observational only: this workflow never runs in or alters the blocking
+# Quality workflow gate.
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider kind the daemon driver uses for the live calls.
+        type: choice
+        options:
+          - generic-chat-completion-api
+          - openrouter
+        default: generic-chat-completion-api
+      model:
+        description: Provider model identifier to exercise with the live calls.
+        type: string
+        required: true
+      endpoint:
+        description: Optional explicit endpoint override; leave empty to use the provider default.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-api-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: real-api-e2e
+    runs-on: ubuntu-24.04
+    # Covers the 120-minute live-run step plus checkout, cache restore, tool
+    # installation, and report upload. This job timeout and the run step
+    # timeout must stay above the worst-case harness budget documented next to
+    # the timing constants in crates/intention-daemon/tests/real_api_e2e.rs;
+    # quality/self_test.py binds all four values.
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      CI_TOOLS_SCOPE: test
+      # Dispatch inputs reach `make e2e-real-api` only through the job
+      # environment, never interpolated into `run:` script text.
+      INTENTION_REAL_API_KIND: ${{ inputs.provider }}
+      INTENTION_REAL_API_MODEL: ${{ inputs.model }}
+      INTENTION_REAL_API_ENDPOINT: ${{ inputs.endpoint }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore Cargo and build caches
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: real-api-e2e
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.97.1
+
+      - name: Install pinned quality tools
+        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5
+        with:
+          tool: cargo-nextest@0.9.140
+          fallback: cargo-binstall
+
+      - name: Set canonical Rust homes
+        run: |
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Verify provider credential is configured
+        env:
+          REAL_API_E2E_KEY: ${{ secrets.REAL_API_E2E_PROVIDER_KEY }}
+        run: |
+          if [ -z "${REAL_API_E2E_KEY:-}" ]; then
+            echo "::error::REAL_API_E2E_PROVIDER_KEY is not configured for this repository; add the repository secret before dispatching this workflow."
+            exit 1
+          fi
+
+      - name: Run real provider API end-to-end tests
+        # Worst-case harness budget: six positive tool turns plus the negative
+        # credential run, each up to three 180-second attempts, the bounded
+        # synchronous session calls, three 30-second daemon starts, and the
+        # bounded replay, kill, and session-read windows come to about 82
+        # minutes; the rest of this step covers the build. quality/self_test.py
+        # recomputes the budget against this timeout and the job timeout.
+        timeout-minutes: 120
+        env:
+          INTENTION_REAL_API_KEY: ${{ secrets.REAL_API_E2E_PROVIDER_KEY }}
+        run: make e2e-real-api
+
+      - name: Upload real API E2E reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-api-e2e-reports
+          if-no-files-found: ignore
+          retention-days: 7
+          path: quality/reports/real-api-e2e

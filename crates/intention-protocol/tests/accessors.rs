@@ -3,25 +3,57 @@
     reason = "Protocol accessor coverage uses expect for fixture diagnostics."
 )]
 
-use intention_domain::RunModeDto;
+use intention_domain::{RunModeDto, SessionProjectionDto};
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolMessageDto, ProtocolRequestEnvelopeDto,
     ProtocolRequestPayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionResyncDto,
     SessionResyncReasonDto, SessionSnapshotDto, SubscribeSessionCommandDto,
 };
-use intention_types::{CorrelationIdDto, SchemaVersionDto, SessionEventSequenceDto, SessionId};
+use intention_types::{
+    CorrelationIdDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId, WorkspaceId,
+};
+
+fn fixture_projection(
+    session_id: SessionId,
+    at_sequence: SessionEventSequenceDto,
+) -> SessionProjectionDto {
+    SessionProjectionDto::new(
+        ProjectId::new(),
+        session_id,
+        WorkspaceId::new(),
+        intention_domain::WorkspaceRootDto::parse(
+            std::env::temp_dir()
+                .join("intention-protocol-accessors-workspace")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("fixture workspace root is valid"),
+        RunModeDto::Build,
+        None,
+        None,
+        Vec::new(),
+        at_sequence,
+    )
+    .expect("fixture projection is valid")
+}
 
 #[test]
 fn public_protocol_accessors_preserve_typed_values() {
-    let schema = SchemaVersionDto::new(1, 0);
-    let version = ProtocolVersionDto::new(1, 3);
+    let schema = SchemaVersionDto::new(1, 1);
+    let version = ProtocolVersionDto::new(1, 1);
     let health = DaemonHealthDto::new(schema, version, DaemonReadinessDto::Starting);
     assert_eq!(health.schema_version(), schema);
     assert_eq!(health.protocol_version(), version);
     assert_eq!(health.readiness(), DaemonReadinessDto::Starting);
 
     let session_id = SessionId::new();
-    let snapshot = SessionSnapshotDto::new(schema, session_id, SessionEventSequenceDto::new(4));
+    let snapshot = SessionSnapshotDto::with_projection(
+        schema,
+        session_id,
+        SessionEventSequenceDto::new(4),
+        fixture_projection(session_id, SessionEventSequenceDto::new(4)),
+    )
+    .expect("fixture snapshot is valid");
     let tail =
         SessionEventTailBatchDto::new(schema, session_id, snapshot.at_sequence(), Vec::new())
             .expect("empty tail is valid");

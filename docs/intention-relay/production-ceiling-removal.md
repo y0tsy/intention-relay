@@ -1,9 +1,9 @@
 # Production ceiling removal — scope
 
-**Status:** the domain part (candidate rows 3–8 below) is removed in this PR
-(`2cd21c9`, `917ca17`). Tools (rows 1–2) and config/runtime (rows 9–10) remain
-undecided; the audit said tools cuts carry context/memory risk and the runtime
-timeout is retained by concept2.
+**Status:** the domain part (candidate rows 3–8 below) is removed and merged
+(PR #15, squash `83a257e`, merged 2026-08-29). Tools (rows 1–2) and
+config/runtime (rows 9–10) remain undecided; the audit said tools cuts carry
+context/memory risk and the runtime timeout is retained by concept2.
 
 ## Purpose
 
@@ -32,25 +32,27 @@ correctness bounds and capacity availability must remain untouched.
 
 | # | Crate | Cap | Value | Kind | Notes |
 |---|---|---|---|---|---|
-| 1 | intention-tools | `MAX_TOOL_OUTPUT_BYTES` with `[truncated]` marker and truncate-with-flag on read/execute/grep | 64 KiB | ProductCeiling | lib.rs L52; forbidden per L335–336, historical-only per L337–338 |
-| 2 | intention-tools | `MAX_GLOB_MATCHES` / `MAX_GREP_MATCHES` (page items) | 10 000 | ProductCeiling | lib.rs L54–55, L937–945 |
-| 3 | intention-domain | `ToolLifecycleEventDto.detail` inline cap | 4 KiB | ProductCeiling | **REMOVED** in `2cd21c9` |
-| 4 | intention-domain | `MAX_TOOL_RESULT_CONTENT_BYTES` | 4 KiB | ProductCeiling | lib.rs L938, L1110; **REMOVED** in `2cd21c9` |
-| 5 | intention-domain | `MAX_TOOL_RESULT_METADATA_ENTRIES` | 16 | ProductCeiling | lib.rs L940, L1112; **REMOVED** in `2cd21c9` |
-| 6 | intention-domain | `MAX_TOOL_RESULT_METADATA_KEY_BYTES` | 128 | ProductCeiling | lib.rs L942, L1010; **REMOVED** in `2cd21c9` |
-| 7 | intention-domain | `MAX_TOOL_RESULT_METADATA_VALUE_BYTES` | 1024 | ProductCeiling | lib.rs L944, L1011; **REMOVED** in `2cd21c9` |
-| 8 | intention-domain | `ToolResultOutcomeDto::succeeded` reuses the 4-KiB content cap | 4 KiB | ProductCeiling | **REMOVED** in `917ca17` |
-| 9 | intention-config / intention-runtime | `max_attempts` (default 2, schema cap 1..=2) | 2 | ProductCeiling | retry counter, listed at L335; historical-only; config lib.rs L604–637 |
-| 10 | intention-config / intention-runtime | `attempt_timeout_seconds` (default 30, schema cap 1..=60) | 30 | confirm | timeout; concept2 retains attempt timeouts (L709); likely out of scope |
+| 1 | intention-tools | `MAX_TOOL_OUTPUT_BYTES` with `[truncated]` marker and truncate-with-flag on read/execute/grep | 64 KiB | ProductCeiling | lib.rs L145; forbidden per L335–336, historical-only per L337–338 |
+| 2 | intention-tools | `MAX_GLOB_MATCHES` / `MAX_GREP_MATCHES` (page items) | 10 000 | ProductCeiling | lib.rs L147–148, L1567–1568 |
+| 3 | intention-domain | `ToolLifecycleEventDto.detail` inline cap | 4 KiB | ProductCeiling | **REMOVED** (PR #15) |
+| 4 | intention-domain | `MAX_TOOL_RESULT_CONTENT_BYTES` | 4 KiB | ProductCeiling | lib.rs L938, L1110; **REMOVED** (PR #15) |
+| 5 | intention-domain | `MAX_TOOL_RESULT_METADATA_ENTRIES` | 16 | ProductCeiling | lib.rs L940, L1112; **REMOVED** (PR #15) |
+| 6 | intention-domain | `MAX_TOOL_RESULT_METADATA_KEY_BYTES` | 128 | ProductCeiling | lib.rs L942, L1010; **REMOVED** (PR #15) |
+| 7 | intention-domain | `MAX_TOOL_RESULT_METADATA_VALUE_BYTES` | 1024 | ProductCeiling | lib.rs L944, L1011; **REMOVED** (PR #15) |
+| 8 | intention-domain | `ToolResultOutcomeDto::succeeded` reuses the 4-KiB content cap | 4 KiB | ProductCeiling | **REMOVED** (PR #15) |
+| 9 | intention-config / intention-runtime | `max_attempts` (default 2, schema cap 1..=2) | 2 | ProductCeiling | retry counter, listed at L335; historical-only; config lib.rs L633, L650–657; runtime lib.rs L555 |
+| 10 | intention-config / intention-runtime | `attempt_timeout_seconds` (default 30, schema cap 1..=60) | 30 | confirm | timeout; concept2 retains attempt timeouts (L709); likely out of scope; config lib.rs L632; runtime lib.rs L572 |
 
-Line numbers refer to `origin/main` at `49d6b5a`.
+Line numbers were captured at the 2026-08-30 audit of `49d6b5a`; the rows that
+are still live carry anchors refreshed at `37bad4e`. The values and crate names
+are the stable part.
 
 ## Watch items (classify before deciding)
 
 - `intention-application` `MAX_DURABLE_TOOL_RESULT_BYTES` = 512 KiB — durable
   tool-result bound; gray zone, needs classification.
 - `intention-storage` `MAX_TOOL_RESULT_CONTENT_BYTES` = 512 KiB (lib.rs
-  L90, L174) — distinguish from the retained 256-facts / 512-KiB page bounds
+  L96, L189) — distinguish from the retained 256-facts / 512-KiB page bounds
   (L912, L4586).
 - concept2 L7598: per-run output and required transferred history are each
   capped at 4 MiB — a defined first-scope accounting limit; confirm in or out
@@ -71,5 +73,7 @@ Line numbers refer to `origin/main` at `49d6b5a`.
 
 The candidate list comes from an audit of the 19 post-M4 production files
 against the M4 baseline `d2a85370` using the classification above. A first cut
-was attempted and then fully reverted inside PR #14 (`ce80989` →
-`cc4bcb3`); this PR is the new vehicle for that work.
+was attempted and then fully reverted inside PR #14 (`ce80989` → `cc4bcb3`);
+PR #15 (`refactor(domain): remove tool-result product ceilings`, squash
+`83a257e`, merged 2026-08-29) landed the domain rows. The rows that are still
+live stay open work here, and each needs its own decision before code moves.

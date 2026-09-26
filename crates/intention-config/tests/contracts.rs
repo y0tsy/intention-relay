@@ -3,7 +3,7 @@
     reason = "Contract fixtures use expect to provide precise test failure messages."
 )]
 
-//! Test-first configuration parsing, migration, resolution, and redaction evidence.
+//! Test-first configuration parsing, resolution, and redaction evidence.
 
 use intention_config::{
     ConfigPathDto, ConfigPathResolver, ConfigSourceDto, ConfigSourceKindDto, RawConfigInputDto,
@@ -71,16 +71,18 @@ fn malformed_or_unsupported_toml_returns_safe_typed_errors() {
 }
 
 #[test]
-fn v0_fixture_migrates_to_v1_without_disclosing_credentials() {
+fn unversioned_document_fails_closed_without_disclosing_credentials() {
     let raw = RawConfigInputDto::new(
         "[model]\nprovider = \"openrouter\"\nname = \"gpt-5.6-terra\"\napi_key = \"fixture-credential-not-real-12345\"\n",
         explicit_source(),
     );
 
-    let resolved = ResolvedConfigDto::parse_resolve(raw).expect("v0 fixture must migrate");
+    let error =
+        ResolvedConfigDto::parse_resolve(raw).expect_err("unversioned document must fail closed");
 
-    assert_eq!(resolved.schema_version().major(), 1);
-    assert!(!resolved.safe_debug_projection().contains(FAKE_CREDENTIAL));
+    assert_eq!(error.code(), "invalid_config_schema");
+    assert_eq!(error.category().as_str(), "validation");
+    assert!(!error.to_string().contains(FAKE_CREDENTIAL));
 }
 
 #[test]

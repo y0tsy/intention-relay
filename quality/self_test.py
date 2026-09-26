@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -525,7 +526,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -539,7 +540,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m4_application_scheduling"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
@@ -591,7 +592,7 @@ def test_m4_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports", "m6_reasoning_surface"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
 
@@ -609,7 +610,7 @@ def test_m5_activation_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'test_targets = ["tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
+            'test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
             'test_targets = []',
         )
         run(
@@ -1407,18 +1408,34 @@ def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
         return FakeCompleted(0)
 
     namespace["run_command"] = fake_run_command
+    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
+    # The fixture run writes the synthetic snapshot into the real reports
+    # root; the live metadata report must be saved and restored so this
+    # self-test never leaves fabricated metadata for later direct checks.
+    prior_bytes = snapshot.read_bytes() if snapshot.is_file() else None
     previous_argv = sys.argv
     sys.argv = ["quality/run_coverage.py", "--profile", "default"]
+    saved_correctly = False
     try:
         namespace["main"]()
+        saved_correctly = snapshot.is_file() and snapshot.read_text(encoding="utf-8") == payload
     finally:
+        if prior_bytes is None:
+            snapshot.unlink(missing_ok=True)
+        else:
+            snapshot.write_bytes(prior_bytes)
         sys.argv = previous_argv
+    if not saved_correctly:
+        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
+    if prior_bytes is None:
+        if snapshot.exists():
+            raise RuntimeError("self-test must not leave a synthetic metadata snapshot behind")
+    else:
+        if not snapshot.is_file() or snapshot.read_bytes() != prior_bytes:
+            raise RuntimeError("self-test must restore the live metadata snapshot byte-identically")
     metadata_calls = [command for command in captured if command[:2] == ["cargo", "metadata"]]
     if metadata_calls != [["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"]]:
         raise RuntimeError(f"coverage metadata must be collected exactly once per run: {metadata_calls!r}")
-    snapshot = namespace["metadata_snapshot_path"](namespace["ROOT"])
-    if not snapshot.is_file() or snapshot.read_text(encoding="utf-8") != payload:
-        raise RuntimeError("coverage runner must save the metadata snapshot under root/quality/reports")
     checker_calls = [
         command
         for command in captured
@@ -1431,6 +1448,107 @@ def test_coverage_metadata_collected_once_and_forwarded(_root: Path) -> None:
             raise RuntimeError(f"every checker invocation must receive the collected metadata snapshot: {command!r}")
     if not any("--workspace-aggregate" in command for command in checker_calls):
         raise RuntimeError("coverage runner must check a workspace aggregate with the metadata snapshot")
+
+
+def test_coverage_daemon_profile_normalization(root: Path) -> None:
+    """Equivalent daemon profiles collapse; distinct tuples still get reports."""
+    namespace = {
+        "__file__": str(root / "quality/run_coverage.py"),
+        "__name__": "quality.run_coverage",
+    }
+    exec((root / "quality/run_coverage.py").read_text(encoding="utf-8"), namespace)
+    captured: list[tuple[str, str, list[str]]] = []
+    payload = json.dumps(
+        {
+            "packages": [
+                {
+                    "name": crate,
+                    "manifest_path": str(root / "crates" / crate / "Cargo.toml"),
+                }
+                for crate in ("intention-types", "intention-daemon")
+            ],
+        }
+    )
+
+    class FakeCompleted:
+        def __init__(self, returncode: int, stdout: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run_command(command: list[str], **kwargs: object) -> FakeCompleted:
+        if command[:2] == ["cargo", "metadata"]:
+            return FakeCompleted(0, payload)
+        captured.append(
+            (str(kwargs.get("crate", "")), str(kwargs.get("profile", "")), list(command))
+        )
+        return FakeCompleted(0)
+
+    namespace["run_command"] = fake_run_command
+    features = root / "quality" / "features.toml"
+    snapshot = namespace["metadata_snapshot_path"](root)
+    prior_snapshot = snapshot.read_bytes() if snapshot.is_file() else None
+    previous_argv = sys.argv
+    sys.argv = ["quality/run_coverage.py"]
+    try:
+        with modified(features):
+            # An enabled critical combination carries a genuinely distinct
+            # flag tuple: every crate the daemon normalization does not cover
+            # must still run it under its own report name, so widening the
+            # normalization to drop it fails this fixture.
+            features.write_text(
+                features.read_text(encoding="utf-8")
+                + '\n[[critical_combinations]]\nname = "extra"\n'
+                + 'features = ["intention-provider-openrouter"]\n'
+                + "enabled = true\n",
+                encoding="utf-8",
+            )
+            namespace["main"]()
+    finally:
+        if prior_snapshot is None:
+            snapshot.unlink(missing_ok=True)
+        else:
+            snapshot.write_bytes(prior_snapshot)
+        sys.argv = previous_argv
+    collects: dict[str, dict[str, list[str]]] = {}
+    for crate, profile, command in captured:
+        if command[:1] == ["cargo"]:
+            collects.setdefault(crate, {})[profile] = command
+    daemon = collects.get("intention-daemon", {})
+    if set(daemon) != {"default"}:
+        raise RuntimeError(
+            f"equivalent daemon profiles must collapse to the first report: {sorted(daemon)}"
+        )
+    daemon_command = daemon["default"]
+    if "--all-features" not in daemon_command or "--no-default-features" in daemon_command:
+        raise RuntimeError(
+            "the surviving daemon report must carry the normalized all-features tuple: "
+            f"{daemon_command!r}"
+        )
+    if str(root / "quality" / "reports" / "coverage-default-intention-daemon.json") not in daemon_command:
+        raise RuntimeError(
+            f"daemon equivalence must keep the first, default report name: {daemon_command!r}"
+        )
+    other = collects.get("intention-types", {})
+    if set(other) != {"default", "no_default", "all", "critical-extra"}:
+        raise RuntimeError(
+            f"distinct coverage tuples must still produce their own reports: {sorted(other)}"
+        )
+    distinct_flags = {
+        "default": [],
+        "no_default": ["--no-default-features"],
+        "all": ["--all-features"],
+        "critical-extra": ["--features", "intention-provider-openrouter"],
+    }
+    for profile, flags in distinct_flags.items():
+        command = other[profile]
+        report = root / "quality" / "reports" / f"coverage-{profile}-intention-types.json"
+        if str(report) not in command:
+            raise RuntimeError(f"{profile} must keep its own report path: {command!r}")
+        for flag in flags:
+            if flag not in command:
+                raise RuntimeError(
+                    f"{profile} must run with its declared flag {flag!r}: {command!r}"
+                )
 
 
 def test_metrics_manifest_start_clears_stale_events(root: Path) -> None:
@@ -1519,6 +1637,578 @@ def test_secret_fixture(root: Path) -> None:
         run([sys.executable, "quality/check_docs.py"], cwd=root, expect_success=False)
 
 
+def test_adr_0037_slice2_ledger_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0037 must exist as the Slice 2 activating specification")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0037](0037-m5plus-slice2-control-plane.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0037")
+
+
+def test_adr_0038_no_compatibility_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0038-no-backward-compatibility-and-legacy-removal.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0038 must exist as the no-compatibility activating specification")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0038](0038-no-backward-compatibility-and-legacy-removal.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0038")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0038" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0038")
+
+
+def test_adr_0039_tool_advertisement_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0039-request-side-tool-advertisement.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0039 must exist as the request-side tool advertisement record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0039](0039-request-side-tool-advertisement.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0039")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0039" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0039")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-062 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-062 row")
+
+
+def test_adr_0040_live_provider_e2e_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0040-opt-in-live-provider-e2e.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0040 must exist as the opt-in live-provider e2e record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0040](0040-opt-in-live-provider-e2e.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0040")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0040" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0040")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-063 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-063 row")
+
+
+def test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0041-same-run-reasoning-round-trip.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0041 must exist as the same-run reasoning round-trip record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0041](0041-same-run-reasoning-round-trip.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0041")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0041" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0041")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-064 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-064 row")
+
+
+def test_adr_0042_project_script_library_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0042-project-script-library-for-kernel-cells.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0042 must exist as the project script library record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    if "[0042](0042-project-script-library-for-kernel-cells.md)" not in text:
+        raise RuntimeError("decisions/README.md must index ADR 0042")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    owners = reconciliation.read_text(encoding="utf-8")
+    if "decision 0042" not in owners:
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0042")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-065 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-065 row")
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    for topic in ("KER-025", "KER-026", "KER-027"):
+        if f"| {topic} |" not in matrix_text:
+            raise RuntimeError(f"source-of-truth matrix must carry the {topic} row")
+    library = root / "docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md"
+    if "kernel_script_library_unavailable" not in library.read_text(encoding="utf-8"):
+        raise RuntimeError(
+            "architecture 20 must declare the kernel_script_library_unavailable failure"
+        )
+
+
+def test_adr_0043_instruction_sources_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0043-instruction-sources-and-system-context.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0043 must exist as the instruction sources and system context record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    if "[0043](0043-instruction-sources-and-system-context.md)" not in readme.read_text(
+        encoding="utf-8"
+    ):
+        raise RuntimeError("decisions/README.md must index ADR 0043")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    if "decision 0043" not in reconciliation.read_text(encoding="utf-8"):
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0043")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-071 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-071 row")
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    for topic in ("INS-001", "SL5-001", "SL5-006"):
+        if f"| {topic} |" not in matrix_text:
+            raise RuntimeError(f"source-of-truth matrix must carry the {topic} row")
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    if "30-instruction-sources-and-system-context.md" not in roadmap.read_text(
+        encoding="utf-8"
+    ):
+        raise RuntimeError("roadmap must reference architecture 30 by filename")
+
+
+def test_every_adr_number_is_referenced_by_the_roadmap(root: Path) -> None:
+    decisions = root / "docs/intention-relay/decisions/README.md"
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    roadmap_text = roadmap.read_text(encoding="utf-8")
+    numbers = re.findall(r"\[(\d{4})\]\((\d{4})-[^)]+\.md\)", decisions.read_text(encoding="utf-8"))
+    indexed = sorted({number for number, target in numbers if number == target})
+    if not indexed:
+        raise RuntimeError("decisions/README.md must index the decision records")
+    missing = [number for number in indexed if number not in roadmap_text]
+    if missing:
+        raise RuntimeError(f"roadmap must reference every ADR: missing {missing}")
+
+
+def test_every_post_m4_architecture_doc_is_referenced_by_the_roadmap(root: Path) -> None:
+    architecture = root / "docs/intention-relay/architecture"
+    roadmap = architecture / "11-implementation-roadmap.md"
+    roadmap_text = roadmap.read_text(encoding="utf-8")
+    missing = []
+    for path in sorted(architecture.glob("*.md")):
+        number = path.stem.split("-", 1)[0]
+        if not number.isdigit() or int(number) < 13 or path == roadmap:
+            continue
+        if path.name not in roadmap_text:
+            missing.append(path.name)
+    if missing:
+        raise RuntimeError(
+            f"roadmap must reference every post-M4 architecture document: missing {missing}"
+        )
+
+
+def test_mandate_track_milestones_declare_required_sections(root: Path) -> None:
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    text = roadmap.read_text(encoding="utf-8")
+    for number in ("10", "11", "12"):
+        heading = f"## Milestone {number}:"
+        if heading not in text:
+            raise RuntimeError(f"roadmap must declare {heading.rstrip(':')}")
+        section = text.split(heading, 1)[1]
+        boundary = section.find("\n## ")
+        if boundary != -1:
+            section = section[:boundary]
+        for requirement in (
+            "### Deliver",
+            "### Tests first",
+            "### Acceptance outcomes",
+            "### Exit criteria",
+        ):
+            if requirement not in section:
+                raise RuntimeError(f"Milestone {number} must declare {requirement}")
+
+
+def workflow_trigger_lines(text: str) -> list[str]:
+    """Return the stripped entries of the workflow's top-level `on:` block."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.rstrip()
+        if not stripped.startswith("on:"):
+            continue
+        inline = stripped[len("on:") :].strip()
+        if inline:
+            return [inline]
+        block: list[str] = []
+        for candidate in lines[index + 1 :]:
+            if candidate.strip() and not candidate.startswith((" ", "\t")):
+                break
+            block.append(candidate.strip())
+        return [entry for entry in block if entry]
+    return []
+
+
+def test_real_api_e2e_workflow_is_manual_only(root: Path) -> None:
+    workflow = root / ".github/workflows/real-api-e2e.yml"
+    if not workflow.is_file():
+        raise RuntimeError("the opt-in real-api-e2e workflow must exist")
+    triggers = workflow_trigger_lines(workflow.read_text(encoding="utf-8"))
+    if not any("workflow_dispatch" in trigger for trigger in triggers):
+        raise RuntimeError("the real-api-e2e workflow must declare workflow_dispatch")
+    for forbidden in ("push:", "pull_request:", "schedule:"):
+        if any(trigger.startswith(forbidden) for trigger in triggers):
+            raise RuntimeError(
+                f"the real-api-e2e workflow must not be triggered by {forbidden.rstrip(':')}"
+            )
+
+
+def test_real_api_e2e_target_is_opt_in_only(root: Path) -> None:
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    if not any(
+        line.startswith("e2e-real-api:") for line in makefile.splitlines()
+    ):
+        raise RuntimeError("the Makefile must declare the e2e-real-api target")
+    offenders: list[str] = []
+    for line in makefile.splitlines():
+        if line.startswith((" ", "\t")) or ":" not in line:
+            continue
+        target, _, prerequisites = line.partition(":")
+        target = target.strip()
+        if target in {"quick", "check", "verify", "ci"} or target.startswith("ci-"):
+            if "e2e-real-api" in prerequisites:
+                offenders.append(target)
+    if offenders:
+        raise RuntimeError(
+            "e2e-real-api must not be a prerequisite of blocking targets: "
+            + ", ".join(offenders)
+        )
+
+
+def rust_duration_constant(source: str, name: str, unit: str) -> int:
+    """Return one Rust `Duration` constant declared from an integer literal."""
+    marker = f"const {name}: Duration = Duration::from_{unit}("
+    start = source.find(marker)
+    if start < 0:
+        raise RuntimeError(f"the source must declare {name}")
+    remainder = source[start + len(marker):]
+    end = remainder.find(")")
+    if end < 0:
+        raise RuntimeError(f"the {name} declaration is malformed")
+    literal = remainder[:end].strip()
+    if not literal.isdigit():
+        raise RuntimeError(f"the {name} declaration is not an integer literal: {literal!r}")
+    return int(literal)
+
+
+def rust_u8_constant(source: str, name: str) -> int:
+    """Return one Rust `u8` constant declared from an integer literal."""
+    match = re.search(rf"const {name}: u8 = (\d+);", source)
+    if match is None:
+        raise RuntimeError(f"the source must declare {name}")
+    return int(match.group(1))
+
+
+def real_api_e2e_timeouts(workflow_text: str) -> tuple[int, int]:
+    """Return the live workflow's (run step, job) `timeout-minutes` values."""
+    run_step_name = "Run real provider API end-to-end tests"
+    in_run_step = False
+    step_timeout = None
+    job_timeout = None
+    for line in workflow_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- name:"):
+            in_run_step = run_step_name in stripped
+        if not stripped.startswith("timeout-minutes:"):
+            continue
+        value_text = stripped.split(":", 1)[1].strip()
+        if not value_text.isdigit():
+            raise RuntimeError(f"a workflow timeout-minutes value is not an integer: {stripped!r}")
+        if in_run_step:
+            step_timeout = int(value_text)
+        elif job_timeout is None:
+            job_timeout = int(value_text)
+    if step_timeout is None or job_timeout is None:
+        raise RuntimeError("the real-api-e2e workflow must declare its run step and job timeouts")
+    return step_timeout, job_timeout
+
+
+def rust_invocation_count(source: str, name: str) -> int:
+    """Count call sites of one function, excluding its own declaration."""
+    occurrences = len(re.findall(rf"\b{name}\(", source))
+    declarations = len(re.findall(rf"\bfn {name}\(", source))
+    return occurrences - declarations
+
+
+def rust_function_body(source: str, name: str) -> str:
+    """Return the body of one top-level Rust function, failing when absent."""
+    match = re.search(rf"^(?:async )?fn {name}\(", source, re.M)
+    if match is None:
+        raise RuntimeError(f"the harness must declare {name}")
+    end = source.find("\n}\n", match.end())
+    if end < 0:
+        raise RuntimeError(f"the {name} body is malformed")
+    return source[match.end():end]
+
+
+def rust_array_len(source: str, name: str) -> int:
+    """Return the number of entries in one `let <name> = [ ... ];` array."""
+    match = re.search(rf"let {name} = \[(.*?)\];", source, re.S)
+    if match is None:
+        raise RuntimeError(f"the harness must declare the {name} array")
+    return len([entry for entry in match.group(1).split(",") if entry.strip()])
+
+
+def live_harness_structure(harness: str) -> dict[str, int]:
+    """Derive the harness structural counts the live-channel budget uses.
+
+    The counts are read from the harness source instead of being written as
+    scalars here, so a seventh tool turn, a third live test, an extra
+    synchronous call per attempt, another daemon start, or another snapshot
+    read changes the recomputed worst case even when every constant stays the
+    same.
+    """
+    wrapper = rust_function_body(harness, "drive_tool_turn")
+    driver = rust_function_body(harness, "drive_tool_turn_with")
+    # The `drive_tool_turn` wrapper forwards to `drive_tool_turn_with`, so its
+    # internal call is not a second live turn.
+    tool_turns = (
+        rust_invocation_count(harness, "drive_tool_turn")
+        + rust_invocation_count(harness, "drive_tool_turn_with")
+        - rust_invocation_count(wrapper, "drive_tool_turn_with")
+    )
+    direct_runs = rust_invocation_count(harness, "send_user_turn") - rust_invocation_count(
+        driver, "send_user_turn"
+    )
+    return {
+        # Every `drive_tool_turn*` call is one tool-driving live turn, and each
+        # live run outside the driver (the negative credential run) adds one.
+        "tool_runs": tool_turns + direct_runs,
+        # One readiness wait per daemon start.
+        "readiness_waits": rust_invocation_count(harness, "wait_until_ready"),
+        # Every spawned daemon is killed exactly once: a restart kills its
+        # predecessor and the test drop kills the final process.
+        "kill_windows": len(re.findall(r"LiveE2eHost::new\(", harness))
+        + len(re.findall(r"\.restart_daemon\(\)", harness)),
+        # The bounded create_session and send_user_turn of every attempt.
+        "synchronous_calls_per_attempt": rust_invocation_count(driver, "create_session")
+        + rust_invocation_count(driver, "send_user_turn"),
+        # One bounded snapshot read per session of the tool-loop fixture, plus
+        # every snapshot call site outside that loop.
+        "session_snapshots": rust_array_len(harness, "sessions")
+        + rust_invocation_count(harness, "bounded_session_snapshot")
+        - 1,
+    }
+
+
+def recomputed_live_channel_budget_millis(root: Path) -> int:
+    """Recompute the harness's worst-case live-channel budget in milliseconds."""
+    harness = (root / "crates/intention-daemon/tests/real_api_e2e.rs").read_text(encoding="utf-8")
+    transport = (root / "crates/intention-transport/src/lib.rs").read_text(encoding="utf-8")
+    turn_deadline = rust_duration_constant(harness, "TURN_DEADLINE", "secs")
+    readiness_deadline = rust_duration_constant(harness, "READINESS_DEADLINE", "secs")
+    replay_quiet_window = rust_duration_constant(harness, "REPLAY_QUIET_WINDOW", "secs")
+    replay_deadline = rust_duration_constant(harness, "REPLAY_DEADLINE", "secs")
+    session_read_deadline = rust_duration_constant(harness, "SESSION_READ_DEADLINE", "secs")
+    kill_deadline = rust_duration_constant(harness, "KILL_DEADLINE", "secs")
+    attempts = rust_u8_constant(harness, "TOOL_TURN_ATTEMPTS")
+    connect_millis = rust_duration_constant(transport, "CONNECT_TIMEOUT", "millis")
+    sync_io_seconds = rust_duration_constant(transport, "SYNC_IO_TIMEOUT", "secs")
+    structure = live_harness_structure(harness)
+    synchronous_call_millis = connect_millis + 2 * sync_io_seconds * 1_000
+    return (
+        structure["tool_runs"] * attempts * turn_deadline * 1_000
+        + structure["tool_runs"]
+        * attempts
+        * structure["synchronous_calls_per_attempt"]
+        * synchronous_call_millis
+        + structure["readiness_waits"] * readiness_deadline * 1_000
+        + structure["kill_windows"] * kill_deadline * 1_000
+        + replay_deadline * 1_000
+        + replay_quiet_window * 1_000
+        + attempts * replay_deadline * 1_000
+        + structure["session_snapshots"] * session_read_deadline * 1_000
+    )
+
+
+def validate_live_channel_budget(root: Path) -> None:
+    """Fail when the declared live budget or the workflow timeouts drift.
+
+    The worst case is recomputed from the harness timing constants, the
+    transport's bounded synchronous-call cost, and the structural counts read
+    from the harness source. The declared budget comment and the workflow's
+    step and job timeouts must keep the same relation, so a change to any
+    budget constant, to the harness structure, or to either timeout fails
+    until the relation is restored.
+    """
+    harness = (root / "crates/intention-daemon/tests/real_api_e2e.rs").read_text(encoding="utf-8")
+    declared = re.search(r"Worst-case live-channel budget: (\d+) seconds", harness)
+    if declared is None:
+        raise RuntimeError("the harness must declare its worst-case live-channel budget in seconds")
+    worst_case_millis = recomputed_live_channel_budget_millis(root)
+    if worst_case_millis != int(declared.group(1)) * 1_000:
+        raise RuntimeError(
+            "the declared live-channel budget must equal the recomputed worst case: "
+            f"declared {declared.group(1)} s, recomputed {worst_case_millis // 1_000} s"
+        )
+    workflow = (root / ".github/workflows/real-api-e2e.yml").read_text(encoding="utf-8")
+    step_timeout, job_timeout = real_api_e2e_timeouts(workflow)
+    worst_case_minutes = -(-worst_case_millis // 60_000)
+    # The step must keep at least 30 minutes above the worst case for the
+    # build, and the job at least 30 minutes above the step for checkout,
+    # cache restore, tool installation, and report upload.
+    minimum_step_margin = 30
+    minimum_job_overhead = 30
+    if step_timeout < worst_case_minutes + minimum_step_margin:
+        raise RuntimeError(
+            "the live-run step timeout must cover the worst-case budget plus the build "
+            f"margin: {step_timeout} < {worst_case_minutes} + {minimum_step_margin}"
+        )
+    if job_timeout < step_timeout + minimum_job_overhead:
+        raise RuntimeError(
+            "the live job timeout must cover the step plus its overhead: "
+            f"{job_timeout} < {step_timeout} + {minimum_job_overhead}"
+        )
+
+
+def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
+    """The declared budget follows the harness structure and the workflow.
+
+    The live-channel budget must keep its declared relation to the workflow
+    step and job timeouts, and the mutation fixtures below prove that the
+    recomputation reads the harness structure: a tool turn, a per-attempt
+    synchronous call, or a snapshot read added without updating the declared
+    total must fail the same check.
+    """
+    validate_live_channel_budget(root)
+    harness_path = root / "crates/intention-daemon/tests/real_api_e2e.rs"
+
+    def add_tool_turn(source: str) -> str:
+        marker = "    let (read_session, read_run) = drive_tool_turn("
+        added = (
+            "    let (fixture_session, fixture_run) = drive_tool_turn(\n"
+            "        &host,\n"
+            '        "read",\n'
+            "        &|_| true,\n"
+            "    );\n"
+        )
+        return source.replace(marker, marker + "\n" + added, 1)
+
+    def add_attempt_call(source: str) -> str:
+        marker = '        create_session(host, session_id, &format!("{tool} turn {attempt}"));'
+        return source.replace(
+            marker,
+            marker + '\n        create_session(host, session_id, "fixture attempt call");',
+            1,
+        )
+
+    def add_snapshot_read(source: str) -> str:
+        marker = "        execute_session,\n    ];"
+        return source.replace(
+            marker, "        execute_session,\n        execute_session,\n    ];", 1
+        )
+
+    mutations = {
+        "a tool turn is added": add_tool_turn,
+        "a per-attempt synchronous call is added": add_attempt_call,
+        "a snapshot read is added": add_snapshot_read,
+    }
+    for description, mutate in mutations.items():
+        with modified(harness_path):
+            source = harness_path.read_text(encoding="utf-8")
+            mutated = mutate(source)
+            if mutated == source:
+                raise RuntimeError(f"the budget mutation fixture is stale: {description}")
+            harness_path.write_text(mutated, encoding="utf-8")
+            try:
+                validate_live_channel_budget(root)
+            except RuntimeError:
+                continue
+            raise RuntimeError(f"the budget check must fail when {description}")
+
+
+def test_slice2_tag_registry_parity(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    wired_slice2 = [
+        "| `model-capability-taxonomy-v1` | `0x0206` | Wired (Slice 2) |",
+        "| `provider-profile-revision-v1` | `0x0207` | Wired (Slice 2) |",
+        "| `provider-selection-v1` | `0x0208` | Wired (Slice 2) |",
+        "| `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |",
+        "| `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |",
+        "| `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |",
+    ]
+    for row in wired_slice2:
+        if row not in text:
+            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
+    for row in (
+        "| `run-execution-meaning` | `0x0101` | Wired |",
+        "| `programmatic-caller-policy-selection-v1` | `0x0201` | Wired |",
+        "| `agent-activity-selection-v1` | `0x0202` | Wired |",
+        "| `goal-run-selection-v1` | `0x0203` | ReservedForSlice3 |",
+        "| `fork-base-snapshot-v1/v2` | `0x0401` | ReservedForSlice4 |",
+        "| `agent-notification-record-v1` | `0x0505` | ReservedForSlice4 |",
+    ):
+        if row not in text:
+            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
+
+
+def test_slice2_storage_schema_declared_single_live(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "SQLite storage schema | Logical version 1" not in text:
+        raise RuntimeError(
+            "ADR 0037 must declare the single live SQLite storage schema (logical version 1)"
+        )
+
+
+def test_slice2_protocol_versions_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "Local protocol | 1.1, unchanged" not in text:
+        raise RuntimeError("ADR 0037 must declare local protocol 1.1 unchanged")
+    if "Public DTO schema | 1.1, additive, unchanged" not in text:
+        raise RuntimeError("ADR 0037 must declare public DTO schema 1.1 unchanged")
+
+
+def test_slice2_test_targets_declared(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    for target in (
+        "m5_control_plane_canonical",
+        "m5_control_plane_rejections",
+        "m5_session_selection_overrides",
+        "control_plane_contracts",
+        "m5_control_plane_config",
+        "m5_catalog_runtime",
+        "m5_control_plane_runtime",
+        "m5_session_selection",
+        "control_plane_client",
+        "session_selection_client",
+        "m6_reasoning_surface",
+        "sqlite_contracts",
+    ):
+        if f"tests/{target}.rs" not in text:
+            raise RuntimeError(f"ADR 0037 must declare the test target {target!r}")
+
+
+def test_slice2_no_new_crate(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
+    text = adr.read_text(encoding="utf-8")
+    if "No new crate, dependency, feature, coverage tier, or exclusion is introduced." not in text:
+        raise RuntimeError("ADR 0037 must declare that no new crate is introduced")
+
+
+def test_slice2_reconciliation_rows_exist(root: Path) -> None:
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    if "| SL2-001 |" not in matrix_text or "| SL2-009 |" not in matrix_text:
+        raise RuntimeError("source-of-truth matrix must carry SL2-001..009 rows")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    evidence_text = evidence.read_text(encoding="utf-8")
+    if "| EVD-047 |" not in evidence_text or "| EVD-060 |" not in evidence_text:
+        raise RuntimeError("evidence register must carry EVD-047..060 rows")
+    if "0037-m5plus-slice2-control-plane.md" not in evidence_text:
+        raise RuntimeError("evidence register must reference ADR 0037")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
@@ -1580,9 +2270,28 @@ def main() -> None:
         test_coverage_metadata_invalid_snapshot,
         test_coverage_metadata_escape_rejected,
         test_coverage_metadata_collected_once_and_forwarded,
+        test_coverage_daemon_profile_normalization,
         test_missing_feature_profile,
         test_supply_chain_policy_failures,
         test_secret_fixture,
+        test_adr_0037_slice2_ledger_exists_and_is_indexed,
+        test_adr_0039_tool_advertisement_record_exists_and_is_indexed,
+        test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
+        test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
+        test_adr_0042_project_script_library_record_exists_and_is_indexed,
+        test_adr_0043_instruction_sources_record_exists_and_is_indexed,
+        test_every_adr_number_is_referenced_by_the_roadmap,
+        test_every_post_m4_architecture_doc_is_referenced_by_the_roadmap,
+        test_mandate_track_milestones_declare_required_sections,
+        test_real_api_e2e_workflow_is_manual_only,
+        test_real_api_e2e_target_is_opt_in_only,
+        test_real_api_e2e_budget_matches_workflow_timeouts,
+        test_slice2_tag_registry_parity,
+        test_slice2_storage_schema_declared_single_live,
+        test_slice2_protocol_versions_declared,
+        test_slice2_test_targets_declared,
+        test_slice2_no_new_crate,
+        test_slice2_reconciliation_rows_exist,
     ]
     standalone_tests = [
         test_unused_dependency,

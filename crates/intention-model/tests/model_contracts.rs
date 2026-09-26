@@ -4,9 +4,9 @@
 )]
 
 use intention_model::{
-    FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ProviderErrorDto, ToolCallDto,
-    UsageDto,
+    AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
+    ModelToolDefinitionDto, ProviderErrorDto, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
 };
 use intention_types::{CorrelationIdDto, RunId, ToolCallId};
 
@@ -23,6 +23,11 @@ fn request() -> ModelRequestDto {
         None,
     )
     .expect("request is valid")
+}
+
+fn tool_definition(name: &str) -> ModelToolDefinitionDto {
+    ModelToolDefinitionDto::new(name, "fixture description", r#"{"type":"object"}"#)
+        .expect("fixture tool definition is valid")
 }
 
 #[test]
@@ -418,6 +423,292 @@ fn model_request_with_messages_preserves_fields() {
     assert_eq!(updated.messages()[0].role(), ModelRoleDto::User);
     assert!(updated.messages()[1].tool_calls().is_some());
     assert!(request.with_messages(Vec::new()).is_err());
+}
+
+#[test]
+fn model_request_tools_round_trip_and_omit_the_empty_field() {
+    let without_tools = request();
+    assert!(without_tools.tools().is_empty());
+    let encoded = serde_json::to_string(&without_tools).expect("request serializes");
+    assert!(!encoded.contains("\"tools\""));
+    let decoded: ModelRequestDto =
+        serde_json::from_str(&encoded).expect("request without tools deserializes");
+    assert!(decoded.tools().is_empty());
+
+    let with_tools = without_tools
+        .with_tools(vec![
+            tool_definition("inspect_path"),
+            tool_definition("read_file"),
+        ])
+        .expect("request with tools is valid");
+    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
+    assert!(encoded.contains("\"tools\""));
+    assert!(encoded.contains("inspect_path"));
+    assert!(encoded.contains("read_file"));
+    let decoded: ModelRequestDto =
+        serde_json::from_str(&encoded).expect("request with tools deserializes");
+    assert_eq!(decoded.tools(), with_tools.tools());
+    assert_eq!(decoded, with_tools);
+}
+
+#[test]
+fn model_request_with_tools_forces_tool_call_capability() {
+    let request = request();
+    assert!(!request.requested_capabilities().tool_calls());
+    let with_tools = request
+        .with_tools(vec![tool_definition("inspect_path")])
+        .expect("request with tools is valid");
+    assert!(with_tools.requested_capabilities().tool_calls());
+    assert!(!with_tools.requested_capabilities().reasoning());
+    assert!(!with_tools.requested_capabilities().multimodal());
+    assert!(!with_tools.requested_capabilities().vendor_extensions());
+    let encoded = serde_json::to_string(&with_tools).expect("request with tools serializes");
+    assert!(encoded.contains("inspect_path"));
+    let cleared = with_tools
+        .with_tools(Vec::new())
+        .expect("cleared request is valid");
+    assert!(cleared.tools().is_empty());
+}
+
+#[test]
+fn model_request_with_messages_preserves_advertised_tools() {
+    let request = request()
+        .with_tools(vec![tool_definition("inspect_path")])
+        .expect("request with tools is valid");
+    let updated = request
+        .with_messages(vec![message(ModelRoleDto::User, "next")])
+        .expect("updated request is valid");
+    assert_eq!(updated.tools(), request.tools());
+}
+
+#[test]
+fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
+    let call_id = ToolCallId::new();
+    let reasoning = AssistantReasoningDto::new(vec![call_id], "considering context")
+        .expect("reasoning is valid");
+    assert_eq!(reasoning.tool_call_ids(), &[call_id]);
+    assert_eq!(reasoning.text(), "considering context");
+
+    // An empty text is the presence-only form and must stay valid.
+    let presence =
+        AssistantReasoningDto::new(vec![call_id], "").expect("presence-only reasoning is valid");
+    assert!(presence.text().is_empty());
+    assert_eq!(presence.tool_call_ids(), &[call_id]);
+
+    for text in ["", "line one\nline two\tindented"] {
+        assert!(AssistantReasoningDto::new(vec![call_id], text).is_ok());
+    }
+    assert_eq!(
+        AssistantReasoningDto::new(Vec::new(), "thinking")
+            .expect_err("reasoning without tool calls must fail")
+            .code(),
+        "invalid_model_assistant_reasoning"
+    );
+    assert_eq!(
+        AssistantReasoningDto::new(vec![call_id, call_id], "thinking")
+            .expect_err("repeated tool-call identities must fail")
+            .code(),
+        "invalid_model_assistant_reasoning"
+    );
+    let bounded = "a".repeat(512 * 1024);
+    assert!(AssistantReasoningDto::new(vec![call_id], bounded).is_ok());
+    let oversized = "a".repeat(512 * 1024 + 1);
+    assert_eq!(
+        AssistantReasoningDto::new(vec![call_id], oversized)
+            .expect_err("oversized reasoning must fail")
+            .code(),
+        "invalid_model_assistant_reasoning_text"
+    );
+    for text in ["bad\u{0}text", "bad\u{7}text", "bad\u{1b}text"] {
+        assert_eq!(
+            AssistantReasoningDto::new(vec![call_id], text)
+                .expect_err("invalid control characters must fail")
+                .code(),
+            "invalid_model_assistant_reasoning_text"
+        );
+    }
+}
+
+#[test]
+fn assistant_reasoning_round_trips_and_rejects_invalid_wire_values() {
+    let call_id = ToolCallId::new();
+    for text in ["considering context", ""] {
+        let reasoning =
+            AssistantReasoningDto::new(vec![call_id], text).expect("reasoning is valid");
+        let encoded = serde_json::to_string(&reasoning).expect("reasoning serializes");
+        assert!(encoded.contains("\"tool_call_ids\""));
+        assert!(encoded.contains("\"text\""));
+        let decoded: AssistantReasoningDto =
+            serde_json::from_str(&encoded).expect("reasoning deserializes");
+        assert_eq!(decoded, reasoning);
+    }
+
+    assert!(
+        serde_json::from_str::<AssistantReasoningDto>(
+            r#"{"tool_call_ids":[],"text":"considering context"}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<AssistantReasoningDto>(&format!(
+            r#"{{"tool_call_ids":["{call_id}","{call_id}"],"text":"considering context"}}"#
+        ))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<AssistantReasoningDto>(&format!(
+            r#"{{"tool_call_ids":["{call_id}"],"text":"bad\u0000text"}}"#
+        ))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<AssistantReasoningDto>(&format!(
+            r#"{{"tool_call_ids":["{call_id}"],"text":"considering context","unexpected":true}}"#
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
+    let without_reasoning = request();
+    assert!(without_reasoning.assistant_reasoning().is_empty());
+    let encoded = serde_json::to_string(&without_reasoning).expect("request serializes");
+    assert!(!encoded.contains("\"assistant_reasoning\""));
+
+    let call = ToolCallDto::new(ToolCallId::new(), "inspect", "{}").expect("tool call is valid");
+    let reasoning =
+        AssistantReasoningDto::new(vec![call.call_id()], "considering context").expect("valid");
+    let with_reasoning = without_reasoning
+        .with_assistant_reasoning(vec![reasoning.clone()])
+        .expect("request with reasoning is valid");
+    assert_eq!(
+        with_reasoning.assistant_reasoning(),
+        &[reasoning.clone()][..]
+    );
+    let encoded = serde_json::to_string(&with_reasoning).expect("request serializes");
+    assert!(encoded.contains("\"assistant_reasoning\""));
+    let decoded: ModelRequestDto =
+        serde_json::from_str(&encoded).expect("request with reasoning deserializes");
+    assert_eq!(decoded, with_reasoning);
+    assert_eq!(
+        decoded.assistant_reasoning(),
+        std::slice::from_ref(&reasoning)
+    );
+
+    let rebuilt_messages = with_reasoning
+        .with_messages(vec![message(ModelRoleDto::User, "next")])
+        .expect("updated request is valid");
+    assert_eq!(
+        rebuilt_messages.assistant_reasoning(),
+        with_reasoning.assistant_reasoning()
+    );
+    let rebuilt_tools = with_reasoning
+        .with_tools(vec![tool_definition("inspect_path")])
+        .expect("tool request is valid");
+    assert_eq!(
+        rebuilt_tools.assistant_reasoning(),
+        with_reasoning.assistant_reasoning()
+    );
+    let cleared = rebuilt_tools
+        .with_assistant_reasoning(Vec::new())
+        .expect("cleared request is valid");
+    assert!(cleared.assistant_reasoning().is_empty());
+
+    assert!(
+        serde_json::from_str::<ModelRequestDto>(&format!(
+            r#"{{"run_id":"00000000-0000-0000-0000-000000000000","model":"model","messages":[{{"role":"user","content":"hello"}}],"assistant_reasoning":[{{"tool_call_ids":["{}","{}"],"text":"considering context"}}]}}"#,
+            call.call_id(),
+            call.call_id()
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn reasoning_presence_marks_a_textless_provider_channel() {
+    let presence = ModelEventDto::reasoning_presence(ReasoningFragmentCategoryDto::Detail);
+    assert_eq!(
+        presence,
+        ModelEventDto::ReasoningDelta {
+            category: ReasoningFragmentCategoryDto::Detail,
+            content: String::new(),
+        }
+    );
+    assert!(ModelEventDto::reasoning_delta("").is_err());
+    assert!(
+        ModelEventDto::reasoning_delta_categorized(ReasoningFragmentCategoryDto::Primary, "")
+            .is_err()
+    );
+
+    let decoded: ModelEventDto =
+        serde_json::from_str(r#"{"kind":"reasoning_delta","category":"primary","content":""}"#)
+            .expect("textless reasoning delta decodes as presence");
+    assert_eq!(
+        decoded,
+        ModelEventDto::reasoning_presence(ReasoningFragmentCategoryDto::Primary)
+    );
+    let decoded: ModelEventDto =
+        serde_json::from_str(&serde_json::to_string(&presence).expect("presence serializes"))
+            .expect("presence deserializes");
+    assert_eq!(decoded, presence);
+}
+
+#[test]
+fn model_tool_definitions_validate_names_descriptions_and_parameters() {
+    let long_name = "a".repeat(65);
+    for name in [
+        "",
+        " ",
+        "inspect.path",
+        "inspect space",
+        "inspecté",
+        long_name.as_str(),
+    ] {
+        assert_eq!(
+            ModelToolDefinitionDto::new(name, "description", r#"{"type":"object"}"#)
+                .expect_err("invalid tool definition name must fail")
+                .code(),
+            "invalid_tool_definition_name"
+        );
+    }
+    assert_eq!(
+        ModelToolDefinitionDto::new("inspect", " ", r#"{"type":"object"}"#)
+            .expect_err("blank tool definition description must fail")
+            .code(),
+        "invalid_tool_definition_description"
+    );
+    let oversized_parameters = format!(r#"{{"padding":"{}"}}"#, "a".repeat(70_000));
+    for parameters in [
+        "",
+        "[]",
+        r#""text""#,
+        "not-json",
+        oversized_parameters.as_str(),
+    ] {
+        assert_eq!(
+            ModelToolDefinitionDto::new("inspect", "description", parameters)
+                .expect_err("invalid tool definition parameters must fail")
+                .code(),
+            "invalid_tool_definition_parameters"
+        );
+    }
+
+    let definition = tool_definition("inspect_path");
+    assert_eq!(definition.name(), "inspect_path");
+    assert_eq!(definition.description(), "fixture description");
+    assert_eq!(definition.parameters_json(), r#"{"type":"object"}"#);
+    let decoded: ModelToolDefinitionDto = serde_json::from_str(
+        &serde_json::to_string(&definition).expect("tool definition serializes"),
+    )
+    .expect("tool definition deserializes");
+    assert_eq!(decoded, definition);
+    assert!(
+        serde_json::from_str::<ModelToolDefinitionDto>(
+            r#"{"name":"inspect","description":"description","parameters_json":"{}","unexpected":true}"#
+        )
+        .is_err()
+    );
 }
 
 struct FixtureDriver(ModelCapabilitiesDto);
