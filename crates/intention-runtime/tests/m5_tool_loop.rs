@@ -17,8 +17,7 @@ use intention_domain::{
 use intention_model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
     ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto,
-    ReasoningFragmentCategoryDto, ToolCallDto,
+    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
@@ -1087,11 +1086,6 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::reasoning_delta("think ").expect("reasoning is valid")),
-            Ok(ModelEventDto::reasoning_delta_categorized(
-                ReasoningFragmentCategoryDto::Detail,
-                "deeper",
-            )
-            .expect("reasoning is valid")),
             Ok(ModelEventDto::tool_call(first.clone())),
         ],
         vec![
@@ -1122,11 +1116,11 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     assert_eq!(
         outcome,
         ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(10)
+            cursor: RunEventCursorDto::new(9)
         }
     );
 
-    let first_reasoning = AssistantReasoningDto::new(vec![first.call_id()], "think deeper")
+    let first_reasoning = AssistantReasoningDto::new(vec![first.call_id()], "think ")
         .expect("fixture reasoning is valid");
     let second_reasoning = AssistantReasoningDto::new(vec![second.call_id()], "second round")
         .expect("fixture reasoning is valid");
@@ -1146,80 +1140,13 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let appends = repository.appends.borrow();
     assert!(matches!(
         appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }]
-            if *category == intention_domain::ReasoningDeltaCategory::Primary && content == "think "
+        [ModelRunFactInputDto::ReasoningDeltaRecorded { content }] if content == "think "
     ));
     assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }]
-            if *category == intention_domain::ReasoningDeltaCategory::Detail && content == "deeper"
-    ));
-    assert!(matches!(
-        appends[5].facts(),
+        appends[4].facts(),
         [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }]
             if content == "second round"
     ));
-}
-
-#[test]
-fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = snapshot("fixture");
-    let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::with_rounds(vec![
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_presence(
-                ReasoningFragmentCategoryDto::Primary,
-            )),
-            Ok(ModelEventDto::tool_call(call.clone())),
-        ],
-        vec![
-            Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-        ],
-    ]);
-    let port = ScriptedPort::new(vec![Ok(
-        ToolResultOutcomeDto::succeeded("one").expect("content is valid")
-    )]);
-
-    let outcome = execute(
-        &repository,
-        &driver,
-        &port,
-        request(run_id, "fixture"),
-        config,
-        ModelCancellationSignal::new(),
-    )
-    .expect("textless reasoning round completes");
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(4)
-        }
-    );
-
-    let requests = driver.requests.borrow();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].assistant_reasoning().is_empty());
-    assert_eq!(requests[1].assistant_reasoning().len(), 1);
-    assert_eq!(
-        requests[1].assistant_reasoning()[0].tool_call_ids(),
-        &[call.call_id()]
-    );
-    assert!(requests[1].assistant_reasoning()[0].text().is_empty());
-    drop(requests);
-
-    let appends = repository.appends.borrow();
-    assert!(
-        appends.iter().all(|append| append
-            .facts()
-            .iter()
-            .all(|fact| !matches!(fact, ModelRunFactInputDto::ReasoningDeltaRecorded { .. }))),
-        "a textless reasoning channel must not become a blank durable reasoning fact"
-    );
 }
 
 #[test]
