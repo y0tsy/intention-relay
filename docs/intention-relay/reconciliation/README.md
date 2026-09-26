@@ -77,7 +77,7 @@ implementation specification can be prepared:
   discovery, arbitrary headers, fork tool-result/child-agent execution, export,
   cross-workspace clone/rebind, autonomous harness goal mode, post-disconnect
   work, and RLM packaging; the recorded provider-native preservation and
-  server-side parser directions have no typed contract after the D-16 audit
+  server-side parser directions have no typed contract after the unconsumed-surface audit (2026-09)
   removed them as unconsumed
   ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md));
 - post-M5 accepted retained-deferral directions: rich MIME/raw kernel output
@@ -120,6 +120,7 @@ provider, reasoning, fork, kernel, activity, notification, and UI packages.
 | [Concept supersession index](concept-supersession-index.md) | Provenance coverage and supersession mapping for selected concept headings. |
 | [Evidence register](evidence-register.md) | Exact evidence anchors and verified/planned status. |
 | [Deferred and excluded register](deferred-excluded-register.md) | Atomic non-authorized deferred and excluded claims. |
+| [PR #24 code-review ledger](pr24-code-review-ledger.md) | Findings from the three read-only review waves over the closed PR #24 branch; its content was carried into `main` by PR #36. |
 | [Decision records](../decisions/README.md) | Accepted Foundation decisions and their rationale. |
 
 ## Review baseline
@@ -178,6 +179,10 @@ following map is navigation and provenance; it does not restate their rules:
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
 | Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
 | Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
+| Selected legacy product baseline | `docs/intention-relay/legacy-baseline/` (read-only capability evidence; superseded only by an explicit decision) | decision 0038 |
+| Legacy Antibusy session prompts | `docs/intention-relay/legacy-antibusy-prompts/` (read-only source copy to adapt, never consumed unchanged) | — |
+| Archived Antibusy audit | `docs/reference/archive/legacy-antibusy-audit/` (archived content superset of the selected baseline; provenance only and never an override; its delta is recorded in the baseline manifest) | decision 0038 |
+| Prime Agent research | `docs/reference/prime-agent-research/` (non-authoritative background material) | — |
 
 Mandate-track delivery ownership: the post-M4 Mandate packages and their
 decisions (0001-0004, 0006-0013, 0025, 0027, and 0042) are delivered by the

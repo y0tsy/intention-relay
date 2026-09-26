@@ -107,6 +107,7 @@ flowchart TD
 9. [M2 closure evidence](../closeout/m2-closure-evidence.md)
 10. [M3 closure evidence](../closeout/m3-closure-evidence.md)
 11. [M4 closure evidence](../closeout/m4-closure-evidence.md)
+12. [M5 closure evidence](../closeout/m5-closure-evidence.md)
 
 ## Document map
 
