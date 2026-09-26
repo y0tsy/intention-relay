@@ -30,6 +30,8 @@ use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
 use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
 
+pub mod harness;
+pub mod programmatic_policy;
 pub mod programmatic_policy;
 pub mod provider_catalog;
 pub mod provider_control_plane;
