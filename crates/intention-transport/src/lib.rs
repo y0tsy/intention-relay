@@ -43,6 +43,10 @@ const SYNC_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The upper bound for the liveness probe that decides whether an endpoint is
 /// a stale socket or belongs to a live listener.
+///
+/// Unix-only: a named pipe on Windows leaves no stale filesystem entry, so the
+/// endpoint path is never probed there.
+#[cfg(unix)]
 const STALE_PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// A validated, private-to-the-current-user location for a local daemon endpoint.
