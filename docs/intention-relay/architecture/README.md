@@ -330,10 +330,14 @@ authority or a second transport path.
 is the sole detailed authority for the accepted post-M5 configuration/provider
 control-plane directions: controlled live reload, credential rotation, provider
 health checks, discovery, pricing policy, and the profile UI/control plane,
-adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
-and activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
-It preserves M3/M4 startup-only configuration and cannot become a second
-authority, transport, registry, scheduler, or sandbox.
+adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
+The M5+ Slice 2 activation of those directions
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so they
+are again documentation-only directions awaiting a new activating specification
+under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
+The document preserves M3/M4 startup-only configuration and cannot become a
+second authority, transport, registry, scheduler, or sandbox.
 
 ### Continual-harness owner
 
@@ -378,8 +382,12 @@ session-selection layer: session defaults, per-turn/fork overrides,
 unavailable-queue promotion and reconciliation, profile-keyed usage,
 `provider_profiles_v1`, pending-removal/degraded recovery, and held
 recovery-promoted run admission, adopted by
-[ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)
-and activated under Milestone 5+. It cannot become a second runtime, registry,
+[ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
+The M5+ Slice 2 activation
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so the
+layer is again a documentation-only direction awaiting a new activating
+specification under Milestone 5+. It cannot become a second runtime, registry,
 scheduler, catalog, persistence authority, or sandbox.
 
 ### Instruction sources and system context owner

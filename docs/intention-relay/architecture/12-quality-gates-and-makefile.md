@@ -271,28 +271,31 @@ authorize an unimplemented focused gate.
 
 A high coverage percentage, passing lint, or successful compilation never replaces a required end-to-end outcome scenario.
 
-### M5+ Slice 2 test targets and evidence requirements
+### M5+ Slice 2 test targets and evidence requirements (reverted)
 
 The M5+ Slice 2 control-plane activation
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) adds the
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) added the
 following integration test targets to the machine-readable policy:
 `intention-domain` `m5_control_plane_canonical`, `m5_control_plane_rejections`,
 `m5_session_selection_overrides`; `intention-protocol`
 `control_plane_contracts`; `intention-config` `m5_control_plane_config`;
 `intention-application` `m5_catalog_runtime`, `m5_control_plane_runtime`,
 `m5_session_selection`; `intention-client` `control_plane_client`,
-`session_selection_client`;
-`intention-model` `m6_reasoning_surface`. `intention-storage-sqlite` adds no
-new integration file; the current-schema tests live inside the existing
-`sqlite_contracts` target. No new CI job, Makefile target, crate, dependency,
-feature profile, coverage tier, or exclusion is added: the existing check count
-and the `make quick`, `make verify`, `docs-check`, and `architecture` gates
-remain the Slice 2 acceptance gate. Slice 2 required evidence is the reload
-transaction fault-injection, rotation no-frozen-meaning and fail-closed
-fixtures, health/discovery/pricing non-authority fixtures, promotion/
-reconciliation limit fixtures, catalog acceptance/recovery fixtures,
-control-plane safe-projection fixtures, and current-schema creation fixtures
-anchored in ADR 0037.
+`session_selection_client`; `intention-model` `m6_reasoning_surface`; and
+`intention-storage-sqlite` `m5_control_plane_repos`. **Those targets no longer
+exist.** [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
+reverted the Slice 2 activation, removed the targets and their goldens from the
+tree, and removed the corresponding declarations from the machine-readable
+policy. The current-schema tests in the existing `sqlite_contracts` target
+remain. The revert added no CI job, Makefile target, crate, dependency, feature
+profile, coverage tier, or exclusion: the existing check count and the
+`make quick`, `make verify`, `docs-check`, and `architecture` gates are the
+revert's acceptance gate. A re-introduction through a new activating
+specification must restore the reload transaction fault-injection, rotation
+no-frozen-meaning and fail-closed fixtures, health/discovery/pricing
+non-authority fixtures, promotion/reconciliation limit fixtures, catalog
+acceptance/recovery fixtures, control-plane safe-projection fixtures, and
+current-schema creation fixtures with their policy declarations.
 
 ### Opt-in live-provider e2e
 
@@ -313,8 +316,8 @@ check, takes its credential only from the repository secret
 `REAL_API_E2E_PROVIDER_KEY`, and never alters the blocking Quality workflow.
 The channel adds no blocking CI job, no required check, no coverage tier, no
 exclusion, and no dependency, so the nine required status checks and the
-`ci-*` alias list stay exactly as documented; the Slice 2 statement that Slice
-2 added no CI job or Makefile target remains true for the blocking gate. A
+`ci-*` alias list stay exactly as documented; the reverted Slice 2 activation
+also added no CI job or Makefile target, so the blocking gate is unchanged. A
 recorded live run reports date, commit, provider, model, and its run
 identifier, the workflow run URL for the manual dispatch or the gitignored
 local run report for a local `make e2e-real-api` run, and never
@@ -467,12 +470,15 @@ tool, or Makefile target. A later activating change must declare exact provider
 owners, dependencies, test targets, coverage/features, storage/wire policy,
 expected-failure architecture fixtures, redaction evidence, and Linux/Windows
 outcomes atomically with production work. The M5+ Slice 2 control-plane
-activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) is
+activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was
 that activating change for the provider catalog, selection, capability
 taxonomy, reasoning surface, header/preservation/parser
-contracts, and the configuration/provider control-plane cluster; it declares
+contracts, and the configuration/provider control-plane cluster; it declared
 the exact test targets above and the single current-schema storage/wire policy,
-and passes the standard gates.
+and passed the standard gates. [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
+reverted it, so those targets no longer exist and the provider package is again
+documentation-only until a new activating change declares them atomically with
+production work.
 
 The post-M4 Session branching and regeneration package is documentation-only. It
 activates no crate, test target, coverage tier, feature profile, storage/wire

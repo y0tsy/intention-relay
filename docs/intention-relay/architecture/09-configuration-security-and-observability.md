@@ -73,39 +73,42 @@ checks, discovery, pricing, profile UI) are adopted as accepted future
 directions under [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
 and [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
-### M5+ typed-edit rendering and reload status
+### M5+ typed-edit rendering and reload status (reverted)
 
-Controlled reload renders typed-edit candidate documents inside
-`intention-config` (the accepted decision: render from the safe snapshot
-AST inside the crate). The configuration crate
-builds the document from the active safe `ConfigSnapshotDto` as a TOML value
-tree and serializes it with the TOML serializer
-(`render_edited_configuration`), so:
+The M5+ Slice 2 activation rendered typed-edit candidate documents inside
+`intention-config` (the accepted decision: render from the safe snapshot AST
+inside the crate). [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
+reverted Slice 2: the typed-edit renderer, the private credential-restore
+helper, the `configuration_edit_invalid` failure, and the
+`ConfigurationProjectionDto.reload_status` vocabulary are removed from the
+tree. Configuration editing is again an accepted future direction
+([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md),
+[architecture 25](25-configuration-provider-control-plane.md)) with no live
+implementation, and controlled reload is again only the accepted future
+direction of [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
+described in the M3 lifecycle rules above. A re-introduction through a new
+activating specification must restore the recorded rules:
 
+- a typed-edit candidate is rendered from the safe snapshot AST inside the
+  configuration crate, and the composition maps protocol typed-edit operations
+  into that crate's credential-free edit-operation type without doing TOML
+  rendering itself;
 - values carrying TOML-significant characters are escaped by the serializer
   instead of producing an unparseable document;
 - configuration fields the edit does not name survive the edit unchanged;
 - a value the configuration shape cannot represent fails with a typed
   `configuration_edit_invalid` error instead of a generic
-  `invalid_config_toml` parse failure.
-
-The composition maps the protocol typed-edit operations into the configuration
-crate's own credential-free edit-operation type and performs no TOML rendering
-itself. The rendered document is credential-free by construction; the private
-channel re-inserts `provider.credential` as a TOML value
-(`restore_credential_document`) before the candidate flows through the
-unchanged server-side reload contract (`prepare`, `parse_candidate`,
-`reject_catalog_affecting_edits`). A document-shape failure in the restore
-helper is a typed validation error (`invalid_config_toml` or
-`invalid_config_schema`), never a credential-free document that a caller could
-mistake for a configured one.
-
-`ConfigurationProjectionDto.reload_status` is the closed
-`ConfigurationReloadStatusDto` vocabulary (`active` on the wire, the only
-status the current production path produces). It is validated by serde at
-decode: an unknown status is rejected with
-`configuration_projection_invalid`, and a consumer can match the status
-exhaustively (the accepted decision: a closed enum).
+  `invalid_config_toml` parse failure;
+- the rendered document stays credential-free by construction; only the private
+  channel may re-insert `provider.credential` as a TOML value before the
+  candidate flows through the unchanged server-side reload contract
+  (`prepare`, `parse_candidate`, `reject_catalog_affecting_edits`), and a
+  document-shape failure in the restore helper is a typed validation error
+  (`invalid_config_toml` or `invalid_config_schema`), never a credential-free
+  document that a caller could mistake for a configured one;
+- the reload status projection is a closed enum validated by serde at decode,
+  where an unknown status is rejected with `configuration_projection_invalid`
+  and a consumer can match the status exhaustively.
 
 ## Open-text provider credentials
 

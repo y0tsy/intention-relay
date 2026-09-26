@@ -44,7 +44,13 @@
 | Process/publication and assembly | `intention-daemon` / `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
 | Adapters | `intention-client`, then TUI/Tauri | client mapping | domain facts | no adapter authority | protocol client | adapter parity fixtures | Existing declared tiers |
 
-## M5+ Slice 2 control-plane ownership
+## M5+ Slice 2 control-plane ownership (reverted by ADR 0044)
+
+The Slice 2 assignment below was activated under ADR 0037 and reverted by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md): the
+modules, targets, and surfaces named here no longer exist, and the table is
+retained as the ownership record a re-introduction must restore. No ownership
+or tier boundary was moved by the revert.
 
 | Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,12 +65,12 @@
 | Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `control_plane_client`, `session_selection_client` | Existing declared tiers |
 | Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
 
-No second authority is introduced: the control-plane surface is served through
-the daemon facade with typed commands and queries; health, discovery, and
-pricing are non-authorizing; and there is no second runtime, registry,
-scheduler, persistence authority, or sandbox. Fork wire commands remain Slice 4
-even though the override fields exist on the fork DTOs and the resolution
-service is implemented.
+The reverted activation introduced no second authority: while it was in force
+the control-plane surface was served through the daemon facade with typed
+commands and queries; health, discovery, and pricing were non-authorizing; and
+there was no second runtime, registry, scheduler, persistence authority, or
+sandbox. Those constraints remain binding on any re-introduction. Fork wire
+commands remain Slice 4.
 
 ## M5+ Slice 5 instruction-source ownership
 

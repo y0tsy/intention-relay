@@ -9,23 +9,24 @@
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
 - Reconciliation topics: `PRV-001..012, RSN-001..020`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (catalog, selection, capability-taxonomy, reasoning-history, header/preservation/parser contracts; `responses` driver remains not activated).
+- Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the catalog, selection, capability-taxonomy, reasoning-history, and header contracts are again accepted directions awaiting a new activating specification (`responses` driver remains not activated).
 
 
-**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
-owner for provider kinds, profiles and catalog lifecycle,
-provider/model-capability selections, endpoint and credential-transport
-semantics, driver-contract compatibility, provider-local availability, and
-normalized textual reasoning. Slice 2 activates the catalog lifecycle,
-provider selection and capability resolution, the normalized reasoning
-surface, the typed dialect decoder contract, and typed
+**Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This
+document is the sole detailed owner for provider kinds, profiles and catalog
+lifecycle, provider/model-capability selections, endpoint and
+credential-transport semantics, driver-contract compatibility, provider-local
+availability, and normalized textual reasoning. The Slice 2 activation
+delivered the catalog lifecycle, provider selection and capability resolution,
+the normalized reasoning surface, the typed dialect decoder contract, and typed
 header policy validation (the typed preservation-control and
 parser-configuration contracts were removed by the unconsumed-surface audit (2026-09)).
-It
-does not authorize a `responses` SDK/driver, remote continuation, live wire
-header injection (`SafeHeader`), a user-kind parser, provider-native live
-extraction beyond declared paths, or production provider behavior beyond the
-activated Slice 2 contracts.
+That delivery was reverted, so none of those catalog, selection, or header
+surfaces exists in the tree and a new activating specification is required to
+re-introduce them. The document does not authorize a `responses` SDK/driver,
+remote continuation, live wire header injection (`SafeHeader`), a user-kind
+parser, provider-native live extraction beyond declared paths, or production
+provider behavior.
 
 It applies only to future Mandate and VerifierMandate execution. M3/M4 bytes,
 IDs, UUID `ConfigRevisionId` values, provider kinds, configuration snapshots,
@@ -213,36 +214,43 @@ support and fixtures. Same family/major is insufficient. Composition alone
 resolves private driver entries by exact profile revision, descriptor revision,
 and driver contract; no SDK/client/credential resource crosses a boundary.
 
-Provider option declarations flow through an explicit composition seam
+Provider option declarations flowed through an explicit composition seam
 (PR24-057). The adapter option builders (`OpenRouterDriverOptions` and
-`GenericChatDriverOptions`) are additive, validated, credential-free driver
-configuration; adapter tests exercise them directly, and production drivers
-apply them only through the composition's single seam translation from
+`GenericChatDriverOptions`) were additive, validated, credential-free driver
+configuration; adapter tests exercised them directly, and production drivers
+applied them only through the composition's single seam translation from
 validated profile declarations. Production driver construction and
-reconstruction apply the seam at startup selected-provider construction, at
+reconstruction applied the seam at startup selected-provider construction, at
 every catalog activation through the composition driver factory, and on
 credential-driven driver rebuilds (rotation), so an option declared by
-catalog material is never silently defaulted or ignored by the live driver.
+catalog material was never silently defaulted or ignored by the live driver.
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) removed
+the option builders and the seam with the rest of the slice; the paragraph
+below records the vocabulary and rules a re-introduction must restore.
 
-The closed Slice 2 declaration vocabulary is the profile's credential
+The closed Slice 2 declaration vocabulary was the profile's credential
 transport (bearer, or one descriptor-selected safe header whose complete
-value is the credential), which translates to the typed header policy, and an
-empty reasoning-effort slot (no Slice 2 declaration surface exists; RSN-011).
-Currently producible declarations therefore map to the closed bearer policy
-with no reasoning effort, and the composition guard test locks that mapping.
-A declaration the executing adapter cannot apply — live `SafeHeader` wire
+value is the credential), which translated to the typed header policy, and an
+empty reasoning-effort slot (no Slice 2 declaration surface existed; RSN-011).
+Producible declarations therefore mapped to the closed bearer policy with no
+reasoning effort, and the composition guard test locked that mapping. A
+declaration the executing adapter could not apply — live `SafeHeader` wire
 injection is not activated (EXC-057), and adapter applicability (for example
-the generic-chat maximum-effort limit) stays adapter-owned — fails closed at
+the generic-chat maximum-effort limit) stays adapter-owned — failed closed at
 the seam with the adapter's typed error instead of silently constructing a
-default driver. Credential rotation replaces only the executing driver's
-private SDK client: the options the seam applied at construction are retained,
-and the rebuild additionally preflights the active profile's declared options.
+default driver. Credential rotation replaced only the executing driver's
+private SDK client: the options the seam applied at construction were retained,
+and the rebuild additionally preflighted the active profile's declared options.
+ADR 0044 removed this seam and every Slice 2 declaration with the rest of the
+slice; a re-introduction must restore the option seam under a new activating
+specification.
 
-The catalog is startup-only. Acceptance is all-or-nothing: the auto-accept path
-builds and pre-validates the replacement registry and its admissions map before
-the durable acceptance, so a build or validation failure leaves the durable
-catalog revision unadvanced and only a successful build commits the acceptance
-and swaps the in-memory registry and gate:
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.** The
+catalog was startup-only. Acceptance was all-or-nothing: the auto-accept path
+built and pre-validated the replacement registry and its admissions map before
+the durable acceptance, so a build or validation failure left the durable
+catalog revision unadvanced and only a successful build committed the
+acceptance and swapped the in-memory registry and gate:
 
 ```mermaid
 flowchart LR
@@ -259,29 +267,32 @@ flowchart LR
   C --> S
 ```
 
-Candidate construction may parse endpoints and create private clients but may
-not perform DNS, HTTP, credential testing, telemetry, model discovery, or
-background provider work. A semantically equal safe catalog creates no new
-revision. Valid non-removal changes may auto-accept at startup. A removal creates
-one pending candidate requiring explicit accept/reject against exact revisions;
-rejection/expiry cannot reconstruct omitted credentials or prior readiness.
+Candidate construction could parse endpoints and create private clients but
+could not perform DNS, HTTP, credential testing, telemetry, model discovery, or
+background provider work. A semantically equal safe catalog created no new
+revision. Valid non-removal changes could auto-accept at startup. A removal
+created one pending candidate requiring explicit accept/reject against exact
+revisions; rejection/expiry could not reconstruct omitted credentials or prior
+readiness.
 
-Acceptance atomically writes safe revisions, tombstones, current projection, and
-a separate configuration-audit sequence. Registry activation then swaps the exact
-accepted private entries. A crash after acceptance but before activation leaves
-`activation_recovery_required`; a changed current file cannot be adopted. Fresh
-provider readiness is unavailable until exact recovery succeeds. Catalog/default/
-enablement changes affect fresh selection only. They neither rewrite stored
-selection nor revoke an already admitted run; explicit Run/Mandate cancellation
-remains the stopping authority. No private binding survives restart.
+Acceptance atomically wrote safe revisions, tombstones, current projection, and
+a separate configuration-audit sequence. Registry activation then swapped the
+exact accepted private entries. A crash after acceptance but before activation
+left `activation_recovery_required`; a changed current file could not be
+adopted. Fresh provider readiness was unavailable until exact recovery
+succeeded. Catalog/default/enablement changes affected fresh selection only.
+They neither rewrote stored selection nor revoked an already admitted run;
+explicit Run/Mandate cancellation remained the stopping authority. No private
+binding survived restart. ADR 0044 removed the catalog, its tables, and the
+configuration-audit sequence.
 
-The audit taxonomy is candidate prepared, removal pending/accepted/rejected/
-expired, catalog accepted/activated, activation recovery required, and recovery
-completed. It is neither Session, Run, Mandate, MCP, lineage, nor activity
-sequence. The taxonomy names are the durable `configuration_audit.audit_kind`
-vocabulary written by the storage path; they are not protocol events and no
-wire event DTO carries them. Numeric catalog/parser/page bounds must be
-explicitly classified as
+The reverted audit taxonomy was candidate prepared, removal
+pending/accepted/rejected/expired, catalog accepted/activated, activation
+recovery required, and recovery completed. It was neither Session, Run,
+Mandate, MCP, lineage, nor activity sequence. The taxonomy names were the
+durable `configuration_audit.audit_kind` vocabulary written by the storage
+path; they were not protocol events and no wire event DTO carried them. Numeric
+catalog/parser/page bounds must be explicitly classified as
 intrinsic representation bounds, protocol bounds, or actual capacity, never
 Mandate admission quotas.
 
@@ -324,9 +335,13 @@ that in-flight exchange as transient request state (ADR 0041); prior-run,
 cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one `RunEventCursorDto` for text, reasoning,
-summaries, tool calls, usage, and terminal facts. The provider-neutral reasoning
-DTO surface is owned by `intention-model` (ADR 0037): the closed fragment
-category and the normalized model events are:
+summaries, tool calls, usage, and terminal facts. The Slice 2 provider-neutral
+reasoning DTO surface was owned by `intention-model`
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) and was removed
+by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md): the
+closed fragment category and the summary delta no longer exist, and the live
+normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`.
+The reverted shape was:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -563,11 +578,14 @@ explicit typed textual history contract; provider-native `preserve_thinking`,
 `thinking.keep`, remote continuation identifiers, and non-fitting
 assistant-history requirements are excluded. Arbitrary authentication headers
 are an accepted post-M5 direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and are
-activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md):
-a closed code-owned typed header policy (the `intention-model`
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and were
+activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)
+as a closed code-owned typed header policy (the `intention-model`
 `AuthenticationHeaderPolicyV1` consumed by both provider adapters; the
-protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). The typed
+protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)).
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) removed
+that policy with the rest of Slice 2, so the direction is again
+documentation-only until a new activating specification. The typed
 provider-native preservation-control and server-side-parser contracts were
 removed by the unconsumed-surface audit (2026-09): no preservation-control or
 parser-configuration surface is activated. Live wire header
@@ -585,7 +603,12 @@ SDK data outside its owner adapter.
 
 ## Catalog lifecycle detail: limits, tombstones, and audit
 
-The first-scope fixed code-owned catalog limits are:
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.** The
+catalog, its tables, and its audit sequence do not exist in the tree. The
+following records the limits and rules that applied while the activation was in
+force and that a re-introduction must restore.
+
+The first-scope fixed code-owned catalog limits were:
 
 | Subject | Limit | Enforcement |
 | --- | ---: | --- |
@@ -661,7 +684,8 @@ unavailable-queue promotion and reconciliation, profile-keyed usage,
 admission) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md)
 and adopted by [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 This document no longer excludes "session defaults/overrides"; the detail lives
-in architecture 29 and is activated under Milestone 5+.
+in architecture 29, was activated under Milestone 5+, and was reverted by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md).
 
 ## Child, verifier, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -688,15 +712,16 @@ profile picker/editor presentation, credential entry/keychain, telemetry,
 multimodal or structured output, plugin drivers, or remote continuation; the
 catalog database, the single current storage schema (logical version 1),
 credential rotation, health checks,
-discovery, pricing, controlled live reload, and typed header policy are
+discovery, pricing, controlled live reload, and typed header policy were
 activated by Slice 2
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
-preservation-control and server-side-parser contracts were removed as
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) and were removed
+by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the
+typed preservation-control and server-side-parser contracts were removed as
 unconsumed by the unconsumed-surface audit (2026-09), and no parser-configuration surface is
 activated. Architecture
 23 owns forks and lineage, architecture 29 owns session defaults/overrides and
 the profiles protocol, and UI, Cargo, Makefile/CI, or production activation
-beyond the activated Slice 2 contracts remain outside this document.
+beyond the accepted directions remain outside this document.
 
 Semantic content inspection of reasoning or provider content is an accepted
 post-M5 future direction under
@@ -706,19 +731,22 @@ redaction, and never rewrites stored facts.
 
 The profile picker/editor, credential rotation, health test, discovery,
 pricing, telemetry, and live reload items are accepted post-M5 directions
-owned by [architecture 25](25-configuration-provider-control-plane.md) and
-activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
-they are activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md).
-The profile picker/editor presentation and telemetry remain not activated.
+owned by [architecture 25](25-configuration-provider-control-plane.md) under
+[Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
+they were activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)
+and reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md),
+so they are again documentation-only. The profile picker/editor presentation
+and telemetry remain not activated.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`, `make
 verify`, and Linux/Windows CI.
-[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
-activating specification: it declares the exact test targets, the single
-current-schema storage policy, and the per-direction evidence anchors. Required
-evidence includes:
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) was the Slice 2
+activating specification; it is superseded by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) and its
+declared test targets no longer exist. The per-direction evidence obligations
+return to the accepted direction and a re-introduction must restore them:
 
 - IRCR canonical positive/negative goldens and cross-platform digests for
   descriptor/profile/catalog/selection/capability/driver records;

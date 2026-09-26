@@ -137,8 +137,10 @@ The following principles (12–29) are the binding specification for the
 post-M5+ Mandate track and the ordinary-run extensions that accompany it. They
 govern future authoritative M4+ packages without changing closed M4 or current
 ordinary-run behavior, and each is implemented only where a milestone has
-landed: principle 27's provider-selection evidence is delivered by the M5+
-Slice 2 control plane, while principles 12–26 and 28 are held by the Mandate
+landed: principle 27's provider-selection evidence was delivered by the M5+
+Slice 2 control plane and was reverted by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so it
+is again future work, while principles 12–26 and 28 are held by the Mandate
 milestones (roadmap M10–M12) and their owning architecture documents 15–23.
 
 ### 12. Execution kinds are explicit

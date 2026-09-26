@@ -101,14 +101,17 @@ implementation specification can be prepared:
 - M5+ Slice 1 contract ledger: the frozen and activated contracts/versions,
   capabilities, tags, fields, ownership, and preservation ledger
   ([ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md)); and
-- M5+ Slice 2 control-plane activation: controlled live reload, credential
-  rotation, health checks, discovery, pricing, raw-TOML/configuration
-  editing, session defaults and per-turn/fork overrides, unavailable-queue
-  promotion/reconciliation, `provider_profiles_v1`, pending-removal/degraded
-  recovery, and the reasoning/catalog surface, with the SQLite control-plane
-  tables as part of the single live schema (logical version 1) created
-  directly on open (no 3-to-4 migration chain)
-  ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); and
+- M5+ Slice 2 control-plane activation (reverted): the Slice 2 activation added
+  controlled live reload, credential rotation, health checks, discovery,
+  pricing, raw-TOML/configuration editing, session defaults and per-turn/fork
+  overrides, unavailable-queue promotion/reconciliation,
+  `provider_profiles_v1`, pending-removal/degraded recovery, and the
+  reasoning/catalog surface, with the SQLite control-plane tables as part of the
+  single live schema (logical version 1) created directly on open (no 3-to-4
+  migration chain)
+  ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md));
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
+  removed that surface, and the directions are again documentation-only; and
 - M5+ no-backward-compatibility policy: the single-version rule for every
   versioned system and the removal of legacy, fallback, and migration
   machinery
@@ -181,7 +184,7 @@ following map is navigation and provenance; it does not restate their rules:
 | Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
 | M5+ complete foundation activation | architectures 25-29, 23, 22, 24, roadmap | decision 0035 |
 | M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
-| M5+ Slice 2 control-plane activation | architectures 25/29/22, roadmap, quality gates | decision 0037 |
+| M5+ Slice 2 control-plane activation (reverted) | architectures 25/29/22, roadmap, quality gates | decision 0037; the revert is recorded by decision 0044 |
 | No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
 | Request-side tool advertisement | architecture 08, architecture 05 | decision 0039 |
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
