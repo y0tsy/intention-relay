@@ -2987,18 +2987,17 @@ mod tests {
             );
             values.push(entry.value);
             let expected_status = match entry.name {
-                // Slice 2 wires the nine active ledger families: the three
-                // historical families plus model-capability-taxonomy-v1
-                // through model-context-projection-v1.
+                // The three historical families carry production codecs.
                 "run-execution-meaning"
                 | "programmatic-caller-policy-selection-v1"
-                | "agent-activity-selection-v1"
-                | "model-capability-taxonomy-v1"
+                | "agent-activity-selection-v1" => TagStatus::Wired,
+                // The Slice 2 control-plane families stay reserved.
+                "model-capability-taxonomy-v1"
                 | "provider-profile-revision-v1"
                 | "provider-selection-v1"
                 | "reasoning-history-manifest-v1"
                 | "context-source-manifest-v1"
-                | "model-context-projection-v1" => TagStatus::Wired,
+                | "model-context-projection-v1" => TagStatus::ReservedForSlice2,
                 // Slice 3 owns the selection and tool-loop families.
                 "goal-run-selection-v1"
                 | "continual-harness-selection-v1"
