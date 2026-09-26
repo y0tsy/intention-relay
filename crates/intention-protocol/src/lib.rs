@@ -104,6 +104,7 @@ pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
 
 pub mod contract_families;
 pub mod negotiation;
+pub mod slice3;
 pub use negotiation::ProtocolNegotiationResultDto;
 
 /// A safe metadata handshake exchanged before any protocol command.
