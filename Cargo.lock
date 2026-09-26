@@ -859,7 +859,6 @@ dependencies = [
 name = "intention-config"
 version = "0.0.0"
 dependencies = [
- "intention-domain",
  "intention-types",
  "serde",
  "serde_json",

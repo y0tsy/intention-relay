@@ -71,7 +71,7 @@ public_resource_patterns = [
 [dependencies]
 "intention-types" = []
 "intention-domain" = ["intention-types"]
-"intention-config" = ["intention-domain", "intention-types"]
+"intention-config" = ["intention-types"]
 "intention-protocol" = ["intention-types", "intention-domain"]
 "intention-storage" = ["intention-config", "intention-domain", "intention-types"]
 "intention-transport" = ["intention-protocol", "intention-types"]
