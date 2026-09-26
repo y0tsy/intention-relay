@@ -791,7 +791,11 @@ impl<'de> Deserialize<'de> for ModelEventDto {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ReasoningDelta { content } => {
-                Self::reasoning_delta(content).map_err(de::Error::custom)
+                if content.is_empty() {
+                    Ok(Self::reasoning_presence())
+                } else {
+                    Self::reasoning_delta(content).map_err(de::Error::custom)
+                }
             }
             RawModelEventDto::ToolCall { call } => Ok(Self::tool_call(call)),
             RawModelEventDto::Usage { usage } => Ok(Self::usage(usage)),
@@ -838,6 +842,21 @@ impl ModelEventDto {
             ))
         } else {
             Ok(Self::ReasoningDelta { content })
+        }
+    }
+
+    /// Creates the textless reasoning-channel presence marker.
+    ///
+    /// A provider can carry the reasoning channel with no textual content, and
+    /// that presence alone must round-trip into the continuation request: the
+    /// assistant tool-call message keeps the channel beside its tool calls even
+    /// when the channel held no text (ADR 0041). The marker never becomes a
+    /// durable reasoning fact and never reaches assistant content; the
+    /// non-empty constructor stays the only source of reasoning text.
+    #[must_use]
+    pub const fn reasoning_presence() -> Self {
+        Self::ReasoningDelta {
+            content: String::new(),
         }
     }
 

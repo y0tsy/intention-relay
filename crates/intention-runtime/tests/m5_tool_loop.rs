@@ -1150,6 +1150,65 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
 }
 
 #[test]
+fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::reasoning_presence()),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded("one").expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("textless reasoning round completes");
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+
+    let requests = driver.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].assistant_reasoning().is_empty());
+    assert_eq!(requests[1].assistant_reasoning().len(), 1);
+    assert_eq!(
+        requests[1].assistant_reasoning()[0].tool_call_ids(),
+        &[call.call_id()]
+    );
+    assert!(requests[1].assistant_reasoning()[0].text().is_empty());
+    drop(requests);
+
+    let appends = repository.appends.borrow();
+    assert!(
+        appends.iter().all(|append| append
+            .facts()
+            .iter()
+            .all(|fact| !matches!(fact, ModelRunFactInputDto::ReasoningDeltaRecorded { .. }))),
+        "a textless reasoning channel must not become a blank durable reasoning fact"
+    );
+}
+
+#[test]
 fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let session_id = SessionId::new();
     let run_id = RunId::new();

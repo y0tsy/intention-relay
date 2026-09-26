@@ -97,7 +97,10 @@ The Slice 2 control plane is removed from the production tree:
   (`AuthenticationHeaderPolicyV1`), the credential transport mode, the
   reasoning effort levels, and the reasoning categories/summaries
   (`ReasoningFragmentCategoryDto`, `ReasoningSummaryDelta`); the M4 normalized
-  reasoning events remain.
+  reasoning events remain, including the textless reasoning-channel presence
+  marker (`ModelEventDto::reasoning_presence`) that
+  [ADR 0041](0041-same-run-reasoning-round-trip.md) requires the continuation
+  request to carry beside the assistant tool calls.
 - **Daemon and client.** `intention-daemon` drops catalog startup/prepare/accept,
   the readiness gate, and the catalog-driven client surface; `intention-client`
   drops the control-plane and session-selection methods and their test targets.

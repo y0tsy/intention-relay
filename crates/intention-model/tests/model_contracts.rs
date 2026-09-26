@@ -242,9 +242,10 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
     assert!(
         serde_json::from_str::<ModelEventDto>(r#"{"kind":"text_delta","content":""}"#).is_err()
     );
-    assert!(
+    assert_eq!(
         serde_json::from_str::<ModelEventDto>(r#"{"kind":"reasoning_delta","content":""}"#)
-            .is_err()
+            .expect("textless reasoning delta decodes as presence"),
+        ModelEventDto::reasoning_presence()
     );
 
     let correlation = CorrelationIdDto::new();
@@ -527,6 +528,26 @@ fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
             "invalid_model_assistant_reasoning_text"
         );
     }
+}
+
+#[test]
+fn reasoning_presence_marks_a_textless_provider_channel() {
+    let presence = ModelEventDto::reasoning_presence();
+    assert_eq!(
+        presence,
+        ModelEventDto::ReasoningDelta {
+            content: String::new(),
+        }
+    );
+    assert!(ModelEventDto::reasoning_delta("").is_err());
+
+    let decoded: ModelEventDto = serde_json::from_str(r#"{"kind":"reasoning_delta","content":""}"#)
+        .expect("textless reasoning delta decodes as presence");
+    assert_eq!(decoded, presence);
+    let decoded: ModelEventDto =
+        serde_json::from_str(&serde_json::to_string(&presence).expect("presence serializes"))
+            .expect("presence deserializes");
+    assert_eq!(decoded, presence);
 }
 
 #[test]

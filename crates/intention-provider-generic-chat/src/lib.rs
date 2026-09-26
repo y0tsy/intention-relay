@@ -229,6 +229,7 @@ struct GenericStreamState<S> {
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
     usage_reported: bool,
+    reasoning_presence_reported: bool,
 }
 
 impl<S> GenericStreamState<S>
@@ -246,6 +247,7 @@ where
             terminal: false,
             terminal_reason: None,
             usage_reported: false,
+            reasoning_presence_reported: false,
         }
     }
 
@@ -365,16 +367,25 @@ where
 
     /// Normalizes one reasoning fragment of a provider delta.
     ///
-    /// An empty value only marks that the provider carried the reasoning
-    /// channel and creates no fact: providers repeat that empty value on
-    /// nearly every chunk. A non-empty fragment stays a transient reasoning
-    /// fact: it is never appended to assistant text, never becomes message
-    /// content, and never enters an error payload. An empty value is exactly
-    /// what the normalized reasoning-delta constructor rejects, which is why
-    /// this adapter has no reasoning failure class of its own: no provider
-    /// value reaches it as a failure.
+    /// An empty value marks that the provider carried the reasoning channel
+    /// with no text. Providers repeat that empty value on nearly every chunk,
+    /// so it becomes at most one textless presence event per stream and
+    /// creates no fact; the continuation request must still send the channel
+    /// back beside the assistant tool calls, because a provider in thinking
+    /// mode rejects a request whose assistant message omits it (ADR 0041). A
+    /// non-empty fragment stays a transient reasoning fact: it is never
+    /// appended to assistant text, never becomes message content, and never
+    /// enters an error payload. An empty value is exactly what the normalized
+    /// reasoning-delta constructor rejects, which is why this adapter has no
+    /// reasoning failure class of its own: no provider value reaches it as a
+    /// failure.
     fn accept_reasoning(&mut self, reasoning: String) {
         if reasoning.is_empty() {
+            if !self.reasoning_presence_reported {
+                self.reasoning_presence_reported = true;
+                self.pending
+                    .push_back(Ok(ModelEventDto::reasoning_presence()));
+            }
             return;
         }
         if let Ok(event) = ModelEventDto::reasoning_delta(reasoning) {
@@ -1254,9 +1265,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_reasoning_values_create_no_facts() {
+    fn empty_reasoning_values_mark_presence_at_most_once() {
         // The provider repeats an empty reasoning value on nearly every chunk;
-        // it creates no event instead of one fact per chunk.
+        // it stays a single textless presence event instead of one event per
+        // chunk, and it creates no reasoning fact.
         let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         for _ in 0..3 {
             state.accept_chunk(chunk(vec![choice(None, Some(""), None, None)], None));
@@ -1265,10 +1277,14 @@ mod tests {
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::started()))
         );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_presence()))
+        );
         assert_eq!(state.pending.pop_front(), None);
         assert!(
             !state.terminal,
-            "an empty reasoning fragment creates no fact and never fails the stream"
+            "an empty reasoning fragment marks presence and never fails the stream"
         );
     }
 
@@ -1338,6 +1354,12 @@ mod tests {
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::reasoning_delta("planning the call")
                 .expect("reasoning fragment is valid")))
+        );
+        // The interleaved empty value repeats the channel without text; it
+        // stays one presence marker before the call it belongs to.
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_presence()))
         );
         assert!(matches!(
             state.pending.pop_front(),
