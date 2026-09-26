@@ -66,6 +66,20 @@ scheduler, persistence authority, or sandbox. Fork wire commands remain Slice 4
 even though the override fields exist on the fork DTOs and the resolution
 service is implemented.
 
+## M5+ Slice 5 instruction-source ownership
+
+| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Instruction source model and profile revisions | architecture 30 | declared by the activating specification (`intention-domain`) | declared by the activating specification (`intention-domain`) | `intention-config` for configuration; existing storage owners for safe provenance | declared by the activating specification (`intention-protocol`) | assembly and revision fixtures | Existing declared tiers |
+| Workspace project instructions | architecture 30; boundary rules by architecture 05 | bounded text plus content digest | not applicable | digest only outside the projection | not applicable | boundary and absence fixtures | Existing declared tiers |
+| Effective instruction projection and digests | architecture 30 | `intention-domain` | `intention-domain` | fork, plan, and handoff records through existing storage owners | protocol DTOs on the frozen records | freeze, inheritance, and digest fixtures | Existing declared tiers |
+| Editing and preview control plane | architectures 30 and 25 | `intention-config` | domain registry | `intention-config` | `intention-protocol` | editing and preview fixtures | Existing declared tiers |
+| Request delivery and driver translation | architecture 08 | existing model contract | domain registry | no durable instruction text | existing `system_context` channel | model and provider translation fixtures | Existing declared tiers |
+| Primary UI surface | architecture 24 adapter rules | client mapping | not applicable | no adapter authority | protocol client | adapter parity fixtures (Milestone 6) | Existing declared tiers |
+
+The fifth slice's activating specification names the exact crates, contract
+versions, tag values, and coverage tiers; this package activates none of them.
+
 ```mermaid
 flowchart TD
   F[Foundation] --> E[Execution meaning]
