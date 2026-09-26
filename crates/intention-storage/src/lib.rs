@@ -8,6 +8,10 @@
 //! that persists a record as text owns both directions of its canonical codec
 //! behind the typed field, and only the typed value is visible to callers.
 
+pub mod goal_repo;
+pub mod harness_repo;
+pub mod programmatic_policy_repo;
+
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     CreateSessionCommandDto, CredentialTransportMode, DomainEventDto, ModelRunFactInputDto,
