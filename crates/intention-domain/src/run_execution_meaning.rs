@@ -4,6 +4,10 @@ use crate::canonical::{
     CanonicalError, CanonicalRecordBuilder, CanonicalRecordReader, Digest256, TagRegistry,
     WireType, decode_u64, decode_uuid_list, encode_bool, encode_u64,
 };
+use crate::slice3_selections::{
+    ContinualHarnessSelectionV1, GoalRunSelectionV1, McpMethodCatalogSelectionV1,
+    ProgrammaticCallerRootOriginV1,
+};
 
 /// The closed execution kind of a run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,9 +56,12 @@ pub struct FixedRunLimits {
 }
 
 /// The frozen programmatic-caller policy selection record.
+///
+/// Field 1 is the closed typed root origin (ADR 0044): the two roots are an
+/// ordinary user-admitted run and one separately admitted harness launch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgrammaticCallerPolicySelectionV1 {
-    pub root_origin: ExecutionKind,
+    pub root_origin: ProgrammaticCallerRootOriginV1,
     pub effective_policy_snapshot_reference: [u8; 16],
     pub policy_selection_digest: Digest256,
     pub inherited_scope_provenance: Vec<[u8; 16]>,
@@ -212,9 +219,18 @@ pub enum AgentActivitySelectionV1 {
 }
 
 /// The run-execution-meaning v4 record (fixed field table 1-11).
+///
+/// Fields 1-6 remain mandatory nested M3/M4 selection records opaque to this
+/// codec. Fields 7-10 are the Slice 3 typed selection slots (ADR 0044): a
+/// closed `Disabled` marker or the nested canonical selection record. Field 11
+/// carries the nested agent activity selection record bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunExecutionMeaningV4Record {
     pub fields: Vec<Vec<u8>>,
+    pub harness_selection: DisabledOr<ContinualHarnessSelectionV1>,
+    pub goal_selection: DisabledOr<GoalRunSelectionV1>,
+    pub mcp_method_catalog_selection: DisabledOr<McpMethodCatalogSelectionV1>,
+    pub programmatic_caller_policy_selection: DisabledOr<ProgrammaticCallerPolicySelectionV1>,
     pub agent_activity_selection: Vec<u8>,
 }
 
@@ -258,7 +274,7 @@ fn authenticated_meaning_digest(
 /// Returns `CanonicalError::DuplicateOrDescendingField` or
 /// `CanonicalError::OverLimit` only if the field stream were noncanonical or
 /// a field or the record exceeded the codec size bounds.
-fn record(
+pub(crate) fn record(
     tag: u32,
     version: u32,
     fields: Vec<(u32, WireType, Vec<u8>)>,
@@ -270,7 +286,7 @@ fn record(
     builder.finish()
 }
 
-fn uuid(bytes: &[u8]) -> Result<[u8; 16], CanonicalError> {
+pub(crate) fn uuid(bytes: &[u8]) -> Result<[u8; 16], CanonicalError> {
     bytes.try_into().map_err(|_| CanonicalError::InvalidField)
 }
 
@@ -498,7 +514,7 @@ impl ProgrammaticCallerPolicySelectionV1 {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             vec![
-                (1, WireType::U64, encode_u64(self.root_origin as u64)),
+                (1, WireType::Record, self.root_origin.encode()?),
                 (
                     2,
                     WireType::Uuid,
@@ -528,9 +544,9 @@ impl ProgrammaticCallerPolicySelectionV1 {
         {
             return Err(CanonicalError::InvalidTag);
         }
-        let root_origin = ExecutionKind::dec(
+        let root_origin = ProgrammaticCallerRootOriginV1::decode(
             reader
-                .field(1, WireType::U64)?
+                .field(1, WireType::Record)?
                 .ok_or(CanonicalError::InvalidField)?,
         )?;
         let effective_policy_snapshot_reference = uuid(
@@ -614,6 +630,10 @@ impl RunExecutionMeaningV4Record {
     /// impossible by construction.
     pub fn encode(&self) -> Result<Vec<u8>, CanonicalError> {
         let mut fields = self.fields.clone();
+        fields.push(self.harness_selection.encode()?);
+        fields.push(self.goal_selection.encode()?);
+        fields.push(self.mcp_method_catalog_selection.encode()?);
+        fields.push(self.programmatic_caller_policy_selection.encode()?);
         fields.push(self.agent_activity_selection.clone());
         record(
             TagRegistry::RUN_EXECUTION_MEANING,
@@ -644,7 +664,7 @@ impl RunExecutionMeaningV4Record {
             .field(11, WireType::Record)?
             .ok_or(CanonicalError::InvalidField)?
             .to_vec();
-        let fields = (1..11)
+        let fields = (1..7)
             .map(|number| {
                 reader
                     .field(number, WireType::Record)?
@@ -652,8 +672,33 @@ impl RunExecutionMeaningV4Record {
                     .map(|value| value.to_vec())
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let harness_selection = DisabledOr::<ContinualHarnessSelectionV1>::decode(
+            reader
+                .field(7, WireType::Record)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let goal_selection = DisabledOr::<GoalRunSelectionV1>::decode(
+            reader
+                .field(8, WireType::Record)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let mcp_method_catalog_selection = DisabledOr::<McpMethodCatalogSelectionV1>::decode(
+            reader
+                .field(9, WireType::Record)?
+                .ok_or(CanonicalError::InvalidField)?,
+        )?;
+        let programmatic_caller_policy_selection =
+            DisabledOr::<ProgrammaticCallerPolicySelectionV1>::decode(
+                reader
+                    .field(10, WireType::Record)?
+                    .ok_or(CanonicalError::InvalidField)?,
+            )?;
         Ok(Self {
             fields,
+            harness_selection,
+            goal_selection,
+            mcp_method_catalog_selection,
+            programmatic_caller_policy_selection,
             agent_activity_selection,
         })
     }
@@ -803,10 +848,56 @@ mod tests {
 
     fn fixture_v4_record() -> RunExecutionMeaningV4Record {
         RunExecutionMeaningV4Record {
-            fields: (0..10).map(|i| vec![i as u8; 3]).collect(),
+            fields: (0..6).map(|i| vec![i as u8; 3]).collect(),
+            harness_selection: DisabledOr::Selected(fixture_harness_selection()),
+            goal_selection: DisabledOr::Disabled,
+            mcp_method_catalog_selection: DisabledOr::Disabled,
+            programmatic_caller_policy_selection: DisabledOr::Selected(fixture_selection()),
             agent_activity_selection: fixture_activity_selection()
                 .encode()
                 .expect("fixture activity selection encodes"),
+        }
+    }
+
+    fn fixture_root_origin() -> ProgrammaticCallerRootOriginV1 {
+        ProgrammaticCallerRootOriginV1::InteractiveUser {
+            originating_turn_id: [0x11; 16],
+        }
+    }
+
+    /// The encoded nested root origin used by raw policy-selection frames.
+    fn fixture_root_origin_bytes() -> Vec<u8> {
+        fixture_root_origin()
+            .encode()
+            .expect("fixture root origin encodes")
+    }
+
+    fn fixture_harness_selection() -> ContinualHarnessSelectionV1 {
+        ContinualHarnessSelectionV1 {
+            harness_id: [0x21; 16],
+            rule_revision: 3,
+            trigger_reason: crate::slice3_selections::HarnessTriggerReasonV1 {
+                reason_id: [0x22; 16],
+                source_kind: crate::slice3_selections::HarnessSourceKindV1::FixedInterval,
+                first_observed_at_ms: 1_000,
+                last_observed_at_ms: 2_000,
+                coalesced_count: 1,
+            },
+            class_resolution: crate::slice3_selections::HarnessClassResolutionV1 {
+                class: crate::slice3_selections::HarnessExecutionClassV1::Light,
+                narrowed_tool_ids: vec!["read_file".to_owned()],
+            },
+            dossier_digest: Digest256::sha256(b"fixture-dossier"),
+            checkpoint_reference: None,
+            time_zone_application: "UTC".to_owned(),
+            bounds: crate::slice3_selections::HarnessSelectionBoundsV1 {
+                max_cause_depth: crate::slice3_selections::HARNESS_MAX_CAUSE_DEPTH,
+                max_concurrent: crate::slice3_selections::HARNESS_MAX_CONCURRENT,
+                max_total_launches: crate::slice3_selections::HARNESS_MAX_TOTAL_LAUNCHES,
+                dossier_bytes: crate::slice3_selections::HARNESS_MAX_DOSSIER_BYTES,
+                checkpoint_bytes: crate::slice3_selections::HARNESS_MAX_CHECKPOINT_BYTES,
+                conclusion_bytes: crate::slice3_selections::HARNESS_MAX_CONCLUSION_BYTES,
+            },
         }
     }
 
@@ -828,7 +919,7 @@ mod tests {
 
     fn fixture_selection() -> ProgrammaticCallerPolicySelectionV1 {
         ProgrammaticCallerPolicySelectionV1 {
-            root_origin: ExecutionKind::Ordinary,
+            root_origin: fixture_root_origin(),
             effective_policy_snapshot_reference: [3u8; 16],
             policy_selection_digest: Digest256::from_bytes(&[9u8; 32])
                 .expect("fixture digest is valid"),
@@ -1109,70 +1200,76 @@ mod tests {
 
     #[test]
     fn meaning_records_require_every_mandatory_field() {
-        let fields = golden_meaning_fields();
-        let activity = golden_v4_record().agent_activity_selection;
-        let full: Vec<(u32, u8, &[u8])> = fields
+        let full = golden_v4_field_table();
+        let raw: Vec<(u32, u8, &[u8])> = full
             .iter()
-            .enumerate()
-            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .map(|(number, wire_type, value)| (*number, *wire_type as u8, value.as_slice()))
             .collect();
-        for missing in 0..10 {
-            let mut partial = full.clone();
-            partial.remove(missing);
-            let mut v4 = partial;
-            v4.push((11, WireType::Record as u8, &activity));
-            let v4_bytes = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &v4);
+        for missing in 0..raw.len() {
+            let partial: Vec<(u32, u8, &[u8])> = raw
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != missing)
+                .map(|(_, entry)| *entry)
+                .collect();
             assert_eq!(
-                RunExecutionMeaningV4Record::decode(&v4_bytes)
-                    .expect_err("missing v4 field is rejected"),
+                RunExecutionMeaningV4Record::decode(&raw_record(
+                    TagRegistry::RUN_EXECUTION_MEANING,
+                    4,
+                    &partial,
+                ))
+                .expect_err("missing v4 field is rejected"),
                 CanonicalError::InvalidField,
                 "missing v4 field {}",
                 missing + 1
             );
         }
-        // Field 11 is mandatory for v4 in addition to fields 1-10.
-        let v4_without_activity = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 4, &full);
-        assert_eq!(
-            RunExecutionMeaningV4Record::decode(&v4_without_activity)
-                .expect_err("v4 requires field 11"),
-            CanonicalError::InvalidField
-        );
     }
 
     #[test]
     fn meaning_records_reject_wrong_field_wire_types() {
-        // A v4 field 1 encoded as a U64 instead of a Record is rejected even
-        // with a valid field 11 present.
-        let activity = golden_v4_record().agent_activity_selection;
-        let meaning_fields = golden_meaning_fields();
-        let mut v4_wrong: Vec<(u32, u8, &[u8])> = meaning_fields
+        // A v4 field 1 encoded as a U64 instead of a Record is rejected.
+        let full = golden_v4_field_table();
+        let mut wrong: Vec<(u32, u8, &[u8])> = full
             .iter()
-            .enumerate()
-            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .map(|(number, wire_type, value)| (*number, *wire_type as u8, value.as_slice()))
             .collect();
-        v4_wrong[0] = (1, WireType::U64 as u8, &[0]);
-        v4_wrong.push((11, WireType::Record as u8, &activity));
+        wrong[0] = (1, WireType::U64 as u8, &[0]);
         assert_eq!(
             RunExecutionMeaningV4Record::decode(&raw_record(
                 TagRegistry::RUN_EXECUTION_MEANING,
                 4,
-                &v4_wrong,
+                &wrong,
             ))
             .expect_err("wrong v4 wire type is rejected"),
             CanonicalError::InvalidField
         );
-        // A v4 field 11 encoded as a U64 instead of a Record is rejected.
-        let mut v4_wrong_activity: Vec<(u32, u8, &[u8])> = meaning_fields
+        // A v4 field 7 encoded as a U64 instead of a Record is rejected.
+        let mut wrong_slot: Vec<(u32, u8, &[u8])> = full
             .iter()
-            .enumerate()
-            .map(|(index, value)| ((index + 1) as u32, WireType::Record as u8, value.as_slice()))
+            .map(|(number, wire_type, value)| (*number, *wire_type as u8, value.as_slice()))
             .collect();
-        v4_wrong_activity.push((11, WireType::U64 as u8, &[0]));
+        wrong_slot[6] = (7, WireType::U64 as u8, &[0]);
         assert_eq!(
             RunExecutionMeaningV4Record::decode(&raw_record(
                 TagRegistry::RUN_EXECUTION_MEANING,
                 4,
-                &v4_wrong_activity,
+                &wrong_slot,
+            ))
+            .expect_err("wrong v4 slot wire type is rejected"),
+            CanonicalError::InvalidField
+        );
+        // A v4 field 11 encoded as a U64 instead of a Record is rejected.
+        let mut wrong_activity: Vec<(u32, u8, &[u8])> = full
+            .iter()
+            .map(|(number, wire_type, value)| (*number, *wire_type as u8, value.as_slice()))
+            .collect();
+        wrong_activity[10] = (11, WireType::U64 as u8, &[0]);
+        assert_eq!(
+            RunExecutionMeaningV4Record::decode(&raw_record(
+                TagRegistry::RUN_EXECUTION_MEANING,
+                4,
+                &wrong_activity,
             ))
             .expect_err("wrong v4 activity wire type is rejected"),
             CanonicalError::InvalidField
@@ -1730,7 +1827,8 @@ mod tests {
         assert_eq!(closed, vec![0x00]);
         assert!(!decode_bool(&closed).expect("closed marker is a valid bool"));
         assert_eq!(
-            DisabledOr::decode(&closed).expect("closed marker decodes"),
+            DisabledOr::<ProgrammaticCallerPolicySelectionV1>::decode(&closed)
+                .expect("closed marker decodes"),
             DisabledOr::Disabled
         );
 
@@ -1738,7 +1836,8 @@ mod tests {
         assert_eq!(open[0], 0x01);
         assert!(decode_bool(&open[..1]).expect("open marker is a valid bool"));
         assert_eq!(
-            DisabledOr::decode(&open).expect("selected value decodes"),
+            DisabledOr::<ProgrammaticCallerPolicySelectionV1>::decode(&open)
+                .expect("selected value decodes"),
             selected
         );
 
@@ -1758,20 +1857,22 @@ mod tests {
             .to_vec();
         assert!(decode_bool(&value[..1]).expect("marker is valid"));
         assert_eq!(
-            DisabledOr::decode(&value).expect("embedded selection decodes"),
+            DisabledOr::<ProgrammaticCallerPolicySelectionV1>::decode(&value)
+                .expect("embedded selection decodes"),
             DisabledOr::Selected(selection)
         );
 
         // Malformed optional encodings are rejected.
         for malformed in [Vec::<u8>::new(), vec![0x00, 0xAA], vec![0x02], vec![0x01]] {
-            assert!(DisabledOr::decode(&malformed).is_err());
+            assert!(DisabledOr::<ProgrammaticCallerPolicySelectionV1>::decode(&malformed).is_err());
         }
     }
 
     #[test]
     fn programmatic_provenance_round_trips_and_is_strict() {
+        let root_origin = fixture_root_origin_bytes();
         let selection = ProgrammaticCallerPolicySelectionV1 {
-            root_origin: ExecutionKind::Ordinary,
+            root_origin: fixture_root_origin(),
             effective_policy_snapshot_reference: [3u8; 16],
             policy_selection_digest: Digest256::from_bytes(&[9u8; 32])
                 .expect("fixture digest is valid"),
@@ -1810,7 +1911,7 @@ mod tests {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             &[
-                (1, WireType::U64 as u8, &[0]),
+                (1, WireType::Record as u8, root_origin.as_slice()),
                 (2, WireType::Uuid as u8, &[3u8; 16]),
                 (3, WireType::Digest as u8, &[9u8; 32]),
                 (4, WireType::List as u8, &truncated),
@@ -1830,7 +1931,7 @@ mod tests {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             &[
-                (1, WireType::U64 as u8, &[0]),
+                (1, WireType::Record as u8, root_origin.as_slice()),
                 (2, WireType::Uuid as u8, &[3u8; 16]),
                 (3, WireType::Digest as u8, &[9u8; 32]),
                 (4, WireType::List as u8, &trailing),
@@ -1851,7 +1952,7 @@ mod tests {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             &[
-                (1, WireType::U64 as u8, &[0]),
+                (1, WireType::Record as u8, root_origin.as_slice()),
                 (2, WireType::Uuid as u8, &[3u8; 16]),
                 (3, WireType::Digest as u8, &[9u8; 32]),
                 (5, WireType::Record as u8, &limits),
@@ -1870,7 +1971,7 @@ mod tests {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             &[
-                (1, WireType::U64 as u8, &[0]),
+                (1, WireType::Record as u8, root_origin.as_slice()),
                 (2, WireType::Uuid as u8, &[3u8; 16]),
                 (3, WireType::Digest as u8, &[9u8; 32]),
                 (4, WireType::List as u8, &(0u32).to_be_bytes()),
@@ -1951,6 +2052,7 @@ mod tests {
 
     #[test]
     fn nested_limits_reject_wrong_record_framing() {
+        let root_origin = fixture_root_origin_bytes();
         // The nested limits records are anonymous: tag zero, version one.
         let wrong_tag = raw_record(TagRegistry::RUN_EXECUTION_MEANING, 1, &[]);
         assert_eq!(
@@ -1992,7 +2094,7 @@ mod tests {
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             1,
             &[
-                (1, WireType::U64 as u8, &[0]),
+                (1, WireType::Record as u8, root_origin.as_slice()),
                 (2, WireType::Uuid as u8, &[3u8; 16]),
                 (3, WireType::Digest as u8, &[9u8; 32]),
                 (4, WireType::List as u8, &(0u32).to_be_bytes()),
@@ -2438,7 +2540,9 @@ mod tests {
 
     fn golden_selection() -> ProgrammaticCallerPolicySelectionV1 {
         ProgrammaticCallerPolicySelectionV1 {
-            root_origin: ExecutionKind::Ordinary,
+            root_origin: ProgrammaticCallerRootOriginV1::InteractiveUser {
+                originating_turn_id: golden_uuid("33333333-3333-4333-8333-333333333333"),
+            },
             effective_policy_snapshot_reference: golden_uuid(
                 "22222222-2222-4222-8222-222222222222",
             ),
@@ -2469,8 +2573,9 @@ mod tests {
             .expect("golden activity limits record encodes")
     }
 
-    /// The fixed run-execution-meaning fields 1-10 exactly as the golden
-    /// fixtures capture them.
+    /// The fixed run-execution-meaning fields 1-6 exactly as the golden
+    /// fixtures capture them. Fields 7-10 are the typed Slice 3 selection
+    /// slots, built from their own constructors in [`golden_v4_record`].
     fn golden_meaning_fields() -> Vec<Vec<u8>> {
         let tree = golden_uuid("11111111-1111-4111-8111-111111111111");
         let policy = golden_uuid("22222222-2222-4222-8222-222222222222");
@@ -2530,18 +2635,16 @@ mod tests {
                 record(0x0103, 1, vec![(1, WireType::List, references)])
                     .expect("golden provenance references encode")
             },
-            encode_bool(false),
-            encode_bool(false),
-            encode_bool(false),
-            DisabledOr::Selected(golden_selection())
-                .encode()
-                .expect("golden policy selection encodes"),
         ]
     }
 
     fn golden_v4_record() -> RunExecutionMeaningV4Record {
         RunExecutionMeaningV4Record {
             fields: golden_meaning_fields(),
+            harness_selection: DisabledOr::Disabled,
+            goal_selection: DisabledOr::Disabled,
+            mcp_method_catalog_selection: DisabledOr::Disabled,
+            programmatic_caller_policy_selection: DisabledOr::Selected(golden_selection()),
             agent_activity_selection: AgentActivitySelectionV1::Root {
                 activity_tree_id: golden_uuid("11111111-1111-4111-8111-111111111111"),
                 root_origin: ExecutionKind::Ordinary,
@@ -2553,6 +2656,52 @@ mod tests {
             .encode()
             .expect("golden activity selection encodes"),
         }
+    }
+
+    /// The golden v4 field table as raw `(number, wire type, value)` triples,
+    /// including the four typed Slice 3 selection slots and field 11.
+    fn golden_v4_field_table() -> Vec<(u32, WireType, Vec<u8>)> {
+        let record = golden_v4_record();
+        let mut fields: Vec<(u32, WireType, Vec<u8>)> = record
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, value)| ((index + 1) as u32, WireType::Record, value.clone()))
+            .collect();
+        fields.push((
+            7,
+            WireType::Record,
+            record
+                .harness_selection
+                .encode()
+                .expect("golden harness selection encodes"),
+        ));
+        fields.push((
+            8,
+            WireType::Record,
+            record
+                .goal_selection
+                .encode()
+                .expect("golden goal selection encodes"),
+        ));
+        fields.push((
+            9,
+            WireType::Record,
+            record
+                .mcp_method_catalog_selection
+                .encode()
+                .expect("golden mcp selection encodes"),
+        ));
+        fields.push((
+            10,
+            WireType::Record,
+            record
+                .programmatic_caller_policy_selection
+                .encode()
+                .expect("golden policy selection encodes"),
+        ));
+        fields.push((11, WireType::Record, record.agent_activity_selection));
+        fields
     }
 
     fn golden_envelope(kind: ExecutionKind) -> RunExecutionMeaningEnvelopeV1 {
@@ -2753,7 +2902,11 @@ mod tests {
 
     fn golden_selection_with_provenance() -> ProgrammaticCallerPolicySelectionV1 {
         ProgrammaticCallerPolicySelectionV1 {
-            root_origin: ExecutionKind::Ordinary,
+            root_origin: ProgrammaticCallerRootOriginV1::ContinualHarness {
+                harness_id: golden_uuid("55555555-5555-4555-8555-555555555555"),
+                rule_revision: 7,
+                trigger_reason_id: golden_uuid("66666666-6666-4666-8666-666666666666"),
+            },
             effective_policy_snapshot_reference: golden_uuid(
                 "22222222-2222-4222-8222-222222222222",
             ),
@@ -2972,6 +3125,9 @@ mod tests {
                 _ => None,
             }
         };
+        // The registry lookup is closed: a name outside the ledger has no
+        // constant.
+        assert_eq!(registry_value("agent-notification-record-v0"), None);
         let mut values = Vec::new();
         for entry in TagRegistry::LEDGER {
             assert_eq!(
@@ -2987,9 +3143,15 @@ mod tests {
             );
             values.push(entry.value);
             let expected_status = match entry.name {
-                // Slice 2 wires the nine active ledger families: the three
-                // historical families plus model-capability-taxonomy-v1
-                // through model-context-projection-v1.
+                // Slice 2 wired the nine control-plane families and Slice 3
+                // wires the harness, Goal, MCP, and tool-loop families.
+                "goal-run-selection-v1"
+                | "continual-harness-selection-v1"
+                | "mcp-method-catalog-selection-v1"
+                | "tool-descriptor-revision"
+                | "tool-registry-revision"
+                | "model-tool-loop-v1"
+                | "bridge-invocation-v1" => TagStatus::Wired,
                 "run-execution-meaning"
                 | "programmatic-caller-policy-selection-v1"
                 | "agent-activity-selection-v1"
@@ -2999,14 +3161,6 @@ mod tests {
                 | "reasoning-history-manifest-v1"
                 | "context-source-manifest-v1"
                 | "model-context-projection-v1" => TagStatus::Wired,
-                // Slice 3 owns the selection and tool-loop families.
-                "goal-run-selection-v1"
-                | "continual-harness-selection-v1"
-                | "mcp-method-catalog-selection-v1"
-                | "tool-descriptor-revision"
-                | "tool-registry-revision"
-                | "model-tool-loop-v1"
-                | "bridge-invocation-v1" => TagStatus::ReservedForSlice3,
                 // Slice 4 owns the fork and agent-activity families.
                 _ => TagStatus::ReservedForSlice4,
             };
@@ -3119,5 +3273,250 @@ mod tests {
                 "registry constant {name} (0x{value:04x}) is missing from the ledger table"
             );
         }
+    }
+
+    #[test]
+    fn activity_selection_decode_rejects_malformed_field_payloads() {
+        let limits = golden_activity_limits_record();
+        let short_tree = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            1,
+            &[(1, WireType::Uuid as u8, &[7u8; 15])],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&short_tree).expect_err("a short tree id is rejected"),
+            CanonicalError::InvalidField
+        );
+        let foreign_limits = raw_record(9, 1, &[]);
+        let bad_limits = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::Uuid as u8, &[7u8; 16]),
+                (2, WireType::U64 as u8, &[0]),
+                (3, WireType::U64 as u8, &[1]),
+                (4, WireType::U64 as u8, &[1]),
+                (5, WireType::U64 as u8, &[1]),
+                (6, WireType::Record as u8, &foreign_limits),
+            ],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&bad_limits)
+                .expect_err("a foreign limits frame is rejected"),
+            CanonicalError::InvalidTag
+        );
+        for bad in [3u32, 4, 5] {
+            let fields: Vec<(u32, u8, Vec<u8>)> = (1..=6)
+                .map(|number| {
+                    let wire_type = match number {
+                        1 => WireType::Uuid,
+                        6 => WireType::Record,
+                        _ => WireType::U64,
+                    };
+                    let value = match number {
+                        1 => vec![7u8; 16],
+                        2 => vec![0u8],
+                        6 => limits.clone(),
+                        _ if number == bad => vec![0, 1],
+                        _ => encode_u64(1),
+                    };
+                    (number, wire_type as u8, value)
+                })
+                .collect();
+            let refs: Vec<(u32, u8, &[u8])> = fields
+                .iter()
+                .map(|(number, wire_type, value)| (*number, *wire_type, value.as_slice()))
+                .collect();
+            assert_eq!(
+                AgentActivitySelectionV1::decode(&raw_record(
+                    TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+                    1,
+                    &refs,
+                ))
+                .expect_err("a non-minimal revision scalar is rejected"),
+                CanonicalError::InvalidField,
+                "field {bad}"
+            );
+        }
+        let unknown_origin = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::Uuid as u8, &[7u8; 16]),
+                (2, WireType::U64 as u8, &[7]),
+                (3, WireType::U64 as u8, &[1]),
+                (4, WireType::U64 as u8, &[1]),
+                (5, WireType::U64 as u8, &[1]),
+                (6, WireType::Record as u8, &limits),
+            ],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&unknown_origin)
+                .expect_err("an unknown root origin is rejected"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn descendant_activity_selection_decode_rejects_a_short_parent_link() {
+        let limits = golden_activity_limits_record();
+        let descendant = raw_record(
+            TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
+            2,
+            &[
+                (1, WireType::Uuid as u8, &[7u8; 16]),
+                (2, WireType::Uuid as u8, &[8u8; 15]),
+                (3, WireType::U64 as u8, &[1]),
+                (4, WireType::U64 as u8, &[1]),
+                (5, WireType::U64 as u8, &[1]),
+                (6, WireType::Record as u8, &limits),
+            ],
+        );
+        assert_eq!(
+            AgentActivitySelectionV1::decode(&descendant)
+                .expect_err("a short parent link reference is rejected"),
+            CanonicalError::InvalidField
+        );
+    }
+
+    #[test]
+    fn programmatic_policy_decode_rejects_short_references_and_digests() {
+        let root_origin = fixture_root_origin_bytes();
+        let short_reference = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::Record as u8, &root_origin),
+                (2, WireType::Uuid as u8, &[3u8; 15]),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&short_reference)
+                .expect_err("a short policy snapshot reference is rejected"),
+            CanonicalError::InvalidField
+        );
+        let short_digest = raw_record(
+            TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
+            1,
+            &[
+                (1, WireType::Record as u8, &root_origin),
+                (2, WireType::Uuid as u8, &[3u8; 16]),
+                (3, WireType::Digest as u8, &[9u8; 31]),
+            ],
+        );
+        assert_eq!(
+            ProgrammaticCallerPolicySelectionV1::decode(&short_digest)
+                .expect_err("a short policy selection digest is rejected"),
+            CanonicalError::InvalidDigest
+        );
+    }
+
+    #[test]
+    fn envelope_decode_rejects_non_minimal_metadata_and_short_digests() {
+        for field in [2u32, 3, 4] {
+            let fields: Vec<(u32, u8, Vec<u8>)> = (1..=6)
+                .map(|number| {
+                    let value = match number {
+                        1 => vec![0u8],
+                        5 => Vec::new(),
+                        6 => vec![0u8; 32],
+                        _ if number == field => vec![0, 1],
+                        _ => encode_u64(1),
+                    };
+                    let wire_type = match number {
+                        5 => WireType::Bytes,
+                        6 => WireType::Digest,
+                        _ => WireType::U64,
+                    };
+                    (number, wire_type as u8, value)
+                })
+                .collect();
+            let refs: Vec<(u32, u8, &[u8])> = fields
+                .iter()
+                .map(|(number, wire_type, value)| (*number, *wire_type, value.as_slice()))
+                .collect();
+            assert_eq!(
+                RunExecutionMeaningEnvelopeV1::decode(&raw_record(0x0102, 1, &refs))
+                    .expect_err("a non-minimal envelope metadata scalar is rejected"),
+                CanonicalError::InvalidField,
+                "field {field}"
+            );
+        }
+        let tag = encode_u64(1);
+        let version = encode_u64(4);
+        let canonicalization = encode_u64(1);
+        let short_digest = raw_record(
+            0x0102,
+            1,
+            &[
+                (1, WireType::U64 as u8, &[0]),
+                (2, WireType::U64 as u8, &tag),
+                (3, WireType::U64 as u8, &version),
+                (4, WireType::U64 as u8, &canonicalization),
+                (5, WireType::Bytes as u8, &[]),
+                (6, WireType::Digest as u8, &[0u8; 31]),
+            ],
+        );
+        assert_eq!(
+            RunExecutionMeaningEnvelopeV1::decode(&short_digest)
+                .expect_err("a short canonical meaning digest is rejected"),
+            CanonicalError::InvalidDigest
+        );
+    }
+
+    #[test]
+    fn v4_record_decode_rejects_invalid_typed_selection_presence_markers() {
+        let invalid: &[u8] = &[2];
+        for field in [7u32, 8, 9, 10] {
+            let full = golden_v4_field_table();
+            let fields: Vec<(u32, u8, &[u8])> = full
+                .iter()
+                .map(|(number, wire_type, value)| {
+                    (
+                        *number,
+                        *wire_type as u8,
+                        if *number == field {
+                            invalid
+                        } else {
+                            value.as_slice()
+                        },
+                    )
+                })
+                .collect();
+            assert_eq!(
+                RunExecutionMeaningV4Record::decode(&raw_record(
+                    TagRegistry::RUN_EXECUTION_MEANING,
+                    4,
+                    &fields,
+                ))
+                .expect_err("an invalid selection presence marker is rejected"),
+                CanonicalError::InvalidOptional,
+                "field {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn activity_limit_test_helpers_cover_unknown_field_numbers() {
+        let frozen = FixedActivityLimits::frozen();
+        assert_eq!(activity_limit_value(&frozen, 0), 0);
+        assert_eq!(activity_limit_value(&frozen, 9), 0);
+        assert_eq!(
+            activity_limits_with(&frozen, 9, 1),
+            frozen,
+            "an unknown activity limit number leaves the value unchanged"
+        );
+    }
+
+    #[test]
+    fn parse_golden_rejects_unexpected_formats_and_unknown_keys() {
+        let unexpected_format = parse_golden("format=typed-tlv-v2")
+            .err()
+            .expect("an unexpected golden format is rejected");
+        assert_eq!(unexpected_format, "unexpected golden format: typed-tlv-v2");
+        let unknown_key = parse_golden("unknown_key=value")
+            .err()
+            .expect("an unknown golden key is rejected");
+        assert_eq!(unknown_key, "unknown golden key: unknown_key");
     }
 }

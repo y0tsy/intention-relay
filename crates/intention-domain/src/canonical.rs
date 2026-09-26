@@ -1009,8 +1009,6 @@ pub fn contains_control_or_nul(value: &str) -> bool {
 pub enum TagStatus {
     /// The tag has a production codec in this PR.
     Wired,
-    /// The tag is reserved for Slice 3 with no production codec yet.
-    ReservedForSlice3,
     /// The tag is reserved for Slice 4 with no production codec yet.
     ReservedForSlice4,
 }
@@ -1078,17 +1076,17 @@ impl TagRegistry {
         LedgerTag {
             name: "goal-run-selection-v1",
             value: 0x0203,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "continual-harness-selection-v1",
             value: 0x0204,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "mcp-method-catalog-selection-v1",
             value: 0x0205,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "model-capability-taxonomy-v1",
@@ -1123,22 +1121,22 @@ impl TagRegistry {
         LedgerTag {
             name: "tool-descriptor-revision",
             value: 0x0301,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "tool-registry-revision",
             value: 0x0302,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "model-tool-loop-v1",
             value: 0x0303,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "bridge-invocation-v1",
             value: 0x0304,
-            status: TagStatus::ReservedForSlice3,
+            status: TagStatus::Wired,
         },
         LedgerTag {
             name: "fork-base-snapshot-v1/v2",
@@ -1181,4 +1179,51 @@ impl TagRegistry {
             status: TagStatus::ReservedForSlice4,
         },
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Unit fixtures use expect to provide precise test failure messages."
+    )]
+
+    use super::*;
+
+    #[test]
+    fn record_reader_rejects_bad_magic_and_frame_versions() {
+        let mut wrong_magic = [0u8; 16];
+        wrong_magic[..4].copy_from_slice(b"XRCX");
+        assert!(matches!(
+            CanonicalRecordReader::new(&wrong_magic, 1),
+            Err(CanonicalError::InvalidMagic)
+        ));
+        let mut wrong_version = Vec::from(*b"IRCR");
+        wrong_version.extend_from_slice(&2u32.to_be_bytes());
+        wrong_version.extend_from_slice(&0u32.to_be_bytes());
+        wrong_version.extend_from_slice(&1u32.to_be_bytes());
+        assert!(matches!(
+            CanonicalRecordReader::new(&wrong_version, 1),
+            Err(CanonicalError::InvalidVersion)
+        ));
+    }
+
+    #[test]
+    fn list_decoders_reject_truncated_counts() {
+        assert_eq!(
+            decode_uuid_list(&[]).expect_err("an empty uuid list count is truncated"),
+            CanonicalError::Truncated
+        );
+        assert_eq!(
+            decode_list_items(&[0, 0, 0]).expect_err("a three-byte list count is truncated"),
+            CanonicalError::Truncated
+        );
+    }
+
+    #[test]
+    fn identifier_credential_shape_accepts_a_trailing_bearer_word() {
+        // A `bearer` word at the end of the value introduces no token, so the
+        // over-inclusive identifier role has nothing to reject.
+        assert!(!credential_shaped_identifier("bearer"));
+    }
 }

@@ -291,12 +291,16 @@ fn all_family_bytes() -> Vec<u8> {
 // ---- Registry ----
 
 #[test]
-fn slice2_registry_has_exactly_nine_wired_tags() {
+fn slice3_registry_has_exactly_sixteen_wired_tags() {
     let wired: Vec<&intention_domain::canonical::LedgerTag> = TagRegistry::LEDGER
         .iter()
         .filter(|entry| entry.status == TagStatus::Wired)
         .collect();
-    assert_eq!(wired.len(), 9, "exactly nine families are wired in Slice 2");
+    assert_eq!(
+        wired.len(),
+        16,
+        "exactly sixteen families are wired in Slice 3"
+    );
     let names: Vec<&str> = wired.iter().map(|entry| entry.name).collect();
     assert_eq!(
         names,
@@ -304,25 +308,33 @@ fn slice2_registry_has_exactly_nine_wired_tags() {
             "run-execution-meaning",
             "programmatic-caller-policy-selection-v1",
             "agent-activity-selection-v1",
+            "goal-run-selection-v1",
+            "continual-harness-selection-v1",
+            "mcp-method-catalog-selection-v1",
             "model-capability-taxonomy-v1",
             "provider-profile-revision-v1",
             "provider-selection-v1",
             "reasoning-history-manifest-v1",
             "context-source-manifest-v1",
             "model-context-projection-v1",
+            "tool-descriptor-revision",
+            "tool-registry-revision",
+            "model-tool-loop-v1",
+            "bridge-invocation-v1",
         ]
     );
     let values: Vec<u32> = wired.iter().map(|entry| entry.value).collect();
     assert_eq!(
         values,
         vec![
-            0x0101, 0x0201, 0x0202, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A, 0x020B
+            0x0101, 0x0201, 0x0202, 0x0203, 0x0204, 0x0205, 0x0206, 0x0207, 0x0208, 0x0209, 0x020A,
+            0x020B, 0x0301, 0x0302, 0x0303, 0x0304
         ]
     );
 }
 
 #[test]
-fn slice2_registry_classifies_future_tags_by_slice() {
+fn slice3_registry_classifies_future_tags_by_slice() {
     let status_of = |tag: u32| -> Option<TagStatus> {
         TagRegistry::LEDGER
             .iter()
@@ -332,8 +344,8 @@ fn slice2_registry_classifies_future_tags_by_slice() {
     for tag in [0x0203, 0x0204, 0x0205, 0x0301, 0x0302, 0x0303, 0x0304] {
         assert_eq!(
             status_of(tag),
-            Some(TagStatus::ReservedForSlice3),
-            "tag 0x{tag:04x} must be reserved for Slice 3"
+            Some(TagStatus::Wired),
+            "tag 0x{tag:04x} must be wired by Slice 3"
         );
     }
     for tag in [
@@ -407,9 +419,9 @@ fn reserved_tags_are_not_active_capabilities() {
         .filter(|entry| entry.status != TagStatus::Wired)
         .map(|entry| entry.value)
         .collect();
-    assert_eq!(reserved.len(), 15);
+    assert_eq!(reserved.len(), 8);
     type Decoder = fn(&[u8]) -> Result<(), CanonicalError>;
-    let decoders: [(&str, Decoder); 6] = [
+    let decoders: [(&str, Decoder); 10] = [
         ("taxonomy", |bytes| {
             ModelCapabilitySetV1::decode(bytes).map(|_| ())
         }),
@@ -427,6 +439,23 @@ fn reserved_tags_are_not_active_capabilities() {
         }),
         ("context projection", |bytes| {
             ModelContextProjectionV1::decode(bytes).map(|_| ())
+        }),
+        ("policy selection", |bytes| {
+            intention_domain::run_execution_meaning::ProgrammaticCallerPolicySelectionV1::decode(
+                bytes,
+            )
+            .map(|_| ())
+        }),
+        ("harness selection", |bytes| {
+            intention_domain::slice3_selections::ContinualHarnessSelectionV1::decode(bytes)
+                .map(|_| ())
+        }),
+        ("goal selection", |bytes| {
+            intention_domain::slice3_selections::GoalRunSelectionV1::decode(bytes).map(|_| ())
+        }),
+        ("mcp selection", |bytes| {
+            intention_domain::slice3_selections::McpMethodCatalogSelectionV1::decode(bytes)
+                .map(|_| ())
         }),
     ];
     for tag in reserved {

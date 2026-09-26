@@ -17,6 +17,7 @@ pub mod provider_catalog;
 pub mod provider_selection;
 pub mod reasoning_history;
 pub mod run_execution_meaning;
+pub mod slice3_selections;
 
 mod model_facts;
 
