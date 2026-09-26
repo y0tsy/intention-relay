@@ -16,22 +16,12 @@ pub mod context_projection;
 pub mod goal_domain;
 pub mod harness;
 pub mod programmatic_policy;
-pub mod goal_domain;
-pub mod harness;
-pub mod programmatic_policy;
-pub mod harness;
-pub mod slice3_selections;
-pub mod verification;
-pub mod programmatic_policy;
-pub mod harness;
 pub mod provider_catalog;
-pub mod slice3_selections;
 pub mod provider_selection;
 pub mod reasoning_history;
-pub mod slice3_selections;
 pub mod run_execution_meaning;
 pub mod slice3_selections;
-pub mod slice3_selections;
+pub mod verification;
 
 mod model_facts;
 
@@ -1940,5 +1930,62 @@ mod tests {
                 .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn session_projection_exposes_its_identity_workspace_root_and_mode() {
+        let project_id = ProjectId::new();
+        let session_id = SessionId::new();
+        let workspace_id = WorkspaceId::new();
+        let workspace_root = fixture_workspace_root();
+        let projection = SessionProjectionDto::new(
+            project_id,
+            session_id,
+            workspace_id,
+            workspace_root.clone(),
+            RunModeDto::Build,
+            None,
+            None,
+            Vec::new(),
+            SessionEventSequenceDto::new(1),
+        )
+        .expect("an empty session projection is coherent");
+        assert_eq!(projection.project_id(), project_id);
+        assert_eq!(projection.session_id(), session_id);
+        assert_eq!(projection.workspace_id(), workspace_id);
+        assert_eq!(projection.workspace_root(), &workspace_root);
+        assert_eq!(projection.mode(), RunModeDto::Build);
+    }
+
+    #[test]
+    fn user_turn_accepted_event_round_trips_and_rejects_blank_content() {
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+        let event = UserTurnAcceptedEventDto::new(session_id, turn_id, "hello", fixture_time())
+            .expect("user turn content is valid");
+        assert_eq!(event.session_id(), session_id);
+        assert_eq!(event.turn_id(), turn_id);
+        assert_eq!(event.content(), "hello");
+        assert_eq!(event.occurred_at(), fixture_time());
+        let encoded = serde_json::to_string(&event).expect("user turn event serializes");
+        let decoded: UserTurnAcceptedEventDto =
+            serde_json::from_str(&encoded).expect("user turn event parses");
+        assert_eq!(decoded, event);
+        let blank = encoded.replace("\"hello\"", "\"   \"");
+        assert!(
+            serde_json::from_str::<UserTurnAcceptedEventDto>(&blank).is_err(),
+            "blank turn content must not deserialize"
+        );
+    }
+
+    #[test]
+    fn run_status_changed_event_exposes_its_successor_status() {
+        let event = RunStatusChangedEventDto::new(
+            SessionId::new(),
+            RunId::new(),
+            RunStatusDto::Running,
+            fixture_time(),
+        );
+        assert_eq!(event.status(), RunStatusDto::Running);
     }
 }

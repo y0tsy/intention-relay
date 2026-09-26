@@ -670,4 +670,104 @@ mod tests {
             "model_context_projection_too_large"
         );
     }
+
+    fn raw_manifest_record(fields: Vec<(u32, WireType, Vec<u8>)>) -> Vec<u8> {
+        record(TagRegistry::CONTEXT_SOURCE_MANIFEST_V1, 1, fields)
+            .expect("raw manifest record encodes")
+    }
+
+    #[test]
+    fn context_source_entry_decode_rejects_wrong_frames_and_bad_optionals() {
+        let wrong_frame =
+            record(7, 1, Vec::new()).expect("raw anonymous entry record with tag seven encodes");
+        assert_eq!(
+            ContextSourceEntryV1::decode(&wrong_frame)
+                .expect_err("a non-anonymous source entry frame is rejected"),
+            CanonicalError::InvalidTag
+        );
+        // The optional safe label is a presence marker followed by UTF-8; a
+        // present value that is not readable text fails closed.
+        let bad_optional = record(
+            0,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8("source-history")),
+                (2, WireType::Utf8, encode_utf8("session")),
+                (3, WireType::Utf8, encode_utf8("rev-0001")),
+                (4, WireType::Optional, vec![1, 0xff]),
+            ],
+        )
+        .expect("raw source entry record encodes");
+        assert_eq!(
+            ContextSourceEntryV1::decode(&bad_optional)
+                .expect_err("an unreadable safe label is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
+
+    #[test]
+    fn context_source_manifest_decode_verifies_its_stored_digest() {
+        let mut tampered = with_digest(fixture_manifest());
+        tampered.manifest_digest = "0".repeat(64);
+        let bytes = tampered.encode().expect("tampered manifest encodes");
+        assert_eq!(
+            ContextSourceManifestV1::decode(&bytes)
+                .expect_err("a stale manifest digest is rejected"),
+            CanonicalError::DigestMismatch
+        );
+        // A manifest whose source-entry list carries unreadable item bytes
+        // fails while decoding entries.
+        let unreadable_entry = raw_manifest_record(vec![
+            (1, WireType::Utf8, encode_utf8("context-source-manifest-v1")),
+            (
+                2,
+                WireType::List,
+                crate::canonical::encode_list_items(&[vec![0xff]]),
+            ),
+            (3, WireType::Utf8, encode_utf8(&"0".repeat(64))),
+        ]);
+        assert_eq!(
+            ContextSourceManifestV1::decode(&unreadable_entry)
+                .expect_err("an unreadable source entry is rejected"),
+            CanonicalError::Truncated
+        );
+    }
+
+    #[test]
+    fn model_context_projection_decode_verifies_its_stored_digest() {
+        let mut tampered = with_projection_digest(fixture_projection());
+        tampered.model_context_digest = "0".repeat(64);
+        let bytes = tampered.encode().expect("tampered projection encodes");
+        assert_eq!(
+            ModelContextProjectionV1::decode(&bytes)
+                .expect_err("a stale model context digest is rejected"),
+            CanonicalError::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn context_source_scalars_reject_blank_over_bound_and_control_values() {
+        let mut blank = fixture_entry();
+        blank.source_id = String::new();
+        assert_eq!(
+            blank.validate().expect_err("a blank source id is rejected"),
+            CanonicalError::ContextSourceManifestInvalid
+        );
+        let mut over_bound = fixture_entry();
+        over_bound.revision = "r".repeat(MAX_CONTEXT_SOURCE_STRING_CHARS + 1);
+        assert_eq!(
+            over_bound
+                .validate()
+                .expect_err("an over-bound revision is rejected"),
+            CanonicalError::ContextSourceManifestInvalid
+        );
+        let mut control = fixture_entry();
+        control.safe_label = Some("label\u{7}".to_owned());
+        assert_eq!(
+            control
+                .validate()
+                .expect_err("a control character is rejected"),
+            CanonicalError::ContextSourceManifestInvalid
+        );
+    }
 }

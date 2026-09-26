@@ -944,4 +944,145 @@ mod tests {
             PROVIDER_SELECTION_CANONICALIZATION_VERSION.to_owned();
         assert!(selection.encode().is_ok());
     }
+
+    fn fixture_provider_selection() -> ProviderSelectionV1 {
+        ProviderSelectionV1 {
+            selection_canonicalization_version: PROVIDER_SELECTION_CANONICALIZATION_VERSION
+                .to_owned(),
+            profile_id: "profile-default".to_owned(),
+            provider_profile_revision_id: "rev-0001".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
+            model_id: "gpt-4.1".to_owned(),
+            normalized_effective_endpoint: "https://api.openai.com/v1".to_owned(),
+            credential_transport_mode: CredentialTransportMode::Bearer,
+            credential_transport_safe_header_name: None,
+            declared_model_capability_subset: vec!["text_streaming".to_owned()],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "ordinary".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            provider_driver_contract_revision: "responses-1.0".to_owned(),
+            selection_source: None,
+        }
+    }
+
+    #[test]
+    fn capability_set_with_disabled_reasoning_round_trips() {
+        let mut capability = fixture_capability_set();
+        capability.reasoning = ReasoningCapability::Disabled;
+        let bytes = capability
+            .encode()
+            .expect("capability set without reasoning encodes");
+        assert_eq!(
+            ModelCapabilitySetV1::decode(&bytes).expect("capability set decodes"),
+            capability
+        );
+        assert!(!capability.supports("reasoning"));
+    }
+
+    #[test]
+    fn capability_selection_rejects_blank_capability_names() {
+        let blank = ModelCapabilitySelectionV1 {
+            taxonomy_version: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+            descriptor_capability_envelope: fixture_capability_set(),
+            selected_capabilities: vec![String::new()],
+        };
+        assert_eq!(
+            blank
+                .encode()
+                .expect_err("a blank capability name is rejected")
+                .code(),
+            "provider_profile_revision_invalid"
+        );
+    }
+
+    #[test]
+    fn capability_selection_decode_rejects_wrong_frames_and_bad_lists() {
+        let envelope = fixture_capability_set()
+            .encode()
+            .expect("capability set encodes");
+        assert_eq!(
+            ModelCapabilitySelectionV1::decode(
+                &record(9, 1, Vec::new()).expect("raw selection record encodes")
+            )
+            .expect_err("a non-anonymous selection frame is rejected"),
+            CanonicalError::InvalidTag
+        );
+        let bad_envelope = record(
+            0,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8(MODEL_CAPABILITY_TAXONOMY_V1)),
+                (2, WireType::Record, vec![0xff]),
+            ],
+        )
+        .expect("raw selection record encodes");
+        assert_eq!(
+            ModelCapabilitySelectionV1::decode(&bad_envelope)
+                .expect_err("a malformed nested envelope is rejected"),
+            CanonicalError::Truncated
+        );
+        let bad_list = record(
+            0,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8(MODEL_CAPABILITY_TAXONOMY_V1)),
+                (2, WireType::Record, envelope),
+                (
+                    3,
+                    WireType::List,
+                    crate::canonical::encode_list_items(&[vec![0xff]]),
+                ),
+            ],
+        )
+        .expect("raw selection record encodes");
+        assert_eq!(
+            ModelCapabilitySelectionV1::decode(&bad_list)
+                .expect_err("an unreadable selected capability is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
+
+    #[test]
+    fn provider_selection_validate_rejects_inconsistent_credential_transport() {
+        let mut selection = fixture_provider_selection();
+        selection.credential_transport_mode = CredentialTransportMode::SafeHeader;
+        selection.credential_transport_safe_header_name = None;
+        assert_eq!(
+            selection
+                .validate()
+                .expect_err("safe-header transport without a header name is rejected")
+                .code(),
+            "provider_profile_revision_invalid"
+        );
+    }
+
+    #[test]
+    fn provider_selection_decode_rejects_unreadable_safe_header_names() {
+        let selection = record(
+            TagRegistry::PROVIDER_SELECTION_V1,
+            1,
+            vec![
+                (
+                    1,
+                    WireType::Utf8,
+                    encode_utf8(PROVIDER_SELECTION_CANONICALIZATION_VERSION),
+                ),
+                (2, WireType::Utf8, encode_utf8("profile-default")),
+                (3, WireType::Utf8, encode_utf8("rev-0001")),
+                (4, WireType::Utf8, encode_utf8("responses")),
+                (5, WireType::Utf8, encode_utf8("kind-descriptor-rev-0001")),
+                (6, WireType::Utf8, encode_utf8("gpt-4.1")),
+                (7, WireType::Utf8, encode_utf8("https://api.openai.com/v1")),
+                (8, WireType::U64, vec![0]),
+                (9, WireType::Optional, vec![1, 0xff]),
+            ],
+        )
+        .expect("raw selection record encodes");
+        assert_eq!(
+            ProviderSelectionV1::decode(&selection)
+                .expect_err("an unreadable safe header name is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
 }

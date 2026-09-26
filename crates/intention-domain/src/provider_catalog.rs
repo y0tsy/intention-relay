@@ -1620,4 +1620,186 @@ mod tests {
             "invalid_provider_kind"
         );
     }
+
+    #[test]
+    fn endpoint_validation_rejects_empty_plaintext_authority_and_credential_shapes() {
+        for (endpoint, expected) in [
+            ("http://", "invalid_endpoint"),
+            ("https://[a[b]/v1", "invalid_endpoint"),
+            ("https://api.example.com/%2x", "invalid_endpoint"),
+            (
+                "https://api.example.com/sk-live-secret",
+                "credentials_forbidden",
+            ),
+        ] {
+            assert_eq!(
+                validate_endpoint(endpoint)
+                    .expect_err("invalid endpoint is rejected")
+                    .code(),
+                expected,
+                "endpoint {endpoint}"
+            );
+        }
+        // A well-formed two-digit percent escape is accepted.
+        assert!(validate_endpoint("https://api.example.com/%20v1").is_ok());
+    }
+
+    #[test]
+    fn kind_descriptor_decode_rejects_a_malformed_protocol_part_list() {
+        let bad_list = record(
+            0,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8("responses")),
+                (2, WireType::Utf8, encode_utf8("responses-descriptor")),
+                (
+                    3,
+                    WireType::List,
+                    crate::canonical::encode_list_items(&[vec![0xff]]),
+                ),
+            ],
+        )
+        .expect("raw descriptor record encodes");
+        assert_eq!(
+            ProviderKindDescriptorRevisionV1::decode(&bad_list)
+                .expect_err("an unreadable protocol part revision is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
+
+    #[test]
+    fn provider_profile_revision_accepts_an_absent_reasoning_compatibility_id() {
+        let mut profile = fixture_profile();
+        profile.reasoning_compatibility_id = None;
+        let bytes = profile
+            .encode()
+            .expect("profile without a reasoning compatibility id encodes");
+        assert_eq!(
+            ProviderProfileRevisionV1::decode(&bytes).expect("profile revision decodes"),
+            profile
+        );
+    }
+
+    #[test]
+    fn provider_profile_revision_decode_rejects_unreadable_optional_values() {
+        let mut fields: Vec<(u32, WireType, Vec<u8>)> = vec![
+            (1, WireType::Utf8, encode_utf8("profile-default")),
+            (2, WireType::Utf8, encode_utf8("rev-0001")),
+            (3, WireType::Utf8, encode_utf8("responses")),
+            (4, WireType::Utf8, encode_utf8("gpt-4.1")),
+            (5, WireType::Utf8, encode_utf8("https://api.openai.com/v1")),
+            (6, WireType::U64, encode_u64(0)),
+        ];
+        let mut unreadable_header = fields.clone();
+        unreadable_header.push((7, WireType::Optional, vec![1, 0xff]));
+        assert_eq!(
+            ProviderProfileRevisionV1::decode(
+                &record(
+                    TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+                    1,
+                    unreadable_header,
+                )
+                .expect("raw profile record encodes")
+            )
+            .expect_err("an unreadable safe header name is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+        fields.push((7, WireType::Optional, encode_optional_utf8(&None)));
+        fields.push((8, WireType::Utf8, encode_utf8(MODEL_CAPABILITY_TAXONOMY_V1)));
+        let mut unreadable_compatibility = fields;
+        unreadable_compatibility.push((9, WireType::Optional, vec![1, 0xff]));
+        assert_eq!(
+            ProviderProfileRevisionV1::decode(
+                &record(
+                    TagRegistry::PROVIDER_PROFILE_REVISION_V1,
+                    1,
+                    unreadable_compatibility,
+                )
+                .expect("raw profile record encodes")
+            )
+            .expect_err("an unreadable reasoning compatibility id is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
+
+    fn raw_tombstone_record(id: &str, provenance: &str, digest: Vec<u8>) -> Vec<u8> {
+        record(
+            0,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8(id)),
+                (2, WireType::U64, encode_u64(2)),
+                (3, WireType::U64, encode_u64(100)),
+                (4, WireType::Utf8, encode_utf8(provenance)),
+                (5, WireType::Digest, digest),
+            ],
+        )
+        .expect("raw tombstone record encodes")
+    }
+
+    #[test]
+    fn tombstone_decode_rejects_wrong_frames_short_digests_and_mismatches() {
+        assert_eq!(
+            ProviderProfileTombstoneDto::decode(
+                &record(9, 1, Vec::new()).expect("raw tombstone record encodes")
+            )
+            .expect_err("a non-anonymous tombstone frame is rejected"),
+            CanonicalError::InvalidTag
+        );
+        assert_eq!(
+            ProviderProfileTombstoneDto::decode(&raw_tombstone_record(
+                "profile-default",
+                "removal-accepted",
+                vec![0u8; 31],
+            ))
+            .expect_err("a digest that is not thirty-two bytes is rejected"),
+            CanonicalError::InvalidDigest
+        );
+        assert_eq!(
+            ProviderProfileTombstoneDto::decode(&raw_tombstone_record(
+                "profile-default",
+                "removal-accepted",
+                vec![0u8; 32],
+            ))
+            .expect_err("a digest that does not match the identity is rejected"),
+            CanonicalError::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn tombstone_constructors_reject_blank_provenance_and_the_openai_alias() {
+        assert_eq!(
+            ProviderProfileTombstoneDto::new("profile-default", 2, 100, "")
+                .expect_err("blank profile tombstone provenance is rejected")
+                .code(),
+            "provider_profile_revision_invalid"
+        );
+        assert_eq!(
+            ProviderKindTombstoneDto::new("generic-chat-completion-api", 2, 101, "")
+                .expect_err("blank kind tombstone provenance is rejected")
+                .code(),
+            "invalid_provider_kind"
+        );
+        assert_eq!(
+            ProviderKindTombstoneDto::new("openai", 2, 101, "removal-accepted")
+                .expect_err("the openai kind alias is rejected")
+                .code(),
+            "invalid_provider_kind"
+        );
+    }
+
+    #[test]
+    fn tombstone_decode_surfaces_failures_through_both_public_dtos() {
+        let wrong_frame = record(9, 1, Vec::new()).expect("raw tombstone record encodes");
+        assert_eq!(
+            ProviderProfileTombstoneDto::decode(&wrong_frame)
+                .expect_err("profile tombstone decode rejects a wrong frame"),
+            CanonicalError::InvalidTag
+        );
+        assert_eq!(
+            ProviderKindTombstoneDto::decode(&wrong_frame)
+                .expect_err("kind tombstone decode rejects a wrong frame"),
+            CanonicalError::InvalidTag
+        );
+    }
 }

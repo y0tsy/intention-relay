@@ -1111,3 +1111,132 @@ impl RunReplayDto {
         &self.tail
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::expect_used,
+        reason = "Unit fixtures use expect to provide precise test failure messages."
+    )]
+
+    use super::*;
+
+    fn fixture_time() -> TimestampDto {
+        TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
+    }
+
+    fn fixture_failure() -> RunFailureDto {
+        RunFailureDto::new("provider_unavailable", ErrorRetryDto::Delayed, None)
+            .expect("fixture failure is valid")
+    }
+
+    #[test]
+    fn reasoning_delta_category_serializes_both_categories_and_rejects_unknown_names() {
+        assert_eq!(
+            serde_json::to_string(&ReasoningDeltaCategory::Primary).expect("primary serializes"),
+            "\"primary\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ReasoningDeltaCategory::Detail).expect("detail serializes"),
+            "\"detail\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ReasoningDeltaCategory>("\"detail\"")
+                .expect("detail deserializes"),
+            ReasoningDeltaCategory::Detail
+        );
+        assert!(
+            serde_json::from_str::<ReasoningDeltaCategory>("\"summary\"").is_err(),
+            "an unknown reasoning category must not deserialize"
+        );
+    }
+
+    #[test]
+    fn every_fact_input_kind_maps_to_its_closed_taxonomy_kind() {
+        let facts = [
+            (
+                ModelRunFactInputDto::provider_attempt_started(1).expect("attempt start is valid"),
+                ModelRunFactKindDto::ProviderAttemptStarted,
+            ),
+            (
+                ModelRunFactInputDto::provider_attempt_failed(1, fixture_failure())
+                    .expect("attempt failure is valid"),
+                ModelRunFactKindDto::ProviderAttemptFailed,
+            ),
+            (
+                ModelRunFactInputDto::retry_scheduled(1, 2).expect("retry is valid"),
+                ModelRunFactKindDto::RetryScheduled,
+            ),
+            (
+                ModelRunFactInputDto::assistant_content_appended(AssistantTurnId::new(), "hello")
+                    .expect("assistant content is valid"),
+                ModelRunFactKindDto::AssistantContentAppended,
+            ),
+        ];
+        for (fact, kind) in facts {
+            assert_eq!(fact.kind(), kind);
+        }
+    }
+
+    #[test]
+    fn durable_model_fact_exposes_its_cursor_input_and_kind() {
+        let input =
+            ModelRunFactInputDto::provider_attempt_started(2).expect("attempt start is valid");
+        let fact = ModelRunFactDto::new(RunEventCursorDto::new(1), input.clone())
+            .expect("cursor-assigned fact is valid");
+        assert_eq!(fact.cursor(), RunEventCursorDto::new(1));
+        assert_eq!(fact.input(), &input);
+        assert_eq!(fact.kind(), ModelRunFactKindDto::ProviderAttemptStarted);
+    }
+
+    #[test]
+    fn durable_model_fact_event_round_trips_and_exposes_its_fact() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let fact = ModelRunFactDto::new(
+            RunEventCursorDto::new(1),
+            ModelRunFactInputDto::provider_attempt_started(1).expect("attempt start is valid"),
+        )
+        .expect("cursor-assigned fact is valid");
+        let event = ModelRunFactEventDto::new(session_id, run_id, fact.clone(), fixture_time());
+        assert_eq!(event.session_id(), session_id);
+        assert_eq!(event.run_id(), run_id);
+        assert_eq!(event.fact(), &fact);
+        assert_eq!(event.occurred_at(), fixture_time());
+        let encoded = serde_json::to_string(&event).expect("model fact event serializes");
+        let decoded: ModelRunFactEventDto =
+            serde_json::from_str(&encoded).expect("model fact event parses");
+        assert_eq!(decoded, event);
+    }
+
+    #[test]
+    fn run_snapshot_exposes_its_capture_sequence() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let run_projection = crate::RunProjectionDto::new(
+            session_id,
+            run_id,
+            intention_types::TurnId::new(),
+            crate::RunStatusDto::Running,
+            intention_types::ConfigRevisionId::new(),
+        );
+        let projection = ModelRunProjectionDto::new(
+            run_projection,
+            RunEventCursorDto::new(1),
+            None,
+            "",
+            None,
+            None,
+            None,
+        )
+        .expect("an empty model projection is consistent");
+        let snapshot = RunSnapshotDto::new(
+            session_id,
+            run_id,
+            SessionEventSequenceDto::new(7),
+            projection,
+        )
+        .expect("snapshot identity matches its run projection");
+        assert_eq!(snapshot.at_sequence(), SessionEventSequenceDto::new(7));
+    }
+}

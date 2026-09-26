@@ -430,4 +430,38 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn reasoning_history_manifest_rejects_a_blank_transfer_policy() {
+        let mut manifest = fixture_manifest();
+        manifest.transfer_policy = String::new();
+        assert_eq!(
+            manifest
+                .validate()
+                .expect_err("a blank transfer policy is rejected"),
+            CanonicalError::ReasoningHistoryIncompatible
+        );
+    }
+
+    #[test]
+    fn reasoning_history_manifest_decode_rejects_unreadable_entry_lists() {
+        let manifest = record(
+            TagRegistry::REASONING_HISTORY_MANIFEST_V1,
+            1,
+            vec![
+                (1, WireType::Utf8, encode_utf8("reasoning-compat-v1")),
+                (
+                    2,
+                    WireType::List,
+                    crate::canonical::encode_list_items(&[vec![0xff]]),
+                ),
+            ],
+        )
+        .expect("raw manifest record encodes");
+        assert_eq!(
+            ReasoningHistoryManifestDto::decode(&manifest)
+                .expect_err("an unreadable entry reference is rejected"),
+            CanonicalError::InvalidUtf8
+        );
+    }
 }
