@@ -150,6 +150,14 @@ You are in Plan mode. Focus on investigation, decomposition, design, and plan au
 This instruction is advisory. It cannot authorize, prevent, or prove the absence
 of shell, process, filesystem, network, or external effects.
 
+This instruction is the `Mode` contribution of the effective instruction
+projection ([architecture 30](30-instruction-sources-and-system-context.md),
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)):
+architecture 30 owns the assembly order, the canonical digest, and the
+materialization of the projection, while this document keeps the instruction
+text and its advisory meaning. The contribution cannot widen or narrow tool
+policy, and a Build run's projection never inherits the Plan contribution.
+
 ## Plan lifecycle
 
 ```mermaid

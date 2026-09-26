@@ -274,3 +274,18 @@ Architecture 24 owns safe activity, notification, and acknowledgement projection
 They remain credential-free and exclude raw prompt/provider/tool/MCP/path/grant/
 resource data. Notifications are durable presentation evidence, not authority,
 read-state by cursor, or operational diagnostics.
+
+## Post-M5 instruction-source configuration and observability consequence
+
+[Architecture 30](30-instruction-sources-and-system-context.md) owns the
+instruction channel ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
+Its profile revision identity, workspace instruction digest, and canonical
+projection digest cross the configuration surface; instruction text stays on
+the editing surface where the user reads and edits it
+([architecture 25](25-configuration-provider-control-plane.md)). Fragment
+configuration follows the TOML-only typed-edit rules above: an edit is a
+validated candidate edit that fails closed and affects fresh runs only, and no
+credential, private endpoint material, SDK object, or raw provider payload may
+be stored in, echoed from, or derived from an instruction source. Logs,
+activity, notification, and audit surfaces carry revision identities and
+canonical digests only; fake-secret regression covers every one of them.

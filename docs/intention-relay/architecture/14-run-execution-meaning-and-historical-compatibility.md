@@ -141,6 +141,14 @@ processes, channels, publication state, current catalogs, and mutable UI state
 are never digest inputs. Missing historical bytes cannot be repaired by
 recomputing a digest from current state.
 
+The effective instruction projection of
+[architecture 30](30-instruction-sources-and-system-context.md)
+([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md))
+follows the same rule: its canonical digest protects exact assembled bytes and
+is recorded as safe usage provenance, while the instruction text itself is
+configuration and project content, not execution meaning. Historical M3/M4
+runs carry no instruction digest and gain none retroactively.
+
 ## Canonical record and digest policy
 
 ```text

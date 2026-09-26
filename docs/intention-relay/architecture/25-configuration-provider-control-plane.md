@@ -195,6 +195,33 @@ executed in M5+ Slice 2:
 - edits affect fresh runs only and never expose credentials, private endpoint
   material, SDK objects, or raw provider payloads on durable/public surfaces.
 
+## Instruction-fragment editing and preview
+
+**Accepted direction for the fifth Milestone 5+ slice by [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md).**
+
+The instruction configuration surface of
+[architecture 30](30-instruction-sources-and-system-context.md) is edited through
+this control plane:
+
+- list, create, edit, duplicate, enable, disable, reorder, and re-scope
+  instruction fragments under the typed-edit and atomic-reload rules above;
+- validate an edit before it commits and reject an invalid, inconsistent, or
+  over-bound edit with a typed failure, leaving the running daemon on its
+  recorded profile revision;
+- show the profile revision identity and canonical digest, and preview the
+  effective instruction projection for a chosen session, policy, and mode
+  without admitting a run, creating a reason or selection, or writing durable
+  instruction state;
+- keep the surface credential-free, never echo a credential or private material
+  through an edit response, and expose fragment text only where the user edits
+  it;
+- edit configuration only: an admitted run's projection is immutable, and a
+  later edit affects fresh runs only.
+
+The direction activates nothing by itself: the fragment editing and preview
+surface ships with the fifth Milestone 5+ slice and its activating
+specification.
+
 ## Compatibility and historical preservation
 
 - M3/M4 startup-only application, recorded revisions, and persisted run

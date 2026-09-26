@@ -33,6 +33,16 @@ Core DTO families:
 | `FinishReasonDto` | Typed terminal reason. |
 | `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
 
+The optional system context is the effective instruction projection of
+[architecture 30](30-instruction-sources-and-system-context.md)
+([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)): the
+daemon assembles it once per admitted run from declared instruction sources, it
+is bounded and credential-free, and the current drivers keep translating it
+into the leading system message with no driver-specific framing, caching
+directive, rewrite, or provider-side scan. Historical M3/M4 requests keep the
+system context absent. A driver never synthesizes, substitutes, reorders, or
+truncates instruction text, and a provider cannot inject or extend it.
+
 Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use only in `intention-provider-openrouter` private implementation and `async_openai` only in `intention-provider-generic-chat`; source-level ownership analysis rejects either SDK plus HTTP/runtime resources outside those owners.
 
 ## Durable model facts

@@ -117,8 +117,10 @@ Skill shape: a reusable workflow has a mandatory `SKILL.md`-equivalent entry
 record, validated frontmatter, an instructional body, and optional supporting
 resources. Its required `name` and `description` are the routing surface: the
 description states the action, trigger, and boundary by which a model or user
-can select the Skill. A Skill is distinct from always-on instructions, a user
-command, a delegated agent, a hook, an MCP server, and a registered tool.
+can select the Skill. A Skill is distinct from always-on instructions
+([architecture 30](30-instruction-sources-and-system-context.md) owns that
+channel, and a Skill body never enters it), a user command, a delegated agent,
+a hook, an MCP server, and a registered tool.
 
 ```text
 SkillDto
@@ -455,8 +457,10 @@ meaning.
 ## Dependencies, non-goals, and evidence
 
 This document depends on architectures 13--20 and decisions 0001--0012. It does
-not define actual Goal persistence, search/index/vector retrieval, prompt
-assembly, SQL/wire tags, migrations, retention/deletion/encryption, source-page
+not define actual Goal persistence, search/index/vector retrieval,
+instruction assembly (owned by
+[architecture 30](30-instruction-sources-and-system-context.md)),
+SQL/wire tags, migrations, retention/deletion/encryption, source-page
 sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical
 Plan artifacts, direct MCP administration, Python/Jupyter process behavior,
 Cargo, Makefile/CI, or production activation.

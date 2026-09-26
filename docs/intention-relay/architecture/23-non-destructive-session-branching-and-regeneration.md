@@ -305,6 +305,17 @@ semantic idempotency input (source, boundary, expected sequence, expected
 preview digest, requested title, safe future-profile override) and excludes the
 daemon-assigned child ID and time.
 
+`effective_instruction_projection` and
+`materialized_effective_instruction_projection` carry the canonical
+`InstructionProjectionV1` of
+[architecture 30](30-instruction-sources-and-system-context.md)
+([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)): the
+exact ordered contributions with their source revisions and digests, the
+declared audience, and the canonical projection digest, materialized when the
+fork is created. A child inherits the projection verbatim; no fork,
+regeneration, replay, or later run re-derives it from current configuration,
+current project instructions, or current session state.
+
 ### Fixed limits and audit taxonomy
 
 The first scope uses these fixed code-owned limits, enforced inside the fork

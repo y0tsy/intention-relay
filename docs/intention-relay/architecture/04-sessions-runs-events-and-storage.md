@@ -416,3 +416,14 @@ a separate lineage sequence may create independent child Sessions, but cannot
 rewrite source events, M3/M4 bytes, queues, cursors, snapshots, or replay. One
 active run remains a per-Session invariant; concurrent branches are separate
 Sessions, not parallel runs in one Session.
+
+## Post-M5 instruction-source storage consequence
+
+[Architecture 30](30-instruction-sources-and-system-context.md) owns the
+effective instruction projection ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
+A run records the profile revision identity, the workspace instruction digest,
+and the canonical projection digest as safe usage provenance; a fork, plan, or
+handoff record materializes the projection itself inside its frozen snapshot.
+The mechanism adds no event sequence, rewrites no M3/M4 bytes, and never
+reconstructs a missing projection from current configuration, current project
+files, or current session state.
