@@ -15,6 +15,6 @@ architecture, not the legacy material, prescribes the new implementation.
 - [`reconciliation/`](reconciliation/README.md): approved documentation-only post-M4 authority, compatibility, ownership, and delivery-boundary reconciliation.
 - [`decisions/`](decisions/README.md): accepted cross-document architecture decisions and their provenance.
 - [`legacy-baseline/`](legacy-baseline/00-manifest.md): the selected product baseline. Use it to identify user-visible capabilities and known limitations that the rewrite must deliberately accept, change, or reject.
-- [`legacy-antibusy-prompts/`](legacy-antibusy-prompts/README.md): a read-only source copy of the static prompts injected into every legacy Antibusy session. Adapt these prompts for Intention Relay, do not consume them as production prompts unchanged.
+- [`legacy-antibusy-prompts/`](legacy-antibusy-prompts/README.md): a read-only source copy of the static prompts injected into every legacy Antibusy session. Adapt these prompts for Intention Relay, do not consume them as production prompts unchanged; the adaptation is specified by [architecture 30](architecture/30-instruction-sources-and-system-context.md) and [ADR 0043](decisions/0043-instruction-sources-and-system-context.md).
 
 For the broader, superseded legacy audit, see [`../reference/archive/legacy-antibusy-audit/`](../reference/archive/legacy-antibusy-audit/00-manifest.md). It is archived and retained as research material and must not override this selected baseline without an explicit decision.

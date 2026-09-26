@@ -248,6 +248,17 @@ and `ModelToolExchangeDto`. Architecture 15 owns their semantics; architecture
 widen historical M4 tool facts, expose provider-native IDs, raw paths, secrets,
 SDK resources, or recreate stored selection from a current registry.
 
+The future instruction-source families include `InstructionSourceV1`,
+`InstructionProfileRevisionV1`, and `InstructionProjectionV1`
+([architecture 30](30-instruction-sources-and-system-context.md),
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). They
+carry bounded credential-free instruction text with its declared kind, scope,
+order, audience, and canonical digests; they carry no tool, policy, admission,
+provider, or other authority, and no untrusted material may enter them.
+Architecture 30 owns their semantics, architecture 14 owns canonical framing,
+digest, decoder, and compatibility rules, and the Slice 5 activating ledger
+assigns their contract versions and tags.
+
 ### Historical compatibility classes
 
 - **Execution compatibility:** a supported record may execute only under its

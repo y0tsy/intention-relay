@@ -50,7 +50,7 @@ not sufficient evidence.
 | EXC-041 | Autonomous harness goal mode | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0033; goal-directed rule continuation, separately admitted, never a free-running agent | [Architecture 26](../architecture/26-continual-harness.md), [Roadmap Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) activation |
 | EXC-042 | Work/requeue after client disconnection | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0033; explicit durable contract, never silent resumption of old external work | [Architecture 26](../architecture/26-continual-harness.md), [Architecture 28](../architecture/28-goal-domain-and-verification.md), [Architecture 18](../architecture/18-mandate-mcp-capability-lifecycle.md), [Roadmap Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) activation |
 | EXC-043 | Delivery of all RLM capabilities in one package | Adopt for M5+ (future direction) | future | Adopted as accepted post-M5 direction under ADR 0033; packaging consolidation preserving documentation package boundaries and the one-capability-path law | [Architecture 17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md), [Architecture 24](../architecture/24-activity-ui-and-adapters.md), [Roadmap Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) activation |
-| EXC-044 | M5+ complete foundation activation (hard prerequisite of M6-M9, four-slice sequence) | Adopt for M5+ (future direction) | future | Adopted by ADR 0035; the complete post-M5 stack is delivered as one pre-approved four-slice sequence (contracts/versions, control plane, harness, UI foundation), all approved together as one package, never implementing M6-M9 boundaries | [ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md), [Roadmap M5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [Roadmap Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) activation |
+| EXC-044 | M5+ complete foundation activation (hard prerequisite of M6-M9, five-slice sequence) | Adopt for M5+ (future direction) | future | Adopted by ADR 0035 and amended by ADR 0043; the complete post-M5 stack is delivered as one pre-approved five-slice sequence (contracts/versions, control plane, harness, UI foundation, instruction sources and system context), all approved together as one package, never implementing M6-M9 boundaries | [ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md), [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md), [Roadmap M5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment), [Roadmap Milestone 5+](../architecture/11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) activation |
 | EXC-049 | Storage migration 3->4 | Exclude from Slice 1 | Slice 1 | No migration is authorized and no entity owns a schema-4 change in this slice. | ADR 0036 / later storage specification |
 | EXC-050 | New crates, features, dependencies, or exclusions | Exclude from Slice 1 | Slice 1 | The frozen ledger introduces none. | ADR 0036 / architecture policy |
 | EXC-051 | M6-M9 boundary implementation | Exclude from Slice 1 | Slice 1 | Contracts activate only Slice 1; downstream behavior remains untouched. | [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md), later slice specifications |
@@ -61,6 +61,14 @@ not sufficient evidence.
 | EXC-056 | `responses` driver | Exclude from Slice 2 | Slice 2 | The `responses` kind is not activated in Slice 2: closed contracts only, blocked until a complete driver exists. | [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md), [Architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md) |
 | EXC-057 | `SafeHeader` live wire header injection | Exclude from Slice 2 | Slice 2 | Typed header policy validation is activated; live wire header injection (`SafeHeader`) is not. | [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md), [Architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md) |
 | EXC-058 | Remote continuation | Exclude from Slice 2 | Slice 2 | Local-history-first; no remote continuation, provider-managed history, or resumed old work. | [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md), [Architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md) |
+
+| EXC-059 | Few-shot example selection | Defer with the instruction package | future | The legacy set injected freshness-dependent examples; instruction sources are static deployment, project, and user content, and example selection needs its own selection, freshness, and disclosure contract. | [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md), [Architecture 30](../architecture/30-instruction-sources-and-system-context.md); a later decision with a selection and evidence owner |
+| EXC-060 | Memory-derived prompt material | Defer with the instruction package | future Mandate | Typed memory is immutable evidence with disclosure rules and never becomes instruction text; promoting it would need a separate audience-safe direction. | [Architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md), [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) |
+| EXC-061 | MCP-provided prompts | Defer with the instruction package | future Mandate | MCP content is untrusted capability material and cannot enter the instruction channel; an MCP prompt surface would need its own typed disclosure contract under architecture 18. | [Architecture 18](../architecture/18-mandate-mcp-capability-lifecycle.md), [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) |
+| EXC-062 | Date, Git, or session-derived context injection | Defer with the instruction package | future | Derived live context is not a declared instruction source; it would need its own freshness, determinism, and safe-projection rules. | [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md), [Architecture 30](../architecture/30-instruction-sources-and-system-context.md) |
+| EXC-063 | Provider-native prompt framing or caching directives | Exclude with the instruction package | future | A provider cannot scan, inject, rewrite, or reorder the projection, and no driver may add framing, caching, or templating of its own. | [Architecture 08](../architecture/08-model-protocol-and-providers.md), [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) |
+| EXC-064 | Prompt tuning, telemetry, and A/B evaluation | Exclude with the instruction package | all | Instruction content is user-controlled configuration, not an optimization, measurement, or experimentation surface. | [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md), [Architecture 09](../architecture/09-configuration-security-and-observability.md) |
+| EXC-065 | Automatic instruction generation and cross-project instruction sharing | Exclude with the instruction package | future | The daemon never generates, summarizes, or collects instruction text, and a profile stays scoped to its declared user, project, or session owner. | [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md), [Architecture 30](../architecture/30-instruction-sources-and-system-context.md) |
 
 All rows remain non-authorizing until a new approved decision updates this
 register and the relevant owner architecture, roadmap, policy, and evidence.
@@ -82,7 +90,9 @@ and remain non-authorizing until a later M5+ activating specification.
 Rows EXC-001..004, EXC-024, and EXC-031..036 are activated for M5+ Slice 2 by
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); all other rows
 remain non-authorizing. Rows EXC-052..058 are Slice 2 exclusions under the
-same decision.
+same decision. Rows EXC-059..065 are the instruction package's deferred and
+excluded claims under
+[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md).
 
 ## Delivery owners named by the roadmap
 
@@ -105,9 +115,14 @@ approved specification:
   policy), EXC-015 (activity numeric limit classification), EXC-039 (export),
   EXC-040 (cross-workspace clone/rebind), and EXC-043 (consolidated RLM package
   boundary);
-- EXC-044 is the M5+ four-slice sequence itself: Slice 1 (contracts/versions) and
-  Slice 2 (control plane) are delivered, and the Slice 3 and Slice 4 activations
-  above carry the rest;
+- EXC-044 is the M5+ five-slice sequence itself: Slice 1 (contracts/versions) and
+  Slice 2 (control plane) are delivered, and the Slice 3, Slice 4, and Slice 5
+  activations carry the rest;
+- the fifth Milestone 5+ slice (instruction sources and system context)
+  delivers the instruction channel of
+  [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md); its
+  deferrals (EXC-059..065) stay non-authorizing with their own reconsideration
+  owners;
 - the remaining adopted rows (EXC-021..023, EXC-025..030, EXC-037, EXC-038) are
   owned by their Milestone 5+ detail packages, whose exit criteria name the
   activation.

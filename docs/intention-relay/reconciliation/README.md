@@ -87,9 +87,17 @@ implementation specification can be prepared:
   ([ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md));
 - post-M5 complete foundation activation: Milestone 5+ as the hard
   prerequisite of M6-M9 and the single activation home for the complete
-  post-M5 stack, delivered as one pre-approved four-slice sequence
-  (contracts/versions, control plane, harness, UI foundation)
+  post-M5 stack, delivered as one pre-approved five-slice sequence
+  (contracts/versions, control plane, harness, UI foundation, instruction
+  sources and system context)
   ([ADR 0035](../decisions/0035-m5plus-complete-foundation-activation.md));
+- post-M5 instruction sources and system context: the deployment instruction
+  profile adapted from the legacy static prompt set, user-editable fragments,
+  workspace `AGENTS.md` project instructions, the `Mode`/`Vfr` contributions,
+  canonical assembly, and the immutable effective instruction projection with
+  its digests and closed failures
+  ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md),
+  [architecture 30](../architecture/30-instruction-sources-and-system-context.md));
 - M5+ Slice 1 contract ledger: the frozen and activated contracts/versions,
   capabilities, tags, fields, ownership, and preservation ledger
   ([ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md)); and
@@ -179,8 +187,9 @@ following map is navigation and provenance; it does not restate their rules:
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |
 | Same-run provider reasoning round-trip | architecture 08, architecture 22 | decision 0041 |
 | Project script library for kernel cells | architecture 05, architecture 15, architecture 20 | decision 0042 |
+| Instruction sources and system context | architecture 30, architecture 21, architecture 23, architecture 08 | decision 0043 |
 | Selected legacy product baseline | `docs/intention-relay/legacy-baseline/` (read-only capability evidence; superseded only by an explicit decision) | decision 0038 |
-| Legacy Antibusy session prompts | `docs/intention-relay/legacy-antibusy-prompts/` (read-only source copy to adapt, never consumed unchanged) | — |
+| Legacy Antibusy session prompts | `docs/intention-relay/legacy-antibusy-prompts/` (read-only source copy to adapt, never consumed unchanged; the adaptation is owned by architecture 30) | decision 0043 for the adaptation, decision 0038 for retention |
 | Archived Antibusy audit | `docs/reference/archive/legacy-antibusy-audit/` (archived content superset of the selected baseline; provenance only and never an override; its delta is recorded in the baseline manifest) | decision 0038 |
 | Prime Agent research | `docs/reference/prime-agent-research/` (non-authoritative background material) | — |
 

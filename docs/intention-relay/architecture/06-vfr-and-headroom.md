@@ -35,7 +35,10 @@ VFR changes a suitable source-file read into a structured virtual representation
 - typed virtual representation DTOs;
 - source map/hidden segment metadata;
 - expansion and raw-read tool contracts;
-- VFR-specific prompt contribution;
+- a VFR-specific typed instruction contribution with its own revision and
+  digest, assembled into the effective instruction projection by
+  [architecture 30](30-instruction-sources-and-system-context.md)
+  ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - tests proving loss-aware, deterministic transformations.
 
 ### Required behavior
@@ -44,7 +47,7 @@ VFR changes a suitable source-file read into a structured virtual representation
 - It transforms only eligible source files according to resolved configuration.
 - It creates a virtual representation that preserves enough stable reference data for later expansion.
 - It does not mutate the physical file or base `read` tool semantics.
-- The model receives explicit instructions describing placeholders and the `expand`/raw path.
+- The model receives explicit instructions describing placeholders and the `expand`/raw path, delivered only as the declared `Vfr` contribution of architecture 30's instruction projection.
 - A user-visible tool result remains traceable to the physical normalized file path and VFR transform decision.
 
 ### Supporting tools

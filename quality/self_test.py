@@ -1747,6 +1747,35 @@ def test_adr_0042_project_script_library_record_exists_and_is_indexed(root: Path
         )
 
 
+def test_adr_0043_instruction_sources_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0043-instruction-sources-and-system-context.md"
+    if not adr.is_file():
+        raise RuntimeError(
+            "ADR 0043 must exist as the instruction sources and system context record"
+        )
+    readme = root / "docs/intention-relay/decisions/README.md"
+    if "[0043](0043-instruction-sources-and-system-context.md)" not in readme.read_text(
+        encoding="utf-8"
+    ):
+        raise RuntimeError("decisions/README.md must index ADR 0043")
+    reconciliation = root / "docs/intention-relay/reconciliation/README.md"
+    if "decision 0043" not in reconciliation.read_text(encoding="utf-8"):
+        raise RuntimeError("reconciliation/README.md owner map must include decision 0043")
+    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
+    if "| EVD-071 |" not in evidence.read_text(encoding="utf-8"):
+        raise RuntimeError("evidence register must carry the EVD-071 row")
+    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
+    matrix_text = matrix.read_text(encoding="utf-8")
+    for topic in ("INS-001", "SL5-001", "SL5-006"):
+        if f"| {topic} |" not in matrix_text:
+            raise RuntimeError(f"source-of-truth matrix must carry the {topic} row")
+    roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
+    if "30-instruction-sources-and-system-context.md" not in roadmap.read_text(
+        encoding="utf-8"
+    ):
+        raise RuntimeError("roadmap must reference architecture 30 by filename")
+
+
 def test_every_adr_number_is_referenced_by_the_roadmap(root: Path) -> None:
     decisions = root / "docs/intention-relay/decisions/README.md"
     roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
@@ -2250,6 +2279,7 @@ def main() -> None:
         test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
         test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
         test_adr_0042_project_script_library_record_exists_and_is_indexed,
+        test_adr_0043_instruction_sources_record_exists_and_is_indexed,
         test_every_adr_number_is_referenced_by_the_roadmap,
         test_every_post_m4_architecture_doc_is_referenced_by_the_roadmap,
         test_mandate_track_milestones_declare_required_sections,

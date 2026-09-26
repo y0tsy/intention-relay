@@ -133,7 +133,7 @@ Before implementation starts, the team must create the architectural test matrix
 
 ## Post-M4 foundation principles
 
-The following principles (12–28) are the binding specification for the
+The following principles (12–29) are the binding specification for the
 post-M5+ Mandate track and the ordinary-run extensions that accompany it. They
 govern future authoritative M4+ packages without changing closed M4 or current
 ordinary-run behavior, and each is implemented only where a milestone has
@@ -296,3 +296,21 @@ A future ordinary Session fork creates a separate child Session with immutable
 lineage and frozen context. It does not allow parallel runs within one Session,
 rewrite a source Session, transfer authority, or claim rollback of workspace or
 external state. Detailed rules are owned by architecture 23 and decision 0015.
+
+### 29. Instructions are advisory deployment and project content, not authority
+
+Every newly admitted run carries exactly one immutable effective instruction
+projection, assembled from declared sources only: the daemon-packaged
+instruction profile adapted from the legacy static prompt set, user-editable
+fragments scoped to user, project, or session, the workspace `AGENTS.md` read
+through the `WorkspaceRoot` boundary, and the reserved `Mode` and `Vfr`
+contributions of architectures 07 and 06. Instruction text is bounded,
+credential-free, and advisory: it cannot create, widen, or remove a tool
+permission, provider selection, admission decision, Mandate, grant, or
+confirmation requirement, and it cannot prove the absence of an external
+effect. Skill bodies, memory records, tool output, repository content, and
+provider output never enter the instruction channel. The projection is frozen
+at admission, inherited verbatim by forks and handoffs, and never re-derived
+from current state. Detailed rules are owned by
+[architecture 30](30-instruction-sources-and-system-context.md) and
+[decision 0043](../decisions/0043-instruction-sources-and-system-context.md).
