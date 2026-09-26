@@ -4564,7 +4564,11 @@ mod tests {
         // delegating is an accepted limit of a textual guard. Needles are
         // assembled from fragments so the guard's own source never satisfies
         // the scan.
-        let source = include_str!("lib.rs");
+        // A Windows checkout rewrites text files to CRLF unless
+        // `.gitattributes` pins LF, so the source is normalized before the
+        // marker scan; otherwise the boundary marker never matches and the
+        // scan slips past the production section into the test module.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
         let production = source
             .split("#[cfg(test)]\nmod tests")
             .next()
