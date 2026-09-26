@@ -55,7 +55,7 @@ const DEFAULT_PROFILE_ID: &str = "default";
 /// This is the value the controller writes to the storage-side `source_recheck`
 /// column of the removal create input
 /// ([`CreateProviderCatalogRemovalCandidateInputDto`]); the wire removal
-/// acceptance request carries no `source_recheck` input at all (P3-17/R22).
+/// acceptance request carries no `source_recheck` input at all.
 const REMOVAL_SOURCE_RECHECK_HEALTH: &str = "health-recheck";
 
 /// One credential-free provider declaration inside a catalog source.
@@ -201,7 +201,7 @@ type BuiltRegistryEntries =
 type AdmissionContext = HashMap<PrivateRegistryKey, AdmissionEntry>;
 
 /// One activation whose fallible preconditions were resolved before the
-/// durable acceptance (D-05, R32).
+/// durable acceptance.
 ///
 /// The built registry entries and the admission context are ready to swap,
 /// the private-registry entry bound is already validated, and the admission
@@ -214,7 +214,7 @@ struct PreparedActivation<'a> {
 }
 
 /// Validates every fallible activation precondition and takes the admission
-/// lock (D-05, R32).
+/// lock.
 ///
 /// The private-registry entry bound and the admission lock are the two
 /// conditions that could fail between a durable acceptance and the in-memory
@@ -257,7 +257,7 @@ fn prepare_activation<'a>(
 /// none of which can panic while the registry lock is held. The `false`
 /// result is therefore unreachable in the current code; it exists so the
 /// caller represents the impossible poisoned-registry state as a typed
-/// recovery readiness instead of a failed acceptance (R32).
+/// recovery readiness instead of a failed acceptance.
 fn swap_activation(registry: &PrivateRegistry, activation: PreparedActivation<'_>) -> bool {
     let PreparedActivation {
         built,
@@ -321,7 +321,7 @@ where
     /// deadline, rolls forward an already-accepted removal whose catalog
     /// acceptance never committed (PR24-004), and otherwise adopts the
     /// candidate rebuilt from durable rows through the normal acceptance path
-    /// (R40), so a crash residue is always resolved here instead of leaving
+    /// so a crash residue is always resolved here instead of leaving
     /// the platform gated. The startup-document reconcile that follows
     /// re-derives the catalog from the current document.
     ///
@@ -401,7 +401,7 @@ where
             Err(error) => return self.blocked(error.code()),
         };
         if let Some(pending) = &pending_rebuild {
-            // R40: the durable pending removal is resolved here, before the
+            // The durable pending removal is resolved here, before the
             // startup-document reconcile runs, so a crash residue can never
             // leave the platform gated. The candidate is rebuilt from durable
             // rows (never from process memory) and adopted through the normal
@@ -447,14 +447,14 @@ where
         self.startup_outcome()
     }
 
-    /// Adopts one durable pending removal rebuilt at startup (R40).
+    /// Adopts one durable pending removal rebuilt at startup.
     ///
     /// The restart is the operator act the pending state waits for, so a
     /// rebuilt pending removal is adopted through the normal acceptance path
     /// instead of leaving readiness `PendingRemoval` and opening the platform
     /// gated on a crash residue. The replacement registry and every fallible
     /// activation precondition are resolved before the durable acceptance, and
-    /// only the infallible swap follows it (R41). The startup-document
+    /// only the infallible swap follows it. The startup-document
     /// reconcile that runs after this returns re-derives the catalog from the
     /// current document, so a document that changed again or was reverted
     /// while the process was down still wins.
@@ -647,7 +647,7 @@ where
     /// accept/reject, so a later candidate keeps returning
     /// `provider_catalog_removal_pending_exists` until it is resolved or
     /// expires; the durable crash residue is adopted by [`Self::startup`]
-    /// itself (R40), never here.
+    /// itself, never here.
     ///
     /// # Errors
     ///
@@ -655,7 +655,7 @@ where
     /// driver build is invoked on any preflight failure.
     #[allow(
         clippy::significant_drop_tightening,
-        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail (R32)"
+        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail"
     )]
     pub fn prepare_candidate(
         &self,
@@ -671,7 +671,7 @@ where
             // explicit accept/reject, so a later candidate keeps the conflict
             // until it is resolved or expires. The durable crash residue is
             // resolved by `startup()` itself before the startup document
-            // reconcile reaches this path (R40).
+            // reconcile reaches this path.
             if matches!(gate.readiness, CatalogReadiness::PendingRemoval { .. }) {
                 return Err(catalog_error(
                     "provider_catalog_removal_pending_exists",
@@ -804,7 +804,7 @@ where
                         created_at: i64_time(now),
                         // The provenance is this controller's own catalog
                         // recheck; no request-supplied value reaches this
-                        // storage column (P3-17/R22).
+                        // storage column.
                         source_recheck: REMOVAL_SOURCE_RECHECK_HEALTH.to_owned(),
                         evidence,
                         operation_id: source.operation_id.clone(),
@@ -839,7 +839,7 @@ where
                     total_issue_count: total,
                 });
             }
-            // D-05/R32: build the complete replacement registry and admission
+            // Build the complete replacement registry and admission
             // map before the durable acceptance and resolve every remaining
             // fallible activation precondition there too (the active-entry
             // bound and the admission lock), so a preflight failure leaves the
@@ -886,7 +886,7 @@ where
     /// is resolved before the durable commit; the removal acceptance then
     /// commits through storage (removal accepted audit, then catalog accepted
     /// and activated audits) and the private registry is swapped with the
-    /// prepared activation (D-05, R32). On a crash after acceptance, the
+    /// prepared activation. On a crash after acceptance, the
     /// startup path recovers the accepted catalog.
     ///
     /// # Errors
@@ -1263,13 +1263,13 @@ where
     ///
     /// Order: build the complete replacement registry and admission context,
     /// resolve every remaining fallible activation precondition and take the
-    /// admission lock (D-05, R32), commit the durable removal and catalog
+    /// admission lock, commit the durable removal and catalog
     /// acceptances, then complete the swap. A failure before the durable
     /// acceptance leaves the durable catalog unchanged and is returned as an
     /// error; the completion after it cannot fail by construction.
     #[allow(
         clippy::significant_drop_tightening,
-        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail (R32)"
+        reason = "the prepared admission guard is deliberately held across the durable acceptance so the post-commit swap cannot fail"
     )]
     fn commit_prepared_acceptance(
         &self,
@@ -1323,7 +1323,7 @@ where
     /// durable acceptance). The unreachable registry-poison result still
     /// degrades to `ActivationRecoveryRequired` instead of reporting a failed
     /// acceptance, because the durable catalog already advanced and the next
-    /// startup re-derives the registry from the accepted revision (R32).
+    /// startup re-derives the registry from the accepted revision.
     fn complete_activation(
         &self,
         gate: &mut ControlPlaneState,
@@ -1868,7 +1868,7 @@ mod tests {
 
     #[test]
     fn a_poisoned_admission_lock_is_rejected_before_any_durable_acceptance() {
-        // R32: the admission lock is resolved before the durable acceptance,
+        // The admission lock is resolved before the durable acceptance,
         // so a poisoned lock surfaces as a pre-commit error instead of a
         // committed catalog revision whose in-memory state never installed.
         let admissions = Mutex::new(AdmissionContext::new());
@@ -1894,7 +1894,7 @@ mod tests {
 
     #[test]
     fn an_over_limit_activation_is_rejected_before_any_durable_acceptance() {
-        // R32: the private-registry active-entry bound is validated before the
+        // The private-registry active-entry bound is validated before the
         // durable acceptance, so the bound can never fail the post-commit
         // swap.
         let admissions = Mutex::new(AdmissionContext::new());

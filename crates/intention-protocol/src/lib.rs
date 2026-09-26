@@ -710,7 +710,7 @@ impl ProtocolCommandDto {
     /// The classification is protocol data: the exhaustive match has no
     /// wildcard arm, so a new variant fails to compile until its author
     /// classifies it instead of silently bypassing the capability gate
-    /// (D-03). Baseline commands stay reachable without the capability.
+    /// Baseline commands stay reachable without the capability.
     #[must_use]
     pub const fn requires_provider_profiles(&self) -> bool {
         match self {
@@ -739,7 +739,7 @@ impl ProtocolQueryDto {
     /// The classification is protocol data: the exhaustive match has no
     /// wildcard arm, so a new variant fails to compile until its author
     /// classifies it instead of silently bypassing the capability gate
-    /// (D-03). Baseline health and session-snapshot queries stay reachable
+    /// Baseline health and session-snapshot queries stay reachable
     /// without the capability.
     #[must_use]
     pub const fn requires_provider_profiles(&self) -> bool {
@@ -2419,7 +2419,7 @@ mod tests {
         }
     }
 
-    /// D-03 (`P2-05`): the control-plane classification is protocol data with
+    /// The control-plane classification is protocol data with
     /// an exhaustive match, so a new variant fails to compile until its author
     /// decides whether the capability gate applies. This table pins every
     /// current variant's classification and the single owner of the rejection

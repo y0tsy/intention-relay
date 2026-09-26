@@ -48,8 +48,7 @@ on Unix-domain sockets; Windows named pipes keep their documented blocking
 behavior, a recorded limitation rather than a second bound (the locked
 `interprocess` transport exposes no per-call named-pipe timeout, so only the
 bounded connect wait applies there), anchored at `apply_sync_io_timeout` in
-`crates/intention-transport/src/lib.rs` and at repair R28 in
-`pr24-review-1.md` Appendix I.3. A peer that accepts a connection and never
+`crates/intention-transport/src/lib.rs`. A peer that accepts a connection and never
 answers therefore fails with a typed unavailable error instead of blocking its
 thread indefinitely; the
 1 MiB frame bound prevents unbounded message allocation. Subscription buffering

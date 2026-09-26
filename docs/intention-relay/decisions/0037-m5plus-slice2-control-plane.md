@@ -17,7 +17,7 @@ policy; provider profile UI and raw-TOML/configuration editing; arbitrary
 authentication headers; session defaults and per-turn/fork overrides;
 unavailable-queue promotion and reconciliation; `provider_profiles_v1`;
 pending-removal and degraded recovery; and the provider reasoning/catalog
-surface. The D-16 audit removed the unconsumed provider-native
+surface. The unconsumed-surface audit (2026-09) removed the unconsumed provider-native
 preservation-control, server-side-parser, Responses reasoning-mode,
 reasoning-usage, and model-capability-envelope contracts; no
 preservation-control or parser-configuration surface is activated by this
@@ -73,7 +73,7 @@ missing profile to `provider_admission_not_found` or
 as `provider_profile_runtime_unavailable` on the run path and as a closed
 unavailable reason on the read path; durable tombstones are append-only
 removal history, not admission authority, so an identifier reintroduced by a
-later accepted catalog is admitted again (`pr24-review-1.md`, R36).
+later accepted catalog is admitted again.
 
 The former `control_plane_unavailable` dispatch stub is removed from
 `crates/intention/src/lib.rs` (ADR 0038 Wave 7); control-plane dispatch
@@ -138,7 +138,7 @@ Crate ownership for the Slice 2 surface is fixed:
 | Wire families, negotiation, and typed commands/queries | `intention-protocol` |
 | TOML parsing, validation, reload candidates, and configuration DTOs | `intention-config` |
 | Current-schema DDL, projections, and durable control-plane rows | `intention-storage` and `intention-storage-sqlite` |
-| Provider-neutral reasoning surface (surviving `intention-model` types; the unconsumed protocol and model duplicates were removed by the D-16 audit) | `intention-model` |
+| Provider-neutral reasoning surface (surviving `intention-model` types; the unconsumed protocol and model duplicates were removed by the unconsumed-surface audit (2026-09)) | `intention-model` |
 | Provider translation and dialect decoding | provider crates (adapters) |
 | Catalog, session-selection, and control-plane services | `intention-application` |
 | Hosting, reload/rotation hosting, and degraded gate | `intention-daemon` |
@@ -187,8 +187,7 @@ Recorded follow-up: the health path reports no profile revision, and
 (`None`) until the catalog is genuinely wired into the health path. When that
 binding lands, the field is populated from the real active profile revision and
 the option-1 assertions become applicable; no synthesized identity is ever
-fabricated in the meantime. The follow-up is parked in the review register's
-parking list (`pr24-review-1.md`, "Parked with owners after V2").
+fabricated in the meantime. The follow-up is recorded as a declared future slice.
 
 ## Resolution notes
 

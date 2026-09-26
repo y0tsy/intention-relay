@@ -870,8 +870,8 @@ fn endpoint_in_use() -> ErrorDto {
 /// answering mid-frame cannot be interrupted per call. The limitation is
 /// anchored at
 /// `docs/intention-relay/architecture/03-daemon-transport-and-adapters.md`
-/// ("M2 serving and backpressure") and at repair R28 in `pr24-review-1.md`
-/// Appendix I.3; a platform with a real per-call bound replaces the stub.
+/// ("M2 serving and backpressure"); a platform with a real per-call bound
+/// replaces the stub.
 #[cfg(unix)]
 fn apply_sync_io_timeout(stream: &LocalSocketStream, timeout: Duration) -> DtoResult<()> {
     stream
@@ -883,7 +883,7 @@ fn apply_sync_io_timeout(stream: &LocalSocketStream, timeout: Duration) -> DtoRe
 /// Keeps the documented non-Unix blocking behavior: the named-pipe transport
 /// cannot express a per-call read or write deadline, so this stub applies no
 /// bound (see `apply_sync_io_timeout` and architecture 03 for the recorded
-/// limitation, R28).
+/// limitation).
 #[cfg(not(unix))]
 const fn apply_sync_io_timeout(_stream: &LocalSocketStream, _timeout: Duration) -> DtoResult<()> {
     Ok(())
@@ -1156,7 +1156,7 @@ mod tests {
         ));
         for kind in [
             // A saturated accept backlog on a live listener fails the probe
-            // with a timeout instead of a refusal (P2-14).
+            // with a timeout instead of a refusal.
             std::io::ErrorKind::TimedOut,
             std::io::ErrorKind::WouldBlock,
             std::io::ErrorKind::PermissionDenied,
@@ -1239,7 +1239,7 @@ mod tests {
         let listener = LocalListener::bind(owned).expect("fixture listener binds");
 
         // Another host takes over the endpoint path after the socket file was
-        // unlinked, exactly as in the saturated-backlog hazard (P2-14).
+        // unlinked, exactly as in the saturated-backlog hazard.
         let replacement = endpoint();
         let replacement_path = replacement.path;
         let replacement_listener = std::os::unix::net::UnixListener::bind(&replacement_path)

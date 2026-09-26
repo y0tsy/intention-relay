@@ -1399,7 +1399,7 @@ fn round_reasoning_attachment(
 /// character the attachment DTO rejects. The run fails with the dedicated
 /// `reasoning_attachment_unrepresentable` code instead of aborting `execute`
 /// with a DTO validation error, and the echo is never truncated or silently
-/// omitted (ADR 0041, PR24 P3-32).
+/// omitted (ADR 0041).
 ///
 /// # Errors
 ///

@@ -334,8 +334,8 @@ fn typed_provider_kind(kind_id: &str) -> DtoResult<ProviderKindDto> {
 ///
 /// `intention-application` derives this placeholder when it builds a profile
 /// from a declaration without an endpoint, so the durable active profile
-/// carries it for an endpointless declaration. The startup comparison (D-02
-/// item 1, R17) needs the same value to stay two-directional; the
+/// carries it for an endpointless declaration. The startup comparison
+/// needs the same value to stay two-directional; the
 /// derivation's private owner lives in the application crate, so this copy is
 /// pinned by `derived_default_endpoint_matches_the_catalog_derivation`, which
 /// reads the active profile's endpoint for an endpointless declaration.
@@ -1232,7 +1232,7 @@ fn configuration_projection(snapshot: &ConfigSnapshotDto) -> ConfigurationProjec
 /// Maps one protocol typed-edit operation into the configuration crate's
 /// credential-free edit operation.
 ///
-/// D-10 (P3-28) keeps TOML document construction owned by `intention-config`
+/// TOML document construction owned by `intention-config`
 /// (which cannot depend on `intention-protocol`); this mapping is the only
 /// protocol-aware code left on the typed-edit path.
 fn configuration_edit_operation(
@@ -1296,7 +1296,7 @@ const fn i64_time(timestamp: TimestampDto) -> i64 {
 /// The durable declaration of the active catalog's default profile.
 ///
 /// The startup path compares this declaration with the validated startup
-/// document (D-02); it carries only the credential-free declaration fields
+/// document; it carries only the credential-free declaration fields
 /// that participate in the catalog profile identity and the run selection.
 struct ActiveCatalogDeclaration {
     kind: String,
@@ -1418,7 +1418,7 @@ impl DaemonApplicationFacade {
     ///
     /// This is the single daemon-open sequence: [`Self::open_platform`]
     /// resolves the platform locations and delegates here, and the startup
-    /// fixtures (R34) call the same sequence over fixture paths instead of
+    /// fixtures call the same sequence over fixture paths instead of
     /// re-implementing it, so the production open path and the fixtures
     /// cannot drift.
     ///
@@ -1433,7 +1433,7 @@ impl DaemonApplicationFacade {
             Self::open_with_selected_provider(database, config_snapshot, selected_provider)?;
         retain_private_startup_credential(&facade, private_credential, source)?;
         // The startup document is the single source of the provider catalog
-        // (D-02): on a fresh store it activates the first catalog revision and
+        // On a fresh store it activates the first catalog revision and
         // on a restart it re-derives the catalog when the file changed, so the
         // executing driver, the active configuration snapshot, and the durable
         // catalog can never disagree.
@@ -1457,8 +1457,7 @@ impl DaemonApplicationFacade {
     /// slice.
     ///
     /// The helper stays private to the open path: the raw document carries the
-    /// credential, so it never crosses a public signature (finding `P3-29`,
-    /// executed with D-02).
+    /// credential, so it never crosses a public signature.
     ///
     /// # Errors
     ///
@@ -1497,7 +1496,7 @@ impl DaemonApplicationFacade {
             })?;
             return Ok(());
         }
-        // D-02 item 1 / R17: compare the startup-derived effective endpoint
+        // Compare the startup-derived effective endpoint
         // with the active catalog's effective endpoint in both directions, so
         // a document that drops a previously declared endpoint re-derives the
         // catalog instead of keeping the stale declaration. A declaration
@@ -1559,7 +1558,7 @@ impl DaemonApplicationFacade {
                     "the prepared removal candidate is missing its revision",
                 )
             })?;
-            // R16 follow-up (differ-differ), corrected by R40: the open
+            // The open
             // sequence adopts a durable, startup-rebuilt pending removal in
             // `startup()` before this prepare runs, so the durable active
             // revision read here is the revision that adoption committed. The
@@ -2538,7 +2537,7 @@ impl DaemonApplicationFacade {
     ///
     /// The operations are mapped into the configuration crate's own edit
     /// vocabulary and rendered there from the active safe snapshot as a TOML
-    /// document (D-10, `P3-28`), so this composition never renders TOML and a
+    /// document, so this composition never renders TOML and a
     /// value carrying TOML-significant characters is escaped by the
     /// serializer. The rendered document is validated server-side through the
     /// reload contract. The retained private credential is restored into the
@@ -4364,7 +4363,7 @@ mod tests {
 
     #[test]
     fn provider_kind_dispatch_is_typed_and_rejects_an_unknown_kind() {
-        // P3-27: the adapter option builder is selected by the typed
+        // The adapter option builder is selected by the typed
         // `ProviderKindDto`, so an unknown catalog kind id fails closed with a
         // typed error instead of falling through to the generic-chat builder.
         assert_eq!(
@@ -4398,7 +4397,7 @@ mod tests {
 
     #[test]
     fn catalog_and_credential_paths_derive_their_option_preflight_from_the_declaration() {
-        // R33: the catalog-activation factory and the credential-rebuild path
+        // The catalog-activation factory and the credential-rebuild path
         // must both derive their option preflight from the profile's
         // declaration. The factory is checked against the adapter builders'
         // own verdict (an independent derivation, not the seam helper it
@@ -4439,7 +4438,7 @@ mod tests {
             }
         }
 
-        // R49: the credential-rebuild boundary is driven at runtime by
+        // The credential-rebuild boundary is driven at runtime by
         // `credential_rebuild_boundary_rotates_the_resolved_profile_and_fails_closed`
         // below, so it is no longer pinned only as source text. The rebuild's
         // declaration-rejection branch stays an accepted textual limit
@@ -4493,7 +4492,7 @@ mod tests {
 
     #[test]
     fn credential_rebuild_boundary_rotates_the_resolved_profile_and_fails_closed() {
-        // R49: the credential-rebuild boundary is driven at runtime here. The
+        // The credential-rebuild boundary is driven at runtime here. The
         // port resolves the active profile through the real catalog admission
         // port (declaration composition and adapter preflight included),
         // swaps the private driver credential, and fails closed for a profile
@@ -4553,9 +4552,9 @@ mod tests {
 
     #[test]
     fn startup_catalog_activation_signature_stays_private_and_document_bearing() {
-        // R38 with R51: `activate_startup_catalog` is deliberately private and
+        // `activate_startup_catalog` is deliberately private and
         // takes the raw startup document because only the daemon-open path
-        // calls it (E6, P3-29). The guard scans the production source before
+        // calls it. The guard scans the production source before
         // the test module and pins exactly one private definition, no public
         // method carrying the name, and exactly one other reference, so a
         // differently named public wrapper around the helper (for example
@@ -4621,7 +4620,7 @@ mod tests {
     /// Opens one facade through the real daemon-open sequence
     /// ([`DaemonApplicationFacade::open_platform_from`], the shared core of
     /// `open_platform`) over caller-supplied fixture paths, so the startup
-    /// fixtures cannot drift from the production sequence (R34).
+    /// fixtures cannot drift from the production sequence.
     fn open_startup_facade(database: &Path, config_path: &Path) -> DaemonApplicationFacade {
         let source = ConfigSourceDto::Explicit(
             ConfigPathDto::parse(config_path.to_string_lossy().into_owned())
@@ -4663,7 +4662,7 @@ mod tests {
 
     #[test]
     fn restart_with_an_edited_startup_model_rederives_the_active_catalog() {
-        // P1-03 / D-02: a restart whose startup document changed a catalog
+        // A restart whose startup document changed a catalog
         // field re-derives the catalog through the normal prepare and accept
         // path instead of leaving the catalog and the executing driver
         // divergent.
@@ -4752,7 +4751,7 @@ mod tests {
 
     #[test]
     fn startup_open_adopts_a_durable_pending_removal_through_the_repository() {
-        // R16 follow-up (a): the composition's real open sequence recovers a
+        // The composition's real open sequence recovers a
         // durable pending removal its own previous process left behind,
         // instead of failing with `provider_catalog_removal_pending_exists`
         // until the 30-minute expiry. The recovered state is read through the
@@ -4841,7 +4840,7 @@ mod tests {
 
     #[test]
     fn startup_open_accepts_a_second_change_after_adopting_a_durable_pending_removal() {
-        // R16 follow-up (b), the differ-differ case: the startup document
+        // The differ-differ follow-up case: the startup document
         // changes again while a durable, startup-rebuilt pending removal
         // exists. The open adopts the pending removal and then accepts the
         // newly prepared candidate against the revision that adoption
@@ -4868,7 +4867,7 @@ mod tests {
         drop(first);
 
         // The document changed again before the pending removal was accepted:
-        // the restart resolves the durable removal first (R40: the candidate
+        // the restart resolves the durable removal first (the candidate
         // rebuilt from the durable rows is adopted through the normal
         // acceptance path), and the re-derived declaration is then accepted as
         // an ordinary replacement against the adopted revision - so only the
@@ -4927,7 +4926,7 @@ mod tests {
 
     #[test]
     fn startup_open_adopts_a_durable_pending_removal_when_the_document_matches() {
-        // R40: the durable pending removal is resolved by the open even when
+        // The durable pending removal is resolved by the open even when
         // the startup document still matches the declaration the removal was
         // prepared from, so a crash residue can never leave the platform
         // gated. The adoption closes the removal row durably, and the
@@ -4988,7 +4987,7 @@ mod tests {
 
     #[test]
     fn restart_after_the_startup_document_drops_a_declared_endpoint_rederives() {
-        // R17 / D-02: the endpoint comparison is two-directional, so a
+        // The endpoint comparison is two-directional, so a
         // document that drops a previously declared endpoint re-derives the
         // active catalog instead of keeping the stale declaration.
         let directory = TempDir::new().expect("temporary directory exists");
@@ -5037,7 +5036,7 @@ mod tests {
 
     #[test]
     fn derived_default_endpoint_matches_the_catalog_derivation() {
-        // R17: the composition's comparison copy of the derived endpoint is
+        // The composition's comparison copy of the derived endpoint is
         // pinned to the catalog's own derivation by reading the active profile
         // of an endpointless declaration.
         let directory = TempDir::new().expect("temporary directory exists");
@@ -5058,7 +5057,7 @@ mod tests {
 
     #[test]
     fn driver_kind_must_match_the_active_catalog_kind() {
-        // D-02 item 3: a `SelectedProvider` whose kind differs from the active
+        // A `SelectedProvider` whose kind differs from the active
         // catalog kind is rejected, so the executing driver can never serve a
         // catalog it does not match.
         let directory = TempDir::new().expect("temporary directory exists");
@@ -6133,7 +6132,7 @@ mod tests {
 
     #[test]
     fn control_plane_typed_edit_escapes_wire_values_before_the_candidate_parse() {
-        // D-10 (P3-28): the document is rendered from the snapshot AST inside
+        // The document is rendered from the snapshot AST inside
         // `intention-config`, so a wire value carrying a TOML-significant
         // character is escaped and reaches the server-side validator. Before
         // the change the interpolated document broke TOML parsing and reported
@@ -6623,7 +6622,7 @@ mod tests {
 
     #[test]
     fn admission_rejects_a_non_current_schema_version_before_any_effect() {
-        // R5b / P2-03: the control-plane schema version is enforced at the
+        // The control-plane schema version is enforced at the
         // composition admission point, so a peer that bypasses decode cannot
         // make the daemon serve a non-current control-plane document.
         let directory = TempDir::new().expect("temporary directory exists");
@@ -7345,7 +7344,7 @@ mod tests {
 
     #[test]
     fn pending_removal_survives_restart_with_durable_material_and_accepts() {
-        // PR24-003 under R40: a pending removal candidate is durable, and a
+        // PR24-003: a pending removal candidate is durable, and a
         // restart resolves it through the normal acceptance path - the
         // candidate rebuilt from the durable rows is adopted, so the platform
         // never opens gated and the real deadline still drives expiry before
@@ -7562,7 +7561,7 @@ mod tests {
 
     #[test]
     fn reload_during_pending_removal_preserves_the_lifecycle_across_restart() {
-        // PR24-005 under R40: a configuration reload commit never rewrites a
+        // PR24-005: a configuration reload commit never rewrites a
         // durable pending-removal state. The removal is still durably pending
         // after the commit, and the restart adopts that same durable row (with
         // its real deadline) instead of opening gated.

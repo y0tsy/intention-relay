@@ -150,7 +150,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
 
 #[test]
 fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
-    // R11/A3: only a genuinely missing run row is a permanent not-found; a
+    // Only a genuinely missing run row is a permanent not-found; a
     // backend read failure during the run-identity lookup stays transient
     // unavailability.
     let (directory, repository) = repository();
@@ -188,7 +188,7 @@ fn backend_failure_on_the_run_identity_lookup_is_unavailable_not_not_found() {
 
 #[test]
 fn backend_failure_on_the_snapshot_lookup_is_unavailable_not_not_found() {
-    // R31/R11: only a genuinely missing snapshot row is the typed
+    // Only a genuinely missing snapshot row is the typed
     // `run_configuration_unavailable`; a backend read failure while loading
     // the persisted safe selection stays transient `storage_unavailable`.
     let (directory, repository) = repository();

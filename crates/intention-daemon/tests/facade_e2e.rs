@@ -467,7 +467,7 @@ fn excess_response() -> String {
 /// protocol capabilities and the daemon's negotiation only verifies protocol
 /// version compatibility, so the fixture reconstructs the same hello with
 /// public APIs only. `provider_profiles_v1` is part of it because the client
-/// surfaces the gated control plane (A1).
+/// surfaces the gated control plane.
 fn command_hello() -> ProtocolHelloDto {
     ProtocolHelloDto::new(
         local_protocol_version(),
@@ -729,7 +729,7 @@ fn assert_contiguous_facts(facts: &[ModelRunFactDto]) {
     );
 }
 
-/// A1 (`P1-02`) and D-03 (`P2-05`): the real daemon accepts the shared
+/// The real daemon accepts the shared
 /// client's gated control-plane surface end to end because the client hello
 /// advertises `provider_profiles_v1`, while the same request from a baseline
 /// peer is rejected before any effect.

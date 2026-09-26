@@ -59,9 +59,8 @@ append seam yet, so the committed event is validated at the boundary and
 recorded nowhere. Durable delivery is parked as a declared future slice,
 reserved to Milestone 6 in the roadmap's
 [reserved declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declarations-carried-by-m6-m9)
-and anchored in the register's parking list
-(`pr24-review-1.md`, "Parked with owners after V2", the durable
-`SessionProviderProfileChanged` append layer). An
+and anchored as the durable
+`SessionProviderProfileChanged` append layer. An
 existing-profile request is a successful `changed = false` no-op that
 publishes no event.
 `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe
@@ -212,7 +211,7 @@ credential rotation, health checks, discovery, pricing, controlled
 live reload, and typed header policy are activated by Slice 2
 ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
 server-side-parser and preservation-control contracts were removed as
-unconsumed by the D-16 audit, so no parser-configuration surface is activated.
+unconsumed by the unconsumed-surface audit (2026-09), so no parser-configuration surface is activated.
 UI, Cargo,
 Makefile/CI, or production activation beyond the activated Slice 2 contracts
 remain outside this document.

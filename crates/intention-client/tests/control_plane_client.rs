@@ -584,7 +584,7 @@ fn baseline_hello() -> ProtocolHelloDto {
     .expect("baseline fixture daemon hello is valid")
 }
 
-/// A1 (`P1-02`): the shared client advertises `provider_profiles_v1` in its
+/// The shared client advertises `provider_profiles_v1` in its
 /// hello, so the real daemon's gate accepts the delivered control-plane
 /// surface, and it still fails closed when a daemon does not negotiate the
 /// capability.
@@ -622,7 +622,7 @@ fn client_hello_advertises_and_requires_provider_profiles_v1() {
 fn invalid_fixture_projections_are_rejected_at_decode() {
     // A projection that is structurally complete but violates its declared
     // invariants must fail at decode instead of reaching the caller. The
-    // reload status is a closed enum (D-14), so an unknown status cannot be
+    // reload status is a closed enum, so an unknown status cannot be
     // constructed here; the protocol decode rejection covers that wire case.
     let blank_policy = endpoint();
     let blank_server = start_fixture_server(

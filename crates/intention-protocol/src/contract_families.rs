@@ -4504,7 +4504,7 @@ impl GetConfigurationProjectionQueryDto {
 /// The vocabulary is a closed enum validated by serde: `active` is the only
 /// status the current production path produces, an unknown wire value is
 /// rejected at decode with `configuration_projection_invalid`, and a consumer
-/// can match the status exhaustively (D-14, `P3-08`).
+/// can match the status exhaustively.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigurationReloadStatusDto {

@@ -16,7 +16,7 @@ use crate::provider_selection::{MODEL_CAPABILITY_TAXONOMY_V1, ModelCapabilitySet
 /// Maximum characters of a provider profile, revision, kind, or model
 /// identifier.
 ///
-/// This is the single identifier bound (D-13): the canonical record counts
+/// This is the single identifier bound: the canonical record counts
 /// characters and enforces the same number the public wire DTO enforces, so a
 /// value cannot pass one boundary and fail the other. ADR 0037 Appendix A
 /// records this number per identifier field.
@@ -145,7 +145,7 @@ pub fn validate_profile_id(profile_id: &str) -> Result<(), CanonicalError> {
 /// malformed percent escapes. A non-empty authority with a stray or nested
 /// bracket, a backslash in the host, an empty or non-numeric port, or a
 /// Unicode whitespace character such as a non-breaking space names no
-/// reachable host and is rejected (R25, R48). Raw or secret-bearing URL input
+/// reachable host and is rejected. Raw or secret-bearing URL input
 /// is never public or durable identity.
 ///
 /// # Errors
@@ -217,7 +217,7 @@ fn authority_host_is_empty(rest: &str) -> bool {
 /// port (`https://api.example.com:notaport/v1`), or a Unicode whitespace
 /// character such as a non-breaking space that the ASCII whitespace scan
 /// cannot see (`https://exa\u{a0}mple.com/v1`). The endpoint policy rejects
-/// these shapes instead of passing them on as execution metadata (R25, R48).
+/// these shapes instead of passing them on as execution metadata.
 #[must_use]
 fn authority_host_is_malformed(rest: &str) -> bool {
     let authority = rest.split('/').next().unwrap_or_default();
@@ -1466,13 +1466,13 @@ mod tests {
             ("https://api.example.com/v1 ", "invalid_endpoint"),
             ("ftp://api.example.com/v1", "invalid_endpoint"),
             ("https://api.example.com/%zz", "invalid_endpoint"),
-            // R25: a non-empty authority whose host is malformed names no
+            // A non-empty authority whose host is malformed names no
             // reachable host and is rejected.
             ("https://]/v1", "invalid_endpoint"),
             ("https://[::1]]/v1", "invalid_endpoint"),
             ("https://exa\\mple.com/v1", "invalid_endpoint"),
             ("https://[::1]suffix/v1", "invalid_endpoint"),
-            // R48: an unbracketed authority with a non-numeric or empty port
+            // An unbracketed authority with a non-numeric or empty port
             // and a host carrying a non-breaking space (U+00A0, which the
             // ASCII whitespace scan cannot see) name no reachable host.
             ("https://api.example.com:notaport/v1", "invalid_endpoint"),

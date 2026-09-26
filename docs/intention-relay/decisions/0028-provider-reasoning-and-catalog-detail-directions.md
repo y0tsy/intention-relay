@@ -20,7 +20,7 @@ The following detail from
   `ReasoningHistoryBound`, 4-MiB aggregate bound,
   `reasoning_history_unavailable`/`incompatible`/`too_large`);
 - reported-usage accounting with no double-count and no price/currency (the
-  typed `ReasoningUsageDto` was removed as unconsumed by the D-16 audit);
+  typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09));
 - `normalized_reasoning_stream_v1` paged initial delivery
   (`RunReasoningHistoryPageDto`/`RunReasoningHistoryCompletedDto`, 256 facts /
   512 KiB per page, `normalized_reasoning_stream_required`);
@@ -60,7 +60,7 @@ The following detail from
   automatic-provider-reasoning-summary default request for a
   summary-supporting `responses` profile. The typed Responses reasoning-mode
   projection and the protocol-side effort copy were removed as unconsumed by
-  the D-16 audit.
+  the unconsumed-surface audit (2026-09).
 
 The session-selection layer (session defaults/overrides, `provider_profiles_v1`,
 promotion/reconciliation, held recovered-run admission) is owned by

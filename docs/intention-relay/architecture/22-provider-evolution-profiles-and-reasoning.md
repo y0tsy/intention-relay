@@ -20,7 +20,7 @@ normalized textual reasoning. Slice 2 activates the catalog lifecycle,
 provider selection and capability resolution, the normalized reasoning
 surface, the typed dialect decoder contract, and typed
 header policy validation (the typed preservation-control and
-parser-configuration contracts were removed as unconsumed by the D-16 audit).
+parser-configuration contracts were removed by the unconsumed-surface audit (2026-09)).
 It
 does not authorize a `responses` SDK/driver, remote continuation, live wire
 header injection (`SafeHeader`), a user-kind parser, provider-native live
@@ -417,7 +417,7 @@ The resolved reasoning policy includes the closed fragment-category and
 summary support, the `ReasoningHistoryTransferDto` mode, and `compatibility_id`
 when transfer is enabled. It also records the fixed 4 MiB output/history limits.
 The optional typed reasoning-usage interpretation and its `ReasoningUsageDto`
-were removed as unconsumed by the D-16 audit. A selection that cannot
+were removed by the unconsumed-surface audit (2026-09). A selection that cannot
 represent the descriptor's declared history transfer fails preflight before
 provider work; it never falls back to a different transfer policy.
 
@@ -432,7 +432,7 @@ provider-managed history state. The provider-neutral contract adds closed
 subset; an unsupported effort fails preflight. The resolved execution policy
 records the selected effort as immutable safe provenance. The former
 Responses-specific reasoning-mode projection and the protocol-side effort copy
-were removed as unconsumed by the D-16 audit.
+were removed by the unconsumed-surface audit (2026-09).
 
 For a `responses` profile whose model subset declares summary support, the
 default request asks for an automatic provider reasoning summary. A returned
@@ -496,7 +496,7 @@ readable with no synthetic manifests.
 
 `UsageDto::Reported` carries only the ordinary reported input/output/total token
 counts; the optional typed `ReasoningUsageDto` was removed as unconsumed by the
-D-16 audit. A missing reported usage stays `NotReported`, never a zero count.
+unconsumed-surface audit (2026-09). A missing reported usage stays `NotReported`, never a zero count.
 Reconnect, replay, inheritance, and tree aggregation must not charge or count
 the same source `RunId` twice. There is no price, currency, or inferred cost.
 
@@ -567,9 +567,9 @@ are an accepted post-M5 direction under
 activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md):
 a closed code-owned typed header policy (the `intention-model`
 `AuthenticationHeaderPolicyV1` consumed by both provider adapters; the
-protocol-only duplicate was removed by the D-16 audit). The typed
+protocol-only duplicate was removed by the unconsumed-surface audit (2026-09)). The typed
 provider-native preservation-control and server-side-parser contracts were
-removed as unconsumed by the D-16 audit: no preservation-control or
+removed by the unconsumed-surface audit (2026-09): no preservation-control or
 parser-configuration surface is activated. Live wire header
 injection (`SafeHeader`) and provider-native live extraction beyond the
 declared paths remain not activated. The current `async-openai` core
@@ -692,7 +692,7 @@ discovery, pricing, controlled live reload, and typed header policy are
 activated by Slice 2
 ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
 preservation-control and server-side-parser contracts were removed as
-unconsumed by the D-16 audit, and no parser-configuration surface is
+unconsumed by the unconsumed-surface audit (2026-09), and no parser-configuration surface is
 activated. Architecture
 23 owns forks and lineage, architecture 29 owns session defaults/overrides and
 the profiles protocol, and UI, Cargo, Makefile/CI, or production activation

@@ -536,7 +536,7 @@ fn health_check_projects_evidence_without_touching_any_run_or_selection_state() 
         assert_eq!(evidence.observed_at, 100);
         assert_eq!(evidence.observed_availability, availability);
         assert_eq!(evidence.safe_diagnostic_code.as_deref(), diagnostic_code);
-        // D-09 / P3-20: the catalog-owned profile revision is structurally
+        // The catalog-owned profile revision is structurally
         // absent because the catalog binding is not wired into the health
         // path. The assertion is the absence of the typed optional value, not
         // a scan for a placeholder pattern, so a reintroduced synthesized
@@ -792,7 +792,7 @@ fn fake_secret_never_appears_in_any_service_dto_or_error() {
 }
 
 /// Consumes the applied-configuration projection through the closed typed
-/// reload-status vocabulary (D-14, `P3-08`).
+/// reload-status vocabulary.
 ///
 /// The vocabulary is matched exhaustively: adding a status variant makes this
 /// fixture stop compiling until the new status is handled deliberately, which

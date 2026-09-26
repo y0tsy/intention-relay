@@ -411,8 +411,8 @@ pub fn classify_changed_fields(left: &ConfigSnapshotDto, right: &ConfigSnapshotD
 /// Projects one active catalog profile declaration into the credential-free
 /// snapshot shape the catalog prepare path compares against.
 ///
-/// The startup catalog re-derivation (finding `P1-03`, accepted decision
-/// D-02) compares the startup document with the durable active catalog, and
+/// The startup catalog re-derivation compares the startup document with the
+/// durable active catalog, and
 /// the catalog prepare path detects change by comparing two configuration
 /// snapshots. This projection turns one catalog profile declaration (kind,
 /// model, endpoint) into that comparison shape: it inherits the schema
@@ -459,7 +459,7 @@ pub fn catalog_declaration_snapshot(
 /// endpoint hash into the profile revision and the resolved selection. The
 /// advertised recovery is real: the next daemon startup re-derives the
 /// catalog from the startup document through the catalog prepare and accept
-/// path (finding `P1-03`, accepted decision D-02), so restarting the daemon
+/// path, so restarting the daemon
 /// applies the change. Execution-policy changes remain reloadable.
 ///
 /// # Errors
@@ -587,8 +587,7 @@ fn collect_v1_issues(table: &toml::Table, issues: &mut Vec<CandidateIssueDto>) {
 ///
 /// The accepted ids are exactly [`ProviderKindDto::ALL`] through
 /// [`ProviderKindDto::from_id`], so this field-level validator consumes the
-/// single id-to-kind owner instead of keeping a second list that can drift
-/// (R37, R50).
+/// single id-to-kind owner instead of keeping a second list that can drift.
 fn validate_provider_kind(
     value: Option<&toml::Value>,
     field: &str,
@@ -771,7 +770,7 @@ fn contains_credential_shape(value: &str) -> bool {
 
 /// One typed, credential-free configuration edit operation.
 ///
-/// The configuration crate owns its own edit vocabulary (D-10): the
+/// The configuration crate owns its own edit vocabulary: the
 /// composition maps the protocol `ConfigurationEditOperationDto` into this
 /// type, so the TOML document shape stays inside the crate the ownership map
 /// assigns to configuration editing.

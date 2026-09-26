@@ -1994,7 +1994,7 @@ fn provider_selection_from_maps_domain_validation_failure_to_provider_profile_re
     let repo = FakeAppRepo::new(catalog, defaults, queued_change(session_id));
     let dispatch = FakeDispatch::new();
     // The resolved profile id passes the protocol shape checks but violates
-    // the canonical domain 256-character bound (D-13), so the failure is
+    // the canonical domain 256-character bound, so the failure is
     // raised by the durable selection validation inside
     // provider_selection_from.
     let over_long = "p".repeat(257);
@@ -2525,7 +2525,7 @@ fn get_maps_catalog_not_ready_to_catalog_not_active() {
 
 #[test]
 fn the_removed_admission_tombstone_code_stays_out_of_the_workspace() {
-    // R36: the tombstoned-profile admission error had no remaining producer
+    // The tombstoned-profile admission error had no remaining producer
     // once the catalog's admission authority became the current active
     // membership, so its application-side mappings were deleted. This guard
     // fails if the removed vocabulary returns anywhere under `crates`, and it
@@ -2735,7 +2735,7 @@ fn by_profile_aggregates_in_period_aggregates_only() {
 fn by_profile_projects_one_aggregation_per_revision_and_model_identity() {
     // Two identities produced in-period usage. The projection must carry each
     // identity's own totals instead of labelling the whole sum with whichever
-    // durable row happened to be last (D-04, option A).
+    // durable row happened to be last.
     let usage = FakeUsage::new();
     usage.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
     usage.seed_aggregate("default", "rev-0001", "model-a", 100, 200);
@@ -2819,7 +2819,7 @@ fn by_profile_rejects_an_invalid_query() {
 
 #[test]
 fn by_profile_rejects_more_identities_than_the_usage_set_bound() {
-    // R54 (D-04 residual): the closed aggregation set is bounded at
+    // The closed aggregation set is bounded at
     // `MAX_PROVIDER_USAGE_IDENTITIES` identities. A period that produced more
     // distinct identities must fail closed instead of projecting an over-limit
     // set.
@@ -2835,7 +2835,7 @@ fn by_profile_rejects_more_identities_than_the_usage_set_bound() {
 
 #[test]
 fn an_aggregation_set_rejects_a_duplicate_identity() {
-    // R54 (D-04 residual): the strict identity order rejects an equal pair, so
+    // The strict identity order rejects an equal pair, so
     // a duplicate identity can never be projected as two entries that each
     // carry a partial total.
     let entry = usage_aggregation("default", "rev-0001", "model-a");
@@ -2850,7 +2850,7 @@ fn an_aggregation_set_rejects_a_duplicate_identity() {
 
 #[test]
 fn an_aggregation_set_rejects_unsorted_entries() {
-    // R54 (D-04 residual): identities must be strictly sorted by revision and
+    // Identities must be strictly sorted by revision and
     // model id, so a projection that reports durable row order is rejected
     // instead of becoming the published set.
     let set = ProviderUsageAggregationsDto {
