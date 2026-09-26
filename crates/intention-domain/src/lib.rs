@@ -13,10 +13,14 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub mod canonical;
 pub mod context_projection;
+pub mod goal_domain;
+pub mod harness;
+pub mod programmatic_policy;
 pub mod harness;
 pub mod programmatic_policy;
 pub mod harness;
 pub mod provider_catalog;
+pub mod slice3_selections;
 pub mod provider_selection;
 pub mod reasoning_history;
 pub mod slice3_selections;
