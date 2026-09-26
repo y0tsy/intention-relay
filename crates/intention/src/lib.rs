@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use intention_application::harness::{
+    CaptureHarnessTriggerRequestDto, HarnessLaunchRequestDto, HarnessRestartRecoveryInputDto,
+    HarnessRuntimeService,
+};
+use intention_application::programmatic_policy::{
+    ProgrammaticPolicyAdmissionService, ProgrammaticReservationRecoveryInputDto,
+};
 use intention_application::{
     ApplicationService, CatalogAdmissionPort, CatalogReadService, ConfigurationReloadService,
     ControlPlaneReadinessPort, CreateSessionWorkflowInputDto, CredentialRotationService,
@@ -33,7 +40,13 @@ use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_domain::{
     CredentialTransportMode as DomainCredentialTransportMode, DomainEventDto,
     GetSessionSnapshotQueryDto, ModelRunFactInputDto, ProviderSelectionV1, RunEventCursorDto,
-    RunFailureDto, RunReplayDto, RunStatusDto, ToolLifecycleStatusDto, canonical::Digest256,
+    RunFailureDto, RunReplayDto, RunStatusDto, ToolLifecycleStatusDto,
+    canonical::{Digest256, contains_control_or_nul, contains_credential_shape},
+    harness::{
+        HarnessDisconnectContractV1, HarnessIntervalScheduleV1, HarnessLaunchOriginV1,
+        HarnessRuleLifecycleStateV1, applied_harness_time_zone, validate_harness_time_zone,
+    },
+    slice3_selections::{HarnessExecutionClassV1, HarnessSourceKindV1},
 };
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
@@ -68,6 +81,15 @@ use intention_runtime::{
     ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, ToolExecutionPort,
     fail_starting_run,
 };
+use intention_storage::harness_repo::{
+    CreateHarnessRuleInputDto, HarnessExecutionClassDto, HarnessJournalRecordDto,
+    HarnessRuleLifecycleStateDto, HarnessRuleRecordDto, HarnessRuleRepositoryDto,
+    HarnessRuleRevisionRecordDto, HarnessSourceKindDto, HarnessTriggerReasonRecordDto,
+    HarnessTriggerRepositoryDto, ReviseHarnessRuleInputDto, TransitionHarnessRuleLifecycleInputDto,
+};
+use intention_storage::programmatic_policy_repo::{
+    ProgrammaticAdmissionRepositoryDto, ProgrammaticReservationStateDto,
+};
 use intention_storage::{
     AppendModelRunFactsInputDto, EnqueueUnavailableRunInputDto, HeldRunRepositoryDto,
     MarkRecoveredRunHeldInputDto, ProviderCatalogRepositoryDto, ProviderRemovalRepositoryDto,
@@ -97,6 +119,68 @@ pub struct DaemonApplicationFacade {
 }
 
 pub use intention_application::CatalogReadiness;
+pub use intention_application::harness::{
+    HarnessAdmittedLaunchDto, HarnessLaunchOutcomeDto, HarnessRestartRecoveryDto,
+    HarnessTriggerCaptureResultDto,
+};
+pub use intention_application::programmatic_policy::ProgrammaticReservationRecoveryDto;
+
+/// The durable continual-harness repository contract of architecture 26.
+///
+/// The daemon-facing harness surface persists through these DTO-only Slice 3
+/// records: rules and immutable revisions, coalesced trigger reasons,
+/// counters, dossiers, verified checkpoints, and the durable journal. They
+/// carry safe identities, revisions, digests, and bound values only, never a
+/// credential, filesystem path, grant, provider resource, or implementation
+/// state.
+pub use intention_storage::harness_repo;
+
+/// One daemon-owned harness scheduling tick request.
+///
+/// The daemon owns the tick cadence, the project time zone, and the
+/// daemon-wide concurrency signal; the composition owns the durable capture,
+/// the single coalesced admission, and every journal append. No credential,
+/// filesystem path, grant, or provider resource crosses this boundary.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HarnessScheduleTickRequestDto {
+    /// The rule observed by this tick, as canonical identity text.
+    pub harness_id: String,
+    /// The daemon-owned observation time in Unix milliseconds.
+    pub observed_at_ms: u64,
+    /// The daemon-owned project time zone applied to a non-archived rule.
+    pub project_time_zone: String,
+    /// Whether the daemon-wide concurrency signal is free at this observation.
+    pub daemon_concurrency_available: bool,
+    /// The daemon-assigned fresh ordinary run identity of a possible launch.
+    pub proposed_run_id: RunId,
+}
+
+/// One due schedule observation captured by a harness scheduling tick.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HarnessScheduleObservationDto {
+    /// The closed source kind of this due observation.
+    pub source_kind: HarnessSourceKindV1,
+    /// The exact observation slot in Unix milliseconds.
+    pub observed_at_ms: u64,
+    /// The durable redelivery-safe capture result.
+    pub capture: HarnessTriggerCaptureResultDto,
+}
+
+/// The complete outcome of one harness scheduling tick.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HarnessScheduleTickOutcomeDto {
+    /// The durable rule identity this tick observed.
+    pub harness_id: String,
+    /// The due observations captured by this tick, in source order.
+    pub observations: Vec<HarnessScheduleObservationDto>,
+    /// The single launch attempt of this tick, when a pending reason existed.
+    pub launch: Option<HarnessLaunchOutcomeDto>,
+    /// The pending coalesced reason after the tick, when one remains.
+    pub pending_reason: Option<HarnessTriggerReasonRecordDto>,
+}
 
 struct FacadeInner {
     repository: Arc<SqliteStorageRepository>,
@@ -2857,6 +2941,331 @@ impl DaemonApplicationFacade {
         Ok(result)
     }
 
+    /// Creates one durable harness rule with its first immutable revision.
+    ///
+    /// The composition owns the persistence path of the daemon harness
+    /// definition surface: the request carries bounded typed records only, and
+    /// the durable repository remains the single persistence authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed rule, revision, bound, and repository failures of the
+    /// durable creation.
+    #[doc(hidden)]
+    pub fn create_harness_rule_for_daemon(
+        &self,
+        input: CreateHarnessRuleInputDto,
+    ) -> DtoResult<HarnessRuleRecordDto> {
+        self.inner.repository.create_harness_rule(input)
+    }
+
+    /// Continues one durable harness rule with its next immutable revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed revision, bound, and repository failures of the
+    /// durable update.
+    #[doc(hidden)]
+    pub fn revise_harness_rule_for_daemon(
+        &self,
+        input: ReviseHarnessRuleInputDto,
+    ) -> DtoResult<HarnessRuleRecordDto> {
+        self.inner.repository.revise_harness_rule(input)
+    }
+
+    /// Applies one validated lifecycle operation to a durable harness rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed lifecycle, revision, and repository failures of the
+    /// durable transition.
+    #[doc(hidden)]
+    pub fn transition_harness_rule_lifecycle_for_daemon(
+        &self,
+        input: TransitionHarnessRuleLifecycleInputDto,
+    ) -> DtoResult<HarnessRuleRecordDto> {
+        self.inner
+            .repository
+            .transition_harness_rule_lifecycle(input)
+    }
+
+    /// Performs one daemon-owned harness scheduling tick for one rule.
+    ///
+    /// The daemon owns the tick cadence, the project time zone, and the
+    /// daemon-wide concurrency signal. This tick captures every due interval
+    /// and calendar observation into at most one coalesced pending reason,
+    /// admits at most one launch from that reason with a daemon-assigned fresh
+    /// ordinary run identity, and appends every durable journal record through
+    /// the frozen harness transactions. Missed interval slots coalesce into the
+    /// newest due slot, a redelivered slot changes nothing, and a paused rule
+    /// captures and coalesces without launching. A non-archived rule follows
+    /// the daemon-owned project time zone: a revision recorded under a
+    /// different zone fails closed until the rule is revised.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credentials_forbidden` for a credential-shaped identity,
+    /// `harness_source_unavailable` for a non-canonical or path-shaped
+    /// identity, `harness_schedule_invalid` for the project time zone or an
+    /// incoherent interval or calendar revision, `harness_archived` for an
+    /// archived rule, and the typed capture, admission, and journal failures of
+    /// the durable transactions.
+    #[doc(hidden)]
+    pub fn harness_schedule_tick_for_daemon(
+        &self,
+        request: HarnessScheduleTickRequestDto,
+    ) -> DtoResult<HarnessScheduleTickOutcomeDto> {
+        validate_daemon_identity(&request.harness_id)?;
+        validate_harness_time_zone(&request.project_time_zone)?;
+        let rule = self
+            .inner
+            .repository
+            .load_harness_rule(request.harness_id.clone())?;
+        let revision = self
+            .inner
+            .repository
+            .load_harness_rule_revision(rule.harness_id.clone(), rule.active_revision)?;
+        let lifecycle = harness_lifecycle_from_storage(rule.lifecycle_state);
+        let applied_zone = applied_harness_time_zone(
+            lifecycle,
+            &revision.applied_time_zone,
+            &request.project_time_zone,
+        )?;
+        if applied_zone != revision.applied_time_zone {
+            return Err(ErrorDto::validation(
+                "harness_schedule_invalid",
+                "a non-archived harness rule follows the daemon project time zone; revise the rule to the current project zone",
+            ));
+        }
+        let observations = due_harness_observations(&revision, request.observed_at_ms)?;
+        let mut captures = Vec::with_capacity(observations.len());
+        for observation in observations {
+            captures.push(self.capture_harness_observation(&rule, &revision, observation)?);
+        }
+        let pending = self
+            .inner
+            .repository
+            .load_pending_harness_trigger(rule.harness_id.clone())?;
+        let launch = match pending {
+            Some(reason) if automatic_launch_permitted(lifecycle, reason.source_kind) => {
+                Some(self.admit_pending_harness_trigger(&rule, &revision, &reason, &request)?)
+            }
+            Some(_) | None => None,
+        };
+        let pending_reason = self
+            .inner
+            .repository
+            .load_pending_harness_trigger(rule.harness_id.clone())?;
+        Ok(HarnessScheduleTickOutcomeDto {
+            harness_id: rule.harness_id,
+            observations: captures,
+            launch,
+            pending_reason,
+        })
+    }
+
+    /// Loads one bounded page of one session's durable harness journal.
+    ///
+    /// The journal remains readable after a client reconnect or a daemon
+    /// restart, and the read is scoped to the owning session of the rule so no
+    /// session can read another session's harness journal.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credentials_forbidden` or `harness_source_unavailable` for an
+    /// unusable rule identity, `harness_source_unavailable` when the session
+    /// does not own the rule, the typed session and rule read failures, and
+    /// `invalid_harness_journal_page` for an out-of-bound page.
+    #[doc(hidden)]
+    pub fn load_harness_journal_for_session_for_daemon(
+        &self,
+        session_id: SessionId,
+        harness_id: &str,
+        after_sequence: u64,
+        limit: u64,
+    ) -> DtoResult<Vec<HarnessJournalRecordDto>> {
+        validate_daemon_identity(harness_id)?;
+        let rule = self
+            .inner
+            .repository
+            .load_harness_rule(harness_id.to_owned())?;
+        let projection = self.inner.repository.load_session_snapshot(session_id)?;
+        if !session_owns_harness_rule(&rule, session_id, &projection.project_id().to_string()) {
+            return Err(ErrorDto::validation(
+                "harness_source_unavailable",
+                "a harness journal is readable only by its owning session",
+            ));
+        }
+        self.harness_runtime()
+            .load_journal(&rule.harness_id, after_sequence, limit)
+    }
+
+    /// Leaves one interrupted harness launch in its `Interrupted` outcome.
+    ///
+    /// Restart recovery never resumes, retries, reattaches, or reruns the
+    /// interrupted run, and it schedules no successor: a later attempt is a
+    /// separately admitted launch with new identities and new capacity. The
+    /// daemon calls this for every interrupted launch its restart observation
+    /// names.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credentials_forbidden` or `harness_source_unavailable` for an
+    /// unusable identity and the typed checkpoint, journal, and repository
+    /// failures of the interrupted run-terminal commit.
+    #[doc(hidden)]
+    pub fn recover_interrupted_harness_launch_for_daemon(
+        &self,
+        harness_id: &str,
+        interrupted_run_id: &str,
+        occurred_at_ms: u64,
+    ) -> DtoResult<HarnessRestartRecoveryDto> {
+        let input = HarnessRestartRecoveryInputDto {
+            harness_id: parse_daemon_identity(harness_id)?,
+            interrupted_run_id: parse_daemon_identity(interrupted_run_id)?,
+            observed_contract: HarnessDisconnectContractV1::frozen(),
+            occurred_at_ms,
+        };
+        self.harness_runtime().recover_interrupted(&input)
+    }
+
+    /// Applies the startup recovery disposition of one root run's outstanding
+    /// programmatic-policy reservations.
+    ///
+    /// A reservation that never reached `ToolCallStarted` is released atomically
+    /// as interrupted before start; a permanently started ambiguous action keeps
+    /// its permanent consumption, becomes `external_effect_unknown`, and is
+    /// never retried or re-reserved. The started set is derived from the durable
+    /// reservation state, so a repeated recovery changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credentials_forbidden` or `harness_source_unavailable` for an
+    /// unusable root identity and the typed reservation, counter, or repository
+    /// failures of the recovery.
+    #[doc(hidden)]
+    pub fn recover_programmatic_policy_reservations_for_daemon(
+        &self,
+        root_run_id: &str,
+        recovered_at_ms: u64,
+    ) -> DtoResult<Vec<ProgrammaticReservationRecoveryDto>> {
+        validate_daemon_identity(root_run_id)?;
+        let reservations = self
+            .inner
+            .repository
+            .load_programmatic_policy_reservations_for_run(root_run_id.to_owned())?;
+        let started_tool_call_ids = reservations
+            .iter()
+            .filter(|reservation| {
+                reservation.state == ProgrammaticReservationStateDto::PermanentOnStart
+            })
+            .map(|reservation| reservation.tool_call_id.clone())
+            .collect();
+        self.policy_admission()
+            .recover_outstanding(&ProgrammaticReservationRecoveryInputDto {
+                root_run_id: root_run_id.to_owned(),
+                started_tool_call_ids,
+                recovered_at_ms,
+            })
+    }
+
+    /// Constructs the harness runtime over the private durable repository.
+    fn harness_runtime(
+        &self,
+    ) -> HarnessRuntimeService<
+        '_,
+        SqliteStorageRepository,
+        SqliteStorageRepository,
+        SqliteStorageRepository,
+    > {
+        HarnessRuntimeService::new(
+            self.inner.repository.as_ref(),
+            self.inner.repository.as_ref(),
+            self.inner.repository.as_ref(),
+        )
+    }
+
+    /// Constructs the policy admission service over the private repository.
+    fn policy_admission(
+        &self,
+    ) -> ProgrammaticPolicyAdmissionService<
+        '_,
+        SqliteStorageRepository,
+        SqliteStorageRepository,
+        SqliteStorageRepository,
+    > {
+        ProgrammaticPolicyAdmissionService::new(
+            self.inner.repository.as_ref(),
+            self.inner.repository.as_ref(),
+            self.inner.repository.as_ref(),
+        )
+    }
+
+    /// Captures one due schedule observation into the durable pending reason.
+    fn capture_harness_observation(
+        &self,
+        rule: &HarnessRuleRecordDto,
+        revision: &HarnessRuleRevisionRecordDto,
+        observation: DueHarnessObservation,
+    ) -> DtoResult<HarnessScheduleObservationDto> {
+        let reason_id = harness_schedule_reason_identity(
+            &rule.harness_id,
+            revision.revision,
+            observation.source_kind,
+            observation.observed_at_ms,
+        );
+        let capture = self
+            .harness_runtime()
+            .capture_trigger(&CaptureHarnessTriggerRequestDto {
+                harness_id: rule.harness_id.clone(),
+                reason_id,
+                source_kind: observation.source_kind,
+                observed_at_ms: observation.observed_at_ms,
+                cause_chain_reference: None,
+                bounded_references: Vec::new(),
+                catch_up: None,
+            })?;
+        Ok(HarnessScheduleObservationDto {
+            source_kind: observation.source_kind,
+            observed_at_ms: observation.observed_at_ms,
+            capture,
+        })
+    }
+
+    /// Admits at most one launch from the current pending reason of one rule.
+    fn admit_pending_harness_trigger(
+        &self,
+        rule: &HarnessRuleRecordDto,
+        revision: &HarnessRuleRevisionRecordDto,
+        reason: &HarnessTriggerReasonRecordDto,
+        request: &HarnessScheduleTickRequestDto,
+    ) -> DtoResult<HarnessLaunchOutcomeDto> {
+        let origin = match reason.source_kind {
+            HarnessSourceKindDto::ExplicitUserLaunch => HarnessLaunchOriginV1::ExplicitUserLaunch,
+            HarnessSourceKindDto::CalendarTime
+            | HarnessSourceKindDto::FixedInterval
+            | HarnessSourceKindDto::TerminalOutcomeLink => HarnessLaunchOriginV1::AutomaticSource,
+        };
+        let launch = HarnessLaunchRequestDto {
+            harness_id: rule.harness_id.clone(),
+            proposed_run_id: request.proposed_run_id.to_string(),
+            origin,
+            daemon_concurrency_available: request.daemon_concurrency_available,
+            cause_chain_depth: 1,
+            requested_class: harness_class_from_storage(revision.class),
+            narrowed_tool_ids: HARNESS_ROOT_NARROWED_TOOLS
+                .iter()
+                .copied()
+                .map(str::to_owned)
+                .collect(),
+            sub_agent_corridor: None,
+            goal: None,
+            dossier_bytes: HARNESS_ROOT_DOSSIER_BYTES,
+            occurred_at_ms: request.observed_at_ms,
+        };
+        self.harness_runtime().admit_pending_trigger(&launch)
+    }
+
     fn recover_before_ready(&self) -> DtoResult<()> {
         RuntimeService::new(
             self.inner.repository.as_ref(),
@@ -2864,6 +3273,265 @@ impl DaemonApplicationFacade {
         )
         .recover_before_ready()?;
         Ok(())
+    }
+}
+
+/// The code-owned read-and-delegate tool selection of one root harness launch.
+///
+/// `sub_agent` stays outside a root selection: it is reachable only through a
+/// user-confirmed programmatic-policy corridor.
+const HARNESS_ROOT_NARROWED_TOOLS: [&str; 5] = ["read", "glob", "grep", "expand", "retrieve"];
+
+/// The code-owned declared dossier size of one root harness launch.
+///
+/// The first scope's dossier carries bounded typed references only, so the
+/// declared size stays far inside the fixed dossier bound; the durable dossier
+/// record keeps its own measured size.
+const HARNESS_ROOT_DOSSIER_BYTES: u64 = 4096;
+
+/// The code-owned calendar minute grid of one scheduling observation.
+const HARNESS_CALENDAR_MINUTE_MS: u64 = 60_000;
+
+/// The code-owned character bound of one daemon-facing identity.
+const MAX_DAEMON_IDENTITY_CHARS: usize = 128;
+
+/// One due capture observation of a harness scheduling tick.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DueHarnessObservation {
+    /// The closed source kind of the due observation.
+    source_kind: HarnessSourceKindV1,
+    /// The exact observation slot in Unix milliseconds.
+    observed_at_ms: u64,
+}
+
+/// Returns the due interval and calendar observations of one rule revision.
+///
+/// The daemon supplies the observation time. An equal-interval source selects
+/// the newest grid slot at or before it, so every missed slot coalesces into
+/// one capture and an already captured durable slot is never repeated. A
+/// calendar source selects the daemon-owned minute that contains the
+/// observation.
+///
+/// # Errors
+///
+/// Returns `harness_schedule_invalid` for an interval revision without its
+/// durable anchor and cadence, a calendar revision without its canonical
+/// expression, and the interval cadence failures of the selected schedule.
+fn due_harness_observations(
+    revision: &HarnessRuleRevisionRecordDto,
+    observed_at_ms: u64,
+) -> DtoResult<Vec<DueHarnessObservation>> {
+    let mut due = Vec::new();
+    if revision
+        .source_kinds
+        .contains(&HarnessSourceKindDto::FixedInterval)
+    {
+        let (Some(anchor_ms), Some(interval_ms)) =
+            (revision.interval_anchor_ms, revision.interval_ms)
+        else {
+            return Err(ErrorDto::validation(
+                "harness_schedule_invalid",
+                "an equal-interval source requires its durable anchor and cadence",
+            ));
+        };
+        let schedule = HarnessIntervalScheduleV1::new(anchor_ms, interval_ms)?;
+        if let Some(slot) = schedule.slot_at_or_before(observed_at_ms) {
+            due.push(DueHarnessObservation {
+                source_kind: HarnessSourceKindV1::FixedInterval,
+                observed_at_ms: slot,
+            });
+        }
+    }
+    if revision
+        .source_kinds
+        .contains(&HarnessSourceKindDto::CalendarTime)
+    {
+        if revision.calendar_expression.is_none() {
+            return Err(ErrorDto::validation(
+                "harness_schedule_invalid",
+                "a calendar source requires its canonical expression",
+            ));
+        }
+        due.push(DueHarnessObservation {
+            source_kind: HarnessSourceKindV1::CalendarTime,
+            observed_at_ms: observed_at_ms - (observed_at_ms % HARNESS_CALENDAR_MINUTE_MS),
+        });
+    }
+    Ok(due)
+}
+
+/// Whether one rule lifecycle state permits an automatic launch of a reason.
+///
+/// A pause is automation paused: an automatic source is captured and coalesced
+/// but does not launch, while an explicit user launch remains allowed as a
+/// separate user-origin operation.
+const fn automatic_launch_permitted(
+    state: HarnessRuleLifecycleStateV1,
+    source_kind: HarnessSourceKindDto,
+) -> bool {
+    state.permits_automatic_launch()
+        || matches!(source_kind, HarnessSourceKindDto::ExplicitUserLaunch)
+}
+
+/// Whether one session owns the harness rule of a journal read.
+///
+/// A session-scoped rule is readable only by its linked ordinary session; a
+/// project-scoped rule is readable by a session of its project.
+fn session_owns_harness_rule(
+    rule: &HarnessRuleRecordDto,
+    session_id: SessionId,
+    project_id: &str,
+) -> bool {
+    if rule.scope.project_id() != project_id {
+        return false;
+    }
+    rule.scope
+        .session_id()
+        .is_none_or(|linked| linked == session_id.to_string())
+}
+
+/// Derives the stable daemon-assigned reason identity of one slot observation.
+///
+/// The identity is deterministic over the rule, the admitting revision, the
+/// closed source kind, and the exact observation slot, so a redelivered slot
+/// never creates a second pending reason, launch, or run.
+fn harness_schedule_reason_identity(
+    harness_id: &str,
+    rule_revision: u64,
+    source_kind: HarnessSourceKindV1,
+    observed_at_ms: u64,
+) -> String {
+    let mut input = Vec::new();
+    push_framed(&mut input, "harness-schedule-observation-v1");
+    push_framed(&mut input, harness_id);
+    push_framed(&mut input, &rule_revision.to_string());
+    push_framed(&mut input, harness_source_kind_name(source_kind));
+    push_framed(&mut input, &observed_at_ms.to_string());
+    identity_text(derived_identity(Digest256::sha256(&input)))
+}
+
+/// Parses one daemon-facing harness identity from canonical text.
+///
+/// # Errors
+///
+/// Returns `credentials_forbidden` for a credential-shaped value and
+/// `harness_source_unavailable` for a blank, control-bearing, filesystem-path
+/// shaped, over-long, or non-canonical identity.
+fn parse_daemon_identity(value: &str) -> DtoResult<[u8; 16]> {
+    fn invalid() -> ErrorDto {
+        ErrorDto::validation(
+            "harness_source_unavailable",
+            "a harness identity is canonical daemon-assigned text",
+        )
+    }
+    if contains_credential_shape(value) {
+        return Err(ErrorDto::validation(
+            "credentials_forbidden",
+            "credentials are forbidden",
+        ));
+    }
+    if value.trim().is_empty()
+        || contains_control_or_nul(value)
+        || names_filesystem_path(value)
+        || value.chars().count() > MAX_DAEMON_IDENTITY_CHARS
+    {
+        return Err(invalid());
+    }
+    let digits: Vec<u8> = value.bytes().filter(|byte| *byte != b'-').collect();
+    if digits.len() != 32 {
+        return Err(invalid());
+    }
+    let mut identity = [0_u8; 16];
+    for (index, chunk) in digits.chunks_exact(2).enumerate() {
+        let (Some(high), Some(low)) = (hex_value(chunk[0]), hex_value(chunk[1])) else {
+            return Err(invalid());
+        };
+        identity[index] = (high << 4) | low;
+    }
+    Ok(identity)
+}
+
+/// Validates one daemon-facing harness identity without retaining it.
+///
+/// # Errors
+///
+/// Returns the rejection of [`parse_daemon_identity`].
+fn validate_daemon_identity(value: &str) -> DtoResult<()> {
+    parse_daemon_identity(value).map(|_| ())
+}
+
+/// Whether one daemon-facing value names a filesystem path.
+fn names_filesystem_path(value: &str) -> bool {
+    value.starts_with('/')
+        || value.starts_with('\\')
+        || value.contains("..")
+        || value.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+}
+
+/// Returns one hexadecimal digit value.
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Formats one daemon-assigned identity as canonical UUID text.
+fn identity_text(identity: [u8; 16]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(36);
+    for (index, byte) in identity.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            text.push('-');
+        }
+        text.push(char::from(HEX[usize::from(byte >> 4)]));
+        text.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+/// Derives one deterministic daemon-assigned identity from a domain digest.
+fn derived_identity(digest: Digest256) -> [u8; 16] {
+    let bytes = digest.bytes();
+    let mut identity = [0_u8; 16];
+    identity.copy_from_slice(&bytes[..16]);
+    identity
+}
+
+/// Appends one length-framed text field to a deterministic digest input.
+fn push_framed(input: &mut Vec<u8>, value: &str) {
+    input.extend_from_slice(&u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+    input.extend_from_slice(value.as_bytes());
+}
+
+/// Converts one durable harness rule lifecycle state into its domain value.
+const fn harness_lifecycle_from_storage(
+    state: HarnessRuleLifecycleStateDto,
+) -> HarnessRuleLifecycleStateV1 {
+    match state {
+        HarnessRuleLifecycleStateDto::Active => HarnessRuleLifecycleStateV1::Active,
+        HarnessRuleLifecycleStateDto::Paused => HarnessRuleLifecycleStateV1::Paused,
+        HarnessRuleLifecycleStateDto::Archived => HarnessRuleLifecycleStateV1::Archived,
+    }
+}
+
+/// Converts one durable harness execution class into its domain value.
+const fn harness_class_from_storage(class: HarnessExecutionClassDto) -> HarnessExecutionClassV1 {
+    match class {
+        HarnessExecutionClassDto::Light => HarnessExecutionClassV1::Light,
+        HarnessExecutionClassDto::Medium => HarnessExecutionClassV1::Medium,
+        HarnessExecutionClassDto::Heavy => HarnessExecutionClassV1::Heavy,
+    }
+}
+
+/// Returns the stable name of one closed harness trigger source kind.
+const fn harness_source_kind_name(kind: HarnessSourceKindV1) -> &'static str {
+    match kind {
+        HarnessSourceKindV1::ExplicitUserLaunch => "explicit_user_launch",
+        HarnessSourceKindV1::CalendarTime => "calendar_time",
+        HarnessSourceKindV1::FixedInterval => "fixed_interval",
+        HarnessSourceKindV1::TerminalOutcomeLink => "terminal_outcome_link",
     }
 }
 
@@ -3015,6 +3683,22 @@ mod tests {
     use super::*;
 
     use intention_domain::SendUserTurnCommandDto;
+    use intention_domain::harness::HarnessRunOutcomeV1;
+    use intention_domain::programmatic_policy::ProgrammaticRecoveryDispositionV1;
+    use intention_storage::harness_repo::{
+        HarnessJournalRecordKindDto, HarnessPresentationModeDto, HarnessRuleOperationDto,
+        HarnessRuleScopeDto, HarnessTaskModeDto, HarnessTriggerCaptureOutcomeDto,
+        HarnessTriggerReasonStateDto,
+    };
+    use intention_storage::programmatic_policy_repo::{
+        CommitProgrammaticReservationStartedInputDto, CreateProgrammaticPolicyInputDto,
+        ProgrammaticAdmissionDecisionDto, ProgrammaticCalendarPeriodKindDto,
+        ProgrammaticPolicyLifecycleStateDto, ProgrammaticPolicyRecordDto,
+        ProgrammaticPolicyRepositoryDto, ProgrammaticPolicyReservationRecordDto,
+        ProgrammaticPolicyRevisionRecordDto, ProgrammaticPolicyScopeDto,
+        ProgrammaticRootOriginKindDto, ProgrammaticRootOriginRuleRecordDto,
+        ReserveProgrammaticPolicyActionInputDto,
+    };
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
@@ -7641,5 +8325,1197 @@ mod tests {
                 .is_none(),
             "the adopted removal is durably closed"
         );
+    }
+
+    /// The durable equal-interval anchor of every harness facade fixture rule.
+    const HARNESS_FIXTURE_INTERVAL_ANCHOR_MS: u64 = 1_000_000;
+
+    /// The fixed fixture cadence, above the one-minute minimum.
+    const HARNESS_FIXTURE_INTERVAL_MS: u64 = 60_000;
+
+    /// The daemon-owned project time zone of every harness facade fixture tick.
+    const HARNESS_FIXTURE_PROJECT_TIME_ZONE: &str = "UTC";
+
+    /// Returns one canonical fixture digest for a durable harness record.
+    fn fixture_harness_digest(seed: char) -> String {
+        format!("sha256:{}", seed.to_string().repeat(64))
+    }
+
+    /// Creates one ordinary fixture session in `project_id`.
+    ///
+    /// One workspace root binds exactly one workspace identity, so every
+    /// fixture session names its own workspace directory below the platform
+    /// temp root.
+    fn create_harness_session(
+        facade: &DaemonApplicationFacade,
+        project_id: ProjectId,
+    ) -> SessionId {
+        let session_id = SessionId::new();
+        let workspace =
+            std::env::temp_dir().join(format!("intention-composition-harness-{session_id}"));
+        let root = WorkspaceRootDto::parse(workspace.to_string_lossy().into_owned())
+            .expect("fixture workspace is absolute");
+        let accepted = facade.command(ProtocolCommandDto::CreateSession(
+            CreateSessionCommandDto::new(
+                project_id,
+                session_id,
+                WorkspaceId::new(),
+                root,
+                RunModeDto::Build,
+            ),
+        ));
+        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
+        session_id
+    }
+
+    /// Builds one immutable fixed-interval revision of one fixture rule.
+    fn fixture_harness_revision(
+        harness_id: &str,
+        applied_time_zone: &str,
+        revision: u64,
+        digest_seed: char,
+    ) -> HarnessRuleRevisionRecordDto {
+        HarnessRuleRevisionRecordDto {
+            harness_id: harness_id.to_owned(),
+            revision,
+            task_digest: fixture_harness_digest('a'),
+            class: HarnessExecutionClassDto::Light,
+            task_mode: HarnessTaskModeDto::RepeatedTask,
+            presentation_mode: HarnessPresentationModeDto::JournalOnly,
+            applied_time_zone: applied_time_zone.to_owned(),
+            source_kinds: vec![HarnessSourceKindDto::FixedInterval],
+            source_references: Vec::new(),
+            interval_anchor_ms: Some(HARNESS_FIXTURE_INTERVAL_ANCHOR_MS),
+            interval_ms: Some(HARNESS_FIXTURE_INTERVAL_MS),
+            calendar_expression: None,
+            completion_link_reference: None,
+            completion_outcomes: Vec::new(),
+            canonical_revision_digest: fixture_harness_digest(digest_seed),
+            created_at_ms: 1_000,
+        }
+    }
+
+    /// Builds the durable creation input of one session-scoped interval rule.
+    fn fixture_harness_rule_input(
+        harness_id: &str,
+        project_id: ProjectId,
+        session_id: SessionId,
+        applied_time_zone: &str,
+    ) -> CreateHarnessRuleInputDto {
+        CreateHarnessRuleInputDto {
+            rule: HarnessRuleRecordDto {
+                harness_id: harness_id.to_owned(),
+                scope: HarnessRuleScopeDto::UserSession {
+                    project_id: project_id.to_string(),
+                    session_id: session_id.to_string(),
+                },
+                lifecycle_state: HarnessRuleLifecycleStateDto::Active,
+                active_revision: 1,
+                service_session_id: session_id.to_string(),
+                updated_at_ms: 1_000,
+            },
+            revision: fixture_harness_revision(harness_id, applied_time_zone, 1, 'b'),
+        }
+    }
+
+    /// Creates one active fixture rule with a single fixed-interval source.
+    fn create_fixture_harness_rule(
+        facade: &DaemonApplicationFacade,
+        project_id: ProjectId,
+        session_id: SessionId,
+        applied_time_zone: &str,
+    ) -> String {
+        let harness_id = SessionId::new().to_string();
+        let created = facade
+            .create_harness_rule_for_daemon(fixture_harness_rule_input(
+                &harness_id,
+                project_id,
+                session_id,
+                applied_time_zone,
+            ))
+            .expect("fixture harness rule creates");
+        assert_eq!(created.harness_id, harness_id);
+        assert_eq!(created.active_revision, 1);
+        harness_id
+    }
+
+    /// Performs one daemon-owned scheduling tick of one fixture rule.
+    fn tick_fixture_harness(
+        facade: &DaemonApplicationFacade,
+        harness_id: &str,
+        observed_at_ms: u64,
+        project_time_zone: &str,
+        daemon_concurrency_available: bool,
+    ) -> DtoResult<HarnessScheduleTickOutcomeDto> {
+        facade.harness_schedule_tick_for_daemon(HarnessScheduleTickRequestDto {
+            harness_id: harness_id.to_owned(),
+            observed_at_ms,
+            project_time_zone: project_time_zone.to_owned(),
+            daemon_concurrency_available,
+            proposed_run_id: RunId::new(),
+        })
+    }
+
+    /// Returns the single admitted launch of one fixture tick outcome.
+    fn admitted_fixture_launch(
+        outcome: &HarnessScheduleTickOutcomeDto,
+    ) -> &HarnessAdmittedLaunchDto {
+        let Some(HarnessLaunchOutcomeDto::Admitted(admitted)) = outcome.launch.as_ref() else {
+            unreachable!("the fixture tick admits exactly one launch, got {outcome:?}")
+        };
+        admitted
+    }
+
+    /// Admits one fixture launch through a tick and returns its run identity.
+    fn admit_fixture_harness_launch(
+        facade: &DaemonApplicationFacade,
+        harness_id: &str,
+        observed_at_ms: u64,
+    ) -> String {
+        let outcome = tick_fixture_harness(
+            facade,
+            harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the fixture tick admits one launch");
+        admitted_fixture_launch(&outcome).run_id.clone()
+    }
+
+    /// Loads one bounded page of one fixture session's harness journal.
+    fn load_fixture_harness_journal(
+        facade: &DaemonApplicationFacade,
+        session_id: SessionId,
+        harness_id: &str,
+        after_sequence: u64,
+        limit: u64,
+    ) -> DtoResult<Vec<HarnessJournalRecordDto>> {
+        facade.load_harness_journal_for_session_for_daemon(
+            session_id,
+            harness_id,
+            after_sequence,
+            limit,
+        )
+    }
+
+    /// Fabricates the durable policy and reservations of one fixture root run
+    /// through the crate-private repository.
+    ///
+    /// No protocol command reserves a programmatic-policy action: the
+    /// composition owns that persistence path, so this fixture commits the
+    /// durable records a restarted daemon would observe. One reservation stays
+    /// outstanding before `ToolCallStarted` and one reached it permanently.
+    fn seed_fixture_programmatic_reservations(facade: &DaemonApplicationFacade, root_run_id: &str) {
+        let policy_id = "policy-composition-recovery";
+        facade
+            .inner
+            .repository
+            .create_programmatic_policy(CreateProgrammaticPolicyInputDto {
+                policy: ProgrammaticPolicyRecordDto {
+                    policy_id: policy_id.to_owned(),
+                    scope: ProgrammaticPolicyScopeDto::Project {
+                        project_id: ProjectId::new().to_string(),
+                    },
+                    calendar_period_kind: ProgrammaticCalendarPeriodKindDto::Day,
+                    lifecycle_state: ProgrammaticPolicyLifecycleStateDto::Active,
+                    active_revision: 1,
+                    canonical_policy_digest: fixture_harness_digest('c'),
+                    updated_at_ms: 1_000,
+                },
+                revision: ProgrammaticPolicyRevisionRecordDto {
+                    policy_id: policy_id.to_owned(),
+                    revision: 1,
+                    root_origin_rules: vec![ProgrammaticRootOriginRuleRecordDto {
+                        root_origin_kind: ProgrammaticRootOriginKindDto::InteractiveUser,
+                        maximum_decision: ProgrammaticAdmissionDecisionDto::DirectLocalRead,
+                    }],
+                    admission_decisions: vec![ProgrammaticAdmissionDecisionDto::DirectLocalRead],
+                    max_actions_per_run: 8,
+                    max_concurrent_actions_per_run: 4,
+                    calendar_period_kind: ProgrammaticCalendarPeriodKindDto::Day,
+                    calendar_max_actions: 64,
+                    inherited_policy_references: Vec::new(),
+                    canonical_revision_digest: fixture_harness_digest('d'),
+                },
+            })
+            .expect("the fixture policy creates");
+        for (reservation_reference, tool_call_id, reserved_at_ms) in [
+            ("reservation-started", "call-started", 1_000),
+            ("reservation-unstarted", "call-unstarted", 1_001),
+        ] {
+            facade
+                .inner
+                .repository
+                .reserve_programmatic_policy_action(ReserveProgrammaticPolicyActionInputDto {
+                    reservation: ProgrammaticPolicyReservationRecordDto {
+                        reservation_reference: reservation_reference.to_owned(),
+                        policy_id: policy_id.to_owned(),
+                        policy_revision: 1,
+                        root_run_id: root_run_id.to_owned(),
+                        tool_call_id: tool_call_id.to_owned(),
+                        typed_input_digest: fixture_harness_digest('e'),
+                        calendar_counter_reference: format!("{policy_id}:day"),
+                        reserved_at_ms,
+                        state: ProgrammaticReservationStateDto::Reserved,
+                        finished_at_ms: None,
+                    },
+                    max_actions_per_run: 8,
+                    max_concurrent_actions_per_run: 4,
+                    calendar_max_actions: 64,
+                    calendar_window_start_ms: 0,
+                    calendar_window_end_ms: 86_400_000,
+                    calendar_window_time_zone: "UTC".to_owned(),
+                })
+                .expect("the fixture reservation commits");
+        }
+        facade
+            .inner
+            .repository
+            .commit_programmatic_reservation_started(CommitProgrammaticReservationStartedInputDto {
+                reservation_reference: "reservation-started".to_owned(),
+                tool_call_id: "call-started".to_owned(),
+                started_at_ms: 1_002,
+            })
+            .expect("the started fixture reservation commits");
+    }
+
+    #[test]
+    fn harness_rule_creation_persists_one_interval_revision_and_rejects_unusable_input() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id = SessionId::new().to_string();
+        let input = fixture_harness_rule_input(
+            &harness_id,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+
+        let created = facade
+            .create_harness_rule_for_daemon(input.clone())
+            .expect("the fixture harness rule creates");
+        assert_eq!(created.harness_id, harness_id);
+        assert_eq!(created.active_revision, 1);
+        assert_eq!(
+            created.lifecycle_state,
+            HarnessRuleLifecycleStateDto::Active
+        );
+        assert_eq!(
+            created.scope,
+            HarnessRuleScopeDto::UserSession {
+                project_id: project_id.to_string(),
+                session_id: session_id.to_string(),
+            }
+        );
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_harness_rule_revision(harness_id.clone(), 1)
+                .expect("the first revision loads"),
+            input.revision,
+            "the immutable interval revision is durable as supplied"
+        );
+
+        // An exact replay of one durable creation returns the stored rule.
+        let replayed = facade
+            .create_harness_rule_for_daemon(input)
+            .expect("an equal creation replay returns the stored rule");
+        assert_eq!(replayed, created);
+
+        let error = facade
+            .create_harness_rule_for_daemon(fixture_harness_rule_input(
+                "sk-live-harness-rule",
+                project_id,
+                session_id,
+                HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            ))
+            .expect_err("credentials never become a durable harness identity");
+        assert_eq!(error.code(), "credentials_forbidden");
+
+        let error = facade
+            .create_harness_rule_for_daemon(fixture_harness_rule_input(
+                "",
+                project_id,
+                session_id,
+                HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            ))
+            .expect_err("a blank harness identity is not a safe label");
+        assert_eq!(error.code(), "invalid_harness_rule");
+
+        let mut foreign_revision = fixture_harness_rule_input(
+            &harness_id,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        foreign_revision.revision.harness_id = SessionId::new().to_string();
+        let error = facade
+            .create_harness_rule_for_daemon(foreign_revision)
+            .expect_err("a new rule starts at exactly its own revision one");
+        assert_eq!(error.code(), "harness_revision_conflict");
+
+        // A path-shaped label is still a safe durable label at this boundary:
+        // the daemon-facing identity gate rejects paths for the tick, journal,
+        // and recovery surface pinned below.
+        let path_text = std::env::temp_dir()
+            .join("harness-rule.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let stored = facade
+            .create_harness_rule_for_daemon(fixture_harness_rule_input(
+                &path_text,
+                project_id,
+                session_id,
+                HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            ))
+            .expect("a path-shaped label creates a durable rule");
+        assert_eq!(stored.harness_id, path_text);
+    }
+
+    #[test]
+    fn harness_rule_revision_continues_the_exact_observed_active_revision() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+
+        let mut next_revision = fixture_harness_revision(&harness_id, "Europe/Berlin", 2, 'c');
+        next_revision.created_at_ms = 2_000;
+        let revised = facade
+            .revise_harness_rule_for_daemon(ReviseHarnessRuleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                revision: next_revision.clone(),
+            })
+            .expect("the fixture rule continues to its next revision");
+        assert_eq!(revised.active_revision, 2);
+        assert_eq!(revised.updated_at_ms, 2_000);
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_harness_rule_revision(harness_id.clone(), 2)
+                .expect("the new revision loads"),
+            next_revision
+        );
+
+        // A stale observation cannot continue the active revision.
+        let error = facade
+            .revise_harness_rule_for_daemon(ReviseHarnessRuleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                revision: fixture_harness_revision(&harness_id, "UTC", 2, 'f'),
+            })
+            .expect_err("a stale expected revision fails closed");
+        assert_eq!(error.code(), "harness_revision_conflict");
+
+        // A revision bound to another rule never continues this one.
+        let foreign_harness_id = SessionId::new().to_string();
+        let error = facade
+            .revise_harness_rule_for_daemon(ReviseHarnessRuleInputDto {
+                harness_id,
+                expected_revision: 2,
+                revision: fixture_harness_revision(&foreign_harness_id, "UTC", 3, 'f'),
+            })
+            .expect_err("a revision of another rule never continues this one");
+        assert_eq!(error.code(), "harness_revision_conflict");
+
+        // An unknown durable rule owns no active revision to continue.
+        let unknown_harness_id = SessionId::new().to_string();
+        let error = facade
+            .revise_harness_rule_for_daemon(ReviseHarnessRuleInputDto {
+                harness_id: unknown_harness_id.clone(),
+                expected_revision: 1,
+                revision: fixture_harness_revision(&unknown_harness_id, "UTC", 2, 'f'),
+            })
+            .expect_err("an unknown harness rule cannot be revised");
+        assert_eq!(error.code(), "harness_not_active");
+    }
+
+    #[test]
+    fn harness_rule_lifecycle_pause_resume_and_archive_stay_typed() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+
+        let paused = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 2_000,
+            })
+            .expect("an active fixture rule pauses");
+        assert_eq!(paused.lifecycle_state, HarnessRuleLifecycleStateDto::Paused);
+        assert_eq!(paused.updated_at_ms, 2_000);
+        assert_eq!(paused.active_revision, 1);
+
+        let resumed = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Resume,
+                has_active_run: false,
+                occurred_at_ms: 3_000,
+            })
+            .expect("a paused fixture rule resumes");
+        assert_eq!(
+            resumed.lifecycle_state,
+            HarnessRuleLifecycleStateDto::Active
+        );
+
+        let archived = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Archive,
+                has_active_run: false,
+                occurred_at_ms: 4_000,
+            })
+            .expect("an active fixture rule archives");
+        assert_eq!(
+            archived.lifecycle_state,
+            HarnessRuleLifecycleStateDto::Archived
+        );
+
+        // An archived rule retains state and rejects every later operation.
+        let error = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id,
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 5_000,
+            })
+            .expect_err("an archived harness rule rejects operations");
+        assert_eq!(error.code(), "harness_archived");
+
+        // A paused rule archives too, but a rule with a live run does not.
+        let second_rule = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: second_rule.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 6_000,
+            })
+            .expect("the second fixture rule pauses");
+        let archived = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: second_rule,
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Archive,
+                has_active_run: false,
+                occurred_at_ms: 7_000,
+            })
+            .expect("a paused fixture rule archives");
+        assert_eq!(
+            archived.lifecycle_state,
+            HarnessRuleLifecycleStateDto::Archived
+        );
+
+        let third_rule = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        let error = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: third_rule.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Archive,
+                has_active_run: true,
+                occurred_at_ms: 8_000,
+            })
+            .expect_err("a rule with a live run is not archived");
+        assert_eq!(error.code(), "harness_not_active");
+
+        // A stale observation cannot transition the rule.
+        let error = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: third_rule,
+                expected_revision: 9,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 9_000,
+            })
+            .expect_err("a stale expected revision fails closed");
+        assert_eq!(error.code(), "harness_revision_conflict");
+
+        // An unknown durable rule owns no lifecycle to transition.
+        let error = facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: SessionId::new().to_string(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 10_000,
+            })
+            .expect_err("an unknown harness rule cannot transition");
+        assert_eq!(error.code(), "harness_not_active");
+    }
+
+    #[test]
+    fn harness_schedule_tick_captures_the_newest_slot_and_admits_at_most_one_launch() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+
+        // Five interval slots have passed since the anchor: exactly the newest
+        // one is captured, coalescing every missed slot, and admitted with a
+        // daemon-assigned fresh ordinary run identity.
+        let observed_at_ms =
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + (5 * HARNESS_FIXTURE_INTERVAL_MS) + 30_000;
+        let outcome = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the fixture tick captures and admits");
+        assert_eq!(outcome.harness_id, harness_id);
+        assert_eq!(outcome.observations.len(), 1);
+        assert_eq!(
+            outcome.observations[0].source_kind,
+            HarnessSourceKindV1::FixedInterval
+        );
+        assert_eq!(
+            outcome.observations[0].observed_at_ms,
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + (5 * HARNESS_FIXTURE_INTERVAL_MS)
+        );
+        assert_eq!(
+            outcome.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Captured
+        );
+        assert!(
+            outcome.observations[0].capture.journal_record.is_some(),
+            "a newly captured reason appends its durable journal record"
+        );
+        let admitted = admitted_fixture_launch(&outcome);
+        assert_eq!(admitted.harness_id, harness_id);
+        assert_eq!(admitted.rule_revision, 1);
+        assert_eq!(
+            admitted.reason.state,
+            HarnessTriggerReasonStateDto::Admitted
+        );
+        assert!(RunId::parse(&admitted.run_id).is_ok());
+        assert!(outcome.pending_reason.is_none());
+
+        let journal = load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 64)
+            .expect("the durable journal reads");
+        let kinds: Vec<HarnessJournalRecordKindDto> =
+            journal.iter().map(|record| record.record_kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                HarnessJournalRecordKindDto::TriggerCaptured,
+                HarnessJournalRecordKindDto::LaunchAdmitted
+            ]
+        );
+        assert_eq!(journal[0].sequence, 1);
+        assert_eq!(journal[1].sequence, 2);
+        assert!(
+            !format!("{journal:?}").contains(&std::env::temp_dir().to_string_lossy().into_owned()),
+            "durable journal records never disclose a filesystem path"
+        );
+
+        // The equal observation is a redelivery: nothing changes durably and
+        // nothing launches twice.
+        let redelivered = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the redelivered tick changes nothing");
+        assert_eq!(
+            redelivered.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Redelivered
+        );
+        assert!(redelivered.observations[0].capture.journal_record.is_none());
+        assert!(redelivered.launch.is_none());
+        assert!(redelivered.pending_reason.is_none());
+        assert_eq!(
+            load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 64)
+                .expect("the durable journal reads")
+                .len(),
+            journal.len()
+        );
+
+        // A later slot is captured while the rule keeps its single live launch:
+        // the newest coalesced reason stays pending for a later observation.
+        let retained = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms + HARNESS_FIXTURE_INTERVAL_MS,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the later slot is captured and retained");
+        assert_eq!(
+            retained.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Captured
+        );
+        let Some(HarnessLaunchOutcomeDto::Retained(held)) = retained.launch.as_ref() else {
+            unreachable!("the rule keeps at most one live launch, got {retained:?}")
+        };
+        assert_eq!(held.reason.coalesced_count, 1);
+        let pending = retained
+            .pending_reason
+            .expect("the retained reason stays pending");
+        assert_eq!(pending.harness_id, harness_id);
+        assert_eq!(pending.state, HarnessTriggerReasonStateDto::Pending);
+    }
+
+    #[test]
+    fn harness_schedule_tick_retains_without_capacity_and_captures_a_paused_rule() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let occupied_rule = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        let observed_at_ms = HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS;
+
+        // An occupied daemon-wide concurrency signal retains the coalesced
+        // reason without launching.
+        let retained = tick_fixture_harness(
+            &facade,
+            &occupied_rule,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            false,
+        )
+        .expect("the fixture tick captures and retains");
+        assert_eq!(
+            retained.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Captured
+        );
+        let Some(HarnessLaunchOutcomeDto::Retained(_)) = retained.launch else {
+            unreachable!("an occupied daemon slot retains the launch, got {retained:?}")
+        };
+        let pending = retained
+            .pending_reason
+            .expect("the coalesced reason stays durable while the daemon slot is occupied");
+        assert_eq!(pending.state, HarnessTriggerReasonStateDto::Pending);
+        assert_eq!(pending.coalesced_count, 1);
+        assert_eq!(pending.last_observed_at_ms, observed_at_ms);
+
+        // The next observation of the same durable reason admits it.
+        let admitted = tick_fixture_harness(
+            &facade,
+            &occupied_rule,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the next tick admits the retained reason");
+        assert_eq!(
+            admitted.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Redelivered
+        );
+        assert!(RunId::parse(&admitted_fixture_launch(&admitted).run_id).is_ok());
+        assert!(admitted.pending_reason.is_none());
+
+        // A paused rule keeps capturing and coalescing without launching.
+        let paused_rule = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: paused_rule.clone(),
+                expected_revision: 1,
+                operation: HarnessRuleOperationDto::Pause,
+                has_active_run: false,
+                occurred_at_ms: 2_000,
+            })
+            .expect("the fixture rule pauses");
+        let paused_tick = tick_fixture_harness(
+            &facade,
+            &paused_rule,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("a paused rule still captures and coalesces");
+        assert_eq!(
+            paused_tick.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Captured
+        );
+        assert!(
+            paused_tick.launch.is_none(),
+            "a paused rule admits no automatic launch"
+        );
+        let pending = paused_tick
+            .pending_reason
+            .expect("the paused rule keeps its pending reason");
+        assert_eq!(pending.state, HarnessTriggerReasonStateDto::Pending);
+        assert_eq!(pending.coalesced_count, 1);
+    }
+
+    #[test]
+    fn harness_schedule_tick_rejects_a_foreign_time_zone_and_an_archived_rule() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id =
+            create_fixture_harness_rule(&facade, project_id, session_id, "America/New_York");
+        let observed_at_ms = HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS;
+
+        // A non-archived rule follows the daemon-owned project time zone: a
+        // revision recorded under another zone fails closed until it is revised.
+        let error = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect_err("a non-archived rule follows the daemon project time zone");
+        assert_eq!(error.code(), "harness_schedule_invalid");
+
+        // An unusable project time zone fails closed before any effect.
+        let error = tick_fixture_harness(&facade, &harness_id, observed_at_ms, "not a zone", true)
+            .expect_err("an unusable project time zone fails closed");
+        assert_eq!(error.code(), "harness_schedule_invalid");
+
+        // The rule is revised to the current project zone and then archived:
+        // archiving retains the zone recorded by the immutable revision, so the
+        // zone mismatch no longer applies and the archived rule rejects capture.
+        facade
+            .revise_harness_rule_for_daemon(ReviseHarnessRuleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 1,
+                revision: fixture_harness_revision(
+                    &harness_id,
+                    HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+                    2,
+                    'f',
+                ),
+            })
+            .expect("the fixture rule is revised to the project zone");
+        facade
+            .transition_harness_rule_lifecycle_for_daemon(TransitionHarnessRuleLifecycleInputDto {
+                harness_id: harness_id.clone(),
+                expected_revision: 2,
+                operation: HarnessRuleOperationDto::Archive,
+                has_active_run: false,
+                occurred_at_ms: 2_000,
+            })
+            .expect("the fixture rule archives");
+        let error = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect_err("an archived rule rejects capture");
+        assert_eq!(error.code(), "harness_archived");
+    }
+
+    #[test]
+    fn harness_schedule_tick_covers_an_early_observation_and_calendar_coalescing() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+
+        // An observation before the durable anchor is due for no interval slot.
+        let early_rule = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        let early = tick_fixture_harness(
+            &facade,
+            &early_rule,
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS - 1,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("an observation before the anchor captures nothing");
+        assert!(early.observations.is_empty());
+        assert!(early.launch.is_none());
+        assert!(early.pending_reason.is_none());
+
+        // An interval source without its durable anchor and cadence is an
+        // incoherent revision and fails closed at its own observation.
+        let incoherent_rule = SessionId::new().to_string();
+        let mut incoherent = fixture_harness_rule_input(
+            &incoherent_rule,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        incoherent.revision.interval_anchor_ms = None;
+        incoherent.revision.interval_ms = None;
+        facade
+            .create_harness_rule_for_daemon(incoherent)
+            .expect("the incoherent interval revision is still a durable rule");
+        let error = tick_fixture_harness(
+            &facade,
+            &incoherent_rule,
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect_err("an equal-interval source requires its durable anchor and cadence");
+        assert_eq!(error.code(), "harness_schedule_invalid");
+
+        // One fixed interval and one calendar source coalesce into one pending
+        // reason and admit exactly one launch.
+        let two_source_rule = SessionId::new().to_string();
+        let mut two_source = fixture_harness_rule_input(
+            &two_source_rule,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        two_source.revision.source_kinds = vec![
+            HarnessSourceKindDto::FixedInterval,
+            HarnessSourceKindDto::CalendarTime,
+        ];
+        two_source.revision.calendar_expression = Some("* * * * *".to_owned());
+        facade
+            .create_harness_rule_for_daemon(two_source)
+            .expect("the two-source fixture rule creates");
+        let observed_at_ms =
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS + 30_000;
+        let outcome = tick_fixture_harness(
+            &facade,
+            &two_source_rule,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the two-source tick captures and admits");
+        assert_eq!(outcome.observations.len(), 2);
+        assert_eq!(
+            outcome.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Captured
+        );
+        assert_eq!(
+            outcome.observations[1].source_kind,
+            HarnessSourceKindV1::CalendarTime
+        );
+        assert_eq!(
+            outcome.observations[1].observed_at_ms,
+            observed_at_ms - (observed_at_ms % 60_000)
+        );
+        assert_eq!(
+            outcome.observations[1].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Coalesced
+        );
+        assert!(
+            outcome.observations[1].capture.journal_record.is_some(),
+            "a coalesced reason appends its durable journal record"
+        );
+        assert_eq!(
+            admitted_fixture_launch(&outcome).harness_id,
+            two_source_rule
+        );
+        assert!(outcome.pending_reason.is_none());
+    }
+
+    #[test]
+    fn harness_daemon_identity_gate_rejects_non_canonical_text() {
+        let (_directory, facade) = test_facade();
+        let observed_at_ms = HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS;
+
+        // A blank, control-bearing, over-long, wrongly shaped, or non-hex value
+        // is never a canonical daemon-assigned identity, and the gate rejects it
+        // before any durable read.
+        for invalid in [
+            String::new(),
+            "harness\u{0}rule".to_owned(),
+            "a".repeat(129),
+            "harness-rule-1".to_owned(),
+            "z".repeat(32),
+        ] {
+            let error = tick_fixture_harness(
+                &facade,
+                &invalid,
+                observed_at_ms,
+                HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+                true,
+            )
+            .expect_err("a non-canonical harness identity fails closed");
+            assert_eq!(
+                error.code(),
+                "harness_source_unavailable",
+                "{invalid:?} fails closed"
+            );
+        }
+    }
+
+    #[test]
+    fn harness_journal_pages_are_scoped_to_the_owning_session_and_bounded() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let other_session_id = create_harness_session(&facade, project_id);
+        let harness_id = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        admit_fixture_harness_launch(
+            &facade,
+            &harness_id,
+            HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS,
+        );
+
+        let page = load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 64)
+            .expect("the owning session reads its journal");
+        assert_eq!(page.len(), 2);
+        assert!(page.iter().all(|record| record.harness_id == harness_id));
+        let next_page = load_fixture_harness_journal(&facade, session_id, &harness_id, 1, 64)
+            .expect("the owning session pages its journal");
+        assert_eq!(next_page.len(), 1);
+        assert_eq!(next_page[0].sequence, 2);
+        assert!(
+            load_fixture_harness_journal(&facade, session_id, &harness_id, 2, 64)
+                .expect("a page past the journal tail reads")
+                .is_empty()
+        );
+
+        // Another session of the same project never reads this session's
+        // journal, a session of another project never does either, and an
+        // unknown session has no durable projection at all.
+        let error = load_fixture_harness_journal(&facade, other_session_id, &harness_id, 0, 64)
+            .expect_err("a harness journal is readable only by its owning session");
+        assert_eq!(error.code(), "harness_source_unavailable");
+        let foreign_project_session_id = create_harness_session(&facade, ProjectId::new());
+        let error =
+            load_fixture_harness_journal(&facade, foreign_project_session_id, &harness_id, 0, 64)
+                .expect_err("a session of another project never reads this journal");
+        assert_eq!(error.code(), "harness_source_unavailable");
+        let error = load_fixture_harness_journal(&facade, SessionId::new(), &harness_id, 0, 64)
+            .expect_err("an unknown session has no durable projection");
+        assert_eq!(error.code(), "storage_record_not_found");
+
+        // An empty or over-bound page fails closed.
+        let error = load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 0)
+            .expect_err("an empty journal page fails closed");
+        assert_eq!(error.code(), "invalid_harness_journal_page");
+        let error = load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 65)
+            .expect_err("an over-bound journal page fails closed");
+        assert_eq!(error.code(), "invalid_harness_journal_page");
+
+        // Credentials and filesystem paths never cross this boundary.
+        let error =
+            load_fixture_harness_journal(&facade, session_id, "sk-live-harness-journal", 0, 64)
+                .expect_err("credentials never cross the journal boundary");
+        assert_eq!(error.code(), "credentials_forbidden");
+        let path_text = std::env::temp_dir()
+            .join("harness-journal.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let error = load_fixture_harness_journal(&facade, session_id, &path_text, 0, 64)
+            .expect_err("a filesystem path is never a harness identity");
+        assert_eq!(error.code(), "harness_source_unavailable");
+    }
+
+    #[test]
+    fn interrupted_harness_launch_recovery_keeps_the_interrupted_outcome() {
+        let (_directory, facade) = test_facade();
+        let project_id = ProjectId::new();
+        let session_id = create_harness_session(&facade, project_id);
+        let harness_id = create_fixture_harness_rule(
+            &facade,
+            project_id,
+            session_id,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+        );
+        let observed_at_ms = HARNESS_FIXTURE_INTERVAL_ANCHOR_MS + HARNESS_FIXTURE_INTERVAL_MS;
+        let interrupted_run_id = admit_fixture_harness_launch(&facade, &harness_id, observed_at_ms);
+
+        let recovery = facade
+            .recover_interrupted_harness_launch_for_daemon(&harness_id, &interrupted_run_id, 9_000)
+            .expect("the interrupted launch recovers without resuming");
+        assert_eq!(recovery.terminal.outcome, HarnessRunOutcomeV1::Interrupted);
+        assert_eq!(recovery.terminal.harness_id, harness_id);
+        assert_eq!(recovery.terminal.producing_run_id, interrupted_run_id);
+        assert!(!recovery.external_work_resumes);
+        assert!(recovery.requires_separate_admission);
+        assert!(
+            recovery.terminal.journal_records.iter().any(|record| {
+                record.record_kind == HarnessJournalRecordKindDto::RunTerminal
+                    && record.safe_summary.contains("interrupted")
+            }),
+            "the interrupted terminal decision is durable"
+        );
+
+        // Recovery resumes nothing: the rule keeps its revision, and the
+        // already captured slot is redelivered without a new launch or a new
+        // scheduled successor.
+        let rule = facade
+            .inner
+            .repository
+            .load_harness_rule(harness_id.clone())
+            .expect("the recovered rule reads");
+        assert_eq!(rule.active_revision, 1);
+        let outcome = tick_fixture_harness(
+            &facade,
+            &harness_id,
+            observed_at_ms,
+            HARNESS_FIXTURE_PROJECT_TIME_ZONE,
+            true,
+        )
+        .expect("the restarted tick observes no new slot");
+        assert_eq!(
+            outcome.observations[0].capture.outcome,
+            HarnessTriggerCaptureOutcomeDto::Redelivered
+        );
+        assert!(outcome.launch.is_none());
+        assert!(outcome.pending_reason.is_none());
+        assert!(
+            load_fixture_harness_journal(&facade, session_id, &harness_id, 0, 64)
+                .expect("the durable journal reads")
+                .iter()
+                .any(|record| record.record_kind == HarnessJournalRecordKindDto::RunTerminal)
+        );
+
+        // Credentials and filesystem paths never cross the recovery boundary.
+        let error = facade
+            .recover_interrupted_harness_launch_for_daemon(
+                "sk-live-harness-recovery",
+                &interrupted_run_id,
+                9_001,
+            )
+            .expect_err("credentials never cross the recovery boundary");
+        assert_eq!(error.code(), "credentials_forbidden");
+        let path_text = std::env::temp_dir()
+            .join("harness-interrupted.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let error = facade
+            .recover_interrupted_harness_launch_for_daemon(&harness_id, &path_text, 9_002)
+            .expect_err("a filesystem path is never an interrupted launch identity");
+        assert_eq!(error.code(), "harness_source_unavailable");
+    }
+
+    #[test]
+    fn programmatic_policy_reservation_recovery_is_idempotent_and_never_resumes_work() {
+        let (_directory, facade) = test_facade();
+        let root_run_id = RunId::new().to_string();
+
+        // A root run without outstanding reservations recovers to an empty,
+        // repeatable list.
+        assert!(
+            facade
+                .recover_programmatic_policy_reservations_for_daemon(&root_run_id, 9_000)
+                .expect("startup recovery reads the durable reservations")
+                .is_empty()
+        );
+        assert!(
+            facade
+                .recover_programmatic_policy_reservations_for_daemon(&root_run_id, 9_001)
+                .expect("a repeated recovery reads the same durable state")
+                .is_empty()
+        );
+
+        seed_fixture_programmatic_reservations(&facade, &root_run_id);
+
+        // One outstanding reservation is released before start, and the one
+        // that reached `ToolCallStarted` keeps its permanent consumption as an
+        // unknown external effect.
+        let recovered = facade
+            .recover_programmatic_policy_reservations_for_daemon(&root_run_id, 9_002)
+            .expect("the outstanding reservations recover");
+        let dispositions: Vec<ProgrammaticRecoveryDispositionV1> =
+            recovered.iter().map(|entry| entry.disposition).collect();
+        assert_eq!(
+            dispositions,
+            vec![
+                ProgrammaticRecoveryDispositionV1::ExternalEffectUnknown,
+                ProgrammaticRecoveryDispositionV1::InterruptedBeforeStart,
+            ]
+        );
+        assert!(
+            recovered.iter().all(|entry| !entry.external_work_resumes),
+            "no recovered action resumes external work"
+        );
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_programmatic_policy_reservation("reservation-started".to_owned())
+                .expect("the started reservation reads")
+                .expect("the started reservation exists")
+                .state,
+            ProgrammaticReservationStateDto::ExternalEffectUnknown
+        );
+        assert_eq!(
+            facade
+                .inner
+                .repository
+                .load_programmatic_policy_reservation("reservation-unstarted".to_owned())
+                .expect("the unstarted reservation reads")
+                .expect("the unstarted reservation exists")
+                .state,
+            ProgrammaticReservationStateDto::InterruptedBeforeStart
+        );
+
+        // The started set is derived from the durable state: a repeated
+        // recovery changes nothing and recovers nothing.
+        assert!(
+            facade
+                .recover_programmatic_policy_reservations_for_daemon(&root_run_id, 9_003)
+                .expect("a repeated recovery changes nothing")
+                .is_empty()
+        );
+
+        // Credentials and filesystem paths never cross the recovery boundary.
+        let error = facade
+            .recover_programmatic_policy_reservations_for_daemon("sk-live-policy-recovery", 9_004)
+            .expect_err("credentials never cross the recovery boundary");
+        assert_eq!(error.code(), "credentials_forbidden");
+        let path_text = std::env::temp_dir()
+            .join("policy-recovery.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let error = facade
+            .recover_programmatic_policy_reservations_for_daemon(&path_text, 9_005)
+            .expect_err("a filesystem path is never a root run identity");
+        assert_eq!(error.code(), "harness_source_unavailable");
     }
 }
