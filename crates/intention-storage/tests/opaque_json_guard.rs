@@ -470,7 +470,7 @@ fn opaque_json_guard_flags_every_json_shaped_carrier_field() {
         );
     }
     for clean in [
-        "struct Fixture { pub selection: ProviderSelectionV1 }",
+        "struct Fixture { pub selection: ResolvedRunProviderSelectionDto }",
         "struct Fixture { pub revision_id: String }",
         "struct Fixture { pub profiles: Vec<ProviderProfileRevisionV1> }",
         "struct Fixture { pub payload: Box<str> }",
