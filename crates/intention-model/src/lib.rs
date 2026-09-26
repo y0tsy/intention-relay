@@ -179,6 +179,99 @@ impl ModelMessageDto {
     }
 }
 
+/// Maximum bytes of one transient assistant-reasoning attachment.
+///
+/// 512 KiB matches the durable per-reasoning-fact bound, so a round-tripped
+/// attachment never exceeds what the durable reasoning path already accepts.
+const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
+
+/// Transient assistant reasoning attached to the tool calls of one provider
+/// response; preserved only for the same-run tool-loop continuation, never
+/// durable, never message content.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AssistantReasoningDto {
+    tool_call_ids: Vec<ToolCallId>,
+    text: String,
+}
+
+impl<'de> Deserialize<'de> for AssistantReasoningDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawAssistantReasoningDto {
+            tool_call_ids: Vec<ToolCallId>,
+            text: String,
+        }
+
+        let raw = RawAssistantReasoningDto::deserialize(deserializer)?;
+        Self::new(raw.tool_call_ids, raw.text).map_err(de::Error::custom)
+    }
+}
+
+impl AssistantReasoningDto {
+    /// Creates the reasoning attached to one provider round's tool calls.
+    ///
+    /// The text may be empty: a provider can carry the reasoning channel with
+    /// no textual content, and that presence alone must round-trip into the
+    /// continuation request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when no tool-call identity is attached, a
+    /// tool-call identity repeats, or the text exceeds 512 KiB or carries a
+    /// control character other than a line break or tab.
+    pub fn new(tool_call_ids: Vec<ToolCallId>, text: impl Into<String>) -> DtoResult<Self> {
+        let text = text.into();
+        if !valid_assistant_reasoning_tool_call_ids(&tool_call_ids) {
+            return Err(ErrorDto::validation(
+                "invalid_model_assistant_reasoning",
+                "assistant reasoning requires at least one unique tool-call identity",
+            ));
+        }
+        if text.len() > MAX_MODEL_ASSISTANT_REASONING_BYTES
+            || text.chars().any(forbidden_reasoning_text_character)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_model_assistant_reasoning_text",
+                "assistant reasoning text must be at most 512 KiB without invalid control characters",
+            ));
+        }
+        Ok(Self {
+            tool_call_ids,
+            text,
+        })
+    }
+
+    /// Returns the identities of the tool calls this reasoning belongs to.
+    #[must_use]
+    pub fn tool_call_ids(&self) -> &[ToolCallId] {
+        &self.tool_call_ids
+    }
+
+    /// Returns the reasoning text; empty means the channel carried no text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// Whether the attached tool-call identities are present and unique.
+fn valid_assistant_reasoning_tool_call_ids(tool_call_ids: &[ToolCallId]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(tool_call_ids.len());
+    !tool_call_ids.is_empty() && tool_call_ids.iter().all(|id| seen.insert(*id))
+}
+
+/// Whether `character` must be rejected in round-tripped reasoning text.
+///
+/// Line breaks and tabs are ordinary reasoning text; every other control
+/// character is transport noise that must never re-enter a provider request.
+const fn forbidden_reasoning_text_character(character: char) -> bool {
+    character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+}
+
 /// Requested model-context capabilities that require preflight support.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -324,12 +417,126 @@ impl ModelCapabilitiesDto {
     }
 }
 
+/// Maximum characters of one tool-definition name (provider function-name constraint).
+const MAX_TOOL_DEFINITION_NAME_CHARS: usize = 64;
+
+/// Maximum bytes of one tool-definition JSON parameter document.
+const MAX_TOOL_DEFINITION_PARAMETERS_BYTES: usize = 65_536;
+
+/// A validated model tool definition advertised to a provider.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ModelToolDefinitionDto {
+    name: String,
+    description: String,
+    parameters_json: String,
+}
+
+impl<'de> Deserialize<'de> for ModelToolDefinitionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawModelToolDefinitionDto {
+            name: String,
+            description: String,
+            parameters_json: String,
+        }
+
+        let raw = RawModelToolDefinitionDto::deserialize(deserializer)?;
+        Self::new(raw.name, raw.description, raw.parameters_json).map_err(de::Error::custom)
+    }
+}
+
+impl ModelToolDefinitionDto {
+    /// Creates a validated tool definition with object-shaped JSON parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the name is not an ASCII `[A-Za-z0-9_-]`
+    /// token of at most 64 characters, the description is blank, or the
+    /// parameters are empty, larger than 64 KiB, or not a JSON object.
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters_json: impl Into<String>,
+    ) -> DtoResult<Self> {
+        let name = name.into();
+        let description = description.into();
+        let parameters_json = parameters_json.into();
+        if name.trim().is_empty()
+            || name.len() > MAX_TOOL_DEFINITION_NAME_CHARS
+            || !name.bytes().all(is_tool_definition_name_byte)
+        {
+            return Err(ErrorDto::validation(
+                "invalid_tool_definition_name",
+                "tool definition name must be an ASCII [A-Za-z0-9_-] token of at most 64 characters",
+            ));
+        }
+        if description.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_tool_definition_description",
+                "tool definition description must not be empty",
+            ));
+        }
+        if parameters_json.is_empty()
+            || parameters_json.len() > MAX_TOOL_DEFINITION_PARAMETERS_BYTES
+        {
+            return Err(invalid_tool_definition_parameters());
+        }
+        let _: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
+            serde_json::from_str(&parameters_json)
+                .map_err(|_| invalid_tool_definition_parameters())?;
+        Ok(Self {
+            name,
+            description,
+            parameters_json,
+        })
+    }
+
+    /// Returns the advertised function name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the model-facing tool description.
+    #[must_use]
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// Returns the validated JSON object text describing the tool parameters.
+    #[must_use]
+    pub fn parameters_json(&self) -> &str {
+        &self.parameters_json
+    }
+}
+
+/// Whether `byte` is one provider function-name character (`[A-Za-z0-9_-]`).
+const fn is_tool_definition_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+/// The validation error for invalid tool-definition JSON parameters.
+fn invalid_tool_definition_parameters() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_tool_definition_parameters",
+        "tool definition parameters must be a non-empty JSON object of at most 64 KiB",
+    )
+}
+
 /// A validated provider-neutral model request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelRequestDto {
     run_id: RunId,
     model: String,
     messages: Vec<ModelMessageDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<ModelToolDefinitionDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    assistant_reasoning: Vec<AssistantReasoningDto>,
     system_context: Option<String>,
     requested_capabilities: ModelRequestedCapabilitiesDto,
 }
@@ -346,20 +553,29 @@ impl<'de> Deserialize<'de> for ModelRequestDto {
             model: String,
             messages: Vec<ModelMessageDto>,
             #[serde(default)]
+            tools: Vec<ModelToolDefinitionDto>,
+            #[serde(default)]
+            assistant_reasoning: Vec<AssistantReasoningDto>,
+            #[serde(default)]
             system_context: Option<String>,
             #[serde(default)]
             requested_capabilities: ModelRequestedCapabilitiesDto,
         }
 
         let raw = RawModelRequestDto::deserialize(deserializer)?;
-        Self::new(
+        let request = Self::new(
             raw.run_id,
             raw.model,
             raw.messages,
             raw.system_context,
             Some(raw.requested_capabilities),
         )
-        .map_err(de::Error::custom)
+        .map_err(de::Error::custom)?;
+        request
+            .with_tools(raw.tools)
+            .map_err(de::Error::custom)?
+            .with_assistant_reasoning(raw.assistant_reasoning)
+            .map_err(de::Error::custom)
     }
 }
 
@@ -402,6 +618,8 @@ impl ModelRequestDto {
             run_id,
             model,
             messages,
+            tools: Vec::new(),
+            assistant_reasoning: Vec::new(),
             system_context,
             requested_capabilities: requested_capabilities.unwrap_or_default(),
         })
@@ -425,19 +643,99 @@ impl ModelRequestDto {
         &self.messages
     }
 
+    /// Returns the tool definitions advertised with this request.
+    #[must_use]
+    pub fn tools(&self) -> &[ModelToolDefinitionDto] {
+        &self.tools
+    }
+
+    /// Returns the transient reasoning attachments carried into the same-run
+    /// tool-loop continuation.
+    #[must_use]
+    pub fn assistant_reasoning(&self) -> &[AssistantReasoningDto] {
+        &self.assistant_reasoning
+    }
+
     /// Returns a copy of this request with the model context messages replaced.
+    ///
+    /// Advertised tools and transient reasoning attachments are preserved.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the replacement message list is empty.
     pub fn with_messages(&self, messages: Vec<ModelMessageDto>) -> DtoResult<Self> {
-        Self::new(
+        let mut request = Self::new(
             self.run_id,
             self.model.clone(),
             messages,
             self.system_context.clone(),
             Some(self.requested_capabilities),
-        )
+        )?;
+        request.tools = self.tools.clone();
+        request.assistant_reasoning = self.assistant_reasoning.clone();
+        Ok(request)
+    }
+
+    /// Returns a copy of this request with the advertised tool definitions replaced.
+    ///
+    /// A non-empty replacement forces the requested-capabilities `tool_calls`
+    /// flag to `true`, so preflight only accepts providers that can honor the
+    /// advertised tools; an empty replacement leaves the flag unchanged.
+    /// Transient reasoning attachments are preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the retained request fields no longer
+    /// satisfy request validation.
+    pub fn with_tools(&self, tools: Vec<ModelToolDefinitionDto>) -> DtoResult<Self> {
+        let requested_capabilities = if tools.is_empty() {
+            self.requested_capabilities
+        } else {
+            ModelRequestedCapabilitiesDto::new(
+                self.requested_capabilities.reasoning(),
+                self.requested_capabilities.multimodal(),
+                true,
+                self.requested_capabilities.vendor_extensions(),
+            )
+        };
+        let mut request = Self::new(
+            self.run_id,
+            self.model.clone(),
+            self.messages.clone(),
+            self.system_context.clone(),
+            Some(requested_capabilities),
+        )?;
+        request.tools = tools;
+        request.assistant_reasoning = self.assistant_reasoning.clone();
+        Ok(request)
+    }
+
+    /// Returns a copy of this request with the full ordered transient reasoning
+    /// attachments replaced.
+    ///
+    /// One attachment belongs to each assistant tool-call message of the
+    /// same-run tool loop; attachments are neither durable nor message content,
+    /// and later rebuilds through [`Self::with_messages`] or [`Self::with_tools`]
+    /// preserve them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the retained request fields no longer
+    /// satisfy request validation.
+    pub fn with_assistant_reasoning(
+        &self,
+        reasoning: Vec<AssistantReasoningDto>,
+    ) -> DtoResult<Self> {
+        let mut request = Self::new(
+            self.run_id,
+            self.model.clone(),
+            self.messages.clone(),
+            self.system_context.clone(),
+            Some(self.requested_capabilities),
+        )?;
+        request.tools = self.tools.clone();
+        request.assistant_reasoning = reasoning;
+        Ok(request)
     }
 
     /// Returns optional daemon-selected system context.
@@ -453,6 +751,16 @@ impl ModelRequestDto {
     }
 }
 
+/// The closed category of one normalized reasoning fragment.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningFragmentCategoryDto {
+    /// The main textual reasoning representation.
+    Primary,
+    /// A separate detailed reasoning representation.
+    Detail,
+}
+
 /// A provider-neutral normalized stream fact.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -461,8 +769,13 @@ pub enum ModelEventDto {
     Started,
     /// A non-empty text content delta arrived.
     TextDelta { content: String },
-    /// A non-empty reasoning delta arrived.
-    ReasoningDelta { content: String },
+    /// A reasoning delta arrived; empty content marks channel presence only.
+    ReasoningDelta {
+        category: ReasoningFragmentCategoryDto,
+        content: String,
+    },
+    /// A non-empty reasoning summary delta arrived.
+    ReasoningSummaryDelta { content: String },
     /// A complete provider-normalized tool call arrived.
     ToolCall { call: ToolCallDto },
     /// Final usage became available.
@@ -480,11 +793,25 @@ impl<'de> Deserialize<'de> for ModelEventDto {
         #[serde(tag = "kind", rename_all = "snake_case")]
         enum RawModelEventDto {
             Started,
-            TextDelta { content: String },
-            ReasoningDelta { content: String },
-            ToolCall { call: ToolCallDto },
-            Usage { usage: UsageDto },
-            Finished { reason: FinishReasonDto },
+            TextDelta {
+                content: String,
+            },
+            ReasoningDelta {
+                category: ReasoningFragmentCategoryDto,
+                content: String,
+            },
+            ReasoningSummaryDelta {
+                content: String,
+            },
+            ToolCall {
+                call: ToolCallDto,
+            },
+            Usage {
+                usage: UsageDto,
+            },
+            Finished {
+                reason: FinishReasonDto,
+            },
         }
 
         match RawModelEventDto::deserialize(deserializer)? {
@@ -492,8 +819,15 @@ impl<'de> Deserialize<'de> for ModelEventDto {
             RawModelEventDto::TextDelta { content } => {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
-            RawModelEventDto::ReasoningDelta { content } => {
-                Self::reasoning_delta(content).map_err(de::Error::custom)
+            RawModelEventDto::ReasoningDelta { category, content } => {
+                if content.is_empty() {
+                    Ok(Self::reasoning_presence(category))
+                } else {
+                    Self::reasoning_delta_categorized(category, content).map_err(de::Error::custom)
+                }
+            }
+            RawModelEventDto::ReasoningSummaryDelta { content } => {
+                Self::reasoning_summary_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ToolCall { call } => Ok(Self::tool_call(call)),
             RawModelEventDto::Usage { usage } => Ok(Self::usage(usage)),
@@ -526,12 +860,24 @@ impl ModelEventDto {
         }
     }
 
-    /// Creates a non-empty reasoning delta.
+    /// Creates a non-empty reasoning delta categorized as primary.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the delta is empty.
     pub fn reasoning_delta(content: impl Into<String>) -> DtoResult<Self> {
+        Self::reasoning_delta_categorized(ReasoningFragmentCategoryDto::Primary, content)
+    }
+
+    /// Creates a non-empty categorized reasoning delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the delta is empty.
+    pub fn reasoning_delta_categorized(
+        category: ReasoningFragmentCategoryDto,
+        content: impl Into<String>,
+    ) -> DtoResult<Self> {
         let content = content.into();
         if content.is_empty() {
             Err(ErrorDto::validation(
@@ -539,7 +885,34 @@ impl ModelEventDto {
                 "model reasoning delta must not be empty",
             ))
         } else {
-            Ok(Self::ReasoningDelta { content })
+            Ok(Self::ReasoningDelta { category, content })
+        }
+    }
+
+    /// Creates the reasoning-channel presence marker for a provider response that
+    /// carried the reasoning channel with no textual content.
+    #[must_use]
+    pub const fn reasoning_presence(category: ReasoningFragmentCategoryDto) -> Self {
+        Self::ReasoningDelta {
+            category,
+            content: String::new(),
+        }
+    }
+
+    /// Creates a non-empty reasoning summary delta.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the delta is empty.
+    pub fn reasoning_summary_delta(content: impl Into<String>) -> DtoResult<Self> {
+        let content = content.into();
+        if content.is_empty() {
+            Err(ErrorDto::validation(
+                "invalid_model_reasoning_summary_delta",
+                "model reasoning summary delta must not be empty",
+            ))
+        } else {
+            Ok(Self::ReasoningSummaryDelta { content })
         }
     }
 
@@ -560,6 +933,143 @@ impl ModelEventDto {
     pub const fn finished(reason: FinishReasonDto) -> Self {
         Self::Finished { reason }
     }
+}
+
+/// The closed provider-neutral reasoning effort levels.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffortLevel {
+    /// Reasoning is explicitly disabled.
+    None,
+    /// Minimal reasoning effort.
+    Minimal,
+    /// Low reasoning effort.
+    Low,
+    /// Balanced reasoning effort.
+    Medium,
+    /// High reasoning effort.
+    High,
+    /// Extra-high reasoning effort.
+    Xhigh,
+    /// Maximum reasoning effort.
+    Max,
+}
+
+/// The closed credential transport modes (names only, never values).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialTransportMode {
+    /// Authorization through the standard bearer scheme.
+    Bearer,
+    /// Authorization through one descriptor-selected safe header name.
+    SafeHeader,
+}
+
+/// Maximum characters of one safe header name.
+const MAX_SAFE_HEADER_NAME_CHARS: usize = 128;
+
+/// A descriptor-declared header policy carrying names only, never credential values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AuthenticationHeaderPolicyV1 {
+    allowed_header_names: Vec<String>,
+    selected_transport: CredentialTransportMode,
+}
+
+impl<'de> Deserialize<'de> for AuthenticationHeaderPolicyV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawAuthenticationHeaderPolicyV1 {
+            allowed_header_names: Vec<String>,
+            selected_transport: CredentialTransportMode,
+        }
+        let raw = RawAuthenticationHeaderPolicyV1::deserialize(deserializer)?;
+        Self::new(raw.allowed_header_names, raw.selected_transport).map_err(de::Error::custom)
+    }
+}
+
+impl AuthenticationHeaderPolicyV1 {
+    /// Creates a validated header policy (names only, never values).
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when a header name is not a non-empty HTTP
+    /// token of at most 128 characters, names are duplicated, or the selected
+    /// transport and the allowed header names are inconsistent.
+    pub fn new(
+        allowed_header_names: Vec<String>,
+        selected_transport: CredentialTransportMode,
+    ) -> DtoResult<Self> {
+        if !valid_header_names(&allowed_header_names) {
+            return Err(ErrorDto::validation(
+                "invalid_safe_header_name",
+                "header policy names must be unique HTTP tokens of at most 128 characters",
+            ));
+        }
+        let transport_is_consistent = match selected_transport {
+            CredentialTransportMode::Bearer => allowed_header_names.is_empty(),
+            CredentialTransportMode::SafeHeader => !allowed_header_names.is_empty(),
+        };
+        if !transport_is_consistent {
+            return Err(ErrorDto::validation(
+                "invalid_credential_transport",
+                "bearer transport rejects header names and safe-header transport requires at least one",
+            ));
+        }
+        Ok(Self {
+            allowed_header_names,
+            selected_transport,
+        })
+    }
+
+    /// Returns the allowed header names (names only, never values).
+    #[must_use]
+    pub fn allowed_header_names(&self) -> &[String] {
+        &self.allowed_header_names
+    }
+
+    /// Returns the selected credential transport mode.
+    #[must_use]
+    pub const fn selected_transport(&self) -> CredentialTransportMode {
+        self.selected_transport
+    }
+}
+
+/// Whether every declared header name is a unique non-empty HTTP token of at
+/// most [`MAX_SAFE_HEADER_NAME_CHARS`] characters.
+fn valid_header_names(names: &[String]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(names.len());
+    names.iter().all(|name| {
+        !name.is_empty()
+            && name.len() <= MAX_SAFE_HEADER_NAME_CHARS
+            && name.bytes().all(is_http_token_byte)
+            && seen.insert(name.clone())
+    })
+}
+
+/// Whether `byte` is one HTTP token character (`tchar`).
+const fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
 }
 
 /// Validates normalized model-stream ordering without owning runtime delivery.
@@ -603,6 +1113,7 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
+            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. }
                 if self.started && !self.terminal =>
             {
@@ -613,6 +1124,7 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
+            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
         }
     }

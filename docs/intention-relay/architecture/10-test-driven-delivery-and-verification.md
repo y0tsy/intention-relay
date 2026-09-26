@@ -34,7 +34,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Domain tests | Prove invariants and state transitions. | One active run, plan number monotonicity. |
 | Contract tests | Prove crate-to-crate and client-to-daemon contracts. | `intention-client` command/event fixtures. |
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
-| Storage tests | Prove transaction, migration, projection, recovery correctness. | Projection and event atomicity. |
+| Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Projection and event atomicity. |
 | Runtime tests | Prove actor lifecycle, cancellation, queue, stream ordering. | Queued turn starts after terminal run. |
 | Tool/policy tests | Prove workspace, hook order, Plan restrictions, VFR/Headroom behavior. | Path escape rejected, VFR then Headroom ordering. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
@@ -90,10 +90,10 @@ Every planned crate must declare a test target before implementation. Minimum ex
 
 | Crate area | Minimum evidence |
 | --- | --- |
-| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, versioned valid/invalid compatibility fixtures, and explicit additive-field policy proof. |
-| `config` | TOML migration/validation, credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
+| `types`, `domain`, `protocol` | DTO round trip, validated wire decoding, current-version fixtures with non-current-version rejection, and explicit additive-field policy proof. |
+| `config` | TOML current-shape parsing/validation (unversioned documents fail closed), credential-free resolved/snapshot fixture, invalid provider/schema/path/source fixture, and fake-secret absence. |
 | `application`, `runtime` | State-machine/use-case tests and deterministic actor integration tests. |
-| `storage`, `storage-sqlite` | Repository contract tests, migration tests, transaction fault injection. |
+| `storage`, `storage-sqlite` | Repository contract tests, current-schema creation tests, transaction fault injection. |
 | `model`, providers | Stream/error fixtures, capability and redaction tests. |
 | `tools`, workspace, hooks | Invocation policy, path boundary, deterministic hook-order tests. |
 | VFR, Headroom, plans | Transform/retrieval/frontmatter/mode-policy outcome tests. |
@@ -105,11 +105,11 @@ The goal is not an arbitrary number of tests. The required quantity is the small
 
 ## M1 serialized-contract evidence
 
-M1 owns versioned JSON fixtures for legacy and current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
+M1 owns versioned JSON fixtures for current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
 
-- supported legacy errors decode with absent additive `detail` and `correlation_id` fields;
+- current `ErrorDto` optional `correlation_id`/`detail` fields decode as `None` when absent;
 - typed `MissingWorkspacePath` detail and canonical `CorrelationIdDto` serialize safely, and malformed/absolute/traversing paths or malformed correlations fail at wire decoding;
-- required fields, IDs, closed enum variants, incompatible config/protocol schema majors, and invalid scalar types fail safely;
+- required fields, IDs, closed enum variants, any schema/protocol version other than the current one, and invalid scalar types fail safely;
 - the documented additive-field policy is tested, rather than inferred from serde defaults;
 - public resolved-config and snapshot projections exclude credentials and local `ConfigPathDto` values.
 
@@ -136,8 +136,8 @@ never substitutes for the following required semantic evidence.
 
 | M3 concern | Required test/evidence target | Required observable result |
 | --- | --- | --- |
-| DTO and event evolution | `m3_contracts`, event-fixture, and protocol-fixture suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while documented compatible fixtures remain decodable. |
-| SQLite durability and migration | `sqlite_contracts` plus migration fixtures. | Bundled SQLite applies supported `rusqlite_migration` versions, rejects a future on-disk schema, persists only credential-free config snapshots, and rejects a known-session future/overflow tail cursor with `invalid_event_tail_position` before SQLite conversion. |
+| DTO and event evolution | `m3_contracts`, event-fixture, and protocol contract suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while current fixtures remain decodable. |
+| SQLite durability and current schema | `sqlite_contracts` current-schema fixtures. | Bundled SQLite creates the complete current storage schema directly on open, persists only credential-free config snapshots, and rejects a known-session future/overflow tail cursor with `invalid_event_tail_position` before SQLite conversion. |
 | Semantic atomicity | SQLite fault-injection outcome fixture at event, projection, and snapshot boundaries. | Each injected write-stage failure rolls back completely: no new projection, event envelope, or session/run snapshot row persists. |
 | Canonical config revisions | SQLite config-revision contract fixture. | Reaccepting an equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID returns a typed conflict without sensitive details. |
 | Queue and idempotency | Storage/application contracts. | Repeated identical turn acceptance is stable, conflicting identity reuse fails typed, tickets are never reused after removal, repository-owned promotion selects the oldest ticket, and no parallel active run exists. |
@@ -155,7 +155,7 @@ Evidence](../closeout/m3-closure-evidence.md).
 
 ## Completed M4 model/provider evidence
 
-M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their policy-declared Cargo integration targets prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, durable tool-call recording, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. No test requires live credentials or provider network access. Final gate and cross-platform evidence are recorded in [M4 Closure Evidence](../closeout/m4-closure-evidence.md).
+M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their policy-declared Cargo integration targets prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, durable tool-call recording, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. The blocking and hermetic suites require no live credentials or provider network access; the only exception is the opt-in, manual, never-blocking live channel defined by [ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md). Final gate and cross-platform evidence are recorded in [M4 Closure Evidence](../closeout/m4-closure-evidence.md).
 
 ## Completed M4 run-stream protocol evidence
 
@@ -269,12 +269,47 @@ The following scenarios must become executable before the corresponding capabili
 ### I. Daemon-host tool loop
 
 1. Start the real daemon binary and connect over the local protocol.
-2. Send a user turn against a fake provider that emits a tool call.
+2. Send a user turn against a fake provider that emits a tool call; verify the
+   outgoing request advertises the six active registered tools (`read`, `write`,
+   `edit`, `execute`, `glob`, `grep`) and requests the `tool_calls` capability.
 3. Verify the daemon executes the call through the real typed registry under `WorkspaceRoot` with typed hooks.
 4. Verify the durable `ToolCallRecorded` and `ToolResultRecorded` facts commit before publication and are streamed to the client.
 5. Verify the provider exchange continues with assistant-tool-call and tool-role messages and completes.
 6. Restart the daemon and replay the run.
 7. Verify recorded tool calls and results replay and are never re-executed.
+
+### J. Live provider tool loop (opt-in, manual)
+
+1. Set `INTENTION_REAL_API_KEY` and `INTENTION_REAL_API_MODEL`, then run
+   `make e2e-real-api` (which exports the `INTENTION_REAL_API_E2E=1` opt-in), or
+   dispatch the manual `.github/workflows/real-api-e2e.yml` workflow with its
+   provider and model inputs. The provider kind defaults to
+   `generic-chat-completion-api`; `openrouter` is selectable through the
+   optional `INTENTION_REAL_API_KIND`, and `INTENTION_REAL_API_ENDPOINT`
+   overrides the endpoint for self-hosted providers.
+2. The `#[ignore]`d test `crates/intention-daemon/tests/real_api_e2e.rs` spawns
+   the real daemon binary, drives it through the real local transport, and
+   executes a real model tool loop against the live provider API over HTTPS.
+3. Verify the provider returns a real tool call; the outgoing request
+   advertises the six active registered tools and requests the `tool_calls`
+   capability (scenario I), the daemon executes the call through the real typed
+   registry under `WorkspaceRoot`, the durable `ToolCallRecorded` and
+   `ToolResultRecorded` facts commit before publication, and the run completes.
+   When the configured model runs in thinking mode, the continuation request
+   also carries the same round's accepted reasoning as `reasoning_content` on
+   the assistant tool-call message (ADR 0041); no prior-turn reasoning is
+   transferred.
+4. Restart the daemon and replay the run; verify the recorded tool call and
+   result replay and are never re-executed.
+5. Verify the credential is absent from durable facts, snapshots, daemon logs,
+   and state bytes.
+6. Verify an invalid credential produces a typed failure mapping and never an
+   untyped panic or a credential echo.
+
+This scenario is non-hermetic: it needs network access, a live provider, and a
+real credential. It runs only under the explicit opt-in ([ADR
+0040](../decisions/0040-opt-in-live-provider-e2e.md)) and never in
+`make quick`, `make verify`, CI, or any required status check.
 
 ## Verification evidence
 
@@ -286,6 +321,10 @@ Each completed implementation slice must report:
 - outcome scenarios covered;
 - lint, coverage, feature, dependency, or architecture exceptions, if any;
 - known non-covered risk, if any;
+- a recorded live run, when one is cited, reports the date, commit, provider,
+  model, and workflow run URL and never the credential; the opt-in live channel
+  ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additional
+  evidence and never a substitute for the mandatory hermetic gates;
 - whether the behavior is proven by automated test, manual smoke test, or intentionally still deferred.
 
 ## Non-goals

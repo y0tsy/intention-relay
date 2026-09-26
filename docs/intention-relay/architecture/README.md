@@ -279,9 +279,12 @@ lifecycle authority, persistence authority, sandbox, or privilege boundary.
 
 [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md) is the
 sole detailed authority for future private kernel epochs, cells, namespace
-checkpoints, safe projections, and kernel recovery. It consumes the Gateway/RLM
-bridge and the one capability path; it is not a second runtime, registry,
-lifecycle authority, sandbox, or privilege boundary.
+checkpoints, safe projections, and kernel recovery, and for the kernel-side
+import surface and script-import evidence of the project script library
+(`.ir/scripts`, [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md));
+the library's path convention and tools stay with architectures 05 and 15. It
+consumes the Gateway/RLM bridge and the one capability path; it is not a second
+runtime, registry, lifecycle authority, sandbox, or privilege boundary.
 
 ### Goals, Skills, context, memory, and compaction owner
 

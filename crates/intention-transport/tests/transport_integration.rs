@@ -472,3 +472,117 @@ fn client_negotiation_rejects_an_incompatible_daemon_response() {
 
     server.join().expect("server thread completes");
 }
+
+// PR24-034: exact-version negotiation must reject a same-major minor mismatch
+// (1.2 vs current 1.1) exactly like a major mismatch, on every path.
+
+#[test]
+fn incompatible_protocol_minor_fails_closed_without_hanging() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
+
+    let server = thread::spawn(move || {
+        let mut connection = listener.accept().expect("server accepts client");
+        let error = negotiate_daemon(
+            &mut connection,
+            hello("fixture-daemon", local_protocol_version()),
+        )
+        .expect_err("mismatched minor must fail on the daemon side");
+        assert_eq!(error.code(), "incompatible_protocol_version");
+    });
+
+    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
+    client
+        .send_hello(&hello("fixture-client", ProtocolVersionDto::new(1, 2)))
+        .expect("client hello sends");
+
+    server.join().expect("server thread completes");
+}
+
+#[test]
+fn client_negotiation_rejects_an_incompatible_daemon_minor_response() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
+
+    let server = thread::spawn(move || {
+        let mut connection = listener.accept().expect("server accepts client");
+        let remote = connection.receive_hello().expect("server receives hello");
+        assert_eq!(remote.adapter_name(), "fixture-client");
+        connection
+            .send_hello(&hello("fixture-daemon", ProtocolVersionDto::new(1, 2)))
+            .expect("server sends minor-mismatched hello");
+    });
+
+    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
+    let error = negotiate_client(
+        &mut client,
+        hello("fixture-client", local_protocol_version()),
+    )
+    .expect_err("client must reject the daemon minor mismatch");
+    assert_eq!(error.code(), "incompatible_protocol_version");
+
+    server.join().expect("server thread completes");
+}
+
+#[tokio::test]
+async fn async_negotiation_rejects_minor_mismatch_on_the_daemon_side() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("server accepts client");
+        let error = connection
+            .negotiate(hello("async-fixture-daemon", local_protocol_version()))
+            .await
+            .err()
+            .expect("async daemon must reject a minor mismatch");
+        assert_eq!(error.code(), "incompatible_protocol_version");
+    });
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("client connects");
+    let client_result = connection
+        .negotiate(hello("async-fixture-client", ProtocolVersionDto::new(1, 2)))
+        .await;
+    assert!(
+        client_result.is_err(),
+        "the mismatched client must fail closed without hanging"
+    );
+    server.await.expect("server task completes");
+}
+
+#[tokio::test]
+async fn async_negotiation_rejects_minor_mismatch_on_the_client_side() {
+    // The async daemon replies only after the exact-version check, so a
+    // fixture daemon that claims a future minor version can be driven only by
+    // letting the client observe the closed connection plus the shared
+    // exact-version gate; the client-side gate is asserted by negotiation
+    // against a server whose local version is the mismatch.
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("server accepts client");
+        let error = connection
+            .negotiate(hello("async-fixture-daemon", ProtocolVersionDto::new(1, 2)))
+            .await
+            .err()
+            .expect("fixture daemon claiming 1.2 must reject a current client");
+        assert_eq!(error.code(), "incompatible_protocol_version");
+    });
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("client connects");
+    let client_result = connection
+        .negotiate(hello("async-fixture-client", local_protocol_version()))
+        .await;
+    assert!(
+        client_result.is_err(),
+        "a client of the current version must fail closed against a 1.2 daemon"
+    );
+    server.await.expect("server task completes");
+}

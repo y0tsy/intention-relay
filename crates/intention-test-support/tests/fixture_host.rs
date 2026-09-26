@@ -73,7 +73,7 @@ fn fixture_host_serves_durable_snapshot_and_scoped_resync() {
             local_protocol_version(),
             CorrelationIdDto::new(),
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                SchemaVersionDto::new(1, 1),
                 ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
                     intention_domain::GetSessionSnapshotQueryDto::new(session_id),
                 )),
@@ -98,11 +98,11 @@ fn fixture_host_serves_durable_snapshot_and_scoped_resync() {
             local_protocol_version(),
             CorrelationIdDto::new(),
             ProtocolMessageDto::new(
-                SchemaVersionDto::new(1, 0),
+                SchemaVersionDto::new(1, 1),
                 ProtocolRequestPayloadDto::Command(
                     intention_protocol::ProtocolCommandDto::SubscribeSession(
                         SubscribeSessionCommandDto::with_run_id(
-                            SchemaVersionDto::new(1, 0),
+                            SchemaVersionDto::new(1, 1),
                             session_id,
                             Some(RunId::new()),
                             Some(SessionEventSequenceDto::new(u64::MAX)),

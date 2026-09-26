@@ -11,15 +11,8 @@ use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
     types::chat::{
-        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestAssistantMessageContent,
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-        ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
-        ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
-        ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions,
-        ChatCompletionStreamResponseDelta, CreateChatCompletionRequest,
-        CreateChatCompletionRequestArgs, CreateChatCompletionStreamResponse, FinishReason,
-        FunctionCall,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions,
+        ChatCompletionTool, ChatCompletionTools, FunctionCall, FunctionObject, ReasoningEffort,
     },
 };
 use futures_util::{
@@ -29,16 +22,100 @@ use futures_util::{
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_model::{
-    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
-    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
+    ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
+    ReasoningEffortLevel, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
+mod wire;
+
+use wire::{WireChunk, WireDelta, WireMessage, WireRequest};
+
+/// Additive descriptor-driven driver options; the default is unchanged.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GenericChatDriverOptions {
+    header_policy: Option<AuthenticationHeaderPolicyV1>,
+    reasoning_effort: Option<ReasoningEffortLevel>,
+}
+
+impl GenericChatDriverOptions {
+    /// Creates default driver options.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the declared header policy (names only, never values).
+    #[must_use]
+    pub const fn header_policy(&self) -> Option<&AuthenticationHeaderPolicyV1> {
+        self.header_policy.as_ref()
+    }
+
+    /// Returns the declared reasoning effort applied to requests.
+    #[must_use]
+    pub const fn reasoning_effort(&self) -> Option<ReasoningEffortLevel> {
+        self.reasoning_effort
+    }
+
+    /// Declares the descriptor header policy (names only, never values).
+    ///
+    /// The policy is validated by construction and stored privately; it is
+    /// never logged, serialized, or made durable.
+    #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "Moving the validated policy into the option requires a drop that const fn cannot evaluate."
+    )]
+    pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
+        self.header_policy = Some(policy);
+        self
+    }
+
+    /// Declares the closed reasoning effort request field.
+    #[must_use]
+    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Validates that every declared option is applicable to this adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the header policy selects the
+    /// safe-header transport or the maximum reasoning effort is declared (the
+    /// pinned SDK effort set has no max).
+    pub fn build(self) -> DtoResult<Self> {
+        if self.header_policy.as_ref().is_some_and(|policy| {
+            policy.selected_transport() == CredentialTransportMode::SafeHeader
+        }) {
+            return Err(ErrorDto::validation(
+                "unsupported_safe_header_transport",
+                "the generic chat adapter does not yet support safe-header credential transport",
+            ));
+        }
+        if self.reasoning_effort == Some(ReasoningEffortLevel::Max) {
+            return Err(ErrorDto::validation(
+                "unsupported_reasoning_effort",
+                "the generic chat adapter cannot express the maximum reasoning effort",
+            ));
+        }
+        Ok(self)
+    }
+}
+
 /// Generic Chat Completions driver with private SDK client state.
+///
+/// The SDK client is held behind a read/write lock so credential rotation can
+/// rebuild it without replacing the driver instance: every in-flight stream
+/// keeps the client clone it captured at start, and later executions clone
+/// the rotated client.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
-    client: Client<OpenAIConfig>,
+    client: std::sync::RwLock<Client<OpenAIConfig>>,
+    options: GenericChatDriverOptions,
     outbound_calls_for_test: u32,
 }
 
@@ -62,29 +139,100 @@ impl GenericChatDriver {
         material.into_parts_for_provider(Self::with_credential)
     }
 
+    /// Creates the driver from opaque startup-only provider material and
+    /// validated descriptor-driven options.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the material selects a different provider kind.
+    pub fn from_startup_material_with_options(
+        material: StartupProviderMaterial,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
+        material.into_parts_for_provider(move |resolved, credential| {
+            Self::with_credential_and_options(resolved, credential, options)
+        })
+    }
+
     fn with_credential(resolved: ResolvedConfigDto, credential: String) -> DtoResult<Self> {
+        Self::with_credential_and_options(resolved, credential, GenericChatDriverOptions::default())
+    }
+
+    fn with_credential_and_options(
+        resolved: ResolvedConfigDto,
+        credential: String,
+        options: GenericChatDriverOptions,
+    ) -> DtoResult<Self> {
         if resolved.provider().kind() != ProviderKindDto::GenericChatCompletionApi {
             return Err(ErrorDto::validation(
                 "invalid_generic_chat_provider_config",
                 "generic chat driver requires generic chat provider configuration",
             ));
         }
+        let client = Self::configured_client(&resolved, credential)?;
+        Ok(Self {
+            resolved,
+            client: std::sync::RwLock::new(client),
+            options,
+            outbound_calls_for_test: 0,
+        })
+    }
+
+    /// Builds the private SDK client for one resolved configuration and
+    /// credential value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    fn configured_client(
+        resolved: &ResolvedConfigDto,
+        credential: String,
+    ) -> DtoResult<Client<OpenAIConfig>> {
         let endpoint = resolved.provider().endpoint().ok_or_else(|| {
             ErrorDto::validation(
                 "missing_generic_chat_endpoint",
                 "generic chat provider requires a configured endpoint",
             )
         })?;
-        let client = Client::with_config(
+        Ok(Client::with_config(
             OpenAIConfig::new()
                 .with_api_base(endpoint)
                 .with_api_key(credential),
-        );
-        Ok(Self {
-            resolved,
-            client,
-            outbound_calls_for_test: 0,
-        })
+        ))
+    }
+
+    /// Replaces the driver's private SDK client with one built from fresh
+    /// private credential material.
+    ///
+    /// The rebuild is composition-owned: the supplied credential must arrive
+    /// through a private channel and is never logged, serialized, or made
+    /// durable. The resolved provider endpoint is unchanged, so the safe
+    /// composition is untouched. The previous client is replaced only after
+    /// the replacement client is configured; concurrent executions keep the
+    /// client they captured before this call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the resolved provider carries no
+    /// endpoint.
+    pub fn rotate_credential(&self, credential: String) -> DtoResult<()> {
+        let client = Self::configured_client(&self.resolved, credential)?;
+        let mut guard = self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = client;
+        drop(guard);
+        Ok(())
+    }
+
+    /// Clones the current private SDK client for one execution attempt.
+    fn current_client(&self) -> Client<OpenAIConfig> {
+        self.client
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Returns the non-network preflight validation result.
@@ -103,8 +251,8 @@ impl GenericChatDriver {
     /// Returns a safe policy or translation error before outbound work.
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
-        let _native_request = translate_request(request)?;
-        let _client = &self.client;
+        let _native_request = translate_request(request, &self.options)?;
+        let _client = self.current_client();
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
     }
@@ -113,6 +261,12 @@ impl GenericChatDriver {
     #[must_use]
     pub const fn prepared_request_count(&self) -> u32 {
         self.outbound_calls_for_test
+    }
+
+    /// Returns the driver's validated declared options.
+    #[must_use]
+    pub const fn options(&self) -> &GenericChatDriverOptions {
+        &self.options
     }
 
     /// Maps a text delta fixture into the canonical stream contract.
@@ -168,7 +322,7 @@ impl GenericChatDriver {
 
 impl ModelDriver for GenericChatDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, false, true, false, false, true)
+        ModelCapabilitiesDto::new(true, true, true, false, false, true)
     }
 }
 
@@ -186,7 +340,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 Err(non_retryable_error("generic_chat_request_rejected"))
             }));
         }
-        let native_request = match translate_request(&request) {
+        let native_request = match translate_request(&request, &self.options) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
@@ -194,12 +348,12 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
-        let client = self.client.clone();
+        let client = self.current_client();
         Box::pin(
             stream::once(async move {
                 client
                     .chat()
-                    .create_stream(native_request)
+                    .create_stream_byot::<WireRequest, WireChunk>(native_request)
                     .await
                     .map_or_else(
                         |error| {
@@ -216,7 +370,7 @@ impl ModelExecutionDriver for GenericChatDriver {
 
 fn normalize_stream<S>(native: S, cancellation: ModelCancellationSignal) -> ModelEventStream
 where
-    S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>> + Send + 'static,
+    S: Stream<Item = Result<WireChunk, OpenAIError>> + Send + 'static,
 {
     Box::pin(stream::unfold(
         GenericStreamState::new(native, cancellation),
@@ -229,14 +383,15 @@ struct GenericStreamState<S> {
     cancellation: ModelCancellationSignal,
     pending: VecDeque<Result<ModelEventDto, ProviderErrorDto>>,
     tools: BTreeMap<(u32, u32), FunctionToolFragments>,
-    legacy_tools: BTreeMap<u32, FunctionToolFragments>,
     terminal: bool,
     terminal_reason: Option<FinishReasonDto>,
+    usage_reported: bool,
+    reasoning_presence_reported: bool,
 }
 
 impl<S> GenericStreamState<S>
 where
-    S: Stream<Item = Result<CreateChatCompletionStreamResponse, OpenAIError>>,
+    S: Stream<Item = Result<WireChunk, OpenAIError>>,
 {
     fn new(native: S, cancellation: ModelCancellationSignal) -> Self {
         let mut pending = VecDeque::new();
@@ -246,9 +401,10 @@ where
             cancellation,
             pending,
             tools: BTreeMap::new(),
-            legacy_tools: BTreeMap::new(),
             terminal: false,
             terminal_reason: None,
+            usage_reported: false,
+            reasoning_presence_reported: false,
         }
     }
 
@@ -263,39 +419,78 @@ where
             if self.terminal {
                 return None;
             }
-            if let Some(reason) = self.terminal_reason.take() {
-                self.finish(reason);
-                continue;
-            }
             match select(self.native.next(), self.cancellation.cancelled()).await {
                 Either::Left((Some(Ok(chunk)), _)) => self.accept_chunk(chunk),
                 Either::Left((Some(Err(error)), _)) => self.fail_error(map_openai_error(&error)),
-                Either::Left((None, _)) => self.fail("generic_chat_stream_incomplete"),
+                Either::Left((None, _)) => self.native_ended(),
                 Either::Right(((), _)) => return None,
             }
         }
     }
 
-    fn accept_chunk(&mut self, chunk: CreateChatCompletionStreamResponse) {
+    fn accept_chunk(&mut self, chunk: WireChunk) {
+        let post_finish = self.terminal_reason.is_some();
+        if post_finish
+            && chunk.choices.iter().any(|choice| {
+                choice.finish_reason.is_some()
+                    || choice
+                        .delta
+                        .content
+                        .as_deref()
+                        .is_some_and(|content| !content.is_empty())
+                    || choice
+                        .delta
+                        .reasoning_content
+                        .as_deref()
+                        .is_some_and(|reasoning| !reasoning.is_empty())
+                    || choice.delta.tool_calls.is_some()
+            })
+        {
+            // Chunks after the finish reason may carry at most the final
+            // usage summary; any further content, reasoning fragment, tool
+            // fragment, or finish is malformed and fails the stream.
+            if chunk
+                .choices
+                .iter()
+                .any(|choice| choice.finish_reason.is_some())
+            {
+                self.fail("generic_chat_duplicate_finish");
+            } else {
+                self.fail("generic_chat_post_finish_content");
+            }
+            return;
+        }
         if let Some(usage) = chunk.usage {
+            if self.usage_reported {
+                self.fail("generic_chat_duplicate_usage");
+                return;
+            }
             match UsageDto::reported(
                 u64::from(usage.prompt_tokens),
                 u64::from(usage.completion_tokens),
                 u64::from(usage.total_tokens),
             ) {
-                Ok(usage) => self.pending.push_back(Ok(ModelEventDto::usage(usage))),
+                Ok(usage) => {
+                    self.usage_reported = true;
+                    self.pending.push_back(Ok(ModelEventDto::usage(usage)));
+                }
                 Err(_) => self.fail("generic_chat_invalid_usage"),
             }
         }
+        if post_finish {
+            return;
+        }
         for choice in chunk.choices {
             if self.accept_delta(choice.index, choice.delta).is_err() {
-                self.fail("generic_chat_invalid_tool_call");
+                if !self.terminal {
+                    self.fail("generic_chat_invalid_tool_call");
+                }
                 return;
             }
             if let Some(reason) = choice.finish_reason
                 && self
                     .terminal_reason
-                    .replace(map_native_finish(reason))
+                    .replace(map_finish_reason(&reason))
                     .is_some()
             {
                 self.fail("generic_chat_duplicate_finish");
@@ -304,22 +499,15 @@ where
         }
     }
 
-    fn accept_delta(
-        &mut self,
-        choice_index: u32,
-        delta: ChatCompletionStreamResponseDelta,
-    ) -> Result<(), ()> {
+    fn accept_delta(&mut self, choice_index: u32, delta: WireDelta) -> Result<(), ()> {
+        // The provider streams the thinking channel before the answer it
+        // informs, so a delta carrying both keeps that order.
+        if let Some(reasoning) = delta.reasoning_content {
+            self.accept_reasoning(reasoning);
+        }
         if let Some(content) = delta.content.filter(|content| !content.is_empty()) {
             self.pending
                 .push_back(Ok(ModelEventDto::text_delta(content).map_err(|_| ())?));
-        }
-        #[allow(
-            deprecated,
-            reason = "Chat Completions exposes legacy function-call stream fragments."
-        )]
-        if let Some(function) = delta.function_call {
-            let fragments = self.legacy_tools.entry(choice_index).or_default();
-            fragments.merge_legacy(function)?;
         }
         if let Some(calls) = delta.tool_calls {
             for call in calls {
@@ -334,28 +522,64 @@ where
         Ok(())
     }
 
+    /// Normalizes one reasoning fragment of a provider delta.
+    ///
+    /// An empty value only marks that the provider carried the reasoning
+    /// channel; providers repeat that empty value on nearly every chunk, so it
+    /// is reported at most once per stream. The fragment stays a transient
+    /// reasoning fact: it is never appended to assistant text, never becomes
+    /// message content, and never enters an error payload. An empty value is
+    /// exactly what the normalized reasoning-delta constructor rejects, which
+    /// is why this adapter has no reasoning failure class of its own: no
+    /// provider value reaches it as a failure (PR24 P3-30).
+    fn accept_reasoning(&mut self, reasoning: String) {
+        match ModelEventDto::reasoning_delta_categorized(
+            ReasoningFragmentCategoryDto::Primary,
+            reasoning,
+        ) {
+            Ok(event) => self.pending.push_back(Ok(event)),
+            Err(_) => {
+                if !self.reasoning_presence_reported {
+                    self.reasoning_presence_reported = true;
+                    self.pending.push_back(Ok(ModelEventDto::reasoning_presence(
+                        ReasoningFragmentCategoryDto::Primary,
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Handles the native end-of-stream.
+    ///
+    /// A recorded finish reason is terminal only once the native stream ends:
+    /// standard streams deliver a trailing usage-only chunk after the
+    /// finish-reason chunk, and the driver requested usage inclusion.
+    /// Recording the reason and continuing to poll collects that usage
+    /// exactly once (PR24-009). An absent reason fails the incomplete stream.
+    fn native_ended(&mut self) {
+        if let Some(reason) = self.terminal_reason.take() {
+            self.finish(reason);
+        } else {
+            self.fail("generic_chat_stream_incomplete");
+        }
+    }
+
     fn finish(&mut self, reason: FinishReasonDto) {
-        let modern = std::mem::take(&mut self.tools)
+        match std::mem::take(&mut self.tools)
             .into_values()
             .map(FunctionToolFragments::finish)
-            .collect::<Result<Vec<_>, _>>();
-        let legacy = std::mem::take(&mut self.legacy_tools)
-            .into_values()
-            .map(FunctionToolFragments::finish_legacy)
-            .collect::<Result<Vec<_>, _>>();
-        match (modern, legacy) {
-            (Ok(modern), Ok(legacy)) if modern.is_empty() || legacy.is_empty() => {
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(calls) => {
                 self.pending.extend(
-                    modern
+                    calls
                         .into_iter()
-                        .chain(legacy)
                         .map(|call| Ok(ModelEventDto::tool_call(call))),
                 );
                 self.pending.push_back(Ok(ModelEventDto::finished(reason)));
                 self.terminal = true;
             }
-            (Ok(_), Ok(_)) => self.fail("generic_chat_conflicting_tool_call"),
-            (Err(()), _) | (_, Err(())) => self.fail("generic_chat_invalid_tool_call"),
+            Err(()) => self.fail("generic_chat_invalid_tool_call"),
         }
     }
 
@@ -398,22 +622,6 @@ impl FunctionToolFragments {
         Ok(())
     }
 
-    fn finish_legacy(self) -> Result<ToolCallDto, ()> {
-        let name = self.name.ok_or(())?;
-        ToolCallDto::new(ToolCallId::new(), name, self.arguments).map_err(|_| ())
-    }
-
-    fn merge_legacy(
-        &mut self,
-        function: async_openai::types::chat::FunctionCallStream,
-    ) -> Result<(), ()> {
-        merge_constant(&mut self.name, function.name)?;
-        if let Some(arguments) = function.arguments {
-            self.arguments.push_str(&arguments);
-        }
-        Ok(())
-    }
-
     fn finish(self) -> Result<ToolCallDto, ()> {
         let _id = self.id.ok_or(())?;
         let name = self.name.ok_or(())?;
@@ -431,23 +639,19 @@ fn merge_constant(slot: &mut Option<String>, next: Option<String>) -> Result<(),
     Ok(())
 }
 
+/// Maps one provider finish reason onto the closed reason set.
+///
+/// The provider value stays an open string, so every unlisted reason (a
+/// vendor-specific value or an extension such as `stop_sequence`) degrades to
+/// `FinishReasonDto::Unknown` instead of aborting the response.
 fn map_finish_reason(reason: &str) -> FinishReasonDto {
     match reason {
         "stop" => FinishReasonDto::Stop,
         "length" => FinishReasonDto::Length,
-        "tool_calls" | "function_call" => FinishReasonDto::ToolCalls,
+        "tool_calls" => FinishReasonDto::ToolCalls,
         "content_filter" => FinishReasonDto::ContentFilter,
         "error" => FinishReasonDto::Error,
         _ => FinishReasonDto::Unknown,
-    }
-}
-
-const fn map_native_finish(reason: FinishReason) -> FinishReasonDto {
-    match reason {
-        FinishReason::Stop => FinishReasonDto::Stop,
-        FinishReason::Length => FinishReasonDto::Length,
-        FinishReason::ToolCalls | FinishReason::FunctionCall => FinishReasonDto::ToolCalls,
-        FinishReason::ContentFilter => FinishReasonDto::ContentFilter,
     }
 }
 
@@ -466,10 +670,7 @@ fn provider_error(retryable: bool) -> DtoResult<ProviderErrorDto> {
 fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
     let retryable = match error {
         OpenAIError::Reqwest(_) | OpenAIError::StreamError(_) => true,
-        OpenAIError::ApiError(error) => matches!(
-            error.api_error.r#type.as_deref(),
-            None | Some("rate_limit_exceeded" | "server_error")
-        ),
+        OpenAIError::ApiError(error) => api_error_retryable(error),
         OpenAIError::JSONDeserialize(..)
         | OpenAIError::FileSaveError(_)
         | OpenAIError::FileReadError(_)
@@ -477,6 +678,25 @@ fn map_openai_error(error: &OpenAIError) -> ProviderErrorDto {
     };
     provider_error(retryable)
         .unwrap_or_else(|_| non_retryable_error("generic_chat_provider_failure"))
+}
+
+/// Classifies one SDK API error by its authoritative HTTP status.
+///
+/// Throttling (429) and server faults (5xx) are transient; every other client
+/// rejection (4xx) is permanent, so a gateway that returns a permanent status
+/// without a `type` field is never retried to the attempt maximum. The
+/// provider's optional `type` string stays a secondary signal: it decides only
+/// a status this taxonomy does not classify by itself, and an unclassified
+/// status without a transient type stays permanent.
+fn api_error_retryable(error: &async_openai::error::ApiErrorResponse) -> bool {
+    match error.status_code.as_u16() {
+        429 | 500..=599 => true,
+        400..=499 => false,
+        _ => matches!(
+            error.api_error.r#type.as_deref(),
+            Some("rate_limit_exceeded" | "server_error")
+        ),
+    }
 }
 
 #[allow(
@@ -488,54 +708,127 @@ fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
         .expect("fixed normalized provider error code is valid")
 }
 
-fn translate_request(request: &ModelRequestDto) -> DtoResult<CreateChatCompletionRequest> {
+/// Translates one provider-neutral request into the exact wire request.
+///
+/// # Errors
+///
+/// Returns a validation error for an undecodable tool-parameter schema, a
+/// malformed tool-role message, or an unexpressible reasoning effort.
+///
+/// The BYOT request path has no SDK builder left to fail on, so the former
+/// `build` failure branch is gone rather than reproduced.
+fn translate_request(
+    request: &ModelRequestDto,
+    options: &GenericChatDriverOptions,
+) -> DtoResult<WireRequest> {
+    let attachments = reasoning_attachments(request);
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
-        messages.push(ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(context.to_owned()),
-                name: None,
-            },
-        ));
+        messages.push(WireMessage::System {
+            content: context.to_owned(),
+        });
     }
     for message in request.messages() {
-        messages.push(translate_message(message)?);
+        messages.push(translate_message(message, &attachments)?);
     }
-    CreateChatCompletionRequestArgs::default()
-        .model(request.model())
-        .messages(messages)
-        .stream_options(ChatCompletionStreamOptions {
+    let tools: Vec<ChatCompletionTools> = request
+        .tools()
+        .iter()
+        .map(|tool| -> DtoResult<ChatCompletionTools> {
+            Ok(ChatCompletionTools::Function(ChatCompletionTool {
+                function: FunctionObject {
+                    name: tool.name().to_owned(),
+                    description: Some(tool.description().to_owned()),
+                    parameters: Some(parse_parameters(tool.parameters_json())?),
+                    strict: None,
+                },
+            }))
+        })
+        .collect::<DtoResult<_>>()?;
+    Ok(WireRequest {
+        model: request.model().to_owned(),
+        messages,
+        stream: true,
+        stream_options: ChatCompletionStreamOptions {
             include_usage: Some(true),
             include_obfuscation: None,
-        })
-        .build()
-        .map_err(|_| {
-            ErrorDto::validation(
-                "invalid_generic_chat_request",
-                "generic chat request could not be translated",
-            )
-        })
+        },
+        reasoning_effort: options
+            .reasoning_effort
+            .map(map_reasoning_effort)
+            .transpose()?,
+        tools,
+    })
 }
 
-fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionRequestMessage> {
+/// Maps every attached tool-call identity to the reasoning text that must
+/// round-trip with the assistant tool-call message carrying that identity.
+///
+/// Attachments are transient same-run material: they are matched by identity,
+/// never merged into message content, and never consulted for other roles.
+fn reasoning_attachments(request: &ModelRequestDto) -> BTreeMap<ToolCallId, &str> {
+    let mut attachments = BTreeMap::new();
+    for attachment in request.assistant_reasoning() {
+        for call_id in attachment.tool_call_ids() {
+            attachments.insert(*call_id, attachment.text());
+        }
+    }
+    attachments
+}
+
+/// Decodes one validated tool-parameter schema into the SDK-declared type.
+///
+/// The decode target is inferred at the call site from the SDK request field,
+/// so the provider boundary never names the native JSON value type.
+///
+/// # Errors
+///
+/// Returns a validation error when the schema text cannot be decoded.
+fn parse_parameters<T>(raw: &str) -> DtoResult<T>
+where
+    T: std::str::FromStr,
+{
+    raw.parse::<T>().map_err(|_| {
+        ErrorDto::validation(
+            "invalid_generic_chat_request",
+            "generic chat tool parameters could not be decoded",
+        )
+    })
+}
+
+/// Maps the closed effort level onto the pinned SDK effort set.
+///
+/// # Errors
+///
+/// Returns a validation error for the maximum effort, which the pinned SDK
+/// effort set cannot express.
+fn map_reasoning_effort(effort: ReasoningEffortLevel) -> DtoResult<ReasoningEffort> {
+    match effort {
+        ReasoningEffortLevel::None => Ok(ReasoningEffort::None),
+        ReasoningEffortLevel::Minimal => Ok(ReasoningEffort::Minimal),
+        ReasoningEffortLevel::Low => Ok(ReasoningEffort::Low),
+        ReasoningEffortLevel::Medium => Ok(ReasoningEffort::Medium),
+        ReasoningEffortLevel::High => Ok(ReasoningEffort::High),
+        ReasoningEffortLevel::Xhigh => Ok(ReasoningEffort::Xhigh),
+        ReasoningEffortLevel::Max => Err(ErrorDto::validation(
+            "unsupported_reasoning_effort",
+            "the generic chat adapter cannot express the maximum reasoning effort",
+        )),
+    }
+}
+
+fn translate_message(
+    message: &ModelMessageDto,
+    attachments: &BTreeMap<ToolCallId, &str>,
+) -> DtoResult<WireMessage> {
     match message.role() {
-        ModelRoleDto::System => Ok(ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(
-                    message.content().to_owned(),
-                ),
-                name: None,
-            },
-        )),
-        ModelRoleDto::User => Ok(ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessage {
-                content: ChatCompletionRequestUserMessageContent::Text(
-                    message.content().to_owned(),
-                ),
-                name: None,
-            },
-        )),
-        ModelRoleDto::Assistant => translate_assistant_message(message),
+        ModelRoleDto::System => Ok(WireMessage::System {
+            content: message.content().to_owned(),
+        }),
+        ModelRoleDto::User => Ok(WireMessage::User {
+            content: message.content().to_owned(),
+        }),
+        ModelRoleDto::Assistant => translate_assistant_message(message, attachments),
         ModelRoleDto::Tool => {
             let tool_call_id = message.tool_call_id().ok_or_else(|| {
                 ErrorDto::validation(
@@ -543,70 +836,53 @@ fn translate_message(message: &ModelMessageDto) -> DtoResult<ChatCompletionReque
                     "tool-role messages must carry one tool call identity",
                 )
             })?;
-            Ok(ChatCompletionRequestMessage::Tool(
-                ChatCompletionRequestToolMessage {
-                    content: ChatCompletionRequestToolMessageContent::Text(
-                        message.content().to_owned(),
-                    ),
-                    tool_call_id: tool_call_id.to_string(),
-                },
-            ))
+            Ok(WireMessage::Tool {
+                content: message.content().to_owned(),
+                tool_call_id: tool_call_id.to_string(),
+            })
         }
     }
 }
 
 fn translate_assistant_message(
     message: &ModelMessageDto,
-) -> DtoResult<ChatCompletionRequestMessage> {
-    let content = message.content();
-    message.tool_calls().map_or_else(
-        || {
-            ChatCompletionRequestAssistantMessageArgs::default()
-                .content(ChatCompletionRequestAssistantMessageContent::Text(
-                    content.to_owned(),
-                ))
-                .build()
-                .map(ChatCompletionRequestMessage::Assistant)
-                .map_err(|_| {
-                    ErrorDto::validation(
-                        "invalid_generic_chat_request",
-                        "generic chat request could not be translated",
-                    )
-                })
-        },
-        |tool_calls| {
-            // The assistant content is optional when tool calls are present, so
-            // an empty DTO content stays omitted on the wire.
-            let mut args = ChatCompletionRequestAssistantMessageArgs::default();
-            if !content.is_empty() {
-                args.content(ChatCompletionRequestAssistantMessageContent::Text(
-                    content.to_owned(),
-                ));
-            }
-            args.tool_calls(
-                tool_calls
-                    .iter()
-                    .map(|call| {
-                        ChatCompletionMessageToolCalls::from(ChatCompletionMessageToolCall {
-                            id: call.call_id().to_string(),
-                            function: FunctionCall {
-                                name: call.name().to_owned(),
-                                arguments: call.arguments_json().to_owned(),
-                            },
-                        })
+    attachments: &BTreeMap<ToolCallId, &str>,
+) -> DtoResult<WireMessage> {
+    // The assistant content is optional when tool calls are present, so an
+    // empty DTO content stays omitted on the wire.
+    let content = (!message.content().is_empty()).then(|| message.content().to_owned());
+    let Some(tool_calls) = message.tool_calls() else {
+        return Ok(WireMessage::Assistant {
+            content,
+            tool_calls: None,
+            reasoning_content: None,
+        });
+    };
+    // A matching attachment serializes its reasoning text beside the tool
+    // calls; an empty text is still a presence marker the provider needs, so
+    // the key is never dropped once an attachment matches.
+    let reasoning_content = tool_calls
+        .iter()
+        .find_map(|call| attachments.get(&call.call_id()).copied())
+        .map(str::to_owned);
+    Ok(WireMessage::Assistant {
+        content,
+        tool_calls: Some(
+            tool_calls
+                .iter()
+                .map(|call| {
+                    ChatCompletionMessageToolCalls::from(ChatCompletionMessageToolCall {
+                        id: call.call_id().to_string(),
+                        function: FunctionCall {
+                            name: call.name().to_owned(),
+                            arguments: call.arguments_json().to_owned(),
+                        },
                     })
-                    .collect::<Vec<_>>(),
-            )
-            .build()
-            .map(ChatCompletionRequestMessage::Assistant)
-            .map_err(|_| {
-                ErrorDto::validation(
-                    "invalid_generic_chat_request",
-                    "generic chat request could not be translated",
-                )
-            })
-        },
-    )
+                })
+                .collect(),
+        ),
+        reasoning_content,
+    })
 }
 
 #[cfg(test)]
@@ -616,7 +892,7 @@ fn translate_assistant_message(
 )]
 mod tests {
     use super::*;
-    use intention_types::RunId;
+    use intention_types::{ErrorRetryDto, RunId};
 
     #[test]
     fn generic_chat_translates_assistant_tool_calls_and_tool_results() {
@@ -640,8 +916,11 @@ mod tests {
         )
         .expect("request is valid");
 
-        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -666,6 +945,7 @@ mod tests {
                         "tool_call_id": call.call_id().to_string(),
                     },
                 ],
+                "stream": true,
                 "stream_options": {"include_usage": true},
             })
         );
@@ -684,8 +964,11 @@ mod tests {
             None,
         )
         .expect("request is valid");
-        let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
-            .expect("request serializes");
+        let wire = serde_json::to_value(
+            translate_request(&follow_up, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
         let assistant = &wire["messages"][1];
         assert!(assistant.get("content").is_none());
         assert_eq!(
@@ -699,6 +982,191 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn generic_chat_advertises_tool_definitions_without_tool_choice() {
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid")
+        .with_tools(vec![
+            intention_model::ModelToolDefinitionDto::new(
+                "read_file",
+                "Reads one file",
+                r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            )
+            .expect("tool is valid"),
+            intention_model::ModelToolDefinitionDto::new(
+                "search",
+                "Searches files",
+                r#"{"type":"object","required":["query"]}"#,
+            )
+            .expect("tool is valid"),
+        ])
+        .expect("tools are valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "model": "fixture",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true,
+                "stream_options": {"include_usage": true},
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "description": "Reads one file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "description": "Searches files",
+                            "parameters": {
+                                "type": "object",
+                                "required": ["query"],
+                            },
+                        },
+                    },
+                ],
+            })
+        );
+        assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn generic_chat_omits_tools_when_no_definitions_are_advertised() {
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid");
+
+        let wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "model": "fixture",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true,
+                "stream_options": {"include_usage": true},
+            })
+        );
+        assert!(wire.get("tools").is_none());
+        assert!(wire.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn assistant_reasoning_attachments_round_trip_onto_the_wire() {
+        let first = ToolCallDto::new(ToolCallId::new(), "read", r#"{"path":"hello.txt"}"#)
+            .expect("fixture call is valid");
+        let second = ToolCallDto::new(ToolCallId::new(), "search", r#"{"query":"hello"}"#)
+            .expect("fixture call is valid");
+
+        // Without an attachment the assistant message carries no reasoning key.
+        let wire = serde_json::to_value(
+            translate_request(
+                &assistant_tool_request(&first, &second),
+                &GenericChatDriverOptions::default(),
+            )
+            .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(wire["messages"][0].get("reasoning_content").is_none());
+
+        // An attachment matching any of the message's call identities carries
+        // its text beside the tool calls.
+        let attached = assistant_tool_request(&first, &second)
+            .with_assistant_reasoning(vec![
+                intention_model::AssistantReasoningDto::new(
+                    vec![second.call_id()],
+                    "weighing the options",
+                )
+                .expect("attachment is valid"),
+            ])
+            .expect("attachment is accepted");
+        let wire = serde_json::to_value(
+            translate_request(&attached, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(
+            wire["messages"][0]["reasoning_content"],
+            "weighing the options"
+        );
+        assert!(wire["messages"][0].get("content").is_none());
+
+        // An empty attachment text is a presence marker the provider needs, so
+        // the key stays on the wire.
+        let presence = assistant_tool_request(&first, &second)
+            .with_assistant_reasoning(vec![
+                intention_model::AssistantReasoningDto::new(vec![second.call_id()], "")
+                    .expect("presence attachment is valid"),
+            ])
+            .expect("attachment is accepted");
+        let wire = serde_json::to_value(
+            translate_request(&presence, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(wire["messages"][0]["reasoning_content"], "");
+
+        // An attachment for an unrelated call never leaks onto this message.
+        let unrelated = assistant_tool_request(&first, &second)
+            .with_assistant_reasoning(vec![
+                intention_model::AssistantReasoningDto::new(vec![ToolCallId::new()], "other call")
+                    .expect("attachment is valid"),
+            ])
+            .expect("attachment is accepted");
+        let wire = serde_json::to_value(
+            translate_request(&unrelated, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(wire["messages"][0].get("reasoning_content").is_none());
+        assert!(
+            wire["messages"][0]["tool_calls"][0]
+                .get("reasoning_content")
+                .is_none()
+        );
+    }
+
+    fn assistant_tool_request(first: &ToolCallDto, second: &ToolCallDto) -> ModelRequestDto {
+        ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::assistant_tool_calls(None, vec![first.clone(), second.clone()])
+                    .expect("message is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("request is valid")
     }
 
     #[test]
@@ -795,114 +1263,113 @@ mod tests {
     }
 
     #[test]
-    fn legacy_function_fragments_complete_only_at_terminal() {
-        let mut fragments = FunctionToolFragments::default();
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{\"path\"".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        fragments
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: None,
-                arguments: Some(":\"src\"}".to_owned()),
-            })
-            .expect("legacy continuation is valid");
-        let call = fragments.finish_legacy().expect("legacy call completes");
-        assert_eq!(call.name(), "inspect");
-        assert_eq!(call.arguments_json(), "{\"path\":\"src\"}");
-        assert!(FunctionToolFragments::default().finish_legacy().is_err());
-        let mut malformed = FunctionToolFragments::default();
-        malformed
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("not-json".to_owned()),
-            })
-            .expect("legacy fragment shape is valid");
-        assert!(malformed.finish_legacy().is_err());
-        let mut conflicting = FunctionToolFragments::default();
-        conflicting
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy initial fragment is valid");
-        assert!(
-            conflicting
-                .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                    name: Some("other".to_owned()),
-                    arguments: None,
-                })
-                .is_err()
-        );
+    fn native_api_errors_follow_the_http_status_not_the_optional_type() {
+        // The gateway status is the authoritative retryability signal:
+        // throttling and server faults are transient, every other client
+        // rejection is permanent, whatever the provider's optional `type`
+        // string says. An untyped 400 must therefore never be retried to the
+        // attempt maximum (PR24 P2-16).
+        for (status, kind, expected) in [
+            (http::StatusCode::BAD_REQUEST, None, ErrorRetryDto::Never),
+            (
+                http::StatusCode::BAD_REQUEST,
+                Some("rate_limit_exceeded"),
+                ErrorRetryDto::Never,
+            ),
+            (
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+                ErrorRetryDto::Delayed,
+            ),
+            (
+                http::StatusCode::SERVICE_UNAVAILABLE,
+                Some("invalid_request_error"),
+                ErrorRetryDto::Delayed,
+            ),
+            (
+                http::StatusCode::TOO_MANY_REQUESTS,
+                Some("rate_limit_exceeded"),
+                ErrorRetryDto::Delayed,
+            ),
+            // A status outside the client/server taxonomy keeps the `type`
+            // string as the secondary signal, and stays permanent without it.
+            (
+                http::StatusCode::FOUND,
+                Some("server_error"),
+                ErrorRetryDto::Delayed,
+            ),
+            (http::StatusCode::FOUND, None, ErrorRetryDto::Never),
+        ] {
+            assert_eq!(
+                map_openai_error(&api_error(status, kind)).retry(),
+                expected,
+                "status {status} with type {kind:?}"
+            );
+        }
     }
 
     #[test]
-    fn native_errors_preserve_safe_retry_guidance() {
-        let rate_limited = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
-            status_code: http::StatusCode::TOO_MANY_REQUESTS,
-            api_error: async_openai::error::ApiError {
-                message: "secret provider text".to_owned(),
-                r#type: Some("rate_limit_exceeded".to_owned()),
-                param: None,
-                code: None,
-            },
-        });
-        let permanent = OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
-            status_code: http::StatusCode::BAD_REQUEST,
-            api_error: async_openai::error::ApiError {
-                message: "secret provider text".to_owned(),
-                r#type: Some("invalid_request_error".to_owned()),
-                param: None,
-                code: None,
-            },
-        });
-        assert_eq!(
-            map_openai_error(&rate_limited).retry(),
-            intention_types::ErrorRetryDto::Delayed
-        );
-        assert_eq!(
-            map_openai_error(&permanent).retry(),
-            intention_types::ErrorRetryDto::Never
-        );
+    fn native_transport_errors_and_normalized_codes_never_leak_provider_text() {
         assert_eq!(
             map_openai_error(&OpenAIError::StreamError(Box::new(
                 async_openai::error::StreamError::EventStream("secret provider text".to_owned())
             )))
             .retry(),
-            intention_types::ErrorRetryDto::Delayed
+            ErrorRetryDto::Delayed
+        );
+        let error = map_openai_error(&api_error(http::StatusCode::BAD_REQUEST, None));
+        assert_eq!(error.code(), "generic_chat_provider_request_rejected");
+        assert!(
+            !serde_json::to_string(&error)
+                .expect("error serializes")
+                .contains("secret provider text")
         );
     }
 
+    fn api_error(status: http::StatusCode, kind: Option<&str>) -> OpenAIError {
+        OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
+            status_code: status,
+            api_error: async_openai::error::ApiError {
+                message: "secret provider text".to_owned(),
+                r#type: kind.map(str::to_owned),
+                param: None,
+                code: None,
+                misalignment: None,
+            },
+        })
+    }
+
     #[test]
-    #[allow(
-        deprecated,
-        reason = "The fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
-    )]
-    fn usage_only_final_chunk_maps_before_finish() {
+    fn trailing_usage_after_finish_reason_is_drained_before_finished() {
+        // Standard stream order: finish-reason chunk, trailing usage-only
+        // chunk, then end. The finish reason must not terminalize the stream
+        // before the usage chunk is polled (PR24-009).
         let mut state = GenericStreamState::new(
-            futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
-            ),
+            futures_util::stream::empty::<Result<WireChunk, OpenAIError>>(),
             ModelCancellationSignal::new(),
         );
-        state.accept_chunk(CreateChatCompletionStreamResponse {
-            id: "fixture".to_owned(),
-            choices: Vec::new(),
-            created: 0,
-            model: "fixture".to_owned(),
-            service_tier: None,
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_owned(),
-            usage: Some(async_openai::types::chat::CompletionUsage {
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        assert!(
+            state.terminal_reason.is_some(),
+            "the finish reason is recorded when its chunk arrives"
+        );
+        assert!(
+            !state.terminal,
+            "a recorded finish reason must not terminalize the stream"
+        );
+        state.accept_chunk(chunk(
+            Vec::new(),
+            Some(async_openai::types::chat::CompletionUsage {
                 prompt_tokens: 2,
                 completion_tokens: 3,
                 total_tokens: 5,
                 prompt_tokens_details: None,
                 completion_tokens_details: None,
             }),
-        });
-        state.finish(FinishReasonDto::Stop);
+        ));
+        // The native stream ends: the recorded reason becomes terminal and
+        // the collected usage is emitted before Finished.
+        state.native_ended();
         assert_eq!(
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::started()))
@@ -917,86 +1384,225 @@ mod tests {
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
         );
+        assert_eq!(state.pending.pop_front(), None);
+        assert!(state.terminal);
     }
 
     #[test]
-    fn conflicting_modern_and_legacy_calls_fail_without_duplicate_output() {
-        let mut state = GenericStreamState::new(
-            futures_util::stream::empty::<Result<CreateChatCompletionStreamResponse, OpenAIError>>(
-            ),
-            ModelCancellationSignal::new(),
-        );
-        let mut modern = FunctionToolFragments::default();
-        modern
-            .merge(
-                Some("modern".to_owned()),
-                Some("function".to_owned()),
-                Some(async_openai::types::chat::FunctionCallStream {
-                    name: Some("inspect".to_owned()),
-                    arguments: Some("{}".to_owned()),
-                }),
-            )
-            .expect("modern fixture is valid");
-        let mut legacy = FunctionToolFragments::default();
-        legacy
-            .merge_legacy(async_openai::types::chat::FunctionCallStream {
-                name: Some("inspect".to_owned()),
-                arguments: Some("{}".to_owned()),
-            })
-            .expect("legacy fixture is valid");
-        state.tools.insert((0, 0), modern);
-        state.legacy_tools.insert(0, legacy);
-        state.finish(FinishReasonDto::ToolCalls);
+    fn usage_is_emitted_at_most_once_and_post_finish_content_fails() {
+        let mut duplicated =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        let usage = || async_openai::types::chat::CompletionUsage {
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+        };
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        duplicated.accept_chunk(chunk(Vec::new(), Some(usage())));
+        assert!(matches!(
+            duplicated.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_duplicate_usage"
+        ));
+
+        let mut post_finish =
+            GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        post_finish.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        post_finish.accept_chunk(chunk(vec![choice(Some("late"), None, None, None)], None));
+        assert!(matches!(
+            post_finish.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
+        ));
+    }
+
+    #[test]
+    fn reasoning_deltas_keep_their_order_among_text_usage_and_finish() {
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        state.accept_chunk(chunk(
+            vec![choice(Some("answer"), Some("weighing"), None, None)],
+            None,
+        ));
+        state.accept_chunk(chunk(vec![choice(None, Some(" harder"), None, None)], None));
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        state.accept_chunk(chunk(
+            Vec::new(),
+            Some(async_openai::types::chat::CompletionUsage {
+                prompt_tokens: 2,
+                completion_tokens: 3,
+                total_tokens: 5,
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+            }),
+        ));
+        state.native_ended();
+
         assert_eq!(
             state.pending.pop_front(),
             Some(Ok(ModelEventDto::started()))
         );
-        assert!(matches!(
+        assert_eq!(
             state.pending.pop_front(),
-            Some(Err(error)) if error.code() == "generic_chat_conflicting_tool_call"
+            Some(Ok(
+                ModelEventDto::reasoning_delta("weighing").expect("reasoning fragment is valid")
+            ))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(
+                ModelEventDto::text_delta("answer").expect("text delta is valid")
+            ))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(
+                ModelEventDto::reasoning_delta(" harder").expect("reasoning fragment is valid")
+            ))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::usage(
+                UsageDto::reported(2, 3, 5).expect("usage is valid")
+            )))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::finished(FinishReasonDto::Stop)))
+        );
+        assert_eq!(state.pending.pop_front(), None);
+    }
+
+    #[test]
+    fn empty_reasoning_values_mark_presence_at_most_once() {
+        // The provider repeats an empty reasoning value on nearly every chunk;
+        // it stays a single presence fact instead of one event per chunk.
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        for _ in 0..3 {
+            state.accept_chunk(chunk(vec![choice(None, Some(""), None, None)], None));
+        }
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::started()))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_presence(
+                ReasoningFragmentCategoryDto::Primary
+            )))
+        );
+        assert_eq!(state.pending.pop_front(), None);
+        assert!(
+            !state.terminal,
+            "an empty reasoning fragment marks presence and never fails the stream"
+        );
+    }
+
+    #[test]
+    fn reasoning_after_finish_reason_fails_the_stream() {
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        state.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        state.accept_chunk(chunk(vec![choice(None, Some("late"), None, None)], None));
+        assert!(matches!(
+            state.pending.back(),
+            Some(Err(error)) if error.code() == "generic_chat_post_finish_content"
         ));
     }
 
-    #[allow(
-        deprecated,
-        reason = "The private fixture constructs the SDK stream-chunk shape with its deprecated fingerprint field."
-    )]
-    fn chunk(
-        choices: Vec<async_openai::types::chat::ChatChoiceStream>,
-        usage: Option<async_openai::types::chat::CompletionUsage>,
-    ) -> CreateChatCompletionStreamResponse {
-        CreateChatCompletionStreamResponse {
-            id: "fixture".to_owned(),
-            choices,
-            created: 0,
-            model: "fixture".to_owned(),
-            service_tier: None,
-            system_fingerprint: None,
-            object: "chat.completion.chunk".to_owned(),
-            usage,
-        }
+    #[test]
+    fn tool_fragments_merge_across_interleaved_reasoning_deltas() {
+        let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+        state.accept_chunk(chunk(
+            vec![choice(
+                None,
+                Some("planning the call"),
+                Some(vec![
+                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
+                        index: 0,
+                        id: Some("call".to_owned()),
+                        r#type: Some(async_openai::types::chat::FunctionType::Function),
+                        function: Some(async_openai::types::chat::FunctionCallStream {
+                            name: Some("inspect".to_owned()),
+                            arguments: Some("{\"path\"".to_owned()),
+                        }),
+                    },
+                ]),
+                None,
+            )],
+            None,
+        ));
+        state.accept_chunk(chunk(
+            vec![choice(
+                None,
+                Some(""),
+                Some(vec![
+                    async_openai::types::chat::ChatCompletionMessageToolCallChunk {
+                        index: 0,
+                        id: None,
+                        r#type: None,
+                        function: Some(async_openai::types::chat::FunctionCallStream {
+                            name: None,
+                            arguments: Some(":\"src\"}".to_owned()),
+                        }),
+                    },
+                ]),
+                None,
+            )],
+            None,
+        ));
+        state.accept_chunk(chunk(
+            vec![choice(None, None, None, Some("tool_calls"))],
+            None,
+        ));
+        state.native_ended();
+
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::started()))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_delta("planning the call")
+                .expect("reasoning fragment is valid")))
+        );
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::reasoning_presence(
+                ReasoningFragmentCategoryDto::Primary
+            )))
+        );
+        assert!(matches!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::ToolCall { call }))
+                if call.name() == "inspect" && call.arguments_json() == r#"{"path":"src"}"#
+        ));
+        assert_eq!(
+            state.pending.pop_front(),
+            Some(Ok(ModelEventDto::finished(FinishReasonDto::ToolCalls)))
+        );
+        assert_eq!(state.pending.pop_front(), None);
     }
 
-    #[allow(
-        deprecated,
-        reason = "The private fixture constructs the SDK legacy-field shape accepted by normalization."
-    )]
-    fn delta(
+    fn chunk(
+        choices: Vec<wire::WireChoice>,
+        usage: Option<async_openai::types::chat::CompletionUsage>,
+    ) -> WireChunk {
+        WireChunk { choices, usage }
+    }
+
+    fn choice(
         content: Option<&str>,
+        reasoning_content: Option<&str>,
         tool_calls: Option<Vec<async_openai::types::chat::ChatCompletionMessageToolCallChunk>>,
-        finish_reason: Option<FinishReason>,
-    ) -> async_openai::types::chat::ChatChoiceStream {
-        async_openai::types::chat::ChatChoiceStream {
+        finish_reason: Option<&str>,
+    ) -> wire::WireChoice {
+        wire::WireChoice {
             index: 0,
-            delta: ChatCompletionStreamResponseDelta {
+            delta: WireDelta {
                 content: content.map(str::to_owned),
-                function_call: None,
+                reasoning_content: reasoning_content.map(str::to_owned),
                 tool_calls,
-                role: None,
-                refusal: None,
             },
-            finish_reason,
-            logprobs: None,
+            finish_reason: finish_reason.map(str::to_owned),
         }
     }
 
@@ -1004,8 +1610,9 @@ mod tests {
     fn native_chunks_normalize_content_tools_and_terminal_finish() {
         let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         state.accept_chunk(chunk(
-            vec![delta(
+            vec![choice(
                 Some("answer"),
+                None,
                 Some(vec![
                     async_openai::types::chat::ChatCompletionMessageToolCallChunk {
                         index: 0,
@@ -1017,7 +1624,7 @@ mod tests {
                         }),
                     },
                 ]),
-                Some(FinishReason::ToolCalls),
+                Some("tool_calls"),
             )],
             None,
         ));
@@ -1046,14 +1653,8 @@ mod tests {
     fn native_chunks_reject_duplicate_finish_invalid_usage_and_incomplete_tools() {
         let mut duplicate =
             GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
-        duplicate.accept_chunk(chunk(
-            vec![delta(None, None, Some(FinishReason::Stop))],
-            None,
-        ));
-        duplicate.accept_chunk(chunk(
-            vec![delta(None, None, Some(FinishReason::Length))],
-            None,
-        ));
+        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("stop"))], None));
+        duplicate.accept_chunk(chunk(vec![choice(None, None, None, Some("length"))], None));
         assert!(matches!(
             duplicate.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_duplicate_finish"
@@ -1079,7 +1680,8 @@ mod tests {
         let mut incomplete =
             GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         incomplete.accept_chunk(chunk(
-            vec![delta(
+            vec![choice(
+                None,
                 None,
                 Some(vec![
                     async_openai::types::chat::ChatCompletionMessageToolCallChunk {
@@ -1092,7 +1694,7 @@ mod tests {
                         }),
                     },
                 ]),
-                Some(FinishReason::ToolCalls),
+                Some("tool_calls"),
             )],
             None,
         ));
@@ -1105,5 +1707,167 @@ mod tests {
             incomplete.pending.back(),
             Some(Err(error)) if error.code() == "generic_chat_invalid_tool_call"
         ));
+    }
+
+    #[test]
+    fn descriptor_options_reject_before_any_request_and_never_disclose_policy() {
+        let bearer = AuthenticationHeaderPolicyV1::new(
+            Vec::new(),
+            intention_model::CredentialTransportMode::Bearer,
+        )
+        .expect("bearer policy is valid");
+        let options = GenericChatDriverOptions::new()
+            .with_header_policy(bearer)
+            .with_reasoning_effort(ReasoningEffortLevel::High)
+            .build()
+            .expect("descriptor options build");
+        assert!(!format!("{options:?}").contains("X-Custom-Auth"));
+
+        let safe_header = AuthenticationHeaderPolicyV1::new(
+            vec!["X-Custom-Auth".to_owned()],
+            intention_model::CredentialTransportMode::SafeHeader,
+        )
+        .expect("safe-header policy is valid");
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_header_policy(safe_header)
+                .build()
+                .expect_err("safe-header transport is rejected before any request")
+                .code(),
+            "unsupported_safe_header_transport"
+        );
+
+        let material = startup_material();
+        let driver = GenericChatDriver::from_startup_material_with_options(material, options)
+            .expect("driver builds with validated options");
+        let debug = format!("{driver:?}");
+        assert!(!debug.contains("fixture-credential-not-real-12345"));
+        assert!(!debug.contains("X-Custom-Auth"));
+        assert!(!debug.contains("reasoning"));
+        assert_eq!(driver.prepared_request_count(), 0);
+    }
+
+    #[test]
+    fn unapplicable_effort_declarations_reject_before_any_request() {
+        assert_eq!(
+            GenericChatDriverOptions::new()
+                .with_reasoning_effort(ReasoningEffortLevel::Max)
+                .build()
+                .expect_err("maximum effort is rejected")
+                .code(),
+            "unsupported_reasoning_effort"
+        );
+    }
+
+    #[test]
+    fn declared_reasoning_effort_is_applied_to_the_native_request() {
+        let options = GenericChatDriverOptions::new()
+            .with_reasoning_effort(ReasoningEffortLevel::Low)
+            .build()
+            .expect("descriptor options build");
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
+            None,
+            None,
+        )
+        .expect("request is valid");
+        let wire = serde_json::to_value(
+            translate_request(&request, &options).expect("request translates"),
+        )
+        .expect("request serializes");
+        assert_eq!(wire["reasoning_effort"], "low");
+
+        let default_wire = serde_json::to_value(
+            translate_request(&request, &GenericChatDriverOptions::default())
+                .expect("request translates"),
+        )
+        .expect("request serializes");
+        assert!(default_wire.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn unlisted_wire_finish_reasons_degrade_to_unknown_instead_of_aborting() {
+        // A gateway may answer with a reason this adapter does not know (for
+        // example `stop_sequence`, `max_tokens`, or a vendor-specific value).
+        // The chunk must decode and the response must complete with the closed
+        // `Unknown` reason instead of failing the whole response (PR24 P3-31).
+        for reason in ["stop_sequence", "max_tokens", "vendor_specific_reason"] {
+            let mut state =
+                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            state.accept_chunk(decode_chunk(&format!(
+                r#"{{"choices":[{{"index":0,"delta":{{"content":"answer"}},"finish_reason":"{reason}"}}]}}"#
+            )));
+            state.native_ended();
+
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::started())),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::text_delta("answer").expect("valid text"))),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::finished(FinishReasonDto::Unknown))),
+                "reason {reason}"
+            );
+            assert_eq!(state.pending.pop_front(), None, "reason {reason}");
+        }
+    }
+
+    #[test]
+    fn known_wire_finish_reasons_keep_their_closed_mapping() {
+        for (reason, expected) in [
+            ("stop", FinishReasonDto::Stop),
+            ("length", FinishReasonDto::Length),
+            ("tool_calls", FinishReasonDto::ToolCalls),
+            ("content_filter", FinishReasonDto::ContentFilter),
+            ("error", FinishReasonDto::Error),
+            // The closed reason set has no function-call category, so the
+            // provider value keeps degrading to `Unknown` as before.
+            ("function_call", FinishReasonDto::Unknown),
+        ] {
+            let mut state =
+                GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
+            state.accept_chunk(decode_chunk(&format!(
+                r#"{{"choices":[{{"index":0,"delta":{{}},"finish_reason":"{reason}"}}]}}"#
+            )));
+            state.native_ended();
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::started())),
+                "reason {reason}"
+            );
+            assert_eq!(
+                state.pending.pop_front(),
+                Some(Ok(ModelEventDto::finished(expected))),
+                "reason {reason}"
+            );
+        }
+    }
+
+    fn decode_chunk(raw: &str) -> WireChunk {
+        serde_json::from_str(raw).expect("fixture chunk decodes through the private wire type")
+    }
+
+    fn startup_material() -> StartupProviderMaterial {
+        ResolvedConfigDto::parse_startup_material(intention_config::RawConfigInputDto::new(
+            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"fixture-credential-not-real-12345\"",
+            intention_config::ConfigSourceDto::Explicit(
+                intention_config::ConfigPathDto::parse(
+                    std::env::temp_dir()
+                        .join("intention-relay-generic-chat-options.toml")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+                .expect("fixture path is absolute"),
+            ),
+        ))
+        .expect("generic chat config resolves")
     }
 }

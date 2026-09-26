@@ -9,7 +9,7 @@ use intention_config::{ConfigSnapshotDto, ProviderKindDto, ResolvedConfigDto};
 use intention_types::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
 
 const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
-const VALID_RESOLVED: &str = r#"{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"source_kind":"explicit"}"#;
+const VALID_RESOLVED: &str = r#"{"schema_version":{"major":1,"minor":0},"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"source_kind":"explicit"}"#;
 
 #[test]
 fn config_snapshot_fixture_decodes_and_round_trips_without_credential() {
@@ -25,6 +25,14 @@ fn config_snapshot_fixture_decodes_and_round_trips_without_credential() {
     assert_eq!(snapshot.resolved().provider().model(), "example-chat-model");
     assert_eq!(snapshot.captured_at().unix_seconds(), 1_700_000_000);
     assert_eq!(snapshot.resolved().source_kind().as_str(), "explicit");
+    assert_eq!(
+        snapshot
+            .resolved()
+            .provider_execution()
+            .attempt_timeout_seconds(),
+        30
+    );
+    assert_eq!(snapshot.resolved().provider_execution().max_attempts(), 2);
 
     let encoded = serde_json::to_string(&snapshot).expect("test serialization must succeed");
     let decoded: ConfigSnapshotDto =

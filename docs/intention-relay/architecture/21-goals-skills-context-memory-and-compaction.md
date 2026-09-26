@@ -270,6 +270,14 @@ capability. Python/IPython may render a selected Skill as convenience
 documentation only; it cannot import a Skill package, execute a body, or bypass
 the typed Skill disclosure and tool gateway paths.
 
+The project script library
+([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)) is not
+a Skill body, supplement, or package reference. A Skill may name a library module
+only as untrusted instructional text, and the module itself stays an ordinary
+project file created and run through the registered tools. This document adds no
+script supplement kind, and a script never becomes Skill content, Skill
+authority, or Skill disclosure.
+
 ```text
 SkillSelectionV1
   skill_id

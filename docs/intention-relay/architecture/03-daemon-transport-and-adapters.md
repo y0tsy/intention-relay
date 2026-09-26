@@ -41,11 +41,19 @@ No TCP listener is opened in v1. This avoids treating localhost as an authentica
 
 M2 accepts each local connection in the daemon host, completes protocol hello,
 reads one request, writes its correlated response, and closes the connection.
-The request is served synchronously by its dedicated connection thread. A slow
-client therefore blocks only that thread during its blocking I/O operation; the
-1 MiB frame bound prevents unbounded message allocation. M2 does not yet define
-subscription buffering, read/write deadlines beyond the bounded connect wait,
-or eviction of slow peers. Those are later transport-hardening decisions.
+The request is served synchronously by its dedicated connection thread. Every
+synchronous connection carries a bounded read and write deadline
+(`SYNC_IO_TIMEOUT`, ten seconds), applied to client connect and listener accept
+on Unix-domain sockets; Windows named pipes keep their documented blocking
+behavior, a recorded limitation rather than a second bound (the locked
+`interprocess` transport exposes no per-call named-pipe timeout, so only the
+bounded connect wait applies there), anchored at `apply_sync_io_timeout` in
+`crates/intention-transport/src/lib.rs` and at repair R28 in
+`pr24-review-1.md` Appendix I.3. A peer that accepts a connection and never
+answers therefore fails with a typed unavailable error instead of blocking its
+thread indefinitely; the
+1 MiB frame bound prevents unbounded message allocation. Subscription buffering
+and eviction of slow peers remain later transport-hardening decisions.
 
 ### M4 asynchronous transport foundation
 
@@ -65,20 +73,23 @@ The foundation preserves the 4-byte big-endian JSON frame format and its 1 MiB
 payload cap. Oversize frames are rejected before payload allocation or write as
 `local_protocol_frame_too_large`; malformed JSON is
 `invalid_local_protocol_frame`; incomplete headers, incomplete payloads, and
-closed peers are `local_daemon_connection_unavailable`. The foundation itself introduces no
-read/write deadline, runtime owner, daemon/client host loop, persistent
-subscription semantics, fan-out, queue capacity, slow-peer policy, or resync
-behavior. M3 consumers continue to use their synchronous one-request connection
-behavior unchanged.
+closed peers are `local_daemon_connection_unavailable`. The foundation itself
+introduces no read/write deadline, runtime owner, daemon/client host loop,
+persistent subscription semantics, fan-out, queue capacity, slow-peer policy,
+or resync behavior; the retained synchronous connections keep their bounded
+`SYNC_IO_TIMEOUT` read and write deadline. M3 consumers continue to use their
+synchronous one-request connection behavior unchanged.
 
 The asynchronous implementation uses the locked `interprocess` Tokio feature
 with its private local Unix-socket / Windows-named-pipe mapping. It preserves
-Unix parent mode `0700`, socket mode `0600`, listener-owned cleanup, and refusal
-to reclaim active endpoint names. Its required transport test target exercises
-real endpoint hello negotiation, ordered correlated multi-frame exchanges,
-concurrent split reader/writer roles, all framing safety outcomes, retained M3
-synchronous behavior, and Windows named-pipe multi-frame fixtures under
-`cfg(windows)`.
+Unix parent mode `0700`, socket mode `0600`, and refusal to reclaim active
+endpoint names; an identity-verified reclaim at the next bind is the only
+endpoint-removal path, a dropped listener never unlinks its endpoint, and a
+clean and an unclean exit look identical on disk. Its required transport test
+target exercises real endpoint hello negotiation, ordered correlated multi-frame
+exchanges, concurrent split reader/writer roles, all framing safety outcomes,
+retained M3 synchronous behavior, and Windows named-pipe multi-frame fixtures
+under `cfg(windows)`.
 
 ### M4 persistent run-stream host
 
@@ -185,7 +196,7 @@ At connection time, client and daemon exchange:
 - last observed session event sequence plus optional run scope for subscriptions,
   when available.
 
-An incompatible major protocol version fails closed with `ErrorDto { category: unavailable }`. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads.
+An incompatible major protocol version fails closed with `ErrorDto { category: unavailable }`. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads. This is the transport-handshake category only; a decode-time schema-version rejection at a public DTO boundary is a `validation` failure (architecture 02, "Validation ownership").
 
 M2 subscriptions return either a consistent session snapshot with a contiguous
 event tail or a typed resync instruction. The client reducer accepts ordered
@@ -205,7 +216,8 @@ snapshot** and an empty contiguous tail at that snapshot's included sequence,
 or a typed resync when the session cannot be supplied. It is **replay-only**,
 not a retained connection and not a live event feed. Historical projection
 reconstruction is not represented in M3. The post-commit publication seam is
-intentionally a no-op in M3.
+removed (ADR 0038 Wave 7): committed evidence is published only through the
+daemon host's commit-observation path, never through a no-op session seam.
 
 M3 durability, unscoped snapshot/tail replay, ordering, and resync remain
 unchanged. Persistent delivery is implemented only for the separate M4
@@ -306,7 +318,7 @@ They must use the same command, query, snapshot, and event DTOs as the Tauri bri
 
 On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
-1. resolve and open the platform state database, applying supported SQLite migrations;
+1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
 3. snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's mandatory terminal-promotion transaction, with durable state-change event and snapshots;
 4. do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass; and

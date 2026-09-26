@@ -16,14 +16,20 @@ target is activated by this decision.
 ## Decision
 
 Milestone 5+ is the single activation home for the full post-M5 stack
-(architectures 25-30, ADR 0021-0034, and all detail packages) and the hard
+(architectures 25-29, ADR 0021-0034, and all detail packages) and the hard
 prerequisite of Milestones 6-9 in the roadmap dependency graph
-(`K[M5+] --> F/G/H/I`). The milestone is delivered as a pre-approved sequence
+(`K[M5+] --> F/G/H/I`). The post-M4 Mandate packages (architectures 13-21) are
+delivered by the separate Mandate-track milestones 10-12, which consume this
+milestone's foundation and whose contract records the four slices below name;
+the Mandate track does not extend the slice sequence or renumber M6-M9. The
+milestone is delivered as a pre-approved sequence
 of activating slices, all approved together as one package:
 
 1. **Contracts and versions** — the versioned protocol/schema/
    execution-meaning/DTO contract ledger for the full post-M5 stack, including
-   `run-execution-meaning-v3`/`v4`, the negotiated capability families
+   `run-execution-meaning-v4` (the single live record version; v3 is removed by
+   [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)), the
+   negotiated capability families
    (`provider_profiles_v1`, `session_fork_v1`,
    `normalized_reasoning_stream_v1`, `agent_activity_v1`,
    `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`),
@@ -34,11 +40,13 @@ of activating slices, all approved together as one package:
 2. **Control plane** — the ADR 0020 cluster and provider session selection
    (architectures 25/29/22): controlled live reload, credential rotation,
    provider health checks, model discovery, pricing policy, profile UI and
-   raw-TOML/configuration editing, arbitrary authentication headers,
-   provider-native preservation controls, server-side parser setup, session
+   raw-TOML/configuration editing, arbitrary authentication headers, session
    defaults and per-turn/fork overrides, unavailable-queue promotion and
    reconciliation, `provider_profiles_v1`, pending-removal and degraded
-   recovery, and the provider reasoning/catalog surface.
+   recovery, and the provider reasoning/catalog surface. The D-16 audit
+   removed the unconsumed provider-native preservation-control and
+   server-side-parser contracts, the Responses reasoning-mode projection, the
+   reasoning-usage DTOs, and the model-capability envelope.
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers, dossiers/checkpoints,
@@ -58,7 +66,7 @@ inside its slice with its own contract, transaction, and outcome test.
 
 ## Rationale
 
-Every post-M5 package (architectures 25-30 and ADR 0021-0034) closes with
+Every post-M5 package (architectures 25-29 and ADR 0021-0034) closes with
 "activation remains excluded pending a later M5+ specification", and the
 post-M5 packages declare DTO, wire, storage, and quality values that M6-M9
 consume. Without a single activation home that fixes the shared contract

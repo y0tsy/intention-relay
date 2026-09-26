@@ -41,10 +41,10 @@ def main() -> None:
         fail("advisories must use version 2 with an explicit ignore list")
     expected_advisory_ignores: set[str] = set()
     if set(advisories["ignore"]) != expected_advisory_ignores:
-        fail("advisories.ignore must be empty after the async-openai 0.41.3 migration (M4-era backoff-chain acknowledgements removed)")
+        fail("advisories.ignore must stay empty: advisories are resolved by upgrading the graph (the 2026-09-23 refresh upgraded rustls to 0.23.45 for RUSTSEC-2026-0285)")
     outdated_ignores = outdated_policy.get("outdated_ignores")
     if not isinstance(outdated_ignores, dict) or outdated_ignores.get("crates") != []:
-        fail("outdated_ignores.crates must be empty after the async-openai 0.41.3 migration (hold removed)")
+        fail("outdated_ignores.crates must stay empty: stale direct dependencies are upgraded (the 2026-09-23 refresh moved openrouter-rs to 0.16.0 and async-openai to 0.42.0)")
     allowed = licenses.get("allow")
     required_licenses = {"Apache-2.0", "MIT", "Unicode-3.0", "0BSD"}
     if not isinstance(allowed, list) or not required_licenses.issubset(allowed):

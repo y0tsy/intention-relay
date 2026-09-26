@@ -11,12 +11,12 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-artifacts-clean deps quality-self-test quality-self-test-in-place quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-selftest ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-start-selftest metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps metrics-finish-selftest
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-artifacts-clean deps quality-self-test quality-self-test-in-place e2e-real-api quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-selftest ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-start-selftest metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps metrics-finish-selftest
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
 	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all deps quality-self-test quality-self-test-in-place quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-selftest ci-deps' \
-	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean' \
+	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
 
@@ -81,6 +81,39 @@ quality-self-test: tools-check ## Prove isolated invalid fixtures fail their int
 
 quality-self-test-in-place: tools-check ## CI in-place fixture check with git-restore scoping (reuses warm Cargo artifacts).
 	$(PYTHON) quality/self_test.py --in-place
+
+e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required; reads .env when present).
+	@if [ -f .env ]; then \
+	  while IFS='=' read -r name value; do \
+	    case "$$name" in INTENTION_*) ;; *) continue ;; esac; \
+	    if [ -z "$$(printenv "$$name" 2>/dev/null || true)" ]; then export "$$name=$$value"; fi; \
+	  done < .env; \
+	fi
+	if [ -z "$${INTENTION_REAL_API_KEY:-}" ] || [ -z "$${INTENTION_REAL_API_MODEL:-}" ]; then
+	  printf '%s\n' \
+	    'usage: INTENTION_REAL_API_KEY=<secret> INTENTION_REAL_API_MODEL=<model-id> make e2e-real-api' \
+	    '' \
+	    'Values come from the environment or from a local gitignored .env file' \
+	    '(explicit environment values take precedence; .env is never committed).' \
+	    '' \
+	    'Required:' \
+	    '  INTENTION_REAL_API_KEY      provider credential; secret material that is never logged or written to reports' \
+	    '  INTENTION_REAL_API_MODEL    provider model identifier' \
+	    '' \
+	    'Optional:' \
+	    '  INTENTION_REAL_API_KIND     provider kind (default: generic-chat-completion-api)' \
+	    '  INTENTION_REAL_API_ENDPOINT explicit endpoint override for self-hosted providers' \
+	    '' \
+	    'This target makes real network calls and is never part of quick, check, verify, or the CI gates.' >&2
+	  exit 2
+	fi
+	mkdir -p quality/reports/real-api-e2e
+	export INTENTION_REAL_API_E2E=1
+	# Forward the optional selectors only when they carry a value, so the tests
+	# observe an absent option instead of an empty-string override.
+	if [ -n "$${INTENTION_REAL_API_KIND:-}" ]; then export INTENTION_REAL_API_KIND; else unset INTENTION_REAL_API_KIND; fi
+	if [ -n "$${INTENTION_REAL_API_ENDPOINT:-}" ]; then export INTENTION_REAL_API_ENDPOINT; else unset INTENTION_REAL_API_ENDPOINT; fi
+	$(CARGO) nextest run --locked --package intention-daemon --test real_api_e2e --run-ignored only --no-capture 2>&1 | tee quality/reports/real-api-e2e/last-run.log
 
 quick: tools-check fmt-check lint ## Fast default local quality loop.
 	$(PYTHON) quality/run_profiles.py test --profile default

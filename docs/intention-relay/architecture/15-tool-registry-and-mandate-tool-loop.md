@@ -190,6 +190,8 @@ For Mandate path-bearing calls, typed safe observation records path form, base r
 
 Build admits otherwise compatible selected descriptors. In Plan mode, ordinary project `write` and `edit` remain incompatible, while physical-plan mutation remains a plan-owner operation. `execute` is directly admissible when otherwise compatible but is not a sandbox. `ask_user` is a normal `user_interaction` tool, not confirmation transport; after it starts, the Mandate run remains `Running`.
 
+The project script library (`.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)) follows these same Mandate semantics: its logical relative path is a default base for the existing frozen descriptors and never an access boundary, `write` and `edit` create or change a module while `execute` or a kernel foreground cell runs it, and no new `ToolId`, registry slot, listener, or primitive path is admitted for it. Per-cell script-import evidence for imported library modules is published as run facts through this architecture's post-commit publication gate under architecture 20's cell rules.
+
 ## Model-to-tool-to-model lifecycle
 
 The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical `ToolCallId`; providers, adapters, and tools choose none of them. Provider-native call IDs remain private. One run has sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty ordered group; a `ToolCallId` is unique and never reused. A group contains at most **16 calls**; a provider step that emits more than 16 calls fails closed before any local effect with the typed `provider_tool_group_invalid` outcome. The same closed outcome applies to a step that has calls but lacks the `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group, or later provider facts for an already closed step.
@@ -336,7 +338,7 @@ Recovery completes before readiness. It classifies unfinished calls from durable
 
 Future compact snapshots contain only safe step/group/call state, never raw output, provider-native IDs, resources, or credentials. Exact wire tags, pages, and storage schema remain deferred.
 
-M3 session replay and M4 run streaming remain unchanged. In particular, an M4 `ToolCallRecorded` remains evidence followed by `tool_execution_unavailable`. It never starts future local execution. Historical records gain no synthetic registry, descriptor, tool-loop, Mandate, verifier, child, MCP, Skill, policy, or execution-kind state.
+M3 session replay and M4 run streaming remain unchanged. An M4 `ToolCallRecorded` remains durable tool-call evidence; the M4-era no-tool-port `tool_execution_unavailable` denial is superseded by ADR 0038 binding decision 2, so the model-tool-loop executor requires a tool executor and provider tool calls execute through the durable tool path. Historical records gain no synthetic registry, descriptor, tool-loop, Mandate, verifier, child, MCP, Skill, policy, or execution-kind state.
 
 ## Dependencies and non-goals
 

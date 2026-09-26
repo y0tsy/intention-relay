@@ -1,7 +1,7 @@
 //! Additive protocol contract-family DTOs.
 use intention_domain::canonical::TagRegistry;
 use intention_types::{DtoResult, ErrorDto};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 fn valid_text(value: &str, max: usize, code: &'static str) -> DtoResult<String> {
     let value = value.trim();
@@ -34,40 +34,63 @@ fn bounded<T>(items: Vec<T>, max: usize, code: &'static str) -> DtoResult<Vec<T>
 }
 /// Whether `value` looks like a credential.
 ///
-/// A value is credential-shaped when it carries any control character
-/// anywhere, contains the case-insensitive `key` or `token` substring, starts
-/// an `sk-` secret anywhere in the string, or holds a case-insensitive
-/// `bearer` token followed by a non-empty token. Trimmed and whitespace-padded
-/// variants are detected too. Detection is intentionally over-inclusive: it is
-/// used to fail closed on provider-adjacent fields.
+/// Identifier role of the shared credential-shape policy owned by
+/// `intention-domain::canonical` (PR24-035): a value is credential-shaped
+/// when it carries any control character anywhere, contains the
+/// case-insensitive `key` or `token` substring, starts an `sk-` secret
+/// anywhere in the string, or holds a case-insensitive `bearer` token
+/// followed by a non-empty token. Trimmed and whitespace-padded variants are
+/// detected too. Detection is intentionally over-inclusive: it is used to
+/// fail closed on provider-adjacent fields.
 #[must_use]
 fn credential_shaped(value: &str) -> bool {
-    value.chars().any(char::is_control) || {
-        let lower = value.trim().to_ascii_lowercase();
-        lower.contains("key")
-            || lower.contains("token")
-            || lower.contains("sk-")
-            || bearer_credential(&lower)
-    }
+    intention_domain::canonical::credential_shaped_identifier(value)
 }
 
-/// Whether `lower` (already lowercased) carries a Bearer-token shape: the
-/// word `bearer` followed, possibly after whitespace or control characters,
-/// by a non-empty token.
-#[must_use]
-fn bearer_credential(lower: &str) -> bool {
-    lower.match_indices("bearer").any(|(index, _)| {
-        let after = &lower[index + "bearer".len()..];
-        let Some(first) = after.chars().next() else {
-            return false;
-        };
-        (first.is_whitespace() || first.is_control())
-            && after
-                .trim_start_matches(|c: char| c.is_whitespace() || c.is_control())
-                .chars()
-                .next()
-                .is_some()
-    })
+/// Whether one control-plane `schema_version` text is a `major.minor`
+/// decimal version with no other text.
+fn schema_version_shape_valid(value: &str) -> bool {
+    let mut components = value.split('.');
+    let major = components.next().unwrap_or_default();
+    let minor = components.next().unwrap_or_default();
+    components.next().is_none()
+        && !major.is_empty()
+        && !minor.is_empty()
+        && major.bytes().all(|byte| byte.is_ascii_digit())
+        && minor.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Requires one control-plane `schema_version` text to be a `major.minor`
+/// decimal version naming the current DTO schema version exactly.
+///
+/// Control-plane command, query, and projection DTOs carry the schema version
+/// as `major.minor` text rather than as a typed version, so the exact-current
+/// rule is checked here: on the wire decode path through each family's
+/// `Deserialize`, and again on daemon admission through `validate()`. The
+/// `major.minor` shape is checked before the version comparison, so malformed
+/// text fails with the calling family's own `code` instead of the version
+/// error.
+///
+/// # Errors
+///
+/// Returns `code` for a value that is not a `major.minor` decimal version and
+/// `incompatible_protocol_version` for a version other than the current one.
+fn require_current_schema_version(value: &str, code: &'static str) -> DtoResult<()> {
+    if !schema_version_shape_valid(value) {
+        return Err(ErrorDto::validation(
+            code,
+            "schema version text is malformed",
+        ));
+    }
+    let current = crate::CURRENT_DTO_SCHEMA_VERSION;
+    if value == format!("{}.{}", current.major(), current.minor()) {
+        Ok(())
+    } else {
+        Err(ErrorDto::validation(
+            "incompatible_protocol_version",
+            "schema version must equal the current DTO schema version",
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -249,21 +272,111 @@ pub struct ForkSessionCommandDto {
     pub requested_title: Option<String>,
     pub future_profile_override_present: bool,
     pub future_profile_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_profile_revision: Option<String>,
 }
 impl ForkSessionCommandDto {
-    /// Validates the fork command's preview digest and optional title.
+    /// Validates the fork command's preview digest, optional title, and
+    /// optional future provider override.
     ///
     /// # Errors
     ///
-    /// Returns `invalid_digest` for a malformed preview digest and
-    /// `invalid_title` for a blank, over-long, or control-bearing title.
+    /// Returns `invalid_digest` for a malformed preview digest,
+    /// `invalid_title` for a blank, over-long, or control-bearing title, and
+    /// `provider_profile_override_invalid` when the override flag is set
+    /// without an override, an expected profile revision is supplied without
+    /// an override, or an override value is blank, over-long, or
+    /// control-bearing; `credentials_forbidden` for a credential-shaped
+    /// override value.
     pub fn validate(&self) -> DtoResult<()> {
         digest(&self.expected_preview_digest)?;
         if let Some(title) = &self.requested_title {
             valid_text(title, 128, "invalid_title")?;
         }
-        Ok(())
+        validate_profile_override_pair(
+            self.future_profile_override_present,
+            self.future_profile_override.as_deref(),
+            self.expected_profile_revision.as_deref(),
+        )
     }
+
+    /// Binds the optional future provider override of the forked session.
+    ///
+    /// The builder keeps the existing all-fields constructor working while
+    /// validating the override pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_profile_override_invalid` when an expected profile
+    /// revision is supplied without an override, or an override value is
+    /// blank, over-long, or control-bearing, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn with_profile_override(
+        mut self,
+        profile_id: Option<String>,
+        expected_profile_revision: Option<String>,
+    ) -> DtoResult<Self> {
+        validate_profile_override_pair(
+            profile_id.is_some(),
+            profile_id.as_deref(),
+            expected_profile_revision.as_deref(),
+        )?;
+        self.future_profile_override_present = profile_id.is_some();
+        self.future_profile_override = profile_id;
+        self.expected_profile_revision = expected_profile_revision;
+        Ok(self)
+    }
+}
+
+/// Validates one optional future/expected provider override pair.
+///
+/// # Errors
+///
+/// Returns `provider_profile_override_invalid` when the presence flag is set
+/// without an override value, an expected revision is supplied without an
+/// override, or a value is blank, over-long, or control-bearing, and
+/// `credentials_forbidden` for a credential-shaped value.
+fn validate_profile_override_pair(
+    present: bool,
+    profile_id: Option<&str>,
+    expected_profile_revision: Option<&str>,
+) -> DtoResult<()> {
+    if present && profile_id.is_none() {
+        return Err(ErrorDto::validation(
+            "provider_profile_override_invalid",
+            "a provider override presence flag requires an override value",
+        ));
+    }
+    if !present && profile_id.is_some() {
+        return Err(ErrorDto::validation(
+            "provider_profile_override_invalid",
+            "a provider override value requires its presence flag",
+        ));
+    }
+    if expected_profile_revision.is_some() && profile_id.is_none() {
+        return Err(ErrorDto::validation(
+            "provider_profile_override_invalid",
+            "an expected profile revision requires a provider override",
+        ));
+    }
+    for value in [profile_id, expected_profile_revision]
+        .into_iter()
+        .flatten()
+    {
+        if value.is_empty() || value.len() > 63 || value.chars().any(char::is_control) {
+            return Err(ErrorDto::validation(
+                "provider_profile_override_invalid",
+                "provider profile override values are invalid",
+            ));
+        }
+        if credential_shaped(value) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+    }
+    Ok(())
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ForkSessionResultDto {
@@ -302,6 +415,25 @@ impl ForkPreviewDto {
 pub struct StartForkRunCommandDto {
     pub session_id: String,
     pub profile_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_profile_revision: Option<String>,
+}
+impl StartForkRunCommandDto {
+    /// Validates the start-fork-run provider override pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_profile_override_invalid` when an expected profile
+    /// revision is supplied without an override, or an override value is
+    /// blank, over-long, or control-bearing, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_profile_override_pair(
+            self.profile_override.is_some(),
+            self.profile_override.as_deref(),
+            self.expected_profile_revision.as_deref(),
+        )
+    }
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetConversationTreeQueryDto {
@@ -1533,56 +1665,84 @@ pub enum ToolTerminalOutcome {
     ExecutionUnavailable,
     ExternalEffectUnknown,
 }
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LegacyM4SelectionBindingDto {
-    pub legacy_config_revision_id: String,
-    pub legacy_snapshot_schema: String,
-    pub legacy_safe_selection: String,
-    pub default_profile_id: String,
-    pub default_profile_revision_id: String,
-    pub kind_descriptor_revision_id: String,
-    pub capability_subset: Vec<String>,
-    pub execution_policy: String,
-    pub driver_contract_revision: String,
+
+// ---------------------------------------------------------------------------
+// Slice 2 control-plane protocol surface.
+//
+// Every type in this section is additive and gated behind the negotiated
+// `provider_profiles_v1` capability: no existing M3/M4/M5 DTO or wire shape
+// changes, and no field here carries credential material.
+// ---------------------------------------------------------------------------
+
+/// The closed readiness state of one provider catalog entry.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReadinessDto {
+    /// The provider is ready to serve requests.
+    Ready,
+    /// The provider is disabled and must not be selected.
+    Disabled,
+    /// The provider is currently unavailable.
+    Unavailable,
 }
-impl LegacyM4SelectionBindingDto {
-    /// Validates the binding fields and legacy reference.
+
+/// A credential-free, pageable provider catalog query.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetProviderCatalogQueryDto {
+    pub schema_version: String,
+    pub page_token: Option<String>,
+    pub expected_catalog_revision_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for GetProviderCatalogQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderCatalogQueryDto {
+            schema_version: String,
+            page_token: Option<String>,
+            expected_catalog_revision_id: Option<String>,
+        }
+        let raw = RawGetProviderCatalogQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            page_token: raw.page_token,
+            expected_catalog_revision_id: raw.expected_catalog_revision_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetProviderCatalogQueryDto {
+    /// Validates the bounded, credential-free catalog query fields.
     ///
     /// # Errors
     ///
-    /// Returns `legacy_selection_reference_invalid` when the safe selection
-    /// is not a lowercase canonical `legacy-uuid:` reference with a valid
-    /// UUID variant and version, `legacy_selection_binding_invalid` for a
-    /// blank, over-long, or control-bearing field or capability entry, and
-    /// `credentials_forbidden` for a credential-shaped value.
+    /// Returns `provider_catalog_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, or for a blank,
+    /// over-long, or control-bearing catalog revision reference,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, `invalid_page_token` for a blank, over-long, or
+    /// control-bearing page token, and `credentials_forbidden` for a
+    /// credential-shaped value.
     pub fn validate(&self) -> DtoResult<()> {
-        if !is_canonical_legacy_uuid_reference(&self.legacy_safe_selection) {
-            return Err(ErrorDto::validation(
-                "legacy_selection_reference_invalid",
-                "legacy selection must be a canonical legacy-uuid reference",
-            ));
+        valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_invalid")?;
+        if let Some(revision) = &self.expected_catalog_revision_id {
+            valid_text(revision, 256, "provider_catalog_invalid")?;
         }
-        let fields = [
-            &self.legacy_config_revision_id,
-            &self.legacy_snapshot_schema,
-            &self.legacy_safe_selection,
-            &self.default_profile_id,
-            &self.default_profile_revision_id,
-            &self.kind_descriptor_revision_id,
-            &self.execution_policy,
-            &self.driver_contract_revision,
-        ];
-        for field in fields {
-            valid_text(field, 256, "legacy_selection_binding_invalid")?;
+        if let Some(token) = &self.page_token {
+            valid_text(token, 1024, "invalid_page_token")?;
         }
-        for capability in &self.capability_subset {
-            valid_text(capability, 256, "legacy_selection_binding_invalid")?;
-        }
-        if fields.iter().any(|value| credential_shaped(value))
+        if credential_shaped(&self.schema_version)
             || self
-                .capability_subset
-                .iter()
-                .any(|value| credential_shaped(value))
+                .expected_catalog_revision_id
+                .as_deref()
+                .is_some_and(credential_shaped)
+            || self.page_token.as_deref().is_some_and(credential_shaped)
         {
             return Err(ErrorDto::validation(
                 "credentials_forbidden",
@@ -1593,39 +1753,3093 @@ impl LegacyM4SelectionBindingDto {
     }
 }
 
-/// Returns whether `value` is exactly `legacy-uuid:<canonical UUID>` where the
-/// UUID is the lowercase hyphenated canonical form with a valid RFC 4122
-/// variant and version.
-#[must_use]
-pub fn is_canonical_legacy_uuid_reference(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("legacy-uuid:") else {
-        return false;
-    };
-    let bytes = rest.as_bytes();
-    if bytes.len() != 36 {
-        return false;
+/// One credential-free provider catalog entry.
+///
+/// The entry names where credentials are transported and whether they are
+/// configured; it never carries credential material, raw payloads, or paths.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderCatalogEntryDto {
+    pub profile_id: String,
+    pub profile_revision_id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub provider_kind_id: String,
+    pub kind_descriptor_revision_id: String,
+    pub model_id: String,
+    pub normalized_endpoint: Option<String>,
+    pub effective_execution_policy: String,
+    pub capability_subset: Vec<String>,
+    pub credential_transport_mode: CredentialTransportMode,
+    pub credential_transport_safe_header_name: Option<String>,
+    pub credential_configured: bool,
+    pub driver_declared_capabilities: Vec<String>,
+    pub readiness: ProviderReadinessDto,
+}
+
+impl<'de> Deserialize<'de> for ProviderCatalogEntryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogEntryDto {
+            profile_id: String,
+            profile_revision_id: String,
+            display_name: String,
+            enabled: bool,
+            provider_kind_id: String,
+            kind_descriptor_revision_id: String,
+            model_id: String,
+            normalized_endpoint: Option<String>,
+            effective_execution_policy: String,
+            capability_subset: Vec<String>,
+            credential_transport_mode: CredentialTransportMode,
+            credential_transport_safe_header_name: Option<String>,
+            credential_configured: bool,
+            driver_declared_capabilities: Vec<String>,
+            readiness: ProviderReadinessDto,
+        }
+        let raw = RawProviderCatalogEntryDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            profile_revision_id: raw.profile_revision_id,
+            display_name: raw.display_name,
+            enabled: raw.enabled,
+            provider_kind_id: raw.provider_kind_id,
+            kind_descriptor_revision_id: raw.kind_descriptor_revision_id,
+            model_id: raw.model_id,
+            normalized_endpoint: raw.normalized_endpoint,
+            effective_execution_policy: raw.effective_execution_policy,
+            capability_subset: raw.capability_subset,
+            credential_transport_mode: raw.credential_transport_mode,
+            credential_transport_safe_header_name: raw.credential_transport_safe_header_name,
+            credential_configured: raw.credential_configured,
+            driver_declared_capabilities: raw.driver_declared_capabilities,
+            readiness: raw.readiness,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
     }
-    let is_lower_hex = |byte: u8| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase();
-    for (index, &byte) in bytes.iter().enumerate() {
-        if matches!(index, 8 | 13 | 18 | 23) {
-            if byte != b'-' {
-                return false;
+}
+
+impl ProviderCatalogEntryDto {
+    /// Validates the bounded, credential-free catalog entry fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_entry_invalid` for a blank, over-long, or
+    /// control-bearing text field or capability entry, or a page exceeding
+    /// its 256-capability bound, `invalid_endpoint` for an endpoint carrying
+    /// userinfo, query, fragment, or control characters, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.profile_id,
+            &self.profile_revision_id,
+            &self.display_name,
+            &self.provider_kind_id,
+            &self.kind_descriptor_revision_id,
+            &self.model_id,
+            &self.effective_execution_policy,
+        ] {
+            valid_text(field, 256, "provider_catalog_entry_invalid")?;
+        }
+        if let Some(endpoint) = &self.normalized_endpoint
+            && (endpoint.contains(['?', '#', '@']) || endpoint.chars().any(char::is_control))
+        {
+            return Err(ErrorDto::validation(
+                "invalid_endpoint",
+                "endpoint is invalid",
+            ));
+        }
+        if let Some(header) = &self.credential_transport_safe_header_name {
+            let header = header.trim();
+            if header.is_empty()
+                || header.chars().count() > 128
+                || header.chars().any(char::is_control)
+            {
+                return Err(ErrorDto::validation(
+                    "provider_catalog_entry_invalid",
+                    "safe header name is invalid",
+                ));
             }
-            continue;
         }
-        if !is_lower_hex(byte) {
-            return false;
+        for list in [&self.capability_subset, &self.driver_declared_capabilities] {
+            if list.len() > 256 {
+                return Err(ErrorDto::validation(
+                    "provider_catalog_entry_invalid",
+                    "provider catalog entry exceeds its 256-capability bound",
+                ));
+            }
+            for capability in list {
+                valid_text(capability, 256, "provider_catalog_entry_invalid")?;
+            }
+        }
+        let mut fields: Vec<&str> = vec![
+            &self.profile_id,
+            &self.profile_revision_id,
+            &self.display_name,
+            &self.provider_kind_id,
+            &self.kind_descriptor_revision_id,
+            &self.model_id,
+            &self.effective_execution_policy,
+        ];
+        if let Some(endpoint) = &self.normalized_endpoint {
+            fields.push(endpoint);
+        }
+        if let Some(header) = &self.credential_transport_safe_header_name {
+            fields.push(header);
+        }
+        fields.extend(self.capability_subset.iter().map(String::as_str));
+        fields.extend(self.driver_declared_capabilities.iter().map(String::as_str));
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A paged, profile-id-sorted provider catalog projection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderCatalogPageDto {
+    pub schema_version: String,
+    pub catalog_revision_id: String,
+    pub entries: Vec<ProviderCatalogEntryDto>,
+    pub next_page_token: Option<String>,
+    pub has_more: bool,
+}
+
+impl<'de> Deserialize<'de> for ProviderCatalogPageDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogPageDto {
+            schema_version: String,
+            catalog_revision_id: String,
+            entries: Vec<ProviderCatalogEntryDto>,
+            next_page_token: Option<String>,
+            has_more: bool,
+        }
+        let raw = RawProviderCatalogPageDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            catalog_revision_id: raw.catalog_revision_id,
+            entries: raw.entries,
+            next_page_token: raw.next_page_token,
+            has_more: raw.has_more,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderCatalogPageDto {
+    /// Validates the sorted, bounded, credential-free catalog page.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, a blank, over-long,
+    /// or control-bearing text field, a page exceeding its 256-entry bound,
+    /// or an inconsistent `has_more`/next-token pair,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, `provider_catalog_unsorted` when entries are not strictly
+    /// sorted by profile id (or repeat a profile id), `invalid_page_token`
+    /// for a malformed continuation token, and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_catalog_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_invalid")?;
+        valid_text(&self.catalog_revision_id, 256, "provider_catalog_invalid")?;
+        if self.entries.len() > 256 {
+            return Err(ErrorDto::validation(
+                "provider_catalog_invalid",
+                "provider catalog page exceeds its 256-entry bound",
+            ));
+        }
+        for pair in self.entries.windows(2) {
+            if pair[0].profile_id >= pair[1].profile_id {
+                return Err(ErrorDto::validation(
+                    "provider_catalog_unsorted",
+                    "provider catalog entries must be strictly sorted by profile id",
+                ));
+            }
+        }
+        for entry in &self.entries {
+            entry.validate()?;
+        }
+        match (&self.next_page_token, self.has_more) {
+            (Some(token), true) => {
+                valid_text(token, 1024, "invalid_page_token")?;
+            }
+            (None, false) => {}
+            _ => {
+                return Err(ErrorDto::validation(
+                    "provider_catalog_invalid",
+                    "has_more requires a next page token and vice versa",
+                ));
+            }
+        }
+        if credential_shaped(&self.schema_version)
+            || credential_shaped(&self.catalog_revision_id)
+            || self
+                .next_page_token
+                .as_deref()
+                .is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A credential-free provider catalog status query.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetProviderCatalogStatusQueryDto {
+    pub schema_version: String,
+}
+
+impl<'de> Deserialize<'de> for GetProviderCatalogStatusQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderCatalogStatusQueryDto {
+            schema_version: String,
+        }
+        let raw = RawGetProviderCatalogStatusQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetProviderCatalogStatusQueryDto {
+    /// Validates the bounded status query schema version.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_status_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_status_invalid")?;
+        if credential_shaped(&self.schema_version) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed activation state of the daemon provider catalog.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogActivationState {
+    /// The catalog is preparing its first revision.
+    Preparing,
+    /// A catalog revision is active and serving.
+    Active,
+    /// A removal candidate is pending removal.
+    PendingRemoval,
+    /// Activation recovery is required before the catalog can serve.
+    ActivationRecoveryRequired,
+}
+
+/// The closed degraded-reason set of a non-active catalog.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogDegradedReason {
+    /// A removal candidate is pending a removal decision.
+    RemovalCandidatePending,
+    /// A removal candidate was rejected after review.
+    RemovalCandidateRejected,
+    /// A removal candidate expired before acceptance.
+    RemovalCandidateExpired,
+    /// Activation recovery is required before the catalog can serve.
+    ActivationRecoveryRequired,
+}
+
+/// The safe removal impact of a pending catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderCatalogRemovalImpactDto {
+    pub affected_profile_ids: Vec<String>,
+    pub safe_impact_summary: String,
+}
+
+impl<'de> Deserialize<'de> for ProviderCatalogRemovalImpactDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogRemovalImpactDto {
+            affected_profile_ids: Vec<String>,
+            safe_impact_summary: String,
+        }
+        let raw = RawProviderCatalogRemovalImpactDto::deserialize(deserializer)?;
+        let value = Self {
+            affected_profile_ids: raw.affected_profile_ids,
+            safe_impact_summary: raw.safe_impact_summary,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderCatalogRemovalImpactDto {
+    /// Validates the bounded, credential-free removal impact.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_removal_impact_invalid` for a blank,
+    /// over-long, or control-bearing field, more than 256 affected profiles,
+    /// or a blank or control-bearing profile id, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(
+            &self.safe_impact_summary,
+            4096,
+            "provider_catalog_removal_impact_invalid",
+        )?;
+        if self.affected_profile_ids.len() > 256 {
+            return Err(ErrorDto::validation(
+                "provider_catalog_removal_impact_invalid",
+                "removal impact exceeds its 256-profile bound",
+            ));
+        }
+        for profile in &self.affected_profile_ids {
+            valid_text(profile, 256, "provider_catalog_removal_impact_invalid")?;
+        }
+        if credential_shaped(&self.safe_impact_summary)
+            || self
+                .affected_profile_ids
+                .iter()
+                .any(|profile| credential_shaped(profile))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A credential-free provider catalog activation and degradation projection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderCatalogStatusDto {
+    pub schema_version: String,
+    pub activation_state: ProviderCatalogActivationState,
+    pub degraded_reason: Option<ProviderCatalogDegradedReason>,
+    pub active_catalog_revision_id: Option<String>,
+    pub candidate_catalog_revision_id: Option<String>,
+    pub active_default_profile_id: Option<String>,
+    pub removal_impact: Option<ProviderCatalogRemovalImpactDto>,
+    pub provider_profiles_negotiated: bool,
+}
+
+impl<'de> Deserialize<'de> for ProviderCatalogStatusDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderCatalogStatusDto {
+            schema_version: String,
+            activation_state: ProviderCatalogActivationState,
+            degraded_reason: Option<ProviderCatalogDegradedReason>,
+            active_catalog_revision_id: Option<String>,
+            candidate_catalog_revision_id: Option<String>,
+            active_default_profile_id: Option<String>,
+            removal_impact: Option<ProviderCatalogRemovalImpactDto>,
+            provider_profiles_negotiated: bool,
+        }
+        let raw = RawProviderCatalogStatusDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            activation_state: raw.activation_state,
+            degraded_reason: raw.degraded_reason,
+            active_catalog_revision_id: raw.active_catalog_revision_id,
+            candidate_catalog_revision_id: raw.candidate_catalog_revision_id,
+            active_default_profile_id: raw.active_default_profile_id,
+            removal_impact: raw.removal_impact,
+            provider_profiles_negotiated: raw.provider_profiles_negotiated,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderCatalogStatusDto {
+    /// Validates the bounded status fields and the closed
+    /// activation/degradation combinations.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_status_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, a blank, over-long, or
+    /// control-bearing text field, or an inconsistent activation state and
+    /// degraded reason, `incompatible_protocol_version` for a schema version
+    /// other than the current one, and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_catalog_status_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_catalog_status_invalid")?;
+        for value in [
+            &self.active_catalog_revision_id,
+            &self.candidate_catalog_revision_id,
+            &self.active_default_profile_id,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            valid_text(value, 256, "provider_catalog_status_invalid")?;
+        }
+        let combination_valid = match self.activation_state {
+            ProviderCatalogActivationState::Active | ProviderCatalogActivationState::Preparing => {
+                self.degraded_reason.is_none()
+            }
+            ProviderCatalogActivationState::PendingRemoval => {
+                self.candidate_catalog_revision_id.is_some()
+                    && matches!(
+                        self.degraded_reason,
+                        Some(
+                            ProviderCatalogDegradedReason::RemovalCandidatePending
+                                | ProviderCatalogDegradedReason::RemovalCandidateRejected
+                                | ProviderCatalogDegradedReason::RemovalCandidateExpired
+                        )
+                    )
+            }
+            ProviderCatalogActivationState::ActivationRecoveryRequired => {
+                self.degraded_reason
+                    == Some(ProviderCatalogDegradedReason::ActivationRecoveryRequired)
+            }
+        };
+        if !combination_valid {
+            return Err(ErrorDto::validation(
+                "provider_catalog_status_invalid",
+                "activation state and degraded reason are inconsistent",
+            ));
+        }
+        if let Some(impact) = &self.removal_impact {
+            impact.validate()?;
+        }
+        let mut fields: Vec<&str> = vec![&self.schema_version];
+        fields.extend(
+            [
+                &self.active_catalog_revision_id,
+                &self.candidate_catalog_revision_id,
+                &self.active_default_profile_id,
+            ]
+            .into_iter()
+            .flatten()
+            .map(String::as_str),
+        );
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed reason a session provider profile could not be resolved.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProfileUnavailableReason {
+    /// No catalog entry exists for the requested profile.
+    ProfileNotFound,
+    /// The requested profile exists but is disabled.
+    ProfileDisabled,
+    /// The requested provider is currently unavailable.
+    ProviderUnavailable,
+    /// The provider catalog is not active yet.
+    CatalogNotActive,
+}
+
+/// The resolved disposition of a session provider profile reference.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum ResolvedProviderProfileDto {
+    /// The profile resolved to a concrete catalog revision.
+    Resolved {
+        profile_id: String,
+        profile_revision_id: String,
+    },
+    /// The profile could not be resolved, with a closed reason.
+    Unavailable(ProviderProfileUnavailableReason),
+}
+
+impl<'de> Deserialize<'de> for ResolvedProviderProfileDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+        enum RawResolvedProviderProfileDto {
+            Resolved {
+                profile_id: String,
+                profile_revision_id: String,
+            },
+            Unavailable(ProviderProfileUnavailableReason),
+        }
+        let raw = RawResolvedProviderProfileDto::deserialize(deserializer)?;
+        let value = match raw {
+            RawResolvedProviderProfileDto::Resolved {
+                profile_id,
+                profile_revision_id,
+            } => Self::Resolved {
+                profile_id,
+                profile_revision_id,
+            },
+            RawResolvedProviderProfileDto::Unavailable(reason) => Self::Unavailable(reason),
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ResolvedProviderProfileDto {
+    /// Validates the resolved profile reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session_provider_profile_invalid` for a blank, over-long, or
+    /// control-bearing profile id or revision and `credentials_forbidden`
+    /// for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        match self {
+            Self::Resolved {
+                profile_id,
+                profile_revision_id,
+            } => {
+                for field in [profile_id, profile_revision_id] {
+                    valid_text(field, 256, "session_provider_profile_invalid")?;
+                }
+                if credential_shaped(profile_id) || credential_shaped(profile_revision_id) {
+                    return Err(ErrorDto::validation(
+                        "credentials_forbidden",
+                        "credentials are forbidden",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Unavailable(_) => Ok(()),
         }
     }
-    // The third group's first digit is the RFC 4122 version.
-    if !matches!(bytes[14], b'1'..=b'5') {
-        return false;
+}
+
+/// A command binding a session's durable provider profile intent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SetSessionProviderProfileCommandDto {
+    pub schema_version: String,
+    pub session_id: String,
+    pub profile_id: String,
+    pub expected_session_projection_revision: u64,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for SetSessionProviderProfileCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSetSessionProviderProfileCommandDto {
+            schema_version: String,
+            session_id: String,
+            profile_id: String,
+            expected_session_projection_revision: u64,
+            operation_id: String,
+        }
+        let raw = RawSetSessionProviderProfileCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            session_id: raw.session_id,
+            profile_id: raw.profile_id,
+            expected_session_projection_revision: raw.expected_session_projection_revision,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
     }
-    // The fourth group's first digit is the RFC 4122 variant.
-    if !matches!(bytes[19], b'8' | b'9' | b'a' | b'b') {
-        return false;
+}
+
+impl SetSessionProviderProfileCommandDto {
+    /// Validates the bounded, credential-free set command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `set_session_provider_profile_invalid` for a blank, over-long,
+    /// or control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.schema_version,
+            &self.session_id,
+            &self.profile_id,
+            &self.operation_id,
+        ] {
+            valid_text(field, 256, "set_session_provider_profile_invalid")?;
+        }
+        require_current_schema_version(
+            &self.schema_version,
+            "set_session_provider_profile_invalid",
+        )?;
+        if [
+            &self.schema_version,
+            &self.session_id,
+            &self.profile_id,
+            &self.operation_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
     }
-    true
+}
+
+/// Acceptance evidence for a session provider profile set operation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SetSessionProviderProfileAcceptedDto {
+    pub session_id: String,
+    pub changed: bool,
+    pub resulting_projection_revision: u64,
+    pub resolved: ResolvedProviderProfileDto,
+}
+
+impl<'de> Deserialize<'de> for SetSessionProviderProfileAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSetSessionProviderProfileAcceptedDto {
+            session_id: String,
+            changed: bool,
+            resulting_projection_revision: u64,
+            resolved: ResolvedProviderProfileDto,
+        }
+        let raw = RawSetSessionProviderProfileAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            changed: raw.changed,
+            resulting_projection_revision: raw.resulting_projection_revision,
+            resolved: raw.resolved,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl SetSessionProviderProfileAcceptedDto {
+    /// Validates the acceptance fields and resolved profile reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session_provider_profile_invalid` for a blank, over-long, or
+    /// control-bearing session id or resolved reference and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.session_id, 256, "session_provider_profile_invalid")?;
+        if credential_shaped(&self.session_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        self.resolved.validate()
+    }
+}
+
+/// A query for one session's durable provider profile projection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetSessionProviderProfileQueryDto {
+    pub schema_version: String,
+    pub session_id: String,
+}
+
+impl<'de> Deserialize<'de> for GetSessionProviderProfileQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetSessionProviderProfileQueryDto {
+            schema_version: String,
+            session_id: String,
+        }
+        let raw = RawGetSessionProviderProfileQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            session_id: raw.session_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetSessionProviderProfileQueryDto {
+    /// Validates the bounded, credential-free query fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session_provider_profile_invalid` for a blank, over-long, or
+    /// control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.schema_version, &self.session_id] {
+            valid_text(field, 256, "session_provider_profile_invalid")?;
+        }
+        require_current_schema_version(&self.schema_version, "session_provider_profile_invalid")?;
+        if credential_shaped(&self.schema_version) || credential_shaped(&self.session_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The durable provider profile projection of one session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionProviderProfileDto {
+    pub session_id: String,
+    pub profile_id: String,
+    pub resolved: ResolvedProviderProfileDto,
+    pub session_projection_revision: u64,
+    pub global_default_profile_id: String,
+}
+
+impl<'de> Deserialize<'de> for SessionProviderProfileDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionProviderProfileDto {
+            session_id: String,
+            profile_id: String,
+            resolved: ResolvedProviderProfileDto,
+            session_projection_revision: u64,
+            global_default_profile_id: String,
+        }
+        let raw = RawSessionProviderProfileDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            profile_id: raw.profile_id,
+            resolved: raw.resolved,
+            session_projection_revision: raw.session_projection_revision,
+            global_default_profile_id: raw.global_default_profile_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl SessionProviderProfileDto {
+    /// Validates the durable projection fields and resolved reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session_provider_profile_invalid` for a blank, over-long, or
+    /// control-bearing field or resolved reference and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.session_id,
+            &self.profile_id,
+            &self.global_default_profile_id,
+        ] {
+            valid_text(field, 256, "session_provider_profile_invalid")?;
+        }
+        if [
+            &self.session_id,
+            &self.profile_id,
+            &self.global_default_profile_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        self.resolved.validate()
+    }
+}
+
+/// A command accepting the removal of a prepared catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AcceptProviderCatalogRemovalCommandDto {
+    pub candidate_handle: String,
+    pub expected_active_catalog_revision_id: String,
+    pub expected_candidate_catalog_revision_id: String,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAcceptProviderCatalogRemovalCommandDto {
+            candidate_handle: String,
+            expected_active_catalog_revision_id: String,
+            expected_candidate_catalog_revision_id: String,
+            operation_id: String,
+        }
+        let raw = RawAcceptProviderCatalogRemovalCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            expected_active_catalog_revision_id: raw.expected_active_catalog_revision_id,
+            expected_candidate_catalog_revision_id: raw.expected_candidate_catalog_revision_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl AcceptProviderCatalogRemovalCommandDto {
+    /// Validates the bounded, credential-free removal command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_removal_invalid` for a blank, over-long, or
+    /// control-bearing field, or when the expected active and candidate
+    /// revisions are equal, and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.expected_active_catalog_revision_id == self.expected_candidate_catalog_revision_id {
+            return Err(ErrorDto::validation(
+                "provider_catalog_removal_invalid",
+                "expected active and candidate revisions must differ",
+            ));
+        }
+        for field in [
+            &self.candidate_handle,
+            &self.expected_active_catalog_revision_id,
+            &self.expected_candidate_catalog_revision_id,
+            &self.operation_id,
+        ] {
+            valid_text(field, 256, "provider_catalog_removal_invalid")?;
+        }
+        if [
+            &self.candidate_handle,
+            &self.expected_active_catalog_revision_id,
+            &self.expected_candidate_catalog_revision_id,
+            &self.operation_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Acceptance evidence for an accepted catalog removal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AcceptProviderCatalogRemovalAcceptedDto {
+    pub candidate_handle: String,
+    pub active_catalog_revision_id: String,
+}
+
+impl<'de> Deserialize<'de> for AcceptProviderCatalogRemovalAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAcceptProviderCatalogRemovalAcceptedDto {
+            candidate_handle: String,
+            active_catalog_revision_id: String,
+        }
+        let raw = RawAcceptProviderCatalogRemovalAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            active_catalog_revision_id: raw.active_catalog_revision_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl AcceptProviderCatalogRemovalAcceptedDto {
+    /// Validates the bounded, credential-free acceptance fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_removal_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.candidate_handle, &self.active_catalog_revision_id] {
+            valid_text(field, 256, "provider_catalog_removal_invalid")?;
+        }
+        if credential_shaped(&self.candidate_handle)
+            || credential_shaped(&self.active_catalog_revision_id)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A command rejecting a catalog removal candidate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RejectProviderCatalogCandidateCommandDto {
+    pub candidate_handle: String,
+    pub expected_active_catalog_revision_id: String,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for RejectProviderCatalogCandidateCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRejectProviderCatalogCandidateCommandDto {
+            candidate_handle: String,
+            expected_active_catalog_revision_id: String,
+            operation_id: String,
+        }
+        let raw = RawRejectProviderCatalogCandidateCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+            expected_active_catalog_revision_id: raw.expected_active_catalog_revision_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl RejectProviderCatalogCandidateCommandDto {
+    /// Validates the bounded, credential-free rejection command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_removal_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.candidate_handle,
+            &self.expected_active_catalog_revision_id,
+            &self.operation_id,
+        ] {
+            valid_text(field, 256, "provider_catalog_removal_invalid")?;
+        }
+        if [
+            &self.candidate_handle,
+            &self.expected_active_catalog_revision_id,
+            &self.operation_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Acceptance evidence for a rejected catalog candidate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RejectProviderCatalogCandidateAcceptedDto {
+    pub candidate_handle: String,
+}
+
+impl<'de> Deserialize<'de> for RejectProviderCatalogCandidateAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRejectProviderCatalogCandidateAcceptedDto {
+            candidate_handle: String,
+        }
+        let raw = RawRejectProviderCatalogCandidateAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_handle: raw.candidate_handle,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl RejectProviderCatalogCandidateAcceptedDto {
+    /// Validates the bounded, credential-free acceptance field.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_catalog_removal_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(
+            &self.candidate_handle,
+            256,
+            "provider_catalog_removal_invalid",
+        )?;
+        if credential_shaped(&self.candidate_handle) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed maximum number of runs promoted in one reconciliation page.
+pub const MAX_UNAVAILABLE_QUEUE_PROMOTIONS: u64 = 8;
+
+/// A command reconciling a session's unavailable-run queue in bounded pages.
+///
+/// The command carries no page cursor: the durable reconciliation marker is
+/// the single paging authority, and the marker's cursor is reported on the
+/// acceptance.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReconcileUnavailableQueueCommandDto {
+    pub session_id: String,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for ReconcileUnavailableQueueCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReconcileUnavailableQueueCommandDto {
+            session_id: String,
+            operation_id: String,
+        }
+        let raw = RawReconcileUnavailableQueueCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ReconcileUnavailableQueueCommandDto {
+    /// Validates the bounded, credential-free reconciliation command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unavailable_queue_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.session_id, &self.operation_id] {
+            valid_text(field, 256, "unavailable_queue_invalid")?;
+        }
+        if credential_shaped(&self.session_id) || credential_shaped(&self.operation_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Acceptance evidence for one unavailable-run queue reconciliation page.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReconcileUnavailableQueueAcceptedDto {
+    pub session_id: String,
+    pub page_cursor: Option<String>,
+    pub promoted_count: u64,
+}
+
+impl<'de> Deserialize<'de> for ReconcileUnavailableQueueAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReconcileUnavailableQueueAcceptedDto {
+            session_id: String,
+            page_cursor: Option<String>,
+            promoted_count: u64,
+        }
+        let raw = RawReconcileUnavailableQueueAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            page_cursor: raw.page_cursor,
+            promoted_count: raw.promoted_count,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ReconcileUnavailableQueueAcceptedDto {
+    /// Validates the bounded, credential-free reconciliation page.
+    ///
+    /// # Errors
+    ///
+    /// Returns `unavailable_queue_invalid` for a blank, over-long, or
+    /// control-bearing field or a promotion batch beyond the closed
+    /// eight-run bound, `invalid_page_token` for a malformed page cursor,
+    /// and `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.session_id, 256, "unavailable_queue_invalid")?;
+        if credential_shaped(&self.session_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        if let Some(cursor) = &self.page_cursor {
+            valid_text(cursor, 1024, "invalid_page_token")?;
+            if credential_shaped(cursor) {
+                return Err(ErrorDto::validation(
+                    "credentials_forbidden",
+                    "credentials are forbidden",
+                ));
+            }
+        }
+        if self.promoted_count > MAX_UNAVAILABLE_QUEUE_PROMOTIONS {
+            return Err(ErrorDto::validation(
+                "unavailable_queue_invalid",
+                "reconciliation page exceeds its 8-promotion bound",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A command admitting a recovered run back into its session.
+///
+/// Admission restores the run to the session queue; it never reroutes the run
+/// to another session or provider.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AdmitRecoveredRunCommandDto {
+    pub session_id: String,
+    pub run_id: String,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for AdmitRecoveredRunCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAdmitRecoveredRunCommandDto {
+            session_id: String,
+            run_id: String,
+            operation_id: String,
+        }
+        let raw = RawAdmitRecoveredRunCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            run_id: raw.run_id,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl AdmitRecoveredRunCommandDto {
+    /// Validates the bounded, credential-free admission command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `recovered_run_admission_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.session_id, &self.run_id, &self.operation_id] {
+            valid_text(field, 256, "recovered_run_admission_invalid")?;
+        }
+        if [&self.session_id, &self.run_id, &self.operation_id]
+            .iter()
+            .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Acceptance evidence for an admitted recovered run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AdmitRecoveredRunAcceptedDto {
+    pub session_id: String,
+    pub run_id: String,
+}
+
+impl<'de> Deserialize<'de> for AdmitRecoveredRunAcceptedDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawAdmitRecoveredRunAcceptedDto {
+            session_id: String,
+            run_id: String,
+        }
+        let raw = RawAdmitRecoveredRunAcceptedDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            run_id: raw.run_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl AdmitRecoveredRunAcceptedDto {
+    /// Validates the bounded, credential-free acceptance fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `recovered_run_admission_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.session_id, &self.run_id] {
+            valid_text(field, 256, "recovered_run_admission_invalid")?;
+        }
+        if credential_shaped(&self.session_id) || credential_shaped(&self.run_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A query for one provider's usage aggregation over a period.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetProviderUsageQueryDto {
+    pub schema_version: String,
+    pub profile_id: String,
+    pub usage_period_start: u64,
+    pub usage_period_end: u64,
+}
+
+impl<'de> Deserialize<'de> for GetProviderUsageQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderUsageQueryDto {
+            schema_version: String,
+            profile_id: String,
+            usage_period_start: u64,
+            usage_period_end: u64,
+        }
+        let raw = RawGetProviderUsageQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            profile_id: raw.profile_id,
+            usage_period_start: raw.usage_period_start,
+            usage_period_end: raw.usage_period_end,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetProviderUsageQueryDto {
+    /// Validates the bounded, credential-free usage query fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_usage_invalid` for a blank, over-long, or
+    /// control-bearing field, a non-decimal schema version, or a period
+    /// ending before its start,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.usage_period_end < self.usage_period_start {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "usage period must end at or after its start",
+            ));
+        }
+        for field in [&self.schema_version, &self.profile_id] {
+            valid_text(field, 256, "provider_usage_invalid")?;
+        }
+        require_current_schema_version(&self.schema_version, "provider_usage_invalid")?;
+        if credential_shaped(&self.schema_version) || credential_shaped(&self.profile_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One credential-free provider usage aggregation.
+///
+/// The aggregation carries units only: request counts and input, output, and
+/// reasoning units. It never carries price, currency, or cost values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UsageAggregationDto {
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub model_id: String,
+    pub request_count: u64,
+    pub input_units: u64,
+    pub output_units: u64,
+    pub reasoning_units: u64,
+    pub usage_period_start: u64,
+    pub usage_period_end: u64,
+}
+
+impl<'de> Deserialize<'de> for UsageAggregationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawUsageAggregationDto {
+            profile_id: String,
+            provider_profile_revision_id: String,
+            model_id: String,
+            request_count: u64,
+            input_units: u64,
+            output_units: u64,
+            reasoning_units: u64,
+            usage_period_start: u64,
+            usage_period_end: u64,
+        }
+        let raw = RawUsageAggregationDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            model_id: raw.model_id,
+            request_count: raw.request_count,
+            input_units: raw.input_units,
+            output_units: raw.output_units,
+            reasoning_units: raw.reasoning_units,
+            usage_period_start: raw.usage_period_start,
+            usage_period_end: raw.usage_period_end,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl UsageAggregationDto {
+    /// Validates the bounded, credential-free usage aggregation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_usage_invalid` for a blank, over-long, or
+    /// control-bearing field, or a period ending before its start, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.usage_period_end < self.usage_period_start {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "usage period must end at or after its start",
+            ));
+        }
+        for field in [
+            &self.profile_id,
+            &self.provider_profile_revision_id,
+            &self.model_id,
+        ] {
+            valid_text(field, 256, "provider_usage_invalid")?;
+        }
+        if [
+            &self.profile_id,
+            &self.provider_profile_revision_id,
+            &self.model_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The maximum (provider profile revision, model) identities in one usage
+/// aggregation set.
+pub const MAX_PROVIDER_USAGE_IDENTITIES: usize = 128;
+
+/// The bounded per-identity provider usage aggregation of one profile period.
+///
+/// The set carries one entry per `(provider_profile_revision_id, model_id)`
+/// identity, strictly sorted by revision and model id. A total is therefore
+/// never attributed to an identity that did not produce it, and the durable
+/// row order never changes the result. It carries units only: request counts
+/// and input, output, and reasoning units, never price, currency, or cost
+/// values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderUsageAggregationsDto {
+    pub entries: Vec<UsageAggregationDto>,
+}
+
+impl<'de> Deserialize<'de> for ProviderUsageAggregationsDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderUsageAggregationsDto {
+            entries: Vec<UsageAggregationDto>,
+        }
+        let raw = RawProviderUsageAggregationsDto::deserialize(deserializer)?;
+        let value = Self {
+            entries: raw.entries,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderUsageAggregationsDto {
+    /// Validates the bounded, strictly sorted, credential-free set.
+    ///
+    /// Every entry must carry the same profile and period: the set projects
+    /// one profile period.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_usage_invalid` for an empty or over-limit set or an
+    /// entry of another profile or period, `provider_usage_unsorted` for
+    /// identities that are not strictly sorted by revision and model id, and
+    /// the per-entry errors of `UsageAggregationDto::validate`.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.entries.is_empty() {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "a usage aggregation set must carry at least one identity",
+            ));
+        }
+        if self.entries.len() > MAX_PROVIDER_USAGE_IDENTITIES {
+            return Err(ErrorDto::validation(
+                "provider_usage_invalid",
+                "a usage aggregation set must not exceed its identity bound",
+            ));
+        }
+        for window in self.entries.windows(2) {
+            let previous = (&window[0].provider_profile_revision_id, &window[0].model_id);
+            let current = (&window[1].provider_profile_revision_id, &window[1].model_id);
+            if previous >= current {
+                return Err(ErrorDto::validation(
+                    "provider_usage_unsorted",
+                    "usage aggregation identities must be strictly sorted by revision and model id",
+                ));
+            }
+        }
+        let first = &self.entries[0];
+        for entry in &self.entries {
+            entry.validate()?;
+            if entry.profile_id != first.profile_id
+                || entry.usage_period_start != first.usage_period_start
+                || entry.usage_period_end != first.usage_period_end
+            {
+                return Err(ErrorDto::validation(
+                    "provider_usage_invalid",
+                    "a usage aggregation set must carry one profile and one period",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_safe_event_fields(fields: &[&str], code: &'static str) -> DtoResult<()> {
+    for field in fields {
+        valid_text(field, 256, code)?;
+    }
+    if fields.iter().any(|value| credential_shaped(value)) {
+        return Err(ErrorDto::validation(
+            "credentials_forbidden",
+            "credentials are forbidden",
+        ));
+    }
+    Ok(())
+}
+
+/// A session's durable provider profile changed.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionProviderProfileChangedEventDto {
+    pub session_id: String,
+    pub previous_profile_id: String,
+    pub profile_id: String,
+    pub session_projection_revision: u64,
+    pub occurred_at: u64,
+}
+
+impl<'de> Deserialize<'de> for SessionProviderProfileChangedEventDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawSessionProviderProfileChangedEventDto {
+            session_id: String,
+            previous_profile_id: String,
+            profile_id: String,
+            session_projection_revision: u64,
+            occurred_at: u64,
+        }
+        let raw = RawSessionProviderProfileChangedEventDto::deserialize(deserializer)?;
+        let value = Self {
+            session_id: raw.session_id,
+            previous_profile_id: raw.previous_profile_id,
+            profile_id: raw.profile_id,
+            session_projection_revision: raw.session_projection_revision,
+            occurred_at: raw.occurred_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl SessionProviderProfileChangedEventDto {
+    /// Validates the bounded, credential-free event fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `session_provider_profile_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        validate_safe_event_fields(
+            &[
+                &self.session_id,
+                &self.previous_profile_id,
+                &self.profile_id,
+            ],
+            "session_provider_profile_invalid",
+        )
+    }
+}
+
+/// The explicit origin of a configuration reload request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationOriginDto {
+    /// An interactive user requested the reload.
+    User,
+    /// An administrator requested the reload.
+    Admin,
+}
+
+/// A command reloading daemon configuration from a candidate reference.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReloadConfigurationCommandDto {
+    pub candidate_snapshot_reference: Option<String>,
+    pub candidate_edit_reference: Option<String>,
+    pub expected_active_config_revision: String,
+    pub operation_id: String,
+    pub origin: ConfigurationOriginDto,
+}
+
+impl<'de> Deserialize<'de> for ReloadConfigurationCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReloadConfigurationCommandDto {
+            candidate_snapshot_reference: Option<String>,
+            candidate_edit_reference: Option<String>,
+            expected_active_config_revision: String,
+            operation_id: String,
+            origin: ConfigurationOriginDto,
+        }
+        let raw = RawReloadConfigurationCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            candidate_snapshot_reference: raw.candidate_snapshot_reference,
+            candidate_edit_reference: raw.candidate_edit_reference,
+            expected_active_config_revision: raw.expected_active_config_revision,
+            operation_id: raw.operation_id,
+            origin: raw.origin,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ReloadConfigurationCommandDto {
+    /// Validates the bounded, credential-free reload command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_reload_invalid` for a blank, over-long, or
+    /// control-bearing field, or when neither candidate reference is
+    /// present, and `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        if self.candidate_snapshot_reference.is_none() && self.candidate_edit_reference.is_none() {
+            return Err(ErrorDto::validation(
+                "configuration_reload_invalid",
+                "a reload must name a candidate snapshot or edit reference",
+            ));
+        }
+        for field in [&self.expected_active_config_revision, &self.operation_id] {
+            valid_text(field, 256, "configuration_reload_invalid")?;
+        }
+        if let Some(reference) = &self.candidate_snapshot_reference {
+            valid_text(reference, 256, "configuration_reload_invalid")?;
+        }
+        if let Some(reference) = &self.candidate_edit_reference {
+            valid_text(reference, 256, "configuration_reload_invalid")?;
+        }
+        let mut fields: Vec<&str> = vec![&self.expected_active_config_revision, &self.operation_id];
+        if let Some(reference) = &self.candidate_snapshot_reference {
+            fields.push(reference);
+        }
+        if let Some(reference) = &self.candidate_edit_reference {
+            fields.push(reference);
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed validation outcome of a configuration reload.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationValidationOutcomeDto {
+    Valid,
+    Invalid,
+}
+
+/// The closed atomic commit outcome of a configuration reload.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationCommitOutcomeDto {
+    Committed,
+    Rejected,
+}
+
+/// The durable outcome of one configuration reload transaction.
+///
+/// Configuration has no migration path under ADR 0038; the former constant
+/// `migration_result` wire field was removed with the migration wording.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReloadTransactionDto {
+    pub transaction_id: String,
+    pub previous_config_revision: String,
+    pub candidate_config_revision: String,
+    pub validation_result: ConfigurationValidationOutcomeDto,
+    pub commit_outcome: ConfigurationCommitOutcomeDto,
+    pub safe_failure_code: Option<String>,
+    pub safe_failure_detail: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ReloadTransactionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawReloadTransactionDto {
+            transaction_id: String,
+            previous_config_revision: String,
+            candidate_config_revision: String,
+            validation_result: ConfigurationValidationOutcomeDto,
+            commit_outcome: ConfigurationCommitOutcomeDto,
+            safe_failure_code: Option<String>,
+            safe_failure_detail: Option<String>,
+        }
+        let raw = RawReloadTransactionDto::deserialize(deserializer)?;
+        let value = Self {
+            transaction_id: raw.transaction_id,
+            previous_config_revision: raw.previous_config_revision,
+            candidate_config_revision: raw.candidate_config_revision,
+            validation_result: raw.validation_result,
+            commit_outcome: raw.commit_outcome,
+            safe_failure_code: raw.safe_failure_code,
+            safe_failure_detail: raw.safe_failure_detail,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ReloadTransactionDto {
+    /// Validates the bounded, credential-free transaction fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_reload_invalid` for a blank, over-long, or
+    /// control-bearing field, when a failed reload carries no safe failure
+    /// code, or when a successful reload carries failure detail, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.transaction_id,
+            &self.previous_config_revision,
+            &self.candidate_config_revision,
+        ] {
+            valid_text(field, 256, "configuration_reload_invalid")?;
+        }
+        let failed = self.validation_result == ConfigurationValidationOutcomeDto::Invalid
+            || self.commit_outcome == ConfigurationCommitOutcomeDto::Rejected;
+        if failed && self.safe_failure_code.is_none() {
+            return Err(ErrorDto::validation(
+                "configuration_reload_invalid",
+                "failed reloads must carry a safe failure code",
+            ));
+        }
+        if !failed && (self.safe_failure_code.is_some() || self.safe_failure_detail.is_some()) {
+            return Err(ErrorDto::validation(
+                "configuration_reload_invalid",
+                "successful reloads must not carry failure detail",
+            ));
+        }
+        if let Some(code) = &self.safe_failure_code {
+            valid_text(code, 128, "configuration_reload_invalid")?;
+        }
+        if let Some(detail) = &self.safe_failure_detail {
+            valid_text(detail, 4096, "configuration_reload_invalid")?;
+        }
+        let mut fields: Vec<&str> = vec![
+            &self.transaction_id,
+            &self.previous_config_revision,
+            &self.candidate_config_revision,
+        ];
+        if let Some(code) = &self.safe_failure_code {
+            fields.push(code);
+        }
+        if let Some(detail) = &self.safe_failure_detail {
+            fields.push(detail);
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A command rotating a provider's credentials.
+///
+/// This command names the affected provider/profile identity and the expected
+/// safe composition revision only; the credential material itself is supplied
+/// out-of-band through a private channel and never appears in a DTO.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RotateProviderCredentialsCommandDto {
+    pub profile_id: String,
+    pub provider_profile_revision_id: String,
+    pub expected_credential_composition_revision: String,
+    pub operation_id: String,
+}
+
+impl<'de> Deserialize<'de> for RotateProviderCredentialsCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRotateProviderCredentialsCommandDto {
+            profile_id: String,
+            provider_profile_revision_id: String,
+            expected_credential_composition_revision: String,
+            operation_id: String,
+        }
+        let raw = RawRotateProviderCredentialsCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            profile_id: raw.profile_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            expected_credential_composition_revision: raw.expected_credential_composition_revision,
+            operation_id: raw.operation_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl RotateProviderCredentialsCommandDto {
+    /// Validates the bounded, credential-free rotation command fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_rotation_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.profile_id,
+            &self.provider_profile_revision_id,
+            &self.expected_credential_composition_revision,
+            &self.operation_id,
+        ] {
+            valid_text(field, 256, "credential_rotation_invalid")?;
+        }
+        if [
+            &self.profile_id,
+            &self.provider_profile_revision_id,
+            &self.expected_credential_composition_revision,
+            &self.operation_id,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The durable result of one provider credential rotation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CredentialRotationResultDto {
+    pub operation_id: String,
+    pub profile_id: String,
+    pub safe_credential_composition_revision: String,
+    pub rotated: bool,
+}
+
+impl<'de> Deserialize<'de> for CredentialRotationResultDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawCredentialRotationResultDto {
+            operation_id: String,
+            profile_id: String,
+            safe_credential_composition_revision: String,
+            rotated: bool,
+        }
+        let raw = RawCredentialRotationResultDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            profile_id: raw.profile_id,
+            safe_credential_composition_revision: raw.safe_credential_composition_revision,
+            rotated: raw.rotated,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl CredentialRotationResultDto {
+    /// Validates the bounded, credential-free rotation result fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_rotation_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.operation_id,
+            &self.profile_id,
+            &self.safe_credential_composition_revision,
+        ] {
+            valid_text(field, 256, "credential_rotation_invalid")?;
+        }
+        if [
+            &self.operation_id,
+            &self.profile_id,
+            &self.safe_credential_composition_revision,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed availability observation of one provider health check.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAvailabilityObservation {
+    Available,
+    Unavailable,
+    Unknown,
+}
+
+/// The closed failure category of one unavailable provider health check.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderHealthFailureCategory {
+    ConnectionFailed,
+    AuthenticationRejected,
+    RequestTimeout,
+    RateLimited,
+    ServiceUnavailable,
+}
+
+/// One non-authorizing provider health evidence observation.
+///
+/// The evidence records what a check observed; it never authorizes routing
+/// or admission decisions by itself. `provider_id` carries the provider
+/// identity the observation belongs to (not a profile identity), and
+/// `provider_profile_revision_id` stays absent until the catalog binding is
+/// genuinely wired into the health path; a synthesized identity is never
+/// fabricated.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderHealthEvidenceDto {
+    pub provider_id: String,
+    pub provider_profile_revision_id: Option<String>,
+    pub health_attempt_id: String,
+    pub check_contract_revision: String,
+    pub observed_availability: ProviderAvailabilityObservation,
+    pub observed_at: u64,
+    pub failure_category: Option<ProviderHealthFailureCategory>,
+    pub safe_diagnostic_code: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ProviderHealthEvidenceDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderHealthEvidenceDto {
+            provider_id: String,
+            provider_profile_revision_id: Option<String>,
+            health_attempt_id: String,
+            check_contract_revision: String,
+            observed_availability: ProviderAvailabilityObservation,
+            observed_at: u64,
+            failure_category: Option<ProviderHealthFailureCategory>,
+            safe_diagnostic_code: Option<String>,
+        }
+        let raw = RawProviderHealthEvidenceDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_id: raw.provider_id,
+            provider_profile_revision_id: raw.provider_profile_revision_id,
+            health_attempt_id: raw.health_attempt_id,
+            check_contract_revision: raw.check_contract_revision,
+            observed_availability: raw.observed_availability,
+            observed_at: raw.observed_at,
+            failure_category: raw.failure_category,
+            safe_diagnostic_code: raw.safe_diagnostic_code,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderHealthEvidenceDto {
+    /// Validates the bounded, credential-free health evidence fields and the
+    /// closed availability/failure combinations.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_health_evidence_invalid` for a blank, over-long, or
+    /// control-bearing field, a failure category or diagnostic code on an
+    /// `Available` observation, or a missing failure category on an
+    /// `Unavailable` observation, and `credentials_forbidden` for a
+    /// credential-shaped value. An absent profile revision is valid and stays
+    /// absent; when present it is validated like the other text fields.
+    pub fn validate(&self) -> DtoResult<()> {
+        let availability_valid = match self.observed_availability {
+            ProviderAvailabilityObservation::Available => {
+                self.failure_category.is_none() && self.safe_diagnostic_code.is_none()
+            }
+            ProviderAvailabilityObservation::Unavailable => self.failure_category.is_some(),
+            ProviderAvailabilityObservation::Unknown => true,
+        };
+        if !availability_valid {
+            return Err(ErrorDto::validation(
+                "provider_health_evidence_invalid",
+                "availability observation and failure detail are inconsistent",
+            ));
+        }
+        for field in [
+            &self.provider_id,
+            &self.health_attempt_id,
+            &self.check_contract_revision,
+        ] {
+            valid_text(field, 256, "provider_health_evidence_invalid")?;
+        }
+        if let Some(revision) = &self.provider_profile_revision_id {
+            valid_text(revision, 256, "provider_health_evidence_invalid")?;
+        }
+        if let Some(code) = &self.safe_diagnostic_code {
+            valid_text(code, 128, "provider_health_evidence_invalid")?;
+        }
+        let mut fields: Vec<&str> = vec![
+            &self.provider_id,
+            &self.health_attempt_id,
+            &self.check_contract_revision,
+        ];
+        if let Some(revision) = &self.provider_profile_revision_id {
+            fields.push(revision);
+        }
+        if let Some(code) = &self.safe_diagnostic_code {
+            fields.push(code);
+        }
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed phase of one provider discovery attempt.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderDiscoveryPhase {
+    BeforeStart,
+    Started,
+    Terminal,
+}
+
+/// One safe provider discovery attempt record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderDiscoveryAttemptDto {
+    pub attempt_id: String,
+    pub discovery_scope: String,
+    pub phase: ProviderDiscoveryPhase,
+    pub started_at: u64,
+    pub safe_status: String,
+}
+
+impl<'de> Deserialize<'de> for ProviderDiscoveryAttemptDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderDiscoveryAttemptDto {
+            attempt_id: String,
+            discovery_scope: String,
+            phase: ProviderDiscoveryPhase,
+            started_at: u64,
+            safe_status: String,
+        }
+        let raw = RawProviderDiscoveryAttemptDto::deserialize(deserializer)?;
+        let value = Self {
+            attempt_id: raw.attempt_id,
+            discovery_scope: raw.discovery_scope,
+            phase: raw.phase,
+            started_at: raw.started_at,
+            safe_status: raw.safe_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderDiscoveryAttemptDto {
+    /// Validates the bounded, credential-free attempt fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_discovery_invalid` for a blank, over-long, or
+    /// control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.attempt_id, &self.discovery_scope, &self.safe_status] {
+            valid_text(field, 256, "provider_discovery_invalid")?;
+        }
+        if [&self.attempt_id, &self.discovery_scope, &self.safe_status]
+            .iter()
+            .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One additive provider model discovery record.
+///
+/// Discovery records are additive observations about a model; they never make
+/// routing decisions by themselves.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderModelDiscoveryRecordDto {
+    pub discovery_scope: String,
+    pub model_id: String,
+    pub capability_records: Vec<String>,
+    pub source_attempt_id: String,
+    pub discovered_at: u64,
+}
+
+impl<'de> Deserialize<'de> for ProviderModelDiscoveryRecordDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderModelDiscoveryRecordDto {
+            discovery_scope: String,
+            model_id: String,
+            capability_records: Vec<String>,
+            source_attempt_id: String,
+            discovered_at: u64,
+        }
+        let raw = RawProviderModelDiscoveryRecordDto::deserialize(deserializer)?;
+        let value = Self {
+            discovery_scope: raw.discovery_scope,
+            model_id: raw.model_id,
+            capability_records: raw.capability_records,
+            source_attempt_id: raw.source_attempt_id,
+            discovered_at: raw.discovered_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderModelDiscoveryRecordDto {
+    /// Validates the bounded, credential-free discovery record fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_discovery_invalid` for a blank, over-long, or
+    /// control-bearing field or capability record, or a record with more
+    /// than 256 capability records, and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.discovery_scope,
+            &self.model_id,
+            &self.source_attempt_id,
+        ] {
+            valid_text(field, 256, "provider_discovery_invalid")?;
+        }
+        if self.capability_records.len() > 256 {
+            return Err(ErrorDto::validation(
+                "provider_discovery_invalid",
+                "discovery record exceeds its 256-capability bound",
+            ));
+        }
+        for record in &self.capability_records {
+            valid_text(record, 256, "provider_discovery_invalid")?;
+        }
+        let mut fields: Vec<&str> = vec![
+            &self.discovery_scope,
+            &self.model_id,
+            &self.source_attempt_id,
+        ];
+        fields.extend(self.capability_records.iter().map(String::as_str));
+        if fields.iter().any(|value| credential_shaped(value)) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed classification of one pricing observation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingClassification {
+    /// The value is bounded by the provider's intrinsic representation.
+    IntrinsicRepresentationBound,
+    /// The value was observed from provider capacity behavior.
+    CapacityObservation,
+    /// The value follows the provider's published product policy.
+    ProductPolicy,
+}
+
+/// One safe, non-authorizing pricing observation.
+///
+/// The observation records a bounded numeric value for one provider kind and
+/// model; it is never an admission ceiling on its own.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PricingObservationDto {
+    pub provider_kind_id: String,
+    pub model_id: String,
+    pub bounded_numeric_value: u64,
+    pub classification: PricingClassification,
+    pub observed_at: u64,
+}
+
+impl<'de> Deserialize<'de> for PricingObservationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawPricingObservationDto {
+            provider_kind_id: String,
+            model_id: String,
+            bounded_numeric_value: u64,
+            classification: PricingClassification,
+            observed_at: u64,
+        }
+        let raw = RawPricingObservationDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_kind_id: raw.provider_kind_id,
+            model_id: raw.model_id,
+            bounded_numeric_value: raw.bounded_numeric_value,
+            classification: raw.classification,
+            observed_at: raw.observed_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl PricingObservationDto {
+    /// Validates the bounded, credential-free observation fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_pricing_observation_invalid` for a blank, over-long,
+    /// or control-bearing field and `credentials_forbidden` for a
+    /// credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.provider_kind_id, &self.model_id] {
+            valid_text(field, 256, "provider_pricing_observation_invalid")?;
+        }
+        if credential_shaped(&self.provider_kind_id) || credential_shaped(&self.model_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A query requesting non-authorizing provider health evidence.
+///
+/// The query names one provider; the returned evidence records what a check
+/// observed and never authorizes routing or admission by itself.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetProviderHealthEvidenceQueryDto {
+    pub schema_version: String,
+    pub provider_id: String,
+}
+
+impl<'de> Deserialize<'de> for GetProviderHealthEvidenceQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderHealthEvidenceQueryDto {
+            schema_version: String,
+            provider_id: String,
+        }
+        let raw = RawGetProviderHealthEvidenceQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            provider_id: raw.provider_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetProviderHealthEvidenceQueryDto {
+    /// Validates the bounded, credential-free health query fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_health_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version, or a provider id (the
+    /// provider id is
+    /// bounded at 63 characters, matching the profile id bound),
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_health_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_health_invalid")?;
+        valid_text(&self.provider_id, 63, "provider_health_invalid")?;
+        if credential_shaped(&self.schema_version) || credential_shaped(&self.provider_id) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A query requesting the status of one provider discovery attempt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetProviderDiscoveryStatusQueryDto {
+    pub schema_version: String,
+    pub attempt_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for GetProviderDiscoveryStatusQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetProviderDiscoveryStatusQueryDto {
+            schema_version: String,
+            attempt_id: Option<String>,
+        }
+        let raw = RawGetProviderDiscoveryStatusQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            attempt_id: raw.attempt_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetProviderDiscoveryStatusQueryDto {
+    /// Validates the bounded, credential-free discovery status query fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_discovery_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version or attempt reference,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_discovery_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_discovery_invalid")?;
+        if let Some(attempt_id) = &self.attempt_id {
+            valid_text(attempt_id, 256, "provider_discovery_invalid")?;
+        }
+        if credential_shaped(&self.schema_version)
+            || self.attempt_id.as_deref().is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A query requesting the safe pricing policy projection.
+///
+/// The projection is never an admission ceiling, quota, or reservation: it
+/// records bounded observations and their code-owned classification only.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetPricingPolicyQueryDto {
+    pub schema_version: String,
+    pub model_id: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for GetPricingPolicyQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetPricingPolicyQueryDto {
+            schema_version: String,
+            model_id: Option<String>,
+        }
+        let raw = RawGetPricingPolicyQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            model_id: raw.model_id,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetPricingPolicyQueryDto {
+    /// Validates the bounded, credential-free pricing query fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_pricing_query_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version or model reference,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "provider_pricing_query_invalid")?;
+        require_current_schema_version(&self.schema_version, "provider_pricing_query_invalid")?;
+        if let Some(model_id) = &self.model_id {
+            valid_text(model_id, 63, "provider_pricing_query_invalid")?;
+        }
+        if credential_shaped(&self.schema_version)
+            || self.model_id.as_deref().is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A credential-free projection of one provider's health evidence.
+///
+/// The projection is closed and non-authorizing: it records what checks
+/// observed and creates no RunId, reason, or selection. Restoration of a
+/// provider therefore only permits reevaluation; it never routes or admits by
+/// itself.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderHealthProjectionDto {
+    pub provider_id: String,
+    pub observations: Vec<ProviderHealthEvidenceDto>,
+    pub safe_reason_code: Option<String>,
+    pub observed_at: u64,
+}
+
+impl<'de> Deserialize<'de> for ProviderHealthProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderHealthProjectionDto {
+            provider_id: String,
+            observations: Vec<ProviderHealthEvidenceDto>,
+            safe_reason_code: Option<String>,
+            observed_at: u64,
+        }
+        let raw = RawProviderHealthProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            provider_id: raw.provider_id,
+            observations: raw.observations,
+            safe_reason_code: raw.safe_reason_code,
+            observed_at: raw.observed_at,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderHealthProjectionDto {
+    /// Validates the bounded, credential-free health projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_health_invalid` for a blank, over-long, or
+    /// control-bearing provider id or safe reason code, a projection with
+    /// more than 64 observations, or an invalid observation, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.provider_id, 63, "provider_health_invalid")?;
+        if let Some(code) = &self.safe_reason_code {
+            valid_text(code, 128, "provider_health_invalid")?;
+        }
+        bounded(self.observations.clone(), 64, "provider_health_invalid")?;
+        for observation in &self.observations {
+            observation.validate()?;
+        }
+        if credential_shaped(&self.provider_id)
+            || self
+                .safe_reason_code
+                .as_deref()
+                .is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A credential-free projection of one provider discovery attempt.
+///
+/// The projection is additive only: records are observations about model
+/// identities and never route traffic. Attempt status is reported through the
+/// closed [`ProviderDiscoveryPhase`]; a terminal phase means the discovery
+/// port returned or errored. No automatic continuation is ever implied.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderDiscoveryProjectionDto {
+    pub attempt_id: Option<String>,
+    pub phase: Option<ProviderDiscoveryPhase>,
+    pub records: Vec<ProviderModelDiscoveryRecordDto>,
+    pub safe_status: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ProviderDiscoveryProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawProviderDiscoveryProjectionDto {
+            attempt_id: Option<String>,
+            phase: Option<ProviderDiscoveryPhase>,
+            records: Vec<ProviderModelDiscoveryRecordDto>,
+            safe_status: Option<String>,
+        }
+        let raw = RawProviderDiscoveryProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            attempt_id: raw.attempt_id,
+            phase: raw.phase,
+            records: raw.records,
+            safe_status: raw.safe_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ProviderDiscoveryProjectionDto {
+    /// Validates the bounded, credential-free discovery projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_discovery_invalid` for a blank, over-long, or
+    /// control-bearing attempt reference or safe status, a projection with
+    /// more than 256 records or an invalid record, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        if let Some(attempt_id) = &self.attempt_id {
+            valid_text(attempt_id, 256, "provider_discovery_invalid")?;
+        }
+        if let Some(status) = &self.safe_status {
+            valid_text(status, 256, "provider_discovery_invalid")?;
+        }
+        bounded(self.records.clone(), 256, "provider_discovery_invalid")?;
+        for record in &self.records {
+            record.validate()?;
+        }
+        if self.attempt_id.as_deref().is_some_and(credential_shaped)
+            || self.safe_status.as_deref().is_some_and(credential_shaped)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A credential-free, non-authorizing pricing policy projection.
+///
+/// The projection carries bounded observations and one code-owned policy
+/// classification. It is never an admission ceiling, quota, or reservation for
+/// Mandate admission, tool admission, or scheduler eligibility.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PricingProjectionDto {
+    pub observations: Vec<PricingObservationDto>,
+    pub policy_classification: Option<PricingClassification>,
+    pub disclaimer: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for PricingProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawPricingProjectionDto {
+            observations: Vec<PricingObservationDto>,
+            policy_classification: Option<PricingClassification>,
+            disclaimer: Option<String>,
+        }
+        let raw = RawPricingProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            observations: raw.observations,
+            policy_classification: raw.policy_classification,
+            disclaimer: raw.disclaimer,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl PricingProjectionDto {
+    /// Validates the bounded, credential-free pricing projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `provider_pricing_projection_invalid` for a projection with
+    /// more than 256 observations or an invalid observation, a blank,
+    /// over-long, or control-bearing disclaimer, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        bounded(
+            self.observations.clone(),
+            256,
+            "provider_pricing_projection_invalid",
+        )?;
+        for observation in &self.observations {
+            observation.validate()?;
+        }
+        if let Some(disclaimer) = &self.disclaimer {
+            valid_text(disclaimer, 1024, "provider_pricing_projection_invalid")?;
+        }
+        if self.disclaimer.as_deref().is_some_and(credential_shaped) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A query requesting the safe configuration projection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GetConfigurationProjectionQueryDto {
+    pub schema_version: String,
+}
+
+impl<'de> Deserialize<'de> for GetConfigurationProjectionQueryDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGetConfigurationProjectionQueryDto {
+            schema_version: String,
+        }
+        let raw = RawGetConfigurationProjectionQueryDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl GetConfigurationProjectionQueryDto {
+    /// Validates the bounded, credential-free configuration projection query.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_projection_invalid` for a blank, over-long,
+    /// control-bearing, or non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        valid_text(&self.schema_version, 64, "configuration_projection_invalid")?;
+        require_current_schema_version(&self.schema_version, "configuration_projection_invalid")?;
+        if credential_shaped(&self.schema_version) {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The closed reload status of the applied configuration projection.
+///
+/// The vocabulary is a closed enum validated by serde: `active` is the only
+/// status the current production path produces, an unknown wire value is
+/// rejected at decode with `configuration_projection_invalid`, and a consumer
+/// can match the status exhaustively (D-14, `P3-08`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationReloadStatusDto {
+    /// The applied configuration is the active one.
+    Active,
+}
+
+impl<'de> Deserialize<'de> for ConfigurationReloadStatusDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "active" => Ok(Self::Active),
+            _ => Err(de::Error::custom(ErrorDto::validation(
+                "configuration_projection_invalid",
+                "the configuration reload status is not a recognized value",
+            ))),
+        }
+    }
+}
+
+/// A safe projection of the applied daemon configuration.
+///
+/// The projection carries the applied config revision, the resolved provider
+/// kind and model, whether a credential is configured (never the credential
+/// itself), the provider execution policy, and the closed reload status. It
+/// never carries raw TOML, credentials, private endpoints, or paths.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigurationProjectionDto {
+    pub schema_version: String,
+    pub applied_config_revision_id: String,
+    pub provider_kind: String,
+    pub model_id: String,
+    pub credential_configured: bool,
+    pub provider_execution_policy: String,
+    pub reload_status: ConfigurationReloadStatusDto,
+}
+
+impl<'de> Deserialize<'de> for ConfigurationProjectionDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationProjectionDto {
+            schema_version: String,
+            applied_config_revision_id: String,
+            provider_kind: String,
+            model_id: String,
+            credential_configured: bool,
+            provider_execution_policy: String,
+            reload_status: ConfigurationReloadStatusDto,
+        }
+        let raw = RawConfigurationProjectionDto::deserialize(deserializer)?;
+        let value = Self {
+            schema_version: raw.schema_version,
+            applied_config_revision_id: raw.applied_config_revision_id,
+            provider_kind: raw.provider_kind,
+            model_id: raw.model_id,
+            credential_configured: raw.credential_configured,
+            provider_execution_policy: raw.provider_execution_policy,
+            reload_status: raw.reload_status,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ConfigurationProjectionDto {
+    /// Validates the bounded, credential-free configuration projection.
+    ///
+    /// The closed `reload_status` vocabulary is validated by its own serde
+    /// implementation, so an unknown status never reaches this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_projection_invalid` for a blank, over-long, or
+    /// control-bearing field or a non-decimal schema version,
+    /// `incompatible_protocol_version` for a schema version other than the
+    /// current one, and `credentials_forbidden` for a credential-shaped
+    /// value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [
+            &self.schema_version,
+            &self.applied_config_revision_id,
+            &self.provider_kind,
+            &self.model_id,
+            &self.provider_execution_policy,
+        ] {
+            valid_text(field, 256, "configuration_projection_invalid")?;
+        }
+        require_current_schema_version(&self.schema_version, "configuration_projection_invalid")?;
+        if [
+            &self.schema_version,
+            &self.applied_config_revision_id,
+            &self.provider_kind,
+            &self.model_id,
+            &self.provider_execution_policy,
+        ]
+        .iter()
+        .any(|value| credential_shaped(value))
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A bounded, credential-free raw TOML configuration edit.
+///
+/// The candidate content is bounded and validated free of credentials and
+/// NUL characters. Responses to this command never echo the raw candidate
+/// content back to any peer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RawTomlEditCommandDto {
+    pub operation_id: String,
+    pub expected_config_revision: String,
+    pub candidate_content: String,
+}
+
+impl<'de> Deserialize<'de> for RawTomlEditCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRawTomlEditCommandDto {
+            operation_id: String,
+            expected_config_revision: String,
+            candidate_content: String,
+        }
+        let raw = RawRawTomlEditCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            expected_config_revision: raw.expected_config_revision,
+            candidate_content: raw.candidate_content,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl RawTomlEditCommandDto {
+    /// Validates the bounded, credential-free raw edit fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `raw_toml_edit_invalid` for a blank, over-long, or
+    /// control-bearing command field, an empty or over-long candidate
+    /// content, or a candidate carrying characters outside newline,
+    /// carriage-return, tab, and printable text, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.operation_id, &self.expected_config_revision] {
+            valid_text(field, 256, "raw_toml_edit_invalid")?;
+        }
+        if self.candidate_content.trim().is_empty() || self.candidate_content.len() > 64 * 1024 {
+            return Err(ErrorDto::validation(
+                "raw_toml_edit_invalid",
+                "candidate content is invalid",
+            ));
+        }
+        if self
+            .candidate_content
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+        {
+            return Err(ErrorDto::validation(
+                "raw_toml_edit_invalid",
+                "candidate content carries invalid control characters",
+            ));
+        }
+        if intention_domain::canonical::credential_shaped_raw_content(&self.candidate_content)
+            || credential_shaped(&self.operation_id)
+            || credential_shaped(&self.expected_config_revision)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One typed, credential-free configuration edit operation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConfigurationEditOperationDto {
+    /// Sets one configuration key path to a bounded safe value.
+    Set {
+        key_path: String,
+        safe_value: String,
+    },
+    /// Removes one configuration key path.
+    Remove { key_path: String },
+}
+
+impl<'de> Deserialize<'de> for ConfigurationEditOperationDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum RawConfigurationEditOperationDto {
+            Set {
+                key_path: String,
+                safe_value: String,
+            },
+            Remove {
+                key_path: String,
+            },
+        }
+        let raw = RawConfigurationEditOperationDto::deserialize(deserializer)?;
+        let value = match raw {
+            RawConfigurationEditOperationDto::Set {
+                key_path,
+                safe_value,
+            } => Self::Set {
+                key_path,
+                safe_value,
+            },
+            RawConfigurationEditOperationDto::Remove { key_path } => Self::Remove { key_path },
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ConfigurationEditOperationDto {
+    /// Validates the bounded, credential-free operation fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_edit_invalid` for a blank, over-long, or
+    /// control-bearing key path or safe value and `credentials_forbidden`
+    /// for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        match self {
+            Self::Set {
+                key_path,
+                safe_value,
+            } => {
+                valid_text(key_path, 256, "configuration_edit_invalid")?;
+                valid_text(safe_value, 1024, "configuration_edit_invalid")?;
+                if credential_shaped(key_path) || credential_shaped(safe_value) {
+                    return Err(ErrorDto::validation(
+                        "credentials_forbidden",
+                        "credentials are forbidden",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Remove { key_path } => {
+                valid_text(key_path, 256, "configuration_edit_invalid")?;
+                if credential_shaped(key_path) {
+                    return Err(ErrorDto::validation(
+                        "credentials_forbidden",
+                        "credentials are forbidden",
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// A command applying typed, credential-free configuration edits.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ConfigurationEditCommandDto {
+    pub operation_id: String,
+    pub expected_config_revision: String,
+    pub operations: Vec<ConfigurationEditOperationDto>,
+}
+
+impl<'de> Deserialize<'de> for ConfigurationEditCommandDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawConfigurationEditCommandDto {
+            operation_id: String,
+            expected_config_revision: String,
+            operations: Vec<ConfigurationEditOperationDto>,
+        }
+        let raw = RawConfigurationEditCommandDto::deserialize(deserializer)?;
+        let value = Self {
+            operation_id: raw.operation_id,
+            expected_config_revision: raw.expected_config_revision,
+            operations: raw.operations,
+        };
+        value.validate().map_err(de::Error::custom)?;
+        Ok(value)
+    }
+}
+
+impl ConfigurationEditCommandDto {
+    /// Validates the bounded, credential-free typed edit command.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_edit_invalid` for a blank, over-long, or
+    /// control-bearing command field, an empty operation list or one beyond
+    /// its 16-operation bound, or an invalid operation, and
+    /// `credentials_forbidden` for a credential-shaped value.
+    pub fn validate(&self) -> DtoResult<()> {
+        for field in [&self.operation_id, &self.expected_config_revision] {
+            valid_text(field, 256, "configuration_edit_invalid")?;
+        }
+        if credential_shaped(&self.operation_id)
+            || credential_shaped(&self.expected_config_revision)
+        {
+            return Err(ErrorDto::validation(
+                "credentials_forbidden",
+                "credentials are forbidden",
+            ));
+        }
+        if self.operations.is_empty() || self.operations.len() > 16 {
+            return Err(ErrorDto::validation(
+                "configuration_edit_invalid",
+                "typed edits must carry between 1 and 16 operations",
+            ));
+        }
+        for operation in &self.operations {
+            operation.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// Metadata linking one public wire contract family to its domain-owned tag.
@@ -1697,11 +4911,6 @@ pub const MODEL_CONTEXT_PROJECTION_V1: ContractFamilyDescriptor = ContractFamily
     name: "model-context-projection-v1",
     version: 1,
     tag: TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-};
-pub const LEGACY_M4_SELECTION_BINDING: ContractFamilyDescriptor = ContractFamilyDescriptor {
-    name: "legacy-m4-selection-binding",
-    version: 1,
-    tag: TagRegistry::LEGACY_M4_SELECTION_BINDING,
 };
 pub const TOOL_DESCRIPTOR_REVISION: ContractFamilyDescriptor = ContractFamilyDescriptor {
     name: "tool-descriptor-revision",
@@ -1791,7 +5000,6 @@ pub const PUBLIC_WIRE_CONTRACT_FAMILIES: &[ContractFamilyDescriptor] = &[
     REASONING_HISTORY_MANIFEST_V1,
     CONTEXT_SOURCE_MANIFEST_V1,
     MODEL_CONTEXT_PROJECTION_V1,
-    LEGACY_M4_SELECTION_BINDING,
     TOOL_DESCRIPTOR_REVISION,
     TOOL_REGISTRY_REVISION,
     MODEL_TOOL_LOOP_V1,
@@ -1861,6 +5069,7 @@ mod tests {
             requested_title: Some("forked session".to_owned()),
             future_profile_override_present: true,
             future_profile_override: Some("profile-2".to_owned()),
+            expected_profile_revision: None,
         }
     }
 
@@ -1933,6 +5142,7 @@ mod tests {
         round_trip(&StartForkRunCommandDto {
             session_id: "session-1".to_owned(),
             profile_override: Some("profile-2".to_owned()),
+            expected_profile_revision: None,
         });
         round_trip(&GetConversationTreeQueryDto {
             session_id: "session-1".to_owned(),
@@ -2161,104 +5371,6 @@ mod tests {
             ToolTerminalOutcome::ExternalEffectUnknown,
         ] {
             round_trip(&outcome);
-        }
-    }
-
-    #[test]
-    fn legacy_m4_selection_binding_round_trips() {
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        assert!(binding.validate().is_ok());
-        round_trip(&binding);
-    }
-
-    #[test]
-    fn legacy_selection_reference_is_preserved_byte_for_byte() {
-        let reference = "legacy-uuid:11111111-1111-4111-8111-111111111111";
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: reference.to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        let wire = serde_json::to_vec(&binding).expect("binding encodes");
-        assert!(String::from_utf8_lossy(&wire).contains(reference));
-        let decoded: LegacyM4SelectionBindingDto =
-            serde_json::from_slice(&wire).expect("binding decodes");
-        assert_eq!(decoded.legacy_safe_selection, reference);
-        assert_eq!(decoded, binding);
-    }
-
-    #[test]
-    fn legacy_selection_reference_validation_rejects_non_canonical_forms() {
-        for value in [
-            "selection",
-            "legacy-uuid:",
-            "legacy-uuid:11111111-1111-4111-8111-11111111111",
-            "LEGACY-UUID:11111111-1111-4111-8111-111111111111",
-            "legacy-uuid:11111111-1111-4111-8111-1111111111111",
-            "legacy-uuid:11111111-1111-4111-8111-11111111111G",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111 ",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111\n",
-            "legacy-uuid:/tmp/11111111-1111-4111-8111-111111111111",
-            "legacy-uuid:11111111-1111-0111-8111-111111111111",
-            "legacy-uuid:11111111-1111-4111-7111-111111111111",
-        ] {
-            assert!(
-                !is_canonical_legacy_uuid_reference(value),
-                "{value:?} must not be canonical"
-            );
-            let binding = LegacyM4SelectionBindingDto {
-                legacy_config_revision_id: "config-1".to_owned(),
-                legacy_snapshot_schema: "schema-1".to_owned(),
-                legacy_safe_selection: value.to_owned(),
-                default_profile_id: "profile-1".to_owned(),
-                default_profile_revision_id: "rev-1".to_owned(),
-                kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-                capability_subset: vec!["text".to_owned()],
-                execution_policy: "execution-policy".to_owned(),
-                driver_contract_revision: "driver-1.0".to_owned(),
-            };
-            assert_eq!(
-                binding
-                    .validate()
-                    .expect_err("non-canonical reference is rejected")
-                    .code(),
-                "legacy_selection_reference_invalid"
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_uuid_reference_accepts_only_rfc_4122_versions_one_through_five() {
-        let reference = |version_digit: char| {
-            format!("legacy-uuid:11111111-1111-{version_digit}111-8111-111111111111")
-        };
-        for version in ['1', '2', '3', '4', '5'] {
-            assert!(
-                is_canonical_legacy_uuid_reference(&reference(version)),
-                "version {version} is RFC 4122 and must be canonical"
-            );
-        }
-        for version in ['0', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'] {
-            assert!(
-                !is_canonical_legacy_uuid_reference(&reference(version)),
-                "version {version} is outside RFC 4122 1..=5 and must be rejected"
-            );
         }
     }
 
@@ -2674,7 +5786,6 @@ mod tests {
             "provider-profiles",
             "model-1",
             "x-safe-header",
-            "legacy-uuid:11111111-1111-4111-8111-111111111111",
             "bearer",
             "bearer ",
             "responses",
@@ -3037,58 +6148,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_m4_selection_binding_validates_all_fields() {
-        let binding = LegacyM4SelectionBindingDto {
-            legacy_config_revision_id: "config-1".to_owned(),
-            legacy_snapshot_schema: "schema-1".to_owned(),
-            legacy_safe_selection: "legacy-uuid:11111111-1111-4111-8111-111111111111".to_owned(),
-            default_profile_id: "profile-1".to_owned(),
-            default_profile_revision_id: "rev-1".to_owned(),
-            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
-            capability_subset: vec!["text".to_owned()],
-            execution_policy: "execution-policy".to_owned(),
-            driver_contract_revision: "driver-1.0".to_owned(),
-        };
-        assert!(binding.validate().is_ok());
-        let mut blank = binding.clone();
-        blank.driver_contract_revision = "   ".to_owned();
-        assert_eq!(
-            blank
-                .validate()
-                .expect_err("blank binding field is rejected")
-                .code(),
-            "legacy_selection_binding_invalid"
-        );
-        let mut blank_capability = binding.clone();
-        blank_capability.capability_subset = vec!["  ".to_owned()];
-        assert_eq!(
-            blank_capability
-                .validate()
-                .expect_err("blank capability entry is rejected")
-                .code(),
-            "legacy_selection_binding_invalid"
-        );
-        let mut credential = binding.clone();
-        credential.default_profile_id = "sk-profile".to_owned();
-        assert_eq!(
-            credential
-                .validate()
-                .expect_err("credential-shaped binding field is rejected")
-                .code(),
-            "credentials_forbidden"
-        );
-        let mut credential_capability = binding;
-        credential_capability.capability_subset = vec!["Bearer cap".to_owned()];
-        assert_eq!(
-            credential_capability
-                .validate()
-                .expect_err("credential-shaped capability is rejected")
-                .code(),
-            "credentials_forbidden"
-        );
-    }
-
-    #[test]
     fn fork_preview_and_notification_limits_accept_at_limit_and_reject_one_over() {
         // Fork preview: 1 MiB snapshot bound and 64-page preview bound.
         let preview = |snapshot_size_bytes: u64, page_count: u32| ForkPreviewDto {
@@ -3159,7 +6218,7 @@ mod tests {
 
         // No committed golden fixture may embed the fake secret.
         for fixture in [
-            include_str!("../tests/fixtures/goldens/hello-compatible-minor-v1.json"),
+            include_str!("../tests/fixtures/goldens/hello-current-version-v1.json"),
             include_str!("../tests/fixtures/goldens/hello-incompatible-major-v2.json"),
             include_str!("../tests/fixtures/goldens/hello-unnegotiated-capability-v1.json"),
         ] {
@@ -3347,6 +6406,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fork_profile_override_pairs_validate_and_round_trip() {
+        // Presence flag without a value is invalid.
+        let mut command = fork_command();
+        command.future_profile_override_present = true;
+        command.future_profile_override = None;
+        command.expected_profile_revision = None;
+        assert_eq!(
+            command
+                .validate()
+                .expect_err("flag without value is rejected")
+                .code(),
+            "provider_profile_override_invalid"
+        );
+        // Expected revision without an override is invalid.
+        let mut command = fork_command();
+        command.future_profile_override_present = true;
+        command.future_profile_override = Some("profile-2".to_owned());
+        command.expected_profile_revision = Some("rev-1".to_owned());
+        assert!(command.validate().is_ok());
+        let mut command = fork_command();
+        command.future_profile_override_present = false;
+        command.future_profile_override = None;
+        command.expected_profile_revision = Some("rev-1".to_owned());
+        assert_eq!(
+            command
+                .validate()
+                .expect_err("expected revision without override is rejected")
+                .code(),
+            "provider_profile_override_invalid"
+        );
+        // Overlong and credential-shaped values are rejected.
+        let mut command = fork_command();
+        command.expected_profile_revision = Some("p".repeat(64));
+        assert_eq!(
+            command
+                .validate()
+                .expect_err("overlong revision is rejected")
+                .code(),
+            "provider_profile_override_invalid"
+        );
+        let mut command = fork_command();
+        command.expected_profile_revision = Some("api-key-rev".to_owned());
+        assert_eq!(
+            command
+                .validate()
+                .expect_err("credential-shaped revision is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        // The builder keeps the override pair coherent and round-trips.
+        let built = fork_command()
+            .with_profile_override(Some("profile-2".to_owned()), Some("rev-1".to_owned()))
+            .expect("builder override pair is valid");
+        assert!(built.future_profile_override_present);
+        assert_eq!(built.future_profile_override.as_deref(), Some("profile-2"));
+        assert_eq!(built.expected_profile_revision.as_deref(), Some("rev-1"));
+        round_trip(&built);
+        let start = StartForkRunCommandDto {
+            session_id: "session-1".to_owned(),
+            profile_override: Some("profile-2".to_owned()),
+            expected_profile_revision: None,
+        };
+        assert!(start.validate().is_ok());
+        let mut start = start;
+        start.expected_profile_revision = Some("rev-1".to_owned());
+        assert!(start.validate().is_ok());
+        start.profile_override = None;
+        assert_eq!(
+            start
+                .validate()
+                .expect_err("revision without override is rejected")
+                .code(),
+            "provider_profile_override_invalid"
+        );
+    }
     #[test]
     fn fork_base_snapshot_families_round_trip_and_validate() {
         let v1 = base_snapshot_v1();
@@ -3868,7 +7003,7 @@ mod tests {
     fn public_wire_families_cover_exactly_the_ledger_tags() {
         // The expected tag set is rebuilt solely from the domain-owned
         // registry constants: there is no protocol-side numeric mirror.
-        const LEDGER_TAGS: [u32; 24] = [
+        const LEDGER_TAGS: [u32; 23] = [
             TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
             TagRegistry::AGENT_ACTIVITY_SELECTION_V1,
             TagRegistry::GOAL_RUN_SELECTION_V1,
@@ -3880,7 +7015,6 @@ mod tests {
             TagRegistry::REASONING_HISTORY_MANIFEST_V1,
             TagRegistry::CONTEXT_SOURCE_MANIFEST_V1,
             TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-            TagRegistry::LEGACY_M4_SELECTION_BINDING,
             TagRegistry::TOOL_DESCRIPTOR_REVISION,
             TagRegistry::TOOL_REGISTRY_REVISION,
             TagRegistry::MODEL_TOOL_LOOP_V1,
@@ -3902,7 +7036,7 @@ mod tests {
         tags.dedup();
         assert_eq!(
             tags, LEDGER_TAGS,
-            "wire families must cover exactly the 24 ADR 0036 ledger tags"
+            "wire families must cover exactly the 23 ADR 0036 ledger tags"
         );
     }
 
@@ -3930,7 +7064,7 @@ mod tests {
 
     #[test]
     fn public_wire_family_tags_match_the_domain_tag_registry() {
-        let registry: [(&str, u32); 26] = [
+        let registry: [(&str, u32); 25] = [
             (
                 "programmatic-caller-policy-selection-v1",
                 TagRegistry::PROGRAMMATIC_CALLER_POLICY_SELECTION_V1,
@@ -3968,10 +7102,6 @@ mod tests {
             (
                 "model-context-projection-v1",
                 TagRegistry::MODEL_CONTEXT_PROJECTION_V1,
-            ),
-            (
-                "legacy-m4-selection-binding",
-                TagRegistry::LEGACY_M4_SELECTION_BINDING,
             ),
             (
                 "tool-descriptor-revision",
@@ -4031,5 +7161,1397 @@ mod tests {
             crate::CURRENT_DTO_SCHEMA_VERSION,
             intention_types::SchemaVersionDto::new(1, 1)
         );
+    }
+
+    fn catalog_query() -> GetProviderCatalogQueryDto {
+        GetProviderCatalogQueryDto {
+            schema_version: "1.1".to_owned(),
+            page_token: None,
+            expected_catalog_revision_id: Some("catalog-rev-1".to_owned()),
+        }
+    }
+
+    fn catalog_entry() -> ProviderCatalogEntryDto {
+        ProviderCatalogEntryDto {
+            profile_id: "profile-1".to_owned(),
+            profile_revision_id: "rev-1".to_owned(),
+            display_name: "Provider One".to_owned(),
+            enabled: true,
+            provider_kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kind-rev-1".to_owned(),
+            model_id: "model-1".to_owned(),
+            normalized_endpoint: Some("https://provider.example".to_owned()),
+            effective_execution_policy: "execution-policy".to_owned(),
+            capability_subset: vec!["text".to_owned()],
+            credential_transport_mode: CredentialTransportMode::SafeHeader,
+            credential_transport_safe_header_name: Some("x-safe-header".to_owned()),
+            credential_configured: true,
+            driver_declared_capabilities: vec!["text".to_owned()],
+            readiness: ProviderReadinessDto::Ready,
+        }
+    }
+
+    fn catalog_page() -> ProviderCatalogPageDto {
+        ProviderCatalogPageDto {
+            schema_version: "1.1".to_owned(),
+            catalog_revision_id: "catalog-rev-1".to_owned(),
+            entries: vec![catalog_entry()],
+            next_page_token: None,
+            has_more: false,
+        }
+    }
+
+    fn catalog_status_query() -> GetProviderCatalogStatusQueryDto {
+        GetProviderCatalogStatusQueryDto {
+            schema_version: "1.1".to_owned(),
+        }
+    }
+
+    fn catalog_status() -> ProviderCatalogStatusDto {
+        ProviderCatalogStatusDto {
+            schema_version: "1.1".to_owned(),
+            activation_state: ProviderCatalogActivationState::Active,
+            degraded_reason: None,
+            active_catalog_revision_id: Some("catalog-rev-1".to_owned()),
+            candidate_catalog_revision_id: None,
+            active_default_profile_id: Some("profile-1".to_owned()),
+            removal_impact: None,
+            provider_profiles_negotiated: true,
+        }
+    }
+
+    fn set_profile_command() -> SetSessionProviderProfileCommandDto {
+        SetSessionProviderProfileCommandDto {
+            schema_version: "1.1".to_owned(),
+            session_id: "session-1".to_owned(),
+            profile_id: "profile-1".to_owned(),
+            expected_session_projection_revision: 7,
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn set_profile_accepted(changed: bool) -> SetSessionProviderProfileAcceptedDto {
+        SetSessionProviderProfileAcceptedDto {
+            session_id: "session-1".to_owned(),
+            changed,
+            resulting_projection_revision: 8,
+            resolved: ResolvedProviderProfileDto::Resolved {
+                profile_id: "profile-1".to_owned(),
+                profile_revision_id: "rev-1".to_owned(),
+            },
+        }
+    }
+
+    fn session_profile_query() -> GetSessionProviderProfileQueryDto {
+        GetSessionProviderProfileQueryDto {
+            schema_version: "1.1".to_owned(),
+            session_id: "session-1".to_owned(),
+        }
+    }
+
+    fn session_profile() -> SessionProviderProfileDto {
+        SessionProviderProfileDto {
+            session_id: "session-1".to_owned(),
+            profile_id: "profile-1".to_owned(),
+            resolved: ResolvedProviderProfileDto::Resolved {
+                profile_id: "profile-1".to_owned(),
+                profile_revision_id: "rev-1".to_owned(),
+            },
+            session_projection_revision: 8,
+            global_default_profile_id: "profile-default".to_owned(),
+        }
+    }
+
+    fn accept_removal_command() -> AcceptProviderCatalogRemovalCommandDto {
+        AcceptProviderCatalogRemovalCommandDto {
+            candidate_handle: "candidate-1".to_owned(),
+            expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
+            expected_candidate_catalog_revision_id: "catalog-rev-2".to_owned(),
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn reject_candidate_command() -> RejectProviderCatalogCandidateCommandDto {
+        RejectProviderCatalogCandidateCommandDto {
+            candidate_handle: "candidate-1".to_owned(),
+            expected_active_catalog_revision_id: "catalog-rev-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn reconcile_queue_command() -> ReconcileUnavailableQueueCommandDto {
+        ReconcileUnavailableQueueCommandDto {
+            session_id: "session-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn reconcile_queue_accepted() -> ReconcileUnavailableQueueAcceptedDto {
+        ReconcileUnavailableQueueAcceptedDto {
+            session_id: "session-1".to_owned(),
+            page_cursor: Some("opaque-page-cursor-01".to_owned()),
+            promoted_count: 8,
+        }
+    }
+
+    fn admit_recovered_command() -> AdmitRecoveredRunCommandDto {
+        AdmitRecoveredRunCommandDto {
+            session_id: "session-1".to_owned(),
+            run_id: "run-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn admit_recovered_accepted() -> AdmitRecoveredRunAcceptedDto {
+        AdmitRecoveredRunAcceptedDto {
+            session_id: "session-1".to_owned(),
+            run_id: "run-1".to_owned(),
+        }
+    }
+
+    fn usage_query() -> GetProviderUsageQueryDto {
+        GetProviderUsageQueryDto {
+            schema_version: "1.1".to_owned(),
+            profile_id: "profile-1".to_owned(),
+            usage_period_start: 100,
+            usage_period_end: 200,
+        }
+    }
+
+    fn usage_aggregation() -> UsageAggregationDto {
+        UsageAggregationDto {
+            profile_id: "profile-1".to_owned(),
+            provider_profile_revision_id: "rev-1".to_owned(),
+            model_id: "model-1".to_owned(),
+            request_count: 12,
+            input_units: 1000,
+            output_units: 500,
+            reasoning_units: 250,
+            usage_period_start: 100,
+            usage_period_end: 200,
+        }
+    }
+
+    fn reload_command() -> ReloadConfigurationCommandDto {
+        ReloadConfigurationCommandDto {
+            candidate_snapshot_reference: Some("snapshot-1".to_owned()),
+            candidate_edit_reference: None,
+            expected_active_config_revision: "config-rev-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+            origin: ConfigurationOriginDto::Admin,
+        }
+    }
+
+    fn reload_transaction(committed: bool) -> ReloadTransactionDto {
+        ReloadTransactionDto {
+            transaction_id: "transaction-1".to_owned(),
+            previous_config_revision: "config-rev-1".to_owned(),
+            candidate_config_revision: "config-rev-2".to_owned(),
+            validation_result: ConfigurationValidationOutcomeDto::Valid,
+            commit_outcome: if committed {
+                ConfigurationCommitOutcomeDto::Committed
+            } else {
+                ConfigurationCommitOutcomeDto::Rejected
+            },
+            safe_failure_code: if committed {
+                None
+            } else {
+                Some("reload_rejected".to_owned())
+            },
+            safe_failure_detail: if committed {
+                None
+            } else {
+                Some("safe rejection detail".to_owned())
+            },
+        }
+    }
+
+    fn rotate_credentials_command() -> RotateProviderCredentialsCommandDto {
+        RotateProviderCredentialsCommandDto {
+            profile_id: "profile-1".to_owned(),
+            provider_profile_revision_id: "rev-1".to_owned(),
+            expected_credential_composition_revision: "composition-1".to_owned(),
+            operation_id: "operation-1".to_owned(),
+        }
+    }
+
+    fn rotation_result() -> CredentialRotationResultDto {
+        CredentialRotationResultDto {
+            operation_id: "operation-1".to_owned(),
+            profile_id: "profile-1".to_owned(),
+            safe_credential_composition_revision: "composition-2".to_owned(),
+            rotated: true,
+        }
+    }
+
+    fn health_evidence() -> ProviderHealthEvidenceDto {
+        ProviderHealthEvidenceDto {
+            provider_id: "profile-1".to_owned(),
+            provider_profile_revision_id: Some("rev-1".to_owned()),
+            health_attempt_id: "attempt-1".to_owned(),
+            check_contract_revision: "check-1".to_owned(),
+            observed_availability: ProviderAvailabilityObservation::Available,
+            observed_at: 100,
+            failure_category: None,
+            safe_diagnostic_code: None,
+        }
+    }
+
+    fn discovery_attempt() -> ProviderDiscoveryAttemptDto {
+        ProviderDiscoveryAttemptDto {
+            attempt_id: "attempt-1".to_owned(),
+            discovery_scope: "responses".to_owned(),
+            phase: ProviderDiscoveryPhase::Started,
+            started_at: 100,
+            safe_status: "running".to_owned(),
+        }
+    }
+
+    fn discovery_record() -> ProviderModelDiscoveryRecordDto {
+        ProviderModelDiscoveryRecordDto {
+            discovery_scope: "responses".to_owned(),
+            model_id: "model-1".to_owned(),
+            capability_records: vec!["text".to_owned()],
+            source_attempt_id: "attempt-1".to_owned(),
+            discovered_at: 100,
+        }
+    }
+
+    fn pricing_observation() -> PricingObservationDto {
+        PricingObservationDto {
+            provider_kind_id: "responses".to_owned(),
+            model_id: "model-1".to_owned(),
+            bounded_numeric_value: 1000,
+            classification: PricingClassification::CapacityObservation,
+            observed_at: 100,
+        }
+    }
+
+    fn raw_toml_edit() -> RawTomlEditCommandDto {
+        RawTomlEditCommandDto {
+            operation_id: "operation-1".to_owned(),
+            expected_config_revision: "config-rev-1".to_owned(),
+            candidate_content: "[daemon]\nmax_parallel_runs = 2\n".to_owned(),
+        }
+    }
+
+    fn typed_config_edit() -> ConfigurationEditCommandDto {
+        ConfigurationEditCommandDto {
+            operation_id: "operation-1".to_owned(),
+            expected_config_revision: "config-rev-1".to_owned(),
+            operations: vec![ConfigurationEditOperationDto::Set {
+                key_path: "daemon.max_parallel_runs".to_owned(),
+                safe_value: "2".to_owned(),
+            }],
+        }
+    }
+
+    #[test]
+    fn zone2_provider_catalog_family_round_trips_and_validates() {
+        let mut query = catalog_query();
+        assert!(query.validate().is_ok());
+        round_trip(&query);
+        query.page_token = Some("opaque-page-cursor-01".to_owned());
+        assert!(query.validate().is_ok());
+        round_trip(&query);
+
+        let entry = catalog_entry();
+        assert!(entry.validate().is_ok());
+        round_trip(&entry);
+        for readiness in [
+            ProviderReadinessDto::Ready,
+            ProviderReadinessDto::Disabled,
+            ProviderReadinessDto::Unavailable,
+        ] {
+            round_trip(&readiness);
+        }
+        for mode in [
+            CredentialTransportMode::Bearer,
+            CredentialTransportMode::SafeHeader,
+        ] {
+            let mut entry = catalog_entry();
+            entry.credential_transport_mode = mode;
+            assert!(entry.validate().is_ok());
+            round_trip(&entry);
+        }
+
+        let page = catalog_page();
+        assert!(page.validate().is_ok());
+        round_trip(&page);
+        let mut paged = catalog_page();
+        paged.entries.push(ProviderCatalogEntryDto {
+            profile_id: "profile-2".to_owned(),
+            ..catalog_entry()
+        });
+        paged.next_page_token = Some("opaque-page-cursor-02".to_owned());
+        paged.has_more = true;
+        assert!(paged.validate().is_ok());
+        round_trip(&paged);
+        let empty = ProviderCatalogPageDto {
+            entries: Vec::new(),
+            ..catalog_page()
+        };
+        assert!(empty.validate().is_ok());
+        round_trip(&empty);
+
+        let status_query = catalog_status_query();
+        assert!(status_query.validate().is_ok());
+        round_trip(&status_query);
+
+        let status = catalog_status();
+        assert!(status.validate().is_ok());
+        round_trip(&status);
+        let impact = ProviderCatalogRemovalImpactDto {
+            affected_profile_ids: vec!["profile-1".to_owned()],
+            safe_impact_summary: "one profile affected".to_owned(),
+        };
+        assert!(impact.validate().is_ok());
+        round_trip(&impact);
+    }
+
+    #[test]
+    fn zone2_provider_catalog_validation_rejects_bad_inputs() {
+        let too_long = "a".repeat(257);
+        for field in ["   ", too_long.as_str(), "a\u{0000}b"] {
+            let mut query = catalog_query();
+            query.schema_version = field.to_owned();
+            assert_eq!(
+                query
+                    .validate()
+                    .expect_err("invalid catalog query is rejected")
+                    .code(),
+                "provider_catalog_invalid"
+            );
+            let mut entry = catalog_entry();
+            entry.profile_id = field.to_owned();
+            assert_eq!(
+                entry
+                    .validate()
+                    .expect_err("invalid catalog entry is rejected")
+                    .code(),
+                "provider_catalog_entry_invalid"
+            );
+        }
+
+        // Endpoint forms carrying userinfo, query, fragment, or control
+        // characters are rejected.
+        for endpoint in [
+            "https://user@provider.example",
+            "https://provider.example?q=1",
+            "https://provider.example#frag",
+            "https://provider.example\tpath",
+        ] {
+            let mut entry = catalog_entry();
+            entry.normalized_endpoint = Some(endpoint.to_owned());
+            assert_eq!(
+                entry
+                    .validate()
+                    .expect_err("invalid endpoint is rejected")
+                    .code(),
+                "invalid_endpoint"
+            );
+        }
+
+        // Credential-shaped values are rejected in entry fields.
+        for value in ["sk-123", "Bearer secret", "api-key-1"] {
+            let mut entry = catalog_entry();
+            entry.model_id = value.to_owned();
+            assert_eq!(
+                entry
+                    .validate()
+                    .expect_err("credential-shaped value is rejected")
+                    .code(),
+                "credentials_forbidden"
+            );
+            let mut header = catalog_entry();
+            header.credential_transport_safe_header_name = Some(value.to_owned());
+            assert_eq!(
+                header
+                    .validate()
+                    .expect_err("credential-shaped header is rejected")
+                    .code(),
+                "credentials_forbidden"
+            );
+        }
+
+        // Page token bounds and credential shapes.
+        let mut query = catalog_query();
+        query.page_token = Some("   ".to_owned());
+        assert_eq!(
+            query
+                .validate()
+                .expect_err("blank page token is rejected")
+                .code(),
+            "invalid_page_token"
+        );
+        let mut query = catalog_query();
+        query.page_token = Some("a".repeat(1025));
+        assert_eq!(
+            query
+                .validate()
+                .expect_err("over-long page token is rejected")
+                .code(),
+            "invalid_page_token"
+        );
+        let mut query = catalog_query();
+        query.page_token = Some("opaque-token-01".to_owned());
+        assert_eq!(
+            query
+                .validate()
+                .expect_err("credential-shaped page token is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut query = catalog_query();
+        query.page_token = Some("opaque-page-cursor\u{0000}-01".to_owned());
+        assert_eq!(
+            query
+                .validate()
+                .expect_err("control-bearing page token is rejected")
+                .code(),
+            "invalid_page_token"
+        );
+
+        // Catalog page: unsorted or repeated profile ids are rejected.
+        let mut unsorted = catalog_page();
+        unsorted.entries = vec![
+            ProviderCatalogEntryDto {
+                profile_id: "profile-2".to_owned(),
+                ..catalog_entry()
+            },
+            ProviderCatalogEntryDto {
+                profile_id: "profile-1".to_owned(),
+                ..catalog_entry()
+            },
+        ];
+        assert_eq!(
+            unsorted
+                .validate()
+                .expect_err("unsorted catalog page is rejected")
+                .code(),
+            "provider_catalog_unsorted"
+        );
+        let mut repeated = catalog_page();
+        repeated.entries = vec![catalog_entry(), catalog_entry()];
+        assert_eq!(
+            repeated
+                .validate()
+                .expect_err("repeated profile id is rejected")
+                .code(),
+            "provider_catalog_unsorted"
+        );
+
+        // Catalog page: has_more must agree with the next page token.
+        let mut missing_token = catalog_page();
+        missing_token.has_more = true;
+        assert_eq!(
+            missing_token
+                .validate()
+                .expect_err("has_more without a token is rejected")
+                .code(),
+            "provider_catalog_invalid"
+        );
+        let mut stale_token = catalog_page();
+        stale_token.next_page_token = Some("opaque-page-cursor-01".to_owned());
+        assert_eq!(
+            stale_token
+                .validate()
+                .expect_err("a token without has_more is rejected")
+                .code(),
+            "provider_catalog_invalid"
+        );
+        let mut oversized = catalog_page();
+        oversized.entries = (0..257)
+            .map(|index| ProviderCatalogEntryDto {
+                profile_id: format!("profile-{index}"),
+                ..catalog_entry()
+            })
+            .collect();
+        assert_eq!(
+            oversized
+                .validate()
+                .expect_err("a 257-entry page is rejected")
+                .code(),
+            "provider_catalog_invalid"
+        );
+    }
+
+    #[test]
+    fn zone2_catalog_status_covers_all_activation_and_degraded_states() {
+        let mut preparing = catalog_status();
+        preparing.activation_state = ProviderCatalogActivationState::Preparing;
+        preparing.active_catalog_revision_id = None;
+        assert!(preparing.validate().is_ok());
+        round_trip(&preparing);
+
+        for reason in [
+            ProviderCatalogDegradedReason::RemovalCandidatePending,
+            ProviderCatalogDegradedReason::RemovalCandidateRejected,
+            ProviderCatalogDegradedReason::RemovalCandidateExpired,
+        ] {
+            let mut pending = catalog_status();
+            pending.activation_state = ProviderCatalogActivationState::PendingRemoval;
+            pending.degraded_reason = Some(reason);
+            pending.candidate_catalog_revision_id = Some("catalog-rev-2".to_owned());
+            pending.removal_impact = Some(ProviderCatalogRemovalImpactDto {
+                affected_profile_ids: vec!["profile-1".to_owned()],
+                safe_impact_summary: "one profile affected".to_owned(),
+            });
+            assert!(pending.validate().is_ok());
+            round_trip(&pending);
+        }
+
+        let mut recovery = catalog_status();
+        recovery.activation_state = ProviderCatalogActivationState::ActivationRecoveryRequired;
+        recovery.degraded_reason = Some(ProviderCatalogDegradedReason::ActivationRecoveryRequired);
+        assert!(recovery.validate().is_ok());
+        round_trip(&recovery);
+
+        // Invalid activation/degradation combinations fail closed.
+        let mut active_degraded = catalog_status();
+        active_degraded.degraded_reason =
+            Some(ProviderCatalogDegradedReason::RemovalCandidatePending);
+        assert_eq!(
+            active_degraded
+                .validate()
+                .expect_err("active with a degraded reason is rejected")
+                .code(),
+            "provider_catalog_status_invalid"
+        );
+        let mut preparing_degraded = catalog_status();
+        preparing_degraded.activation_state = ProviderCatalogActivationState::Preparing;
+        preparing_degraded.degraded_reason =
+            Some(ProviderCatalogDegradedReason::RemovalCandidateExpired);
+        assert_eq!(
+            preparing_degraded
+                .validate()
+                .expect_err("preparing with a degraded reason is rejected")
+                .code(),
+            "provider_catalog_status_invalid"
+        );
+        let mut pending_without_candidate = catalog_status();
+        pending_without_candidate.activation_state = ProviderCatalogActivationState::PendingRemoval;
+        pending_without_candidate.degraded_reason =
+            Some(ProviderCatalogDegradedReason::RemovalCandidatePending);
+        assert_eq!(
+            pending_without_candidate
+                .validate()
+                .expect_err("pending removal without a candidate revision is rejected")
+                .code(),
+            "provider_catalog_status_invalid"
+        );
+        let mut pending_wrong_reason = catalog_status();
+        pending_wrong_reason.activation_state = ProviderCatalogActivationState::PendingRemoval;
+        pending_wrong_reason.degraded_reason =
+            Some(ProviderCatalogDegradedReason::ActivationRecoveryRequired);
+        pending_wrong_reason.candidate_catalog_revision_id = Some("catalog-rev-2".to_owned());
+        assert_eq!(
+            pending_wrong_reason
+                .validate()
+                .expect_err("pending removal with the wrong reason is rejected")
+                .code(),
+            "provider_catalog_status_invalid"
+        );
+        let mut recovery_without_reason = catalog_status();
+        recovery_without_reason.activation_state =
+            ProviderCatalogActivationState::ActivationRecoveryRequired;
+        assert_eq!(
+            recovery_without_reason
+                .validate()
+                .expect_err("recovery without its reason is rejected")
+                .code(),
+            "provider_catalog_status_invalid"
+        );
+    }
+
+    #[test]
+    fn zone2_session_provider_profile_family_round_trips_and_validates() {
+        let command = set_profile_command();
+        assert!(command.validate().is_ok());
+        round_trip(&command);
+
+        // Changed, idempotent no-op, and unavailable acceptance evidence.
+        let changed = set_profile_accepted(true);
+        assert!(changed.validate().is_ok());
+        round_trip(&changed);
+        let idempotent = set_profile_accepted(false);
+        assert!(idempotent.validate().is_ok());
+        round_trip(&idempotent);
+        for reason in [
+            ProviderProfileUnavailableReason::ProfileNotFound,
+            ProviderProfileUnavailableReason::ProfileDisabled,
+            ProviderProfileUnavailableReason::ProviderUnavailable,
+            ProviderProfileUnavailableReason::CatalogNotActive,
+        ] {
+            let mut unavailable = set_profile_accepted(true);
+            unavailable.resolved = ResolvedProviderProfileDto::Unavailable(reason);
+            assert!(unavailable.validate().is_ok());
+            round_trip(&unavailable);
+        }
+
+        let query = session_profile_query();
+        assert!(query.validate().is_ok());
+        round_trip(&query);
+
+        let profile = session_profile();
+        assert!(profile.validate().is_ok());
+        round_trip(&profile);
+
+        // Blank and credential-shaped session profile fields fail closed.
+        let mut blank = set_profile_command();
+        blank.session_id = "   ".to_owned();
+        assert_eq!(
+            blank
+                .validate()
+                .expect_err("blank session id is rejected")
+                .code(),
+            "set_session_provider_profile_invalid"
+        );
+        let mut credential = set_profile_command();
+        credential.profile_id = "sk-profile".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped profile id is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+        let mut credential_resolved = session_profile();
+        credential_resolved.resolved = ResolvedProviderProfileDto::Resolved {
+            profile_id: "Bearer profile".to_owned(),
+            profile_revision_id: "rev-1".to_owned(),
+        };
+        assert_eq!(
+            credential_resolved
+                .validate()
+                .expect_err("credential-shaped resolved profile is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_removal_queue_recovery_family_round_trips_and_validates() {
+        let accept = accept_removal_command();
+        assert!(accept.validate().is_ok());
+        round_trip(&accept);
+        let accepted = AcceptProviderCatalogRemovalAcceptedDto {
+            candidate_handle: "candidate-1".to_owned(),
+            active_catalog_revision_id: "catalog-rev-1".to_owned(),
+        };
+        assert!(accepted.validate().is_ok());
+        round_trip(&accepted);
+
+        let reject = reject_candidate_command();
+        assert!(reject.validate().is_ok());
+        round_trip(&reject);
+        let rejected = RejectProviderCatalogCandidateAcceptedDto {
+            candidate_handle: "candidate-1".to_owned(),
+        };
+        assert!(rejected.validate().is_ok());
+        round_trip(&rejected);
+
+        // Mismatched expected revisions: the active and candidate revisions
+        // must differ.
+        let mut same_revisions = accept.clone();
+        same_revisions.expected_candidate_catalog_revision_id = "catalog-rev-1".to_owned();
+        assert_eq!(
+            same_revisions
+                .validate()
+                .expect_err("equal expected revisions are rejected")
+                .code(),
+            "provider_catalog_removal_invalid"
+        );
+
+        let reconcile = reconcile_queue_command();
+        assert!(reconcile.validate().is_ok());
+        round_trip(&reconcile);
+
+        // The 8-promotion boundary is enforced on reconciliation pages.
+        assert!(reconcile_queue_accepted().validate().is_ok());
+        round_trip(&reconcile_queue_accepted());
+        let mut over_bound = reconcile_queue_accepted();
+        over_bound.promoted_count = 9;
+        assert_eq!(
+            over_bound
+                .validate()
+                .expect_err("a 9-promotion page is rejected")
+                .code(),
+            "unavailable_queue_invalid"
+        );
+
+        let admit = admit_recovered_command();
+        assert!(admit.validate().is_ok());
+        round_trip(&admit);
+        let admitted = admit_recovered_accepted();
+        assert!(admitted.validate().is_ok());
+        round_trip(&admitted);
+
+        // Blank and credential-shaped removal fields fail closed.
+        let mut blank_accept = accept;
+        blank_accept.candidate_handle = "   ".to_owned();
+        assert_eq!(
+            blank_accept
+                .validate()
+                .expect_err("blank candidate handle is rejected")
+                .code(),
+            "provider_catalog_removal_invalid"
+        );
+        let mut credential_admit = admit;
+        credential_admit.operation_id = "Bearer operation".to_owned();
+        assert_eq!(
+            credential_admit
+                .validate()
+                .expect_err("credential-shaped operation id is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_usage_family_round_trips_and_validates() {
+        let query = usage_query();
+        assert!(query.validate().is_ok());
+        round_trip(&query);
+        let aggregation = usage_aggregation();
+        assert!(aggregation.validate().is_ok());
+        round_trip(&aggregation);
+
+        // Periods ending before their start are rejected.
+        let mut reversed = usage_query();
+        reversed.usage_period_start = 200;
+        reversed.usage_period_end = 100;
+        assert_eq!(
+            reversed
+                .validate()
+                .expect_err("reversed usage period is rejected")
+                .code(),
+            "provider_usage_invalid"
+        );
+        let mut reversed_aggregation = aggregation;
+        reversed_aggregation.usage_period_end = 99;
+        assert_eq!(
+            reversed_aggregation
+                .validate()
+                .expect_err("reversed aggregation period is rejected")
+                .code(),
+            "provider_usage_invalid"
+        );
+        let mut credential = usage_aggregation();
+        credential.model_id = "sk-model".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped model id is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_usage_aggregation_sets_are_sorted_and_bounded() {
+        let entry = usage_aggregation();
+        let mut second = usage_aggregation();
+        second.model_id = "model-2".to_owned();
+        let valid = ProviderUsageAggregationsDto {
+            entries: vec![entry.clone(), second.clone()],
+        };
+        assert!(valid.validate().is_ok());
+        round_trip(&valid);
+
+        // Identities must be strictly sorted by revision and model id.
+        let unsorted = ProviderUsageAggregationsDto {
+            entries: vec![second, entry.clone()],
+        };
+        assert_eq!(
+            unsorted
+                .validate()
+                .expect_err("unsorted identities are rejected")
+                .code(),
+            "provider_usage_unsorted"
+        );
+
+        // An empty set carries no identity and is rejected.
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: Vec::new()
+            }
+            .validate()
+            .expect_err("an empty set is rejected")
+            .code(),
+            "provider_usage_invalid"
+        );
+
+        // The set projects exactly one profile and one period.
+        let mut other_profile = usage_aggregation();
+        other_profile.model_id = "model-2".to_owned();
+        other_profile.profile_id = "profile-2".to_owned();
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: vec![entry, other_profile],
+            }
+            .validate()
+            .expect_err("a mixed-profile set is rejected")
+            .code(),
+            "provider_usage_invalid"
+        );
+
+        // The identity bound is enforced before any entry is projected.
+        let mut over_limit = Vec::new();
+        for index in 0..=MAX_PROVIDER_USAGE_IDENTITIES {
+            let mut bounded = usage_aggregation();
+            bounded.model_id = format!("model-{index:04}");
+            over_limit.push(bounded);
+        }
+        assert_eq!(
+            ProviderUsageAggregationsDto {
+                entries: over_limit
+            }
+            .validate()
+            .expect_err("an over-limit set is rejected")
+            .code(),
+            "provider_usage_invalid"
+        );
+    }
+
+    #[test]
+    fn zone2_catalog_events_round_trip_and_validate() {
+        let changed = SessionProviderProfileChangedEventDto {
+            session_id: "session-1".to_owned(),
+            previous_profile_id: "profile-default".to_owned(),
+            profile_id: "profile-1".to_owned(),
+            session_projection_revision: 8,
+            occurred_at: 100,
+        };
+        assert!(changed.validate().is_ok());
+        round_trip(&changed);
+
+        let mut credential = changed;
+        credential.session_id = "sk-session".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped event field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_configuration_reload_family_round_trips_and_validates() {
+        for origin in [ConfigurationOriginDto::User, ConfigurationOriginDto::Admin] {
+            let mut command = reload_command();
+            command.origin = origin;
+            assert!(command.validate().is_ok());
+            round_trip(&command);
+        }
+        let mut edit_reference = reload_command();
+        edit_reference.candidate_snapshot_reference = None;
+        edit_reference.candidate_edit_reference = Some("edit-1".to_owned());
+        assert!(edit_reference.validate().is_ok());
+        round_trip(&edit_reference);
+
+        let committed = reload_transaction(true);
+        assert!(committed.validate().is_ok());
+        round_trip(&committed);
+        let rejected = reload_transaction(false);
+        assert!(rejected.validate().is_ok());
+        round_trip(&rejected);
+        let mut invalid = reload_transaction(true);
+        invalid.validation_result = ConfigurationValidationOutcomeDto::Invalid;
+        invalid.safe_failure_code = Some("validation_failed".to_owned());
+        assert!(invalid.validate().is_ok());
+        round_trip(&invalid);
+
+        // Neither candidate reference present is rejected.
+        let mut no_reference = reload_command();
+        no_reference.candidate_snapshot_reference = None;
+        no_reference.candidate_edit_reference = None;
+        assert_eq!(
+            no_reference
+                .validate()
+                .expect_err("a reload without candidate references is rejected")
+                .code(),
+            "configuration_reload_invalid"
+        );
+        // Failed reloads must carry a safe failure code.
+        let mut missing_code = reload_transaction(false);
+        missing_code.safe_failure_code = None;
+        assert_eq!(
+            missing_code
+                .validate()
+                .expect_err("a failed reload without a failure code is rejected")
+                .code(),
+            "configuration_reload_invalid"
+        );
+        // Successful reloads must not carry failure detail.
+        let mut stale_detail = reload_transaction(true);
+        stale_detail.safe_failure_detail = Some("stale".to_owned());
+        assert_eq!(
+            stale_detail
+                .validate()
+                .expect_err("a successful reload with failure detail is rejected")
+                .code(),
+            "configuration_reload_invalid"
+        );
+        let mut credential = reload_command();
+        credential.operation_id = "Bearer operation".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped reload field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_rotation_and_health_evidence_round_trip_and_validate() {
+        let rotate = rotate_credentials_command();
+        assert!(rotate.validate().is_ok());
+        round_trip(&rotate);
+        let result = rotation_result();
+        assert!(result.validate().is_ok());
+        round_trip(&result);
+
+        let evidence = health_evidence();
+        assert!(evidence.validate().is_ok());
+        round_trip(&evidence);
+        for category in [
+            ProviderHealthFailureCategory::ConnectionFailed,
+            ProviderHealthFailureCategory::AuthenticationRejected,
+            ProviderHealthFailureCategory::RequestTimeout,
+            ProviderHealthFailureCategory::RateLimited,
+            ProviderHealthFailureCategory::ServiceUnavailable,
+        ] {
+            let mut unavailable = health_evidence();
+            unavailable.observed_availability = ProviderAvailabilityObservation::Unavailable;
+            unavailable.failure_category = Some(category);
+            unavailable.safe_diagnostic_code = Some("diag-1".to_owned());
+            assert!(unavailable.validate().is_ok());
+            round_trip(&unavailable);
+        }
+        for availability in [
+            ProviderAvailabilityObservation::Available,
+            ProviderAvailabilityObservation::Unavailable,
+            ProviderAvailabilityObservation::Unknown,
+        ] {
+            round_trip(&availability);
+        }
+
+        // An Available observation must not carry failure detail.
+        let mut contradictory = health_evidence();
+        contradictory.failure_category = Some(ProviderHealthFailureCategory::RequestTimeout);
+        assert_eq!(
+            contradictory
+                .validate()
+                .expect_err("available with a failure category is rejected")
+                .code(),
+            "provider_health_evidence_invalid"
+        );
+        // An Unavailable observation must carry a failure category.
+        let mut missing_category = health_evidence();
+        missing_category.observed_availability = ProviderAvailabilityObservation::Unavailable;
+        assert_eq!(
+            missing_category
+                .validate()
+                .expect_err("unavailable without a failure category is rejected")
+                .code(),
+            "provider_health_evidence_invalid"
+        );
+        let mut credential = rotate;
+        credential.profile_id = "sk-profile".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped rotation field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_discovery_and_pricing_family_round_trips_and_validates() {
+        for phase in [
+            ProviderDiscoveryPhase::BeforeStart,
+            ProviderDiscoveryPhase::Started,
+            ProviderDiscoveryPhase::Terminal,
+        ] {
+            let mut attempt = discovery_attempt();
+            attempt.phase = phase;
+            assert!(attempt.validate().is_ok());
+            round_trip(&attempt);
+        }
+        let record = discovery_record();
+        assert!(record.validate().is_ok());
+        round_trip(&record);
+        for classification in [
+            PricingClassification::IntrinsicRepresentationBound,
+            PricingClassification::CapacityObservation,
+            PricingClassification::ProductPolicy,
+        ] {
+            let mut observation = pricing_observation();
+            observation.classification = classification;
+            assert!(observation.validate().is_ok());
+            round_trip(&observation);
+        }
+
+        let mut oversized = discovery_record();
+        oversized.capability_records = (0..257).map(|i| format!("capability-{i}")).collect();
+        assert_eq!(
+            oversized
+                .validate()
+                .expect_err("a 257-capability record is rejected")
+                .code(),
+            "provider_discovery_invalid"
+        );
+        let mut credential = pricing_observation();
+        credential.model_id = "Bearer model".to_owned();
+        assert_eq!(
+            credential
+                .validate()
+                .expect_err("credential-shaped pricing field is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_edit_policy_parser_and_reasoning_family_round_trips_and_validates() {
+        let raw_edit = raw_toml_edit();
+        assert!(raw_edit.validate().is_ok());
+        round_trip(&raw_edit);
+        let mut single_line = raw_edit.clone();
+        single_line.candidate_content = "max_parallel_runs = 2".to_owned();
+        assert!(single_line.validate().is_ok());
+
+        // Credential-shaped TOML content is rejected (redacted edits only).
+        for content in [
+            "api_key = \"sk-secret\"\n".to_owned(),
+            "token = \"secret\"\n".to_owned(),
+            "bearer = \"credential\"\n".to_owned(),
+        ] {
+            let mut credential = raw_edit.clone();
+            credential.candidate_content = content;
+            assert_eq!(
+                credential
+                    .validate()
+                    .expect_err("credential-bearing TOML content is rejected")
+                    .code(),
+                "credentials_forbidden"
+            );
+        }
+        let mut nul_content = raw_edit.clone();
+        nul_content.candidate_content = "[daemon]\nvalue\u{0000}=1\n".to_owned();
+        assert_eq!(
+            nul_content
+                .validate()
+                .expect_err("NUL-bearing TOML content is rejected")
+                .code(),
+            "raw_toml_edit_invalid"
+        );
+        let mut oversized = raw_edit;
+        oversized.candidate_content = "a".repeat(64 * 1024 + 1);
+        assert_eq!(
+            oversized
+                .validate()
+                .expect_err("over-long TOML content is rejected")
+                .code(),
+            "raw_toml_edit_invalid"
+        );
+
+        let typed_edit = typed_config_edit();
+        assert!(typed_edit.validate().is_ok());
+        round_trip(&typed_edit);
+        let remove_edit = ConfigurationEditCommandDto {
+            operations: vec![ConfigurationEditOperationDto::Remove {
+                key_path: "daemon.max_parallel_runs".to_owned(),
+            }],
+            ..typed_config_edit()
+        };
+        assert!(remove_edit.validate().is_ok());
+        round_trip(&remove_edit);
+        let mut empty_operations = typed_config_edit();
+        empty_operations.operations = Vec::new();
+        assert_eq!(
+            empty_operations
+                .validate()
+                .expect_err("an empty typed edit is rejected")
+                .code(),
+            "configuration_edit_invalid"
+        );
+        let mut credential_operation = typed_config_edit();
+        credential_operation.operations = vec![ConfigurationEditOperationDto::Set {
+            key_path: "daemon.max_parallel_runs".to_owned(),
+            safe_value: "Bearer value".to_owned(),
+        }];
+        assert_eq!(
+            credential_operation
+                .validate()
+                .expect_err("credential-shaped safe value is rejected")
+                .code(),
+            "credentials_forbidden"
+        );
+    }
+
+    #[test]
+    fn zone2_dtos_and_events_never_serialize_fake_credentials() {
+        const FAKE_SECRETS: [&str; 3] = ["sk-test", "Bearer secret", "api_key"];
+        let payloads: Vec<String> = vec![
+            serde_json::to_string(&catalog_query()).expect("catalog query serializes"),
+            serde_json::to_string(&catalog_entry()).expect("catalog entry serializes"),
+            serde_json::to_string(&catalog_page()).expect("catalog page serializes"),
+            serde_json::to_string(&catalog_status_query()).expect("status query serializes"),
+            serde_json::to_string(&catalog_status()).expect("catalog status serializes"),
+            serde_json::to_string(&ProviderCatalogRemovalImpactDto {
+                affected_profile_ids: vec!["profile-1".to_owned()],
+                safe_impact_summary: "one profile affected".to_owned(),
+            })
+            .expect("removal impact serializes"),
+            serde_json::to_string(&set_profile_command()).expect("set command serializes"),
+            serde_json::to_string(&set_profile_accepted(true)).expect("accepted serializes"),
+            serde_json::to_string(&session_profile_query()).expect("session query serializes"),
+            serde_json::to_string(&session_profile()).expect("session profile serializes"),
+            serde_json::to_string(&accept_removal_command()).expect("removal command serializes"),
+            serde_json::to_string(&reject_candidate_command()).expect("reject command serializes"),
+            serde_json::to_string(&reconcile_queue_command())
+                .expect("reconcile command serializes"),
+            serde_json::to_string(&reconcile_queue_accepted())
+                .expect("reconcile accepted serializes"),
+            serde_json::to_string(&admit_recovered_command()).expect("admit command serializes"),
+            serde_json::to_string(&admit_recovered_accepted()).expect("admit accepted serializes"),
+            serde_json::to_string(&usage_query()).expect("usage query serializes"),
+            serde_json::to_string(&usage_aggregation()).expect("usage aggregation serializes"),
+            serde_json::to_string(&SessionProviderProfileChangedEventDto {
+                session_id: "session-1".to_owned(),
+                previous_profile_id: "profile-default".to_owned(),
+                profile_id: "profile-1".to_owned(),
+                session_projection_revision: 8,
+                occurred_at: 100,
+            })
+            .expect("session event serializes"),
+            serde_json::to_string(&reload_command()).expect("reload command serializes"),
+            serde_json::to_string(&reload_transaction(true))
+                .expect("reload transaction serializes"),
+            serde_json::to_string(&rotate_credentials_command())
+                .expect("rotation command serializes"),
+            serde_json::to_string(&rotation_result()).expect("rotation result serializes"),
+            serde_json::to_string(&health_evidence()).expect("health evidence serializes"),
+            serde_json::to_string(&discovery_attempt()).expect("discovery attempt serializes"),
+            serde_json::to_string(&discovery_record()).expect("discovery record serializes"),
+            serde_json::to_string(&pricing_observation()).expect("pricing observation serializes"),
+            serde_json::to_string(&raw_toml_edit()).expect("raw toml edit serializes"),
+            serde_json::to_string(&typed_config_edit()).expect("typed edit serializes"),
+        ];
+        for payload in payloads {
+            let json = payload;
+            for secret in FAKE_SECRETS {
+                assert!(
+                    !json.contains(secret),
+                    "serialized control-plane DTO must not contain {secret:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zone2_credential_shaped_control_plane_fields_are_all_rejected() {
+        let cases: Vec<Box<dyn Fn() -> DtoResult<()>>> = vec![
+            Box::new(|| {
+                let mut value = catalog_query();
+                value.expected_catalog_revision_id = Some("sk-test".to_owned());
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = catalog_entry();
+                value.driver_declared_capabilities = vec!["Bearer secret".to_owned()];
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = catalog_page();
+                value.catalog_revision_id = "sk-test".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = catalog_status();
+                value.active_default_profile_id = Some("api_key".to_owned());
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = set_profile_accepted(true);
+                value.session_id = "sk-test".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = session_profile();
+                value.global_default_profile_id = "Bearer secret".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = reject_candidate_command();
+                value.operation_id = "api_key".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = reconcile_queue_accepted();
+                value.page_cursor = Some("sk-test".to_owned());
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = admit_recovered_accepted();
+                value.run_id = "Bearer secret".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = usage_query();
+                value.profile_id = "sk-test".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = reload_transaction(true);
+                value.transaction_id = "sk-test".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = rotation_result();
+                value.profile_id = "api_key".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = health_evidence();
+                value.observed_availability = ProviderAvailabilityObservation::Unavailable;
+                value.failure_category = Some(ProviderHealthFailureCategory::ServiceUnavailable);
+                value.safe_diagnostic_code = Some("Bearer secret".to_owned());
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = discovery_attempt();
+                value.safe_status = "sk-test".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = discovery_record();
+                value.model_id = "api_key".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = pricing_observation();
+                value.provider_kind_id = "Bearer secret".to_owned();
+                value.validate()
+            }),
+            Box::new(|| {
+                let mut value = typed_config_edit();
+                value.expected_config_revision = "sk-test".to_owned();
+                value.validate()
+            }),
+        ];
+        for (index, case) in cases.into_iter().enumerate() {
+            assert_eq!(
+                case()
+                    .expect_err("credential-shaped value is rejected")
+                    .code(),
+                "credentials_forbidden",
+                "credential case {index} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn zone2_closed_enums_reject_unknown_wire_values() {
+        // "unexpected" matches no variant of any closed enum, unlike
+        // "unknown", which is a valid ProviderAvailabilityObservation.
+        for wire in ["\"unexpected\"", "\"READY\"", "\"ready \"", "42", "null"] {
+            assert!(serde_json::from_str::<ProviderReadinessDto>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderCatalogActivationState>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderCatalogDegradedReason>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderProfileUnavailableReason>(wire).is_err());
+            assert!(serde_json::from_str::<PricingClassification>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderDiscoveryPhase>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderAvailabilityObservation>(wire).is_err());
+            assert!(serde_json::from_str::<ProviderHealthFailureCategory>(wire).is_err());
+            assert!(serde_json::from_str::<ConfigurationOriginDto>(wire).is_err());
+            assert!(serde_json::from_str::<ConfigurationValidationOutcomeDto>(wire).is_err());
+            assert!(serde_json::from_str::<ConfigurationCommitOutcomeDto>(wire).is_err());
+            assert!(serde_json::from_str::<CredentialTransportMode>(wire).is_err());
+        }
+        // Tagged enums reject unknown tags and unknown variants.
+        assert!(
+            serde_json::from_str::<ResolvedProviderProfileDto>(r#"{"kind":"unknown","data":{}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ConfigurationEditOperationDto>(
+                r#"{"kind":"unknown","data":{}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<ConfigurationEditOperationDto>(
+                r#"{"kind":"set","data":{"key_path":"a","safe_value":"b"}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wired_domain_ledger_tags_have_matching_public_wire_families() {
+        use intention_domain::canonical::{TagRegistry, TagStatus};
+
+        // The domain-internal run-execution-meaning family owns the nested
+        // M3/M4 selection records and is opaque to the protocol codec: it is
+        // the one Wired ledger tag with no public wire family.
+        const DOMAIN_INTERNAL_FAMILY_TAG: u32 = 0x0101;
+
+        let mut wired: Vec<&intention_domain::canonical::LedgerTag> = TagRegistry::LEDGER
+            .iter()
+            .filter(|entry| entry.status == TagStatus::Wired)
+            .collect();
+        wired.sort_by_key(|entry| entry.value);
+
+        // Every Wired ledger tag except the domain-internal execution-meaning
+        // family must be covered by exactly the expected number of public
+        // wire descriptors; the fork aliases share one tag for two versioned
+        // descriptors.
+        for entry in wired {
+            if entry.value == DOMAIN_INTERNAL_FAMILY_TAG {
+                assert!(
+                    PUBLIC_WIRE_CONTRACT_FAMILIES
+                        .iter()
+                        .all(|descriptor| descriptor.tag != entry.value),
+                    "{} must not claim the domain-internal ledger tag",
+                    entry.name
+                );
+                continue;
+            }
+            let count = PUBLIC_WIRE_CONTRACT_FAMILIES
+                .iter()
+                .filter(|descriptor| descriptor.tag == entry.value)
+                .count();
+            let expected = if entry.value == TagRegistry::FORK_BASE_SNAPSHOT_V1
+                || entry.value == TagRegistry::FORK_PREVIEW_V1
+            {
+                2
+            } else {
+                1
+            };
+            assert_eq!(
+                count, expected,
+                "Wired ledger tag {} (0x{:04X}) must be covered exactly {expected} time(s) by PUBLIC_WIRE_CONTRACT_FAMILIES",
+                entry.name, entry.value
+            );
+        }
+
+        // Conversely, every descriptor's tag must exist in the domain ledger.
+        // Reserved tags are permitted today and become Wired as their codecs
+        // land, so no assertion is made on their status yet.
+        for descriptor in PUBLIC_WIRE_CONTRACT_FAMILIES {
+            assert!(
+                TagRegistry::LEDGER
+                    .iter()
+                    .any(|entry| entry.value == descriptor.tag),
+                "{} must exist in the domain ledger",
+                descriptor.name
+            );
+        }
     }
 }

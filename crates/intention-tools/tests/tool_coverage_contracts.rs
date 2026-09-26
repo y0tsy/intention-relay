@@ -45,30 +45,32 @@ fn grep_scopes_cover_file_directory_workspace_and_missing_scope() {
         GrepScope::Workspace,
     ] {
         let result = service
-            .dispatch(
+            .dispatch_with_cancellation(
                 ToolCallId::new(),
                 ToolInput::Grep(GrepInput {
                     pattern: text("needle"),
                     scope: Some(scope),
                     path: None,
                 }),
+                CancellationSignal::new(),
             )
             .unwrap();
         assert!(matches!(result, ToolResult::Grep(value) if !value.matches.is_empty()));
     }
     let error = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: None,
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap_err();
     assert_eq!(error.code(), "invalid_tool_path");
     let error = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
@@ -77,6 +79,7 @@ fn grep_scopes_cover_file_directory_workspace_and_missing_scope() {
                 }),
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap_err();
     assert_eq!(error.code(), "workspace_path_unavailable");
@@ -89,13 +92,14 @@ fn directory_scope_recurses_and_rejects_non_files() {
     std::fs::create_dir(dir.path().join("a/b")).unwrap();
     std::fs::write(dir.path().join("a/b/file"), "x needle").unwrap();
     let result = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::Directory { path: path("a") }),
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap();
     assert_eq!(
@@ -106,13 +110,14 @@ fn directory_scope_recurses_and_rejects_non_files() {
         1
     );
     let error = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Grep(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::File { path: path("a") }),
                 path: None,
             }),
+            CancellationSignal::new(),
         )
         .unwrap_err();
     assert_eq!(error.code(), "tool_search_failed");
@@ -206,18 +211,19 @@ fn write_and_edit_conflicts_leave_content_unchanged() {
     std::fs::write(dir.path().join("f"), "original").unwrap();
     let p = path("f");
     let write = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Write(WriteInput {
                 path: p.clone(),
                 content: text("new"),
                 expected_content: Some(text("stale")),
             }),
+            CancellationSignal::new(),
         )
         .unwrap_err();
     assert_eq!(write.code(), "tool_write_conflict");
     let edit = service
-        .dispatch(
+        .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Edit(EditInput {
                 path: p,
@@ -225,6 +231,7 @@ fn write_and_edit_conflicts_leave_content_unchanged() {
                 new: text("new"),
                 expected_content: Some(text("stale")),
             }),
+            CancellationSignal::new(),
         )
         .unwrap_err();
     assert_eq!(edit.code(), "tool_edit_conflict");

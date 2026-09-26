@@ -53,6 +53,13 @@ ToolResultDto
   timing
 ```
 
+Every active descriptor also declares `model_parameters_schema`: the code-owned
+JSON Schema text for its typed model parameters. `intention_tools::model_visible_descriptors()`
+returns exactly the active descriptors that expose such a schema, in registry
+order; the current model-visible set is `read`, `write`, `edit`, `execute`,
+`glob`, and `grep`, and reserved slots are never included. Ordinary model
+requests advertise that set as typed tool definitions (ADR 0039).
+
 The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or results.
 
 ### Execution-kind scope
@@ -81,6 +88,24 @@ A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searc
   a filesystem and CWD boundary, not an environment or privilege boundary.
 - a tool result identifies the normalized path/CWD used, with safe redaction as necessary;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
+
+### Project script library
+
+The project script library is the logical, slash-separated, workspace-relative
+path `.ir/scripts` under `workspace_root`, with `.ir` as the project-local hidden
+root for agent-authored reusable material
+([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
+
+- the convention names a location only; the library is not implicitly included
+  in, or excluded from, any other policy, and no plan artifact, daemon state,
+  checkpoint, or configuration lives there;
+- modules are created and edited only through `write` and `edit`, read through
+  `read`, `glob`, and `grep`, and run through `execute`; the relative-path,
+  symbolic-link, and traversal rules above apply unchanged and fail closed;
+- a tool result or error identifies a module by its logical relative path, with
+  the same redaction as every other workspace path; and
+- `write` and `edit` remain incompatible in Plan mode, so library mutation stays
+  Build activity.
 
 A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
 
@@ -112,12 +137,29 @@ flowchart LR
 
 <!-- The phases map to the typed hook lifecycle. Base tools do primitive work only. -->
 
-The model-tool loop feeds this pipeline: a provider-emitted tool call becomes
-a typed invocation built by the application, executes through the daemon-owned
-registry, and its durable result is persisted before publication and returned
-to the provider exchange as a tool-role message. Provider adapters never
-execute local tools. The runtime owns the provider continuation until the
-provider finishes.
+Ordinary model requests advertise the model-visible descriptor set as typed
+tool definitions. The model-tool loop feeds this pipeline: a provider-emitted
+tool call becomes a typed invocation built by the application, executes through
+the daemon-owned registry, and its durable result is persisted before
+publication and returned to the provider exchange as a tool-role message.
+Provider adapters never execute local tools. The runtime owns the provider
+continuation until the provider finishes.
+
+### Tooling execution API and status rendering
+
+`intention-tools` exposes exactly one current execution surface: the
+cancellation-aware bare-result dispatch (`dispatch_with_cancellation`) and the
+envelope entry (`invoke_enveloped` / `invoke_enveloped_with_cancellation`) that
+returns the result-boundary envelope with observability and execution
+metadata. There are no compatibility wrappers without cancellation, and no
+caller-facing path that bypasses the typed invocation envelope when invocation
+identity and durable metadata are required. Every executed program is
+classified by a typed `ToolProcessStatus` (`success`, `non_zero` with its
+numeric code, or `signal` with its recorded signal); the classification is
+carried on the durable execution metadata. The execute result's text rendering
+is derived from that same typed status, so the text and the typed
+classification can never disagree and no arbitrary sentinel exit code is
+invented for signal termination.
 
 ## Hook system
 

@@ -56,24 +56,15 @@ fn generic_driver_declares_supported_subset_and_rejects_unsupported_preflight() 
     let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     assert!(driver.capabilities().supports_text());
     assert!(driver.capabilities().supports_tool_calls());
-    assert!(!driver.capabilities().supports_reasoning());
+    assert!(driver.capabilities().supports_reasoning());
     assert!(!driver.capabilities().supports_multimodal());
     assert!(!driver.capabilities().supports_vendor_extensions());
     assert!(
         driver
             .preflight(&request(ModelRequestedCapabilitiesDto::new(
-                false, false, true, false,
+                true, false, true, false,
             )))
             .is_ok()
-    );
-    assert_eq!(
-        driver
-            .preflight(&request(ModelRequestedCapabilitiesDto::new(
-                true, false, false, false,
-            )))
-            .expect_err("reasoning must reject before outbound work")
-            .code(),
-        "unsupported_model_capability"
     );
     assert_eq!(driver.prepared_request_count(), 0);
 
@@ -154,6 +145,24 @@ fn generic_driver_translates_all_text_roles_without_network_work() {
     assert_eq!(driver.prepared_request_count(), 1);
 }
 
+#[test]
+fn generic_driver_prepares_advertised_tool_definitions_without_network_work() {
+    let mut driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
+    let request = request(ModelRequestedCapabilitiesDto::default())
+        .with_tools(vec![
+            intention_model::ModelToolDefinitionDto::new(
+                "read_file",
+                "Reads one file",
+                r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            )
+            .expect("tool is valid"),
+        ])
+        .expect("tools are valid");
+
+    driver.prepare_request(&request).expect("request prepares");
+    assert_eq!(driver.prepared_request_count(), 1);
+}
+
 fn collect_ready(
     mut stream: intention_model::ModelEventStream,
 ) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {
@@ -186,7 +195,7 @@ fn generic_execution_rejects_preflight_before_stream_creation_without_network_wo
     let driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
     let events = collect_ready(driver.execute(
         request(ModelRequestedCapabilitiesDto::new(
-            true, false, false, false,
+            false, true, false, false,
         )),
         ModelCancellationSignal::new(),
     ));
@@ -249,7 +258,6 @@ fn generic_mapping_covers_known_finish_status_and_invalid_fixture_values() {
         ("stop", FinishReasonDto::Stop),
         ("length", FinishReasonDto::Length),
         ("tool_calls", FinishReasonDto::ToolCalls),
-        ("function_call", FinishReasonDto::ToolCalls),
         ("content_filter", FinishReasonDto::ContentFilter),
         ("error", FinishReasonDto::Error),
         ("unknown", FinishReasonDto::Unknown),

@@ -4,7 +4,7 @@
 //! JSON codecs remain private implementation details of this crate.
 
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
@@ -27,21 +27,22 @@ use intention_types::{
     EventId, EventMetadataDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
     SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
-use rusqlite_migration::{M, Migrations};
 use sqlite::OptionalExtension;
 
-const CURRENT_STORAGE_SCHEMA: i64 = 3;
 const MAX_CANONICAL_FACT_BYTES: usize = 512 * 1024;
 const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
 const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
 
-macro_rules! schema_m3_sql {
-    () => {
-        "
-CREATE TABLE projects (project_id TEXT PRIMARY KEY);
-CREATE TABLE workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
-CREATE TABLE sessions (
+/// The complete current storage schema (logical version 1): the M3 base
+/// tables, the M4 run-cursor, model-fact, and model-snapshot tables (with the
+/// cursor-zero seed for existing runs), and the tool-result table. `open()`
+/// appends `control_plane::SCHEMA_M5_SQL` and creates the whole schema in a
+/// single batch; there is no migration chain and no version gate.
+const SCHEMA_SQL: &str = "
+CREATE TABLE IF NOT EXISTS projects (project_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS workspace_roots (workspace_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(project_id),
   workspace_id TEXT NOT NULL REFERENCES workspace_roots(workspace_id),
@@ -51,67 +52,55 @@ CREATE TABLE sessions (
   last_sequence INTEGER NOT NULL CHECK(last_sequence >= 0),
   next_queue_ticket INTEGER NOT NULL CHECK(next_queue_ticket >= 0)
 );
-CREATE TABLE turns (
+CREATE TABLE IF NOT EXISTS turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
   content TEXT NOT NULL CHECK(length(trim(content)) > 0), proposed_run_id TEXT NOT NULL,
   config_revision_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('started','queued')),
   queue_ticket INTEGER, PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
 );
-CREATE TABLE runs (
+CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
   turn_id TEXT NOT NULL, status TEXT NOT NULL, config_revision_id TEXT NOT NULL,
+  reasoning_aggregate_bytes INTEGER NOT NULL DEFAULT 0 CHECK(reasoning_aggregate_bytes >= 0),
   UNIQUE(session_id, turn_id)
 );
-CREATE UNIQUE INDEX one_active_run_per_session ON runs(session_id)
+CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
   WHERE status NOT IN ('completed','cancelled','failed','interrupted');
-CREATE TABLE queued_turns (
+CREATE TABLE IF NOT EXISTS queued_turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
-  queue_ticket INTEGER NOT NULL, PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
+  queue_ticket INTEGER NOT NULL, resolved_selection_json TEXT,
+  PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
 );
-CREATE TABLE configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
-CREATE TABLE domain_events (
+CREATE TABLE IF NOT EXISTS configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS domain_events (
   event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL CHECK(sequence > 0), envelope_json TEXT NOT NULL,
   UNIQUE(session_id, sequence)
 );
-CREATE TABLE session_snapshots (
+CREATE TABLE IF NOT EXISTS session_snapshots (
   session_id TEXT PRIMARY KEY REFERENCES sessions(session_id), sequence INTEGER NOT NULL,
   projection_json TEXT NOT NULL
 );
-CREATE TABLE run_snapshots (
+CREATE TABLE IF NOT EXISTS run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL, projection_json TEXT NOT NULL
 );
-"
-    };
-}
-
-macro_rules! schema_m4_sql {
-    () => {
-        "
-CREATE TABLE run_cursors (
+CREATE TABLE IF NOT EXISTS run_cursors (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   cursor INTEGER NOT NULL CHECK(cursor >= 0)
 );
-CREATE TABLE model_run_facts (
+CREATE TABLE IF NOT EXISTS model_run_facts (
   run_id TEXT NOT NULL REFERENCES runs(run_id), cursor INTEGER NOT NULL CHECK(cursor > 0),
   event_id TEXT NOT NULL REFERENCES domain_events(event_id),
   PRIMARY KEY(run_id, cursor), UNIQUE(event_id)
 );
-CREATE TABLE model_run_snapshots (
+CREATE TABLE IF NOT EXISTS model_run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
   sequence INTEGER NOT NULL, cursor INTEGER NOT NULL CHECK(cursor >= 0), snapshot_json TEXT NOT NULL
 );
-INSERT INTO run_cursors(run_id, session_id, cursor)
+INSERT OR IGNORE INTO run_cursors(run_id, session_id, cursor)
   SELECT run_id, session_id, 0 FROM runs;
-"
-    };
-}
-
-macro_rules! schema_m4_tool_results_sql {
-    () => {
-        "
-CREATE TABLE tool_results (
+CREATE TABLE IF NOT EXISTS tool_results (
   run_id TEXT NOT NULL REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
   call_id TEXT NOT NULL,
@@ -122,32 +111,7 @@ CREATE TABLE tool_results (
   PRIMARY KEY(run_id, call_id),
   UNIQUE(event_id)
 );
-"
-    };
-}
-
-const SCHEMA_M3_SQL: &str = schema_m3_sql!();
-const SCHEMA_M4_SQL: &str = schema_m4_sql!();
-const SCHEMA_M4_TOOL_RESULTS_SQL: &str = schema_m4_tool_results_sql!();
-
-/// The exact production schema-3 surface: the M3 base tables plus the M4
-/// run-cursor, model-fact, and tool-result tables. Preservation fixtures that
-/// stamp user_version = 3 (where the migration library applies nothing) build
-/// their schema from this single source of truth.
-#[doc(hidden)]
-pub const TEST_SCHEMA_3_SQL: &str = concat!(
-    schema_m3_sql!(),
-    schema_m4_sql!(),
-    schema_m4_tool_results_sql!()
-);
-
-static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-    Migrations::new(vec![
-        M::up(SCHEMA_M3_SQL),
-        M::up(SCHEMA_M4_SQL),
-        M::up(SCHEMA_M4_TOOL_RESULTS_SQL),
-    ])
-});
+";
 
 /// A local absolute SQLite database location whose string is never exposed again.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,57 +143,26 @@ pub struct SqliteStorageRepository {
 }
 
 impl SqliteStorageRepository {
-    /// Opens or creates a migrated local database at an explicitly supplied absolute location.
+    /// Opens or creates a local database at an explicitly supplied absolute
+    /// location, creating the complete current storage schema directly on open.
     ///
     /// # Errors
     ///
-    /// Returns a safe unavailable error when the database cannot be opened or migrated.
+    /// Returns a safe unavailable error when the database cannot be opened or
+    /// the current schema cannot be created.
     pub fn open(location: SqliteDatabaseLocationDto) -> DtoResult<Self> {
-        let mut connection = sqlite::Connection::open(location.0).map_err(storage_error)?;
+        let connection = sqlite::Connection::open(location.0).map_err(storage_error)?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
             .map_err(storage_error)?;
-        let stored_version: i64 = connection
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(storage_error)?;
-        if stored_version > CURRENT_STORAGE_SCHEMA {
-            return Err(ErrorDto::unavailable(
-                "unsupported_storage_schema",
-                "the local storage schema is newer than this application supports",
-            ));
-        }
-        MIGRATIONS
-            .to_latest(&mut connection)
+        connection
+            .execute_batch(&format!("{SCHEMA_SQL}{}", control_plane::SCHEMA_M5_SQL))
             .map_err(|_| unavailable())?;
-        Self::hydrate_model_run_snapshots(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             #[cfg(test)]
             fault: Mutex::new(None),
         })
-    }
-
-    fn hydrate_model_run_snapshots(connection: &mut sqlite::Connection) -> DtoResult<()> {
-        let tx = connection
-            .transaction_with_behavior(sqlite::TransactionBehavior::Immediate)
-            .map_err(storage_error)?;
-        let session_ids = {
-            let mut statement = tx
-                .prepare("SELECT session_id FROM sessions ORDER BY session_id")
-                .map_err(storage_error)?;
-            let rows = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(storage_error)?;
-            rows.map(|row| row.map_err(storage_error))
-                .collect::<DtoResult<Vec<_>>>()?
-        };
-        for encoded_session in session_ids {
-            let session_id = SessionId::parse(&encoded_session).map_err(codec_error)?;
-            let projection = Self::project(&tx, session_id)?;
-            Self::ensure_run_cursors(&tx, session_id)?;
-            Self::snapshot_model_runs(&tx, &projection)?;
-        }
-        tx.commit().map_err(storage_error)
     }
 
     fn connection(&self) -> DtoResult<std::sync::MutexGuard<'_, sqlite::Connection>> {
@@ -395,7 +328,7 @@ impl SqliteStorageRepository {
                 sqlite_integer(position, "event sequence is outside the SQLite range")?;
             let event = EventEnvelopeDto::new(
                 EventMetadataDto::new(
-                    SchemaVersionDto::new(1, 0),
+                    SchemaVersionDto::new(1, 1),
                     EventId::new(),
                     session_id,
                     draft.run_id,
@@ -527,19 +460,21 @@ impl SqliteStorageRepository {
     }
 
     fn promote_oldest_queued_turn(
+        &self,
         tx: &sqlite::Transaction<'_>,
         session_id: SessionId,
         occurred_at: TimestampDto,
+        hold_for_recovery: bool,
     ) -> DtoResult<Vec<EventDraft>> {
         let queued_selection = tx
             .query_row(
-                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
+                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id, queued_turns.resolved_selection_json FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
                 [session_id.to_string()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
             )
             .optional()
             .map_err(storage_error)?;
-        let Some((turn_id, run_id, revision_id)) = queued_selection else {
+        let Some((turn_id, run_id, revision_id, resolved_selection_json)) = queued_selection else {
             return Ok(Vec::new());
         };
         let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
@@ -552,6 +487,30 @@ impl SqliteStorageRepository {
         .map_err(storage_error)?;
         tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
         tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
+        // The queued turn's durable selection transfers to its fresh run in
+        // the same transaction as run creation; the provider-selection fault
+        // point proves the whole promotion transaction is atomic.
+        if let Some(encoded) = resolved_selection_json {
+            let selection = control_plane::parse_selection_json(&encoded)?;
+            control_plane::insert_selection(tx, session_id, promoted_run_id, &selection)?;
+            self.fault(FaultPoint::ProviderSelection)?;
+        }
+        // A successor promoted by recovery (the interrupted run's terminal
+        // transition) is durably held in the same transaction: no daemon is
+        // running to schedule it, so it waits for the explicit
+        // AdmitRecoveredRun admission instead of being auto-scheduled or
+        // re-interrupted by a later restart (PR24-007/019).
+        if hold_for_recovery {
+            tx.execute(
+                "INSERT INTO held_recovered_runs(run_id, session_id, held_at, reason, admission_state, admission_operation_id, admitted_at) VALUES (?1,?2,?3,'recovered_run_requires_explicit_admission','held',NULL,NULL)",
+                sqlite::params![
+                    promoted_run_id.to_string(),
+                    session_id.to_string(),
+                    occurred_at.unix_seconds()
+                ],
+            )
+            .map_err(storage_error)?;
+        }
         Ok(vec![EventDraft::new(
             Some(promoted_run_id),
             Some(promoted_turn_id),
@@ -605,6 +564,8 @@ macro_rules! immediate_transaction {
         result
     }};
 }
+
+mod control_plane;
 
 impl StorageRepositoryDto for SqliteStorageRepository {
     fn append_tool_lifecycle_event(
@@ -704,6 +665,26 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 [command.project_id().to_string()],
             )
             .map_err(storage_error)?;
+            // The root binding is unique in both directions: a second workspace
+            // identity bound to an already-used root must surface as the same
+            // typed conflict as the reverse identity/root mismatch, instead of
+            // a raw SQLite constraint failure that collapses into
+            // `storage_unavailable`.
+            let root_bound_to_other_identity = tx
+                .query_row(
+                    "SELECT workspace_id FROM workspace_roots WHERE workspace_root=?1",
+                    [command.workspace_root().as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some_and(|bound| bound != command.workspace_id().to_string());
+            if root_bound_to_other_identity {
+                return Err(conflict(
+                    "workspace_root_conflict",
+                    "the workspace root is already bound to a different workspace identity",
+                ));
+            }
             tx.execute("INSERT INTO workspace_roots(workspace_id, workspace_root) VALUES (?1, ?2) ON CONFLICT(workspace_id) DO NOTHING", sqlite::params![command.workspace_id().to_string(), command.workspace_root().as_str()]).map_err(storage_error)?;
             let stored_workspace_root: String = tx
                 .query_row(
@@ -750,7 +731,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             sqlite::params![session_id.to_string(), input.turn_id().to_string()],
             |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, Option<i64>>(2)?,row.get::<_, String>(3)?,row.get::<_, String>(4)?)),
         ).optional().map_err(storage_error)?;
-            if let Some((content, outcome, ticket, run, revision)) = existing {
+            if let Some((content, outcome, _ticket, run, revision)) = existing {
                 if content != input.content()
                     || run != input.proposed_run_id().to_string()
                     || revision != input.config_revision_id().to_string()
@@ -761,18 +742,46 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     ));
                 }
                 let projection = Self::project(&tx, session_id)?;
+                // The idempotent reply is recomputed from the current durable
+                // state, never from the immutable acceptance marker: a started
+                // turn reports the run's actual status, and a queued turn
+                // requires a current queue membership with its real ticket.
                 let outcome = if outcome == "started" {
+                    let actual_status: Option<String> = tx
+                        .query_row(
+                            "SELECT status FROM runs WHERE session_id=?1 AND run_id=?2",
+                            sqlite::params![session_id.to_string(), &run],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .map_err(storage_error)?;
+                    let Some(actual_status) = actual_status else {
+                        return Err(codec_error("accepted started turn has no durable run row"));
+                    };
                     Some(AcceptedTurnOutcomeDto::Started(run_projection(
                         session_id,
                         &run,
                         &input.turn_id().to_string(),
-                        "starting",
+                        &actual_status,
                         &revision,
                     )?))
                 } else {
+                    let membership = tx
+                        .query_row(
+                            "SELECT queue_ticket FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
+                            sqlite::params![session_id.to_string(), input.turn_id().to_string()],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()
+                        .map_err(storage_error)?;
+                    let Some(ticket) = membership else {
+                        return Err(conflict(
+                            "accepted_turn_removed",
+                            "the accepted queued turn was removed before it could start",
+                        ));
+                    };
                     Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(
-                        u64::try_from(ticket.ok_or_else(|| codec_error("missing queue ticket"))?)
-                            .map_err(|_| codec_error("invalid queue ticket"))?,
+                        u64::try_from(ticket).map_err(|_| codec_error("invalid queue ticket"))?,
                     )))
                 };
                 let result = CommittedChangeDto::new(
@@ -783,6 +792,26 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )?;
                 tx.commit().map_err(storage_error)?;
                 return Ok(result);
+            }
+            // Turn and run identities are globally unique while the idempotency
+            // check above is scoped to (session_id, turn_id), so a caller-supplied
+            // TurnId already durable in another session (the daemon derives the run
+            // id from it) must surface as a typed conflict instead of a raw SQLite
+            // constraint failure that collapses into `storage_unavailable`.
+            let identity_bound = tx
+                .query_row(
+                    "SELECT 1 FROM turns WHERE proposed_run_id=?1 UNION ALL SELECT 1 FROM runs WHERE run_id=?1 LIMIT 1",
+                    [input.proposed_run_id().to_string()],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(storage_error)?
+                .is_some();
+            if identity_bound {
+                return Err(conflict(
+                    "turn_identity_conflict",
+                    "the durable turn identity is already bound to another session",
+                ));
             }
             let sequence = sequence(&tx, session_id)?;
             Self::store_config(&tx, input.config_snapshot())?;
@@ -814,6 +843,17 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             let (outcome, drafts) = if active.is_none() {
                 tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'started',NULL)", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
                 tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)", sqlite::params![input.proposed_run_id().to_string(),session_id.to_string(),input.turn_id().to_string(),input.config_revision_id().to_string()]).map_err(storage_error)?;
+                // The resolved provider selection of a fresh run commits in the
+                // same transaction as the run and its RunStarted event.
+                if let Some(selection) = input.provider_selection() {
+                    control_plane::insert_selection(
+                        &tx,
+                        session_id,
+                        input.proposed_run_id(),
+                        selection,
+                    )?;
+                    self.fault(FaultPoint::ProviderSelection)?;
+                }
                 (
                     AcceptedTurnOutcomeDto::Started(RunProjectionDto::new(
                         session_id,
@@ -862,9 +902,19 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
                 .map_err(storage_error)?;
                 tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'queued',?6)", sqlite::params![session_id.to_string(), input.turn_id().to_string(),input.content(),input.proposed_run_id().to_string(),input.config_revision_id().to_string(),ticket]).map_err(storage_error)?;
+                // A queued turn keeps its resolved provider selection durably
+                // until promotion transfers it to the run it later starts.
+                let resolved_selection_json = input
+                    .provider_selection()
+                    .map(control_plane::encode_selection_json);
                 tx.execute(
-                    "INSERT INTO queued_turns(session_id,turn_id,queue_ticket) VALUES (?1,?2,?3)",
-                    sqlite::params![session_id.to_string(), input.turn_id().to_string(), ticket],
+                    "INSERT INTO queued_turns(session_id,turn_id,queue_ticket,resolved_selection_json) VALUES (?1,?2,?3,?4)",
+                    sqlite::params![
+                        session_id.to_string(),
+                        input.turn_id().to_string(),
+                        ticket,
+                        resolved_selection_json
+                    ],
                 )
                 .map_err(storage_error)?;
                 let position = QueuePositionDto::new(
@@ -974,10 +1024,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )),
             )];
             if input.status().is_terminal() {
-                drafts.extend(Self::promote_oldest_queued_turn(
+                // A successor promoted by a recovery interruption is held for
+                // explicit admission; every other terminal transition promotes
+                // for immediate daemon scheduling (PR24-007).
+                drafts.extend(self.promote_oldest_queued_turn(
                     &tx,
                     session_id,
                     input.occurred_at(),
+                    input.status() == RunStatusDto::Interrupted,
                 )?);
             }
             let events = Self::append(&tx, session_id, position, drafts)?;
@@ -1000,6 +1054,31 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             let cursor = current_run_cursor(&tx, run_id)?;
             if cursor != input.expected_cursor() {
                 return Err(cursor_conflict());
+            }
+            // The combined per-run reasoning bound is enforced at the durable
+            // append authority: the whole batch is pre-scanned against the
+            // durable aggregate before any write, and a batch that would
+            // cross the 4 MiB bound is rejected wholesale (PR24-024).
+            let aggregate: i64 = tx
+                .query_row(
+                    "SELECT reasoning_aggregate_bytes FROM runs WHERE session_id=?1 AND run_id=?2",
+                    sqlite::params![session_id.to_string(), run_id.to_string()],
+                    |row| row.get(0),
+                )
+                .map_err(storage_error)?;
+            let mut reasoning_aggregate: u64 =
+                u64::try_from(aggregate).map_err(|_| reasoning_accounting_error())?;
+            let mut batch_has_reasoning = false;
+            for input_fact in input.facts() {
+                let Some(bytes) = reasoning_fact_content_bytes(input_fact) else {
+                    continue;
+                };
+                batch_has_reasoning = true;
+                let bytes = u64::try_from(bytes).map_err(|_| reasoning_accounting_error())?;
+                intention_domain::validate_reasoning_fact_output_bound(reasoning_aggregate, bytes)?;
+                reasoning_aggregate = reasoning_aggregate
+                    .checked_add(bytes)
+                    .ok_or_else(reasoning_accounting_error)?;
             }
             let mut next_cursor = cursor.value();
             let mut drafts = Vec::with_capacity(input.facts().len());
@@ -1045,10 +1124,14 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )),
                 ));
                 if status.is_terminal() {
-                    drafts.extend(Self::promote_oldest_queued_turn(
+                    // A terminal append's promotion targets immediate daemon
+                    // scheduling; recovery-interrupted promotions are the only
+                    // held case and happen through `transition_run`.
+                    drafts.extend(self.promote_oldest_queued_turn(
                         &tx,
                         session_id,
                         input.occurred_at(),
+                        false,
                     )?);
                 }
             }
@@ -1078,6 +1161,20 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
+            if batch_has_reasoning {
+                tx.execute(
+                    "UPDATE runs SET reasoning_aggregate_bytes=?3 WHERE session_id=?1 AND run_id=?2",
+                    sqlite::params![
+                        session_id.to_string(),
+                        run_id.to_string(),
+                        sqlite_integer(
+                            reasoning_aggregate,
+                            "reasoning aggregate is outside the SQLite range"
+                        )?,
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
             self.fault(FaultPoint::ModelFacts)?;
             let projection = Self::project(&tx, session_id)?;
             self.fault(FaultPoint::Projection)?;
@@ -1106,16 +1203,26 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 sqlite::params![session_id.to_string(), run_id.to_string()],
                 |row| row.get(0),
             )
-            .map_err(|_| run_configuration_not_found())?;
+            .map_err(|error| match error {
+                // Only a genuinely missing run row is a permanent not-found;
+                // a backend read failure stays transient unavailability.
+                sqlite::Error::QueryReturnedNoRows => run_configuration_not_found(),
+                other => storage_error(other),
+            })?;
         let snapshot: String = connection
             .query_row(
                 "SELECT snapshot_json FROM configuration_revisions WHERE revision_id=?1",
                 [revision_id],
                 |row| row.get(0),
             )
-            .map_err(|_| run_configuration_unavailable())?;
+            .map_err(|error| match error {
+                // The selection row is genuinely absent; a backend read
+                // failure stays transient unavailability.
+                sqlite::Error::QueryReturnedNoRows => run_configuration_unavailable(),
+                other => storage_error(other),
+            })?;
         drop(connection);
-        serde_json::from_str(&snapshot).map_err(|_| run_configuration_unavailable())
+        serde_json::from_str(&snapshot).map_err(codec_error)
     }
 
     fn load_tool_result(
@@ -1330,9 +1437,22 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     ) -> DtoResult<Vec<CommittedChangeDto>> {
         let unfinished = {
             let connection = self.connection()?;
+            // Stale holds (held rows whose run already reached a terminal
+            // status) are cleaned before the interrupt pass; held and already
+            // admitted Starting runs are never re-interrupted by a later
+            // restart, because they await (or already completed) explicit
+            // admission (PR24-007/019).
+            connection
+                .execute(
+                    &format!(
+                        "DELETE FROM held_recovered_runs WHERE run_id IN (SELECT run_id FROM runs WHERE status IN ({TERMINAL_STATUSES}))"
+                    ),
+                    [],
+                )
+                .map_err(storage_error)?;
             let mut statement = connection
                 .prepare(&format!(
-                    "SELECT session_id,run_id FROM runs WHERE status NOT IN ({TERMINAL_STATUSES}) ORDER BY session_id,run_id"
+                    "SELECT session_id,run_id FROM runs WHERE status NOT IN ({TERMINAL_STATUSES}) AND run_id NOT IN (SELECT run_id FROM held_recovered_runs WHERE admission_state IN ('held','admitted')) ORDER BY session_id,run_id"
                 ))
                 .map_err(storage_error)?;
             let unfinished = statement
@@ -1484,6 +1604,19 @@ pub enum FaultPoint {
     Projection,
     Snapshot,
     ToolResult,
+    CatalogRevision,
+    CatalogTombstone,
+    CatalogProjection,
+    CatalogAudit,
+    ReloadSnapshot,
+    ReloadAudit,
+    ProviderSelection,
+    UnavailableQueue,
+    UsageAggregate,
+    HeldRun,
+    RemovalCandidate,
+    RemovalAudit,
+    RemovalState,
 }
 
 struct EventDraft {
@@ -1702,6 +1835,12 @@ const fn model_fact_event(
         intention_domain::ModelRunFactKindDto::ReasoningDeltaRecorded => {
             DomainEventDto::ReasoningDeltaRecorded(event)
         }
+        // Reasoning summary deltas are tail-only reasoning facts with no
+        // dedicated event variant; they share the reasoning-delta envelope and
+        // keep their precise kind in the typed fact payload.
+        intention_domain::ModelRunFactKindDto::ReasoningSummaryDeltaRecorded => {
+            DomainEventDto::ReasoningDeltaRecorded(event)
+        }
         intention_domain::ModelRunFactKindDto::UsageRecorded => {
             DomainEventDto::UsageRecorded(event)
         }
@@ -1797,6 +1936,27 @@ fn sequence(tx: &sqlite::Transaction<'_>, session: SessionId) -> DtoResult<u64> 
 }
 fn sqlite_integer(value: u64, message: &'static str) -> DtoResult<i64> {
     i64::try_from(value).map_err(|_| codec_error(message))
+}
+
+/// Returns the byte length a reasoning fact contributes to the per-run
+/// reasoning aggregate, or `None` for non-reasoning facts (PR24-024).
+const fn reasoning_fact_content_bytes(fact: &ModelRunFactInputDto) -> Option<usize> {
+    match fact {
+        ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }
+        | ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content } => Some(content.len()),
+        _ => None,
+    }
+}
+
+fn reasoning_accounting_error() -> ErrorDto {
+    ErrorDto::new(
+        "storage_decode_failed",
+        ErrorCategoryDto::Internal,
+        "the durable reasoning aggregate cannot be represented",
+        ErrorRetryDto::Never,
+        None,
+    )
+    .unwrap_or_else(|_| unavailable())
 }
 
 fn run_projection(
@@ -2014,13 +2174,29 @@ mod tests {
     use super::*;
     use intention_config::{ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_domain::{
+        ContextPreservationCapability, CredentialTransportMode, ModelCapabilitySetV1,
+        ModelInputCapability, ProviderDriverContractRevisionDto, ProviderKindDescriptorRevisionV1,
+        ProviderProfileRevisionV1, ProviderSelectionV1, ReasoningCapability,
+        StructuredOutputCapability, provider_selection::MODEL_CAPABILITY_TAXONOMY_V1,
+    };
+    use intention_domain::{
         CreateSessionCommandDto, RunEventCursorDto, RunModeDto, ToolLifecycleEventDto,
         ToolLifecycleStatusDto, WorkspaceRootDto,
     };
     use intention_storage::{
-        AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendToolLifecycleEventInputDto,
-        CreateSessionInputDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
-        TransitionRunInputDto,
+        AcceptProviderCatalogInputDto, AcceptProviderCatalogRemovalInputDto,
+        AcceptUserTurnInputDto, AdmitHeldRecoveredRunInputDto, AppendModelRunFactsInputDto,
+        AppendProviderKindDescriptorRevisionInputDto, AppendProviderProfileRevisionInputDto,
+        AppendToolLifecycleEventInputDto, CommitConfigurationReloadInputDto,
+        ConfigurationReloadRepositoryDto, CreateProviderCatalogRemovalCandidateInputDto,
+        CreateSessionInputDto, EnqueueUnavailableRunInputDto,
+        ExpireProviderCatalogRemovalCandidateInputDto, HeldRunRepositoryDto,
+        LoadProviderCatalogPageInputDto, MarkRecoveredRunHeldInputDto,
+        PromoteUnavailableRunsInputDto, ProviderCatalogRemovalEvidenceDto,
+        ProviderCatalogRepositoryDto, ProviderProfileCandidateDto, ProviderReadinessDto,
+        ProviderRemovalRepositoryDto, RejectProviderCatalogRemovalInputDto, StorageRepositoryDto,
+        ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+        UnavailableQueueRepositoryDto,
     };
     use intention_types::{
         ConfigRevisionId, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
@@ -2029,6 +2205,102 @@ mod tests {
 
     fn fixture_time(value: i64) -> TimestampDto {
         TimestampDto::from_unix_seconds(value).expect("fixture timestamp is valid")
+    }
+
+    fn fixture_capability_envelope() -> ModelCapabilitySetV1 {
+        ModelCapabilitySetV1 {
+            taxonomy_version: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+            input: ModelInputCapability::TextOnly,
+            text_streaming: true,
+            structured_output: StructuredOutputCapability::Unsupported,
+            reasoning: ReasoningCapability::TextualReasoningV1,
+            tool_exchange: false,
+            context_preservation: ContextPreservationCapability::LocalDurableHistoryV1 {
+                reasoning_input_contract: "reasoning-history-transfer-v1".to_owned(),
+            },
+        }
+    }
+
+    fn fixture_kind_descriptor(kind_id: &str) -> ProviderKindDescriptorRevisionV1 {
+        ProviderKindDescriptorRevisionV1 {
+            kind_id: kind_id.to_owned(),
+            descriptor_family: "responses-descriptor".to_owned(),
+            ordered_protocol_part_revisions: vec!["parts-v1".to_owned()],
+            endpoint_policy: "https-only".to_owned(),
+            credential_transport_contract: "bearer-or-safe-header".to_owned(),
+            model_capability_envelope: fixture_capability_envelope(),
+            driver_contract_family: "responses".to_owned(),
+        }
+    }
+
+    fn fixture_profile(profile_id: &str, revision_id: &str) -> ProviderProfileRevisionV1 {
+        ProviderProfileRevisionV1 {
+            profile_id: profile_id.to_owned(),
+            revision_id: revision_id.to_owned(),
+            provider_kind_id: "responses".to_owned(),
+            model_id: "gpt-4.1".to_owned(),
+            endpoint: "https://api.example.com/v1".to_owned(),
+            credential_transport_mode: CredentialTransportMode::Bearer,
+            safe_header_name: None,
+            capability_taxonomy_revision: MODEL_CAPABILITY_TAXONOMY_V1.to_owned(),
+            reasoning_compatibility_id: Some("reasoning-compat-v1".to_owned()),
+            kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
+            driver_contract_revision: ProviderDriverContractRevisionDto {
+                driver_family: "responses".to_owned(),
+                major: 1,
+                minor: 0,
+            },
+        }
+    }
+
+    fn fixture_profile_candidate(
+        profile_id: &str,
+        revision_id: &str,
+    ) -> ProviderProfileCandidateDto {
+        ProviderProfileCandidateDto {
+            profile: fixture_profile(profile_id, revision_id),
+            declared_model_capability_subset: vec![
+                "text_input".to_owned(),
+                "text_streaming".to_owned(),
+            ],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "ordinary".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            display_name: Some(profile_id.to_owned()),
+            enabled: true,
+            credential_configured: true,
+            readiness: ProviderReadinessDto::Ready,
+        }
+    }
+
+    fn fixture_selection() -> ProviderSelectionV1 {
+        ProviderSelectionV1 {
+            selection_canonicalization_version: "1".to_owned(),
+            profile_id: "profile-default".to_owned(),
+            provider_profile_revision_id: "rev-0001".to_owned(),
+            kind_id: "responses".to_owned(),
+            kind_descriptor_revision_id: "kind-descriptor-rev-0001".to_owned(),
+            model_id: "gpt-4.1".to_owned(),
+            normalized_effective_endpoint: "https://api.example.com/v1".to_owned(),
+            credential_transport_mode: CredentialTransportMode::Bearer,
+            credential_transport_safe_header_name: None,
+            declared_model_capability_subset: vec!["text_streaming".to_owned()],
+            resolved_reasoning_policy: "textual-reasoning-v1".to_owned(),
+            effective_execution_policy: "ordinary".to_owned(),
+            effective_loopback_policy_or_not_applicable: "not-applicable".to_owned(),
+            provider_driver_contract_revision: "responses-1.0".to_owned(),
+            selection_source: Some("catalog-rev-0001".to_owned()),
+        }
+    }
+
+    fn raw_count(location: &SqliteDatabaseLocationDto, query: &str) -> i64 {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let count: i64 = connection
+            .query_row(query, [], |row| row.get(0))
+            .expect("inspection count loads");
+        drop(connection);
+        count
     }
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
@@ -2705,6 +2977,852 @@ mod tests {
                     .code(),
                 "tool_result_not_found"
             );
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Test fixtures pass flat candidate identity values for precise diagnostics."
+    )]
+    fn prepare_candidate(
+        repository: &SqliteStorageRepository,
+        revision: u64,
+        operation_id: &str,
+        kind_id: &str,
+        descriptor_revision_id: &str,
+        profile_id: &str,
+        profile_revision_id: &str,
+        accepted_at: i64,
+    ) {
+        repository
+            .append_provider_kind_descriptor_revision(
+                AppendProviderKindDescriptorRevisionInputDto {
+                    descriptor_revision_id: descriptor_revision_id.to_owned(),
+                    descriptor: fixture_kind_descriptor(kind_id),
+                    catalog_revision_id: revision,
+                    accepted_at,
+                    operation_id: operation_id.to_owned(),
+                },
+            )
+            .expect("fixture kind descriptor prepares");
+        repository
+            .append_provider_profile_revision(AppendProviderProfileRevisionInputDto {
+                profile: fixture_profile_candidate(profile_id, profile_revision_id),
+                catalog_revision_id: revision,
+                accepted_at,
+                operation_id: operation_id.to_owned(),
+            })
+            .expect("fixture profile prepares");
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Test fixtures pass flat candidate identity values for precise diagnostics."
+    )]
+    fn accept_candidate(
+        repository: &SqliteStorageRepository,
+        revision: u64,
+        handle: &str,
+        operation_id: &str,
+        kind_id: &str,
+        descriptor_revision_id: &str,
+        profile_id: &str,
+        profile_revision_id: &str,
+        accepted_at: i64,
+    ) {
+        repository
+            .accept_provider_catalog(AcceptProviderCatalogInputDto {
+                catalog_revision_id: revision,
+                candidate_handle: handle.to_owned(),
+                kind_descriptors: vec![intention_storage::ProviderKindDescriptorCandidateDto {
+                    descriptor_revision_id: descriptor_revision_id.to_owned(),
+                    descriptor: fixture_kind_descriptor(kind_id),
+                }],
+                profiles: vec![fixture_profile_candidate(profile_id, profile_revision_id)],
+                default_profile_id: profile_id.to_owned(),
+                accepted_at,
+                operation_id: operation_id.to_owned(),
+            })
+            .expect("fixture catalog accepts");
+    }
+
+    #[test]
+    fn every_catalog_acceptance_fault_stage_rolls_back_to_the_active_catalog() {
+        for point in [
+            FaultPoint::CatalogRevision,
+            FaultPoint::CatalogTombstone,
+            FaultPoint::CatalogProjection,
+            FaultPoint::CatalogAudit,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            prepare_candidate(
+                &repository,
+                1,
+                "op-prep-1",
+                "kind-a",
+                "kd-1",
+                "profile-a",
+                "rev-a",
+                1,
+            );
+            accept_candidate(
+                &repository,
+                1,
+                "candidate-1",
+                "op-accept-1",
+                "kind-a",
+                "kd-1",
+                "profile-a",
+                "rev-a",
+                1,
+            );
+            let baseline_state = repository
+                .load_provider_catalog_status()
+                .expect("baseline catalog state loads");
+            assert_eq!(baseline_state.active_catalog_revision_id, Some(1));
+            // Prepare candidate 2, which removes profile-a and kind-a.
+            prepare_candidate(
+                &repository,
+                2,
+                "op-prep-2",
+                "kind-b",
+                "kd-2",
+                "profile-b",
+                "rev-b",
+                2,
+            );
+            repository.arm_fault(point);
+            let error = repository
+                .accept_provider_catalog(AcceptProviderCatalogInputDto {
+                    catalog_revision_id: 2,
+                    candidate_handle: "candidate-2".to_owned(),
+                    kind_descriptors: vec![intention_storage::ProviderKindDescriptorCandidateDto {
+                        descriptor_revision_id: "kd-2".to_owned(),
+                        descriptor: fixture_kind_descriptor("kind-b"),
+                    }],
+                    profiles: vec![fixture_profile_candidate("profile-b", "rev-b")],
+                    default_profile_id: "profile-b".to_owned(),
+                    accepted_at: 2,
+                    operation_id: "op-accept-2".to_owned(),
+                })
+                .expect_err("injected catalog acceptance fault aborts the transaction");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            let state = reopened
+                .load_provider_catalog_status()
+                .expect("catalog state reloads");
+            assert_eq!(state.active_catalog_revision_id, Some(1));
+            assert_eq!(state.candidate_catalog_revision_id, Some(2));
+            assert_eq!(
+                state.status,
+                intention_storage::ProviderCatalogStatusDto::Active
+            );
+            let page = reopened
+                .load_provider_catalog_page(LoadProviderCatalogPageInputDto {
+                    token: None,
+                    limit: 10,
+                })
+                .expect("active catalog page reloads");
+            assert_eq!(page.entries.len(), 1);
+            assert_eq!(page.entries[0].profile_id, "profile-a");
+            assert_eq!(page.entries[0].profile_revision_id, "rev-a");
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM provider_profile_tombstones WHERE removed_catalog_revision_id=2"
+                ),
+                0
+            );
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM provider_kind_tombstones WHERE removed_catalog_revision_id=2"
+                ),
+                0
+            );
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-accept-2'"
+                ),
+                0
+            );
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM provider_catalog_profile_projection WHERE projection_state='active' AND catalog_revision_id=2"
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn every_reload_fault_stage_rolls_back_snapshot_and_audit_atomically() {
+        for point in [FaultPoint::ReloadSnapshot, FaultPoint::ReloadAudit] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            let snapshot = fixture_snapshot();
+            let revision = snapshot.revision_id().to_string();
+            repository.arm_fault(point);
+            let error = repository
+                .commit_configuration_reload(CommitConfigurationReloadInputDto {
+                    snapshot: snapshot.clone(),
+                    operation_id: "op-reload-1".to_owned(),
+                    reloaded_at: 5,
+                })
+                .expect_err("injected reload fault aborts the transaction");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_count(
+                    &location,
+                    &format!(
+                        "SELECT COUNT(*) FROM configuration_revisions WHERE revision_id='{revision}'"
+                    )
+                ),
+                0
+            );
+            assert_eq!(
+                raw_count(
+                    &location,
+                    "SELECT COUNT(*) FROM configuration_audit WHERE operation_id='op-reload-1'"
+                ),
+                0
+            );
+            // The reloaded snapshot remains acceptable after the rollback.
+            reopened
+                .accept_configuration_revision(snapshot)
+                .expect("reloaded snapshot persists after rollback");
+        }
+    }
+
+    #[test]
+    fn provider_selection_fault_rolls_back_fresh_run_selection_and_events() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        let baseline_tail = repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
+            .expect("baseline tail loads");
+        repository.arm_fault(FaultPoint::ProviderSelection);
+        let error = repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "turn with selection",
+                    run_id,
+                    fixture_snapshot(),
+                    fixture_time(2),
+                )
+                .expect("fixture turn input is valid")
+                .with_provider_selection(fixture_selection()),
+            )
+            .expect_err("injected provider selection fault aborts the transaction");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location.clone()).expect("database reopens");
+        assert_eq!(
+            reopened
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("tail reloads"),
+            baseline_tail
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!(
+                    "SELECT COUNT(*) FROM resolved_run_provider_selections WHERE run_id='{run_id}'"
+                )
+            ),
+            0
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!("SELECT COUNT(*) FROM runs WHERE run_id='{run_id}'")
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn provider_selection_fault_rolls_back_promotion_transfer_atomically() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let first_run = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            first_run,
+            "first run",
+        );
+        let promoted_run = RunId::new();
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "queued run with selection",
+                    promoted_run,
+                    fixture_snapshot(),
+                    fixture_time(3),
+                )
+                .expect("fixture turn input is valid")
+                .with_provider_selection(fixture_selection()),
+            )
+            .expect("queued turn commits");
+        repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Running,
+                fixture_time(3),
+            ))
+            .expect("first run transitions to running");
+        repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Completing,
+                fixture_time(3),
+            ))
+            .expect("first run transitions to completing");
+        let baseline_tail = repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
+            .expect("baseline tail loads");
+        repository.arm_fault(FaultPoint::ProviderSelection);
+        let error = repository
+            .transition_run(TransitionRunInputDto::new(
+                session_id,
+                first_run,
+                RunStatusDto::Completed,
+                fixture_time(4),
+            ))
+            .expect_err("injected provider selection fault aborts the promotion");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location.clone()).expect("database reopens");
+        // The whole promotion transaction rolled back: the queued turn stays
+        // queued, no promoted run exists, and no selection row was transferred.
+        assert_eq!(
+            reopened
+                .load_tail(session_id, SessionEventSequenceDto::new(0))
+                .expect("tail reloads"),
+            baseline_tail
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!("SELECT COUNT(*) FROM runs WHERE run_id='{promoted_run}'")
+            ),
+            0
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!(
+                    "SELECT COUNT(*) FROM resolved_run_provider_selections WHERE run_id='{promoted_run}'"
+                )
+            ),
+            0
+        );
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!("SELECT COUNT(*) FROM queued_turns WHERE session_id='{session_id}'")
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn run_rebinding_to_a_different_provider_selection_is_a_typed_conflict() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    TurnId::new(),
+                    "run with a resolved selection",
+                    run_id,
+                    fixture_snapshot(),
+                    fixture_time(2),
+                )
+                .expect("fixture turn input is valid")
+                .with_provider_selection(fixture_selection()),
+            )
+            .expect("run with selection commits");
+        // The fresh-run accept and the queue promotion both guard the run
+        // identity before the selection row, so the conflict cannot be
+        // produced through a second accept or a second promotion; it is driven
+        // through the production selection writer inside a real transaction
+        // instead. The identical selection identity stays idempotent while
+        // different bytes for the same run are a typed conflict.
+        let mut connection = repository.connection().expect("connection acquires");
+        let transaction = repository
+            .begin(&mut connection)
+            .expect("transaction begins");
+        let mut different = fixture_selection();
+        different.model_id = "a-different-model".to_owned();
+        let error =
+            super::control_plane::insert_selection(&transaction, session_id, run_id, &different)
+                .expect_err("rebinding one run to a different selection is rejected");
+        assert_eq!(error.code(), "provider_selection_conflict");
+        super::control_plane::insert_selection(
+            &transaction,
+            session_id,
+            run_id,
+            &fixture_selection(),
+        )
+        .expect("the identical selection identity is idempotent");
+        drop(transaction);
+        drop(connection);
+        // The rejected rebinding left the durable row untouched.
+        assert_eq!(
+            raw_count(
+                &location,
+                &format!(
+                    "SELECT COUNT(*) FROM resolved_run_provider_selections WHERE run_id='{run_id}' AND model_id='gpt-4.1'"
+                )
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn unavailable_queue_fault_rolls_back_promotion_and_marker_atomically() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            run_id,
+            "unavailable run",
+        );
+        repository
+            .enqueue_unavailable_run(EnqueueUnavailableRunInputDto {
+                run_id,
+                session_id,
+                profile_id: "profile-a".to_owned(),
+                provider_profile_revision_id: "rev-a".to_owned(),
+                unavailable_reason: "provider_unavailable".to_owned(),
+                first_unavailable_at: 3,
+                operation_id: "op-enqueue-1".to_owned(),
+                selection: fixture_selection(),
+            })
+            .expect("unavailable run enqueues");
+        repository.arm_fault(FaultPoint::UnavailableQueue);
+        let error = repository
+            .promote_unavailable_runs(PromoteUnavailableRunsInputDto {
+                now: 4,
+                operation_id: "op-promote-1".to_owned(),
+                max: 8,
+            })
+            .expect_err("injected unavailable queue fault aborts the transaction");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location.clone()).expect("database reopens");
+        let page = reopened
+            .load_unavailable_queue_page(intention_storage::LoadUnavailableQueuePageInputDto {
+                after_queue_id: None,
+                limit: 10,
+            })
+            .expect("queue page reloads");
+        assert_eq!(page.len(), 1);
+        assert_eq!(
+            page[0].state,
+            intention_storage::UnavailableQueueStateDto::Queued
+        );
+        assert_eq!(page[0].promotion_attempts, 0);
+        assert_eq!(
+            raw_count(
+                &location,
+                "SELECT COUNT(*) FROM unavailable_queue_reconciliation_markers"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn held_run_fault_rolls_back_admission_atomically() {
+        let location = fixture_location();
+        let repository = SqliteStorageRepository::open(location.clone()).expect("database opens");
+        let session_id = create_fixture_session(&repository);
+        let run_id = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            TurnId::new(),
+            run_id,
+            "recovered run",
+        );
+        repository
+            .mark_recovered_run_held(MarkRecoveredRunHeldInputDto {
+                run_id,
+                session_id,
+                held_at: 3,
+                operation_id: "op-hold-1".to_owned(),
+            })
+            .expect("recovered run is held");
+        repository.arm_fault(FaultPoint::HeldRun);
+        let error = repository
+            .admit_held_recovered_run(AdmitHeldRecoveredRunInputDto {
+                run_id,
+                session_id,
+                admitted_at: 4,
+                operation_id: "op-admit-1".to_owned(),
+            })
+            .expect_err("injected held-run admission fault aborts the transaction");
+        assert_eq!(error.code(), "injected_storage_fault");
+        drop(repository);
+        let reopened = SqliteStorageRepository::open(location).expect("database reopens");
+        let held = reopened
+            .load_held_recovered_run(run_id)
+            .expect("held run reloads")
+            .expect("held run record exists");
+        assert_eq!(
+            held.admission_state,
+            intention_storage::HeldRunAdmissionStateDto::Held
+        );
+        assert_eq!(held.admitted_at, None);
+        // Idempotent admission still works after the rollback.
+        reopened
+            .admit_held_recovered_run(AdmitHeldRecoveredRunInputDto {
+                run_id,
+                session_id,
+                admitted_at: 4,
+                operation_id: "op-admit-2".to_owned(),
+            })
+            .expect("held run admits after rollback");
+        let admitted = reopened
+            .load_held_recovered_run(run_id)
+            .expect("admitted run reloads")
+            .expect("admitted run record exists");
+        assert_eq!(
+            admitted.admission_state,
+            intention_storage::HeldRunAdmissionStateDto::Admitted
+        );
+    }
+
+    /// One durable removal-candidate row as read back through a raw
+    /// connection, so a fault fixture can compare every durable column at once.
+    #[derive(Debug, Eq, PartialEq)]
+    struct RemovalCandidateRow {
+        candidate_handle: String,
+        candidate_catalog_revision_id: i64,
+        active_catalog_revision_id: i64,
+        created_at: i64,
+        expires_at: i64,
+        source_recheck: String,
+        status: String,
+        candidate_json: String,
+        operation_id: Option<String>,
+        completed_at: Option<i64>,
+    }
+
+    fn raw_removal_candidate(
+        location: &SqliteDatabaseLocationDto,
+        handle: &str,
+    ) -> RemovalCandidateRow {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let row = connection
+            .query_row(
+                "SELECT candidate_handle, candidate_catalog_revision_id, active_catalog_revision_id, created_at, expires_at, source_recheck, status, candidate_json, operation_id, completed_at FROM provider_catalog_removal_candidates WHERE candidate_handle=?1",
+                [handle],
+                |row| {
+                    Ok(RemovalCandidateRow {
+                        candidate_handle: row.get(0)?,
+                        candidate_catalog_revision_id: row.get(1)?,
+                        active_catalog_revision_id: row.get(2)?,
+                        created_at: row.get(3)?,
+                        expires_at: row.get(4)?,
+                        source_recheck: row.get(5)?,
+                        status: row.get(6)?,
+                        candidate_json: row.get(7)?,
+                        operation_id: row.get(8)?,
+                        completed_at: row.get(9)?,
+                    })
+                },
+            )
+            .expect("removal candidate row reads");
+        drop(connection);
+        row
+    }
+
+    /// One durable catalog-state row as read back through a raw connection, so
+    /// a fault fixture can compare every durable column at once.
+    #[derive(Debug, Eq, PartialEq)]
+    struct CatalogStateRow {
+        singleton_id: i64,
+        active_catalog_revision_id: Option<i64>,
+        candidate_catalog_revision_id: Option<i64>,
+        status: String,
+        active_default_profile_id: Option<String>,
+        candidate_handle: Option<String>,
+        degraded_reason: Option<String>,
+        updated_at: i64,
+    }
+
+    fn raw_catalog_state(location: &SqliteDatabaseLocationDto) -> CatalogStateRow {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let row = connection
+            .query_row(
+                "SELECT singleton_id, active_catalog_revision_id, candidate_catalog_revision_id, status, active_default_profile_id, candidate_handle, degraded_reason, updated_at FROM provider_catalog_state WHERE singleton_id=1",
+                [],
+                |row| {
+                    Ok(CatalogStateRow {
+                        singleton_id: row.get(0)?,
+                        active_catalog_revision_id: row.get(1)?,
+                        candidate_catalog_revision_id: row.get(2)?,
+                        status: row.get(3)?,
+                        active_default_profile_id: row.get(4)?,
+                        candidate_handle: row.get(5)?,
+                        degraded_reason: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                },
+            )
+            .expect("catalog state row reads");
+        drop(connection);
+        row
+    }
+
+    /// One durable configuration-audit row as read back through a raw
+    /// connection, so a fault fixture can compare the complete audit table
+    /// instead of a per-operation count.
+    #[derive(Debug, Eq, PartialEq)]
+    struct ConfigurationAuditRow {
+        audit_sequence: i64,
+        operation_id: String,
+        audit_kind: String,
+        catalog_revision_id: Option<i64>,
+        config_revision_id: Option<String>,
+        profile_id: Option<String>,
+        run_id: Option<String>,
+        occurred_at: i64,
+        audit_json: String,
+    }
+
+    fn raw_audit_rows(location: &SqliteDatabaseLocationDto) -> Vec<ConfigurationAuditRow> {
+        let connection =
+            sqlite::Connection::open(&location.0).expect("database reopens for inspection");
+        let mut statement = connection
+            .prepare(
+                "SELECT audit_sequence, operation_id, audit_kind, catalog_revision_id, config_revision_id, profile_id, run_id, occurred_at, audit_json FROM configuration_audit ORDER BY audit_sequence",
+            )
+            .expect("audit table statement prepares");
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ConfigurationAuditRow {
+                    audit_sequence: row.get(0)?,
+                    operation_id: row.get(1)?,
+                    audit_kind: row.get(2)?,
+                    catalog_revision_id: row.get(3)?,
+                    config_revision_id: row.get(4)?,
+                    profile_id: row.get(5)?,
+                    run_id: row.get(6)?,
+                    occurred_at: row.get(7)?,
+                    audit_json: row.get(8)?,
+                })
+            })
+            .expect("audit table query runs")
+            .map(|row| row.expect("audit row reads"))
+            .collect();
+        drop(statement);
+        drop(connection);
+        rows
+    }
+
+    fn create_removal_candidate(repository: &SqliteStorageRepository) {
+        repository
+            .create_provider_catalog_removal_candidate(
+                CreateProviderCatalogRemovalCandidateInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    candidate_catalog_revision_id: 2,
+                    active_catalog_revision_id: 1,
+                    created_at: 100,
+                    source_recheck: "health-recheck".to_owned(),
+                    evidence: ProviderCatalogRemovalEvidenceDto {
+                        catalog_revision_id: 2,
+                        removed_profile_ids: vec!["profile-a".to_owned()],
+                        removed_kind_ids: vec!["kind-a".to_owned()],
+                    },
+                    operation_id: "op-removal-create-1".to_owned(),
+                },
+            )
+            .expect("removal candidate creates");
+    }
+
+    #[test]
+    fn removal_accept_fault_rolls_back_candidate_and_audit_atomically() {
+        for point in [FaultPoint::RemovalCandidate, FaultPoint::RemovalAudit] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            repository.arm_fault(point);
+            let error = repository
+                .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    accepted_at: 110,
+                    operation_id: "op-removal-accept-1".to_owned(),
+                })
+                .expect_err("injected removal fault aborts the acceptance");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
+            // The rolled-back candidate is still pending and accepts durably.
+            reopened
+                .accept_provider_catalog_removal(AcceptProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    accepted_at: 110,
+                    operation_id: "op-removal-accept-1".to_owned(),
+                })
+                .expect("candidate accepts after the rollback");
+            let accepted = raw_removal_candidate(&location, "removal-1");
+            assert_eq!(accepted.status, "accepted");
+            assert_eq!(accepted.completed_at, Some(110));
+            assert_eq!(
+                accepted.operation_id.as_deref(),
+                Some("op-removal-accept-1")
+            );
+        }
+    }
+
+    #[test]
+    fn removal_reject_fault_rolls_back_candidate_audit_and_active_status_atomically() {
+        for point in [
+            FaultPoint::RemovalCandidate,
+            FaultPoint::RemovalAudit,
+            FaultPoint::RemovalState,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            assert_eq!(state_baseline.status, "pending_removal");
+            repository.arm_fault(point);
+            let error = repository
+                .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    rejected_at: 110,
+                    operation_id: "op-removal-reject-1".to_owned(),
+                })
+                .expect_err("injected removal fault aborts the rejection");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
+            // The rolled-back rejection still restores the active catalog.
+            reopened
+                .reject_provider_catalog_removal(RejectProviderCatalogRemovalInputDto {
+                    candidate_handle: "removal-1".to_owned(),
+                    rejected_at: 110,
+                    operation_id: "op-removal-reject-1".to_owned(),
+                })
+                .expect("candidate rejects after the rollback");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1").status,
+                "rejected"
+            );
+            assert_eq!(raw_catalog_state(&location).status, "active");
+        }
+    }
+
+    #[test]
+    fn removal_expire_fault_rolls_back_candidate_audit_and_active_status_atomically() {
+        for point in [
+            FaultPoint::RemovalCandidate,
+            FaultPoint::RemovalAudit,
+            FaultPoint::RemovalState,
+        ] {
+            let location = fixture_location();
+            let repository =
+                SqliteStorageRepository::open(location.clone()).expect("database opens");
+            create_removal_candidate(&repository);
+            let candidate_baseline = raw_removal_candidate(&location, "removal-1");
+            let state_baseline = raw_catalog_state(&location);
+            let audit_baseline = raw_audit_rows(&location);
+            assert_eq!(candidate_baseline.status, "pending");
+            assert_eq!(state_baseline.status, "pending_removal");
+            let now = candidate_baseline.expires_at;
+            repository.arm_fault(point);
+            let error = repository
+                .expire_provider_catalog_removal_candidate(
+                    ExpireProviderCatalogRemovalCandidateInputDto {
+                        now,
+                        operation_id: "op-removal-expire-1".to_owned(),
+                    },
+                )
+                .expect_err("injected removal fault aborts the expiry");
+            assert_eq!(error.code(), "injected_storage_fault");
+            drop(repository);
+            let reopened =
+                SqliteStorageRepository::open(location.clone()).expect("database reopens");
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1"),
+                candidate_baseline
+            );
+            assert_eq!(raw_catalog_state(&location), state_baseline);
+            assert_eq!(raw_audit_rows(&location), audit_baseline);
+            // The rolled-back overdue candidate still expires durably.
+            assert_eq!(
+                reopened
+                    .expire_provider_catalog_removal_candidate(
+                        ExpireProviderCatalogRemovalCandidateInputDto {
+                            now,
+                            operation_id: "op-removal-expire-1".to_owned(),
+                        },
+                    )
+                    .expect("expiry runs after the rollback"),
+                1
+            );
+            assert_eq!(
+                raw_removal_candidate(&location, "removal-1").status,
+                "expired"
+            );
+            assert_eq!(raw_catalog_state(&location).status, "active");
         }
     }
 }

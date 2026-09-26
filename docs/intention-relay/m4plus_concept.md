@@ -4445,15 +4445,16 @@ ReasoningFragmentCategoryDto
   Primary
   Detail
 
-ReasoningDeltaDto
+ModelEventDto::ReasoningDelta
   category
   content
 
-ReasoningSummaryDeltaDto
+ModelEventDto::ReasoningSummaryDelta
   content
 ```
 
-The future provider/model, domain, and durable representations are closed and
+The provider-neutral reasoning DTO surface is owned by `intention-model`. The
+future provider/model, domain, and durable representations are closed and
 corresponding: `ModelEventDto::ReasoningDelta { category, content }` and
 `ModelEventDto::ReasoningSummaryDelta { content }` normalize provider input;
 `ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }` and
@@ -5763,9 +5764,10 @@ A `ProviderProfileId` is immutable and is both the TOML key in
 `[a-z0-9]+(?:-[a-z0-9]+)*`, remain within a future bounded length, reject
 uppercase rather than silently normalizing it, and reject the reserved prefixes
 `system` and `legacy`. It is never derived from a model, endpoint, or
-credential, cannot be renamed, and is never reused after deletion. Renaming an
-ID is an atomic removal of the old identity and creation of a new one, with no
-heuristic based on equal safe selections.
+credential, cannot be renamed, and is admitted again after removal only through
+a later accepted catalog that declares it. Renaming an ID is an atomic removal
+of the old identity and creation of a new one, with no heuristic based on equal
+safe selections.
 
 `display_name` is optional presentation metadata. When present, it is trimmed,
 non-blank bounded Unicode plain text that rejects control and bidi-override
@@ -6182,7 +6184,7 @@ validation or policy result; it never truncates accepted execution semantics.
 
 | Subject | Limit | Enforcement |
 | --- | ---: | --- |
-| `ProviderProfileId` and user `ProviderKindId` length | 63 ASCII characters | Reject the field before canonical revision construction. |
+| `ProviderProfileId` and user `ProviderKindId` length | 256 characters (not bytes) | Reject the field before canonical revision construction. |
 | Validated `display_name` length | 128 Unicode scalar values after trim and NFC normalization | Reject the field before catalog-digest construction. |
 | Profiles in one catalog | 128 | Reject the candidate as oversized. |
 | User-declared kinds in one catalog | 32 | Reject the candidate as oversized. |
@@ -6205,15 +6207,18 @@ than mutable user-kind definitions.
 
 Credential-free catalog revisions and profile-revision rows are immutable,
 append-only SQLite history. A current projection points to the active catalog.
-Accepted profile removal writes a permanent `ProviderProfileTombstoneDto` with
-only safe identity, removed catalog revision/time, and provenance. A candidate
-cannot reintroduce a tombstoned ID. A candidate cannot remove a user-declared
-kind while any resulting profile still references it; it fails with
-`provider_kind_has_dependents`. It may instead remove or reassign every
-dependent profile in the same atomic candidate, after which accepted kind
-removal writes a permanent safe `ProviderKindTombstoneDto`. Existing historical
-descriptor revisions remain readable for audit and historical verification; a
-removed kind never receives a new live registration or a reused identity.
+Accepted profile removal writes an append-only removal-history
+`ProviderProfileTombstoneDto` with only safe identity, removed catalog
+revision/time, and provenance. Tombstones are removal-history evidence, not
+admission authority: an identifier reintroduced by a later accepted catalog is
+admitted again, and its next removal records a fresh history row. A candidate
+cannot remove a user-declared kind while any resulting profile still references
+it; it fails with `provider_kind_has_dependents`. It may instead remove or
+reassign every dependent profile in the same atomic candidate, after which
+accepted kind removal writes an append-only removal-history
+`ProviderKindTombstoneDto`. Existing historical descriptor revisions remain
+readable for audit and historical verification; a removed kind is admitted again
+only by a later accepted catalog that declares it.
 
 Catalog lifecycle evidence belongs to a dedicated typed configuration-audit
 envelope/sequence rather than a synthetic session. It retains the complete
@@ -6344,10 +6349,10 @@ the private candidate; the public status separately exposes only its safe
 candidate revision and a bounded impact preview.
 
 `AcceptProviderCatalogRemovalCommandDto` is idempotent and contains the
-candidate handle, expected active/candidate revisions, operation ID, and source
-recheck. It atomically accepts removals, creates profile and kind tombstones as
-applicable, records the ordered removal/acceptance audit evidence, and activates
-the prepared registry. `RejectProviderCatalogCandidateCommandDto` drops the
+candidate handle, expected active/candidate revisions, and operation ID. It
+atomically accepts removals, creates profile and kind tombstones as applicable,
+records the ordered removal/acceptance audit evidence, and activates the
+prepared registry. `RejectProviderCatalogCandidateCommandDto` drops the
 private candidate and pending status only, then records
 `ProviderCatalogCandidateRejected`; it cannot rewrite TOML or restore old
 secrets/readiness, and leaves the daemon in degraded read-only mode with
@@ -6362,7 +6367,9 @@ The removal impact preview contains only removed IDs, global-default validity,
 bounded affected session-default and queued-selection counts/examples,
 tombstone consequences, and truncation. It never exposes prompts, paths, or
 credentials. A removal candidate does not make an already absent tombstone a
-new pending item; reintroduction of a tombstoned ID fails validation first.
+new pending item, and a later accepted catalog may reintroduce the identifier;
+reintroduction is admitted again while the earlier tombstone stays removal
+history.
 
 Startup opens storage first and interrupts pre-existing unfinished runs before
 any read response, using the existing provider-independent recovery rule and
@@ -6412,9 +6419,15 @@ exact enabled compatible `default` entry, otherwise failing closed.
 
 `SetSessionProviderProfileCommandDto` is user/client initiated, idempotent, and
 optimistic: it takes a session, enabled profile ID, expected session projection
-revision, and operation ID. It changes only future intent, emits a closed
-`SessionProviderProfileChanged` event and snapshot when changed, and cannot
-alter active or queued work. A request for the existing profile is a successful
+revision, and operation ID. It changes only future intent and, when the durable
+default changed, publishes the typed `SessionProviderProfileChanged` event to
+the validating session-event boundary. Slice 2 keeps no durable copy of that
+event and writes no durable session-event snapshot for it, because the
+control-plane event family has no durable append seam yet; durable delivery is
+parked as a declared future slice anchored in the review register's parking
+list (`pr24-review-1.md`, "Parked with owners after V2", the durable
+`SessionProviderProfileChanged` append layer). The command cannot alter active
+or queued work. A request for the existing profile is a successful
 `changed = false` no-op with no new event. A session may retain an unavailable
 profile ID only after later catalog disable/removal; an explicit command cannot
 select a disabled or absent profile.
@@ -6597,7 +6610,7 @@ Any approved implementation of this concept must add evidence for:
 
 - v0/v1-to-v2 in-memory migration through the stable `default` profile,
   legacy-after-v2 rejection, and tombstoned-`default` migration conflict;
-- strict catalog TOML validation: slug grammar/reserved prefixes, 63-character
+- strict catalog TOML validation: slug grammar/reserved prefixes, 256-character
   profile/kind IDs, 128-character NFC display text, all-or-nothing profile
   validation, field-wise policy merge, 512 KiB candidate size, 128-profile and
   32-user-kind limits, 32 bounded validation diagnostics, mandatory enabled
@@ -6817,9 +6830,10 @@ Any approved implementation of this concept must add evidence for:
   profiles, proving no DNS, HTTP, credential test, telemetry, model discovery,
   or background provider request occurs during startup/activation;
 - immutable credential-free catalog/profile and complete candidate-lifecycle
-  history, permanent profile/kind tombstones and ID non-reuse, ordered
-  configuration-audit sequencing, global-default invariants, and valid duplicate
-  safe selections with independent private clients;
+  history, append-only profile/kind removal-history tombstones whose admission
+  follows the current active membership, ordered configuration-audit sequencing,
+  global-default invariants, and valid duplicate safe selections with independent
+  private clients;
 - prepare/commit/swap fault injection after safe catalog write, profile/kind
   tombstones, current projection, each lifecycle audit event, and registry swap;
   stale source/candidate conflict, rejected candidates, 30-minute candidate
@@ -7413,7 +7427,7 @@ preparation before it is added to this matrix.
   big-endian lengths, canonical collection ordering, SHA-256, tagged lowercase
   hex IDs, NFC display-name handling, explicit loopback-policy applicability,
   excluded catalog/provenance fields, and additive fail-closed migration rules.
-- [x] Choose concrete bounded values and enforcement behavior: 63-character
+- [x] Choose concrete bounded values and enforcement behavior: 256-character
   profile/kind IDs, 128 profiles, 32 user kinds, 512 KiB candidates, 32 safe
   diagnostics, a 30-minute pending-removal lifetime, 128 registry entries,
   eight unavailable promotions, and 32-entry reconciliation/pages/previews.

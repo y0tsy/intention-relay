@@ -25,7 +25,7 @@ Core DTO families:
 
 | DTO | Responsibility |
 | --- | --- |
-| `ModelRequestDto` | System context, text messages, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
+| `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient same-run assistant reasoning attachment, requested reasoning/multimodal/tool/vendor-extension capabilities, and run identity. |
 | `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
 | `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream facts. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
@@ -81,7 +81,7 @@ The provider adapter translates native formats into canonical DTOs. It must not 
 
 ### OpenRouter
 
-`intention-provider-openrouter` uses `openrouter-rs` 0.14.0 privately.
+`intention-provider-openrouter` uses `openrouter-rs` 0.16.0 privately.
 
 It owns:
 
@@ -97,12 +97,10 @@ not expose SDK resources.
 
 ### Generic Chat Completion
 
-`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.41.3 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser.
-
-It owns:
+`intention-provider-generic-chat` supports compatible Chat Completion-style endpoints using `async-openai` 0.42.0 privately with its configured-base-URL streaming support. It does not implement a custom HTTP or SSE parser: the adapter enables the pinned SDK's `byot` feature and drives the stream through `create_stream_byot` with crate-private typed request and chunk structs, so the SDK still owns HTTP, SSE, TLS, and error mapping while the adapter privately owns the typed wire. It owns:
 
 - generic endpoint/auth/config translation;
-- private SDK request construction and fixture normalization for text, usage, finish, function-style tool-call, and error facts;
+- private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish, `tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error facts;
 - documented capability limitations; and
 - normalized failures.
 
@@ -111,7 +109,7 @@ private provider composition path. Provider crates continue to expose only
 provider-neutral contracts; runtime-owned execution and persistent delivery do
 not expose SDK resources.
 
-Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts only text context/output, usage, finish reasons, and function-style tool calls; reasoning, multimodal, and vendor extensions fail preflight before any outbound request is prepared. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
+Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. `openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract decision before it is introduced. The generic provider accepts text context/output, advertised tool definitions, usage, finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; multimodal and vendor extensions fail preflight before any outbound request is prepared. Reasoning output is normalized as `ModelEventDto::ReasoningDelta` (`Primary`), and when a configured thinking-mode gateway requires it the adapter serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run continuation, as transient request state with no durable representation; an empty channel is only a presence marker (ADR 0041). The OpenRouter adapter ignores the transient attachment because its pinned SDK request type has no reasoning field and its wire does not require the echo. OpenRouter declares text, reasoning, tool-call, and streaming capability while its M4 foundation rejects multimodal context. Execution-time capability behavior belongs to the selected provider driver and runtime policy.
 
 ## Provider selection
 
@@ -129,6 +127,23 @@ local effect, persists the correlated `ToolResultRecorded`, and continues the
 provider exchange with assistant-tool-call and tool-role messages until the
 provider finishes.
 
+Ordinary production requests advertise the active registered tools: the
+request carries validated typed `ModelToolDefinitionDto` definitions built by
+`intention_tools::model_visible_descriptors()` in registry order (`read`,
+`write`, `edit`, `execute`, `glob`, `grep`). A non-empty advertisement forces
+the requested `tool_calls` capability, so a driver that does not declare
+tool-call support fails closed at preflight with
+`unsupported_model_capability`. Both current adapters translate the
+definitions into their private SDK request and omit `tool_choice`; an empty
+advertisement preserves the previous request shape (ADR 0039).
+
+The same-run continuation is the one place provider reasoning returns to a
+request: the runtime attaches the current round's accepted reasoning to the
+assistant tool-call message (`assistant_reasoning`), and no prior-turn
+reasoning is transferred. The attachment is transient request state with no
+durable representation and never becomes message text or durable history;
+cross-turn transfer remains future work (ADR 0041).
+
 Provider drivers do not invoke local tools directly. The application builds
 the typed invocation from a provider-emitted tool call, and the daemon-owned
 registry executes it under `WorkspaceRoot` with typed hooks. The M4 no-port
@@ -139,6 +154,7 @@ records the tool-call facts and appends the terminal
 ## Retry and timeout ownership
 
 - Provider crates classify native failures into `ProviderErrorDto`.
+- The Generic Chat Completion adapter derives retryability from the SDK API error's authoritative HTTP status: 429 and 5xx are transient, and every other 4xx is permanent, so a permanent client rejection without an error `type` is never retried to the attempt maximum. The SDK error's optional `type` string stays only a secondary signal: it decides a status this taxonomy does not classify by itself, and an unclassified status without a transient type stays permanent. The classification selects the normalized `generic_chat_provider_unavailable` (retryable) or `generic_chat_provider_request_rejected` (permanent) failure.
 - Runtime/application policy determines whether an error is retryable for the run.
 - Config snapshots define timeout/retry limits applied to the run.
 - A retry must produce explicit events and preserve causal relation to the originating model turn.
@@ -159,6 +175,8 @@ cancelling is durable it suppresses later provider events/errors and retries.
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
 | Capability check | Application/runtime test. | Unsupported requested feature fails before an invalid provider call. |
+| Tool advertisement | Model/registry/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in registry order, both adapters translate them without `tool_choice`, a driver without tool-call support fails preflight, and the advertisement survives the tool-result continuation request. |
+| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `Primary` reasoning events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions still fail preflight. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned registry executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
@@ -205,13 +223,20 @@ architecture 22 defines only their future documentation contract.
 
 ## Post-M4 tool-loop consequence
 
-M4 tool-call evidence and denial remain unchanged. A future driver may support
-`model_tool_loop_v1` only when it can translate a frozen local typed tool
-selection and complete `ModelToolExchangeDto` history into a fresh provider
-request. It never invokes a local primitive or reuses opaque remote continuation
-state. Registry and tool-loop semantics are owned by [Tool registry and direct
-Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md); provider evolution
-remains separate.
+M4 tool-call evidence and denial remain unchanged. The ordinary request-side
+advertisement of the active registered tools is active under ADR 0039 and
+creates no frozen selection; `model_tool_loop_v1`, `ModelToolExchangeDto`
+history, and Mandate tool selection remain reserved for Slice 3. The same-run
+reasoning round-trip is active under ADR 0041: it attaches only the current
+round's accepted reasoning as transient request state, creates no durable
+reasoning history, and does not change the reserved `model_tool_loop_v1`
+contract. A future
+driver may support `model_tool_loop_v1` only when it can translate a frozen
+local typed tool selection and complete `ModelToolExchangeDto` history into a
+fresh provider request. It never invokes a local primitive or reuses opaque
+remote continuation state. Registry and tool-loop semantics are owned by
+[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md);
+provider evolution remains separate.
 
 ## Post-M4 session branching consequence
 

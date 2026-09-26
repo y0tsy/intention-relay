@@ -3,9 +3,9 @@
     reason = "M4 SQLite model-context fixtures use expect for precise diagnostics."
 )]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::Instant;
 
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -125,13 +125,20 @@ fn context_read_never_returns_starting_context_after_concurrent_terminalization(
         let reader_repository = Arc::new(reader_repository);
         let writer_repository = Arc::new(writer_repository);
         let ready = Arc::new(Barrier::new(2));
+        // The reader records whether terminalization was already durable when
+        // its read began. Completion timestamps cannot prove that ordering: a
+        // descheduled reader thread returns a legitimate pre-commit snapshot
+        // after the writer committed, which made this fixture flaky under load.
+        let terminalized = Arc::new(AtomicBool::new(false));
         let reader_ready = Arc::clone(&ready);
+        let reader_terminalized = Arc::clone(&terminalized);
         let reader = {
             let repository = Arc::clone(&reader_repository);
             thread::spawn(move || {
                 reader_ready.wait();
+                let started_after_terminalization = reader_terminalized.load(Ordering::SeqCst);
                 let context = repository.load_starting_run_model_context(session_id, run_id);
-                (Instant::now(), context)
+                (started_after_terminalization, context)
             })
         };
         let writer_ready = Arc::clone(&ready);
@@ -147,22 +154,51 @@ fn context_read_never_returns_starting_context_after_concurrent_terminalization(
                         time(3),
                     ))
                     .expect("writer terminalizes run");
-                Instant::now()
+                terminalized.store(true, Ordering::SeqCst);
             })
         };
 
-        let (reader_finished, context) = reader.join().expect("reader thread completes");
-        let writer_finished = writer.join().expect("writer thread completes");
-        if writer_finished < reader_finished {
-            let error = context.expect_err(
-                "a read completing after terminalization cannot return a starting context",
-            );
+        let (started_after_terminalization, context) =
+            reader.join().expect("reader thread completes");
+        writer.join().expect("writer thread completes");
+        if let Err(error) = &context {
             assert_eq!(
                 error.code(),
                 "run_model_context_unavailable",
                 "iteration {iteration}"
             );
         }
+        if let Ok(context) = &context {
+            // A read that began before terminalization may observe the
+            // pre-commit snapshot; it must still be one coherent starting
+            // context, never a partially terminalized one.
+            assert!(
+                !started_after_terminalization,
+                "iteration {iteration}: a read starting after terminalization returned a starting context"
+            );
+            assert_eq!(context.run_id(), run_id, "iteration {iteration}");
+            assert_eq!(
+                context.safe_config().resolved().provider().model(),
+                "current-model",
+                "iteration {iteration}"
+            );
+            assert_eq!(
+                context.messages().last().map(|message| message.content()),
+                Some("current user"),
+                "iteration {iteration}"
+            );
+        }
+        // Once terminalization is durable, a fresh read on the racing
+        // connection must never return the starting context, however the race
+        // itself was ordered.
+        let error = reader_repository
+            .load_starting_run_model_context(session_id, run_id)
+            .expect_err("a read after durable terminalization cannot return a starting context");
+        assert_eq!(
+            error.code(),
+            "run_model_context_unavailable",
+            "iteration {iteration}"
+        );
     }
 }
 

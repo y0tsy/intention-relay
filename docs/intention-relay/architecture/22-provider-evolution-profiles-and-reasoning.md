@@ -9,16 +9,23 @@
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
 - Reconciliation topics: `PRV-001..012, RSN-001..020`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: documentation-approved; implementation-authorized work requires a later activating specification.
+- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (catalog, selection, capability-taxonomy, reasoning-history, header/preservation/parser contracts; `responses` driver remains not activated).
 
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for future provider kinds, profiles and catalog lifecycle,
+**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
+owner for provider kinds, profiles and catalog lifecycle,
 provider/model-capability selections, endpoint and credential-transport
 semantics, driver-contract compatibility, provider-local availability, and
-normalized textual reasoning. It does not authorize a crate, SDK, parser,
-storage migration, wire implementation, catalog database, profile UI, or
-production provider behavior.
+normalized textual reasoning. Slice 2 activates the catalog lifecycle,
+provider selection and capability resolution, the normalized reasoning
+surface, the typed dialect decoder contract, and typed
+header policy validation (the typed preservation-control and
+parser-configuration contracts were removed as unconsumed by the D-16 audit).
+It
+does not authorize a `responses` SDK/driver, remote continuation, live wire
+header injection (`SafeHeader`), a user-kind parser, provider-native live
+extraction beyond declared paths, or production provider behavior beyond the
+activated Slice 2 contracts.
 
 It applies only to future Mandate and VerifierMandate execution. M3/M4 bytes,
 IDs, UUID `ConfigRevisionId` values, provider kinds, configuration snapshots,
@@ -158,19 +165,26 @@ that cannot be represented by the Responses descriptor fails
 Chat.
 
 Generic Chat remains narrow. A divergent reasoning protocol requires a separate
-first-party descriptor or user-declared typed kind. A user kind is an immutable
+first-party descriptor or user-declared typed kind. For the ordinary production
+path, the current `generic-chat-completion-api` adapter consumes the pinned
+SDK's typed `reasoning_content` field as normalized `Primary` reasoning output
+and echoes the current round's accepted reasoning on the same-run assistant
+tool-call continuation (ADR 0041); that typed field does not widen the
+descriptor envelope, and any other or vendor-specific dialect still requires a
+separate descriptor or typed kind. A user kind is an immutable
 composition of closed binary-owned protocol parts accepted by a code-owned
 compatibility matrix. It cannot be a plugin, executable configuration, arbitrary
 driver/parser, raw HTTP/JSON template, arbitrary header map, or secret
 interpolation. Reserved first-party IDs cannot be replaced.
 
-A `ProviderProfileId` is immutable and never reused. Profile removal creates a
-permanent tombstone; rename means removal plus new identity. A display name is
-safe presentation metadata, not execution identity. Profile semantic revisions
-are append-only. A profile revision changes for its kind/descriptor, model,
-endpoint, credential transport, capability subset, reasoning/execution policy,
-or applicable loopback policy, but not credential-only replacement, display
-name, enabled state, TOML whitespace/order, source path, or capture time.
+A `ProviderProfileId` is immutable within its declared catalog. Profile removal
+creates an append-only removal-history tombstone; rename means removal plus new
+identity, and a later accepted catalog may reintroduce a removed ID. A display
+name is safe presentation metadata, not execution identity. Profile semantic
+revisions are append-only. A profile revision changes for its kind/descriptor,
+model, endpoint, credential transport, capability subset, reasoning/execution
+policy, or applicable loopback policy, but not credential-only replacement,
+display name, enabled state, TOML whitespace/order, source path, or capture time.
 
 Every profile holds one opaque literal credential in private composition state.
 The only selected transports are bearer authorization or one descriptor-selected
@@ -199,16 +213,46 @@ support and fixtures. Same family/major is insufficient. Composition alone
 resolves private driver entries by exact profile revision, descriptor revision,
 and driver contract; no SDK/client/credential resource crosses a boundary.
 
-The catalog is startup-only and all-or-nothing:
+Provider option declarations flow through an explicit composition seam
+(PR24-057). The adapter option builders (`OpenRouterDriverOptions` and
+`GenericChatDriverOptions`) are additive, validated, credential-free driver
+configuration; adapter tests exercise them directly, and production drivers
+apply them only through the composition's single seam translation from
+validated profile declarations. Production driver construction and
+reconstruction apply the seam at startup selected-provider construction, at
+every catalog activation through the composition driver factory, and on
+credential-driven driver rebuilds (rotation), so an option declared by
+catalog material is never silently defaulted or ignored by the live driver.
+
+The closed Slice 2 declaration vocabulary is the profile's credential
+transport (bearer, or one descriptor-selected safe header whose complete
+value is the credential), which translates to the typed header policy, and an
+empty reasoning-effort slot (no Slice 2 declaration surface exists; RSN-011).
+Currently producible declarations therefore map to the closed bearer policy
+with no reasoning effort, and the composition guard test locks that mapping.
+A declaration the executing adapter cannot apply — live `SafeHeader` wire
+injection is not activated (EXC-057), and adapter applicability (for example
+the generic-chat maximum-effort limit) stays adapter-owned — fails closed at
+the seam with the adapter's typed error instead of silently constructing a
+default driver. Credential rotation replaces only the executing driver's
+private SDK client: the options the seam applied at construction are retained,
+and the rebuild additionally preflights the active profile's declared options.
+
+The catalog is startup-only. Acceptance is all-or-nothing: the auto-accept path
+builds and pre-validates the replacement registry and its admissions map before
+the durable acceptance, so a build or validation failure leaves the durable
+catalog revision unadvanced and only a successful build commits the acceptance
+and swaps the in-memory registry and gate:
 
 ```mermaid
 flowchart LR
   T[TOML restart] --> V[Local validation]
   V --> P[Prepared candidate]
-  P -->|No removal| A[Accept durable catalog]
+  P -->|No removal| B[Build and pre-validate registry]
   P -->|Removal| W[Pending removal]
-  W -->|Accept| A
+  W -->|Accept| A[Accept durable catalog]
   W -->|Reject or expire| D[Degraded read mode]
+  B --> A
   A --> S[Exact private registry swap]
   S --> R[Fresh readiness]
   A -. crash .-> C[Activation recovery]
@@ -234,7 +278,10 @@ remains the stopping authority. No private binding survives restart.
 The audit taxonomy is candidate prepared, removal pending/accepted/rejected/
 expired, catalog accepted/activated, activation recovery required, and recovery
 completed. It is neither Session, Run, Mandate, MCP, lineage, nor activity
-sequence. Numeric catalog/parser/page bounds must be explicitly classified as
+sequence. The taxonomy names are the durable `configuration_audit.audit_kind`
+vocabulary written by the storage path; they are not protocol events and no
+wire event DTO carries them. Numeric catalog/parser/page bounds must be
+explicitly classified as
 intrinsic representation bounds, protocol bounds, or actual capacity, never
 Mandate admission quotas.
 
@@ -243,7 +290,7 @@ Mandate admission quotas.
 Compatibility and availability are distinct. Corrupt/missing meaning, digest
 mismatch, unknown version/taxonomy, invalid intersection, descriptor mismatch,
 or incompatible driver blocks execution before effect. Exact compatible private
-material that is absent, disabled, tombstoned, or unavailable is live
+material that is absent, disabled, or unavailable is live
 availability evidence. For a Mandate it retains the existing reason and creates
 no `RunId`; readiness restoration only wakes architecture-16 reevaluation.
 Neither outcome allows default, same-model, alternate endpoint, kind, driver, or
@@ -270,21 +317,27 @@ Provider descriptors own closed request dialect and native stream normalization,
 not context sourcing. Architecture 21 alone selects safe source references,
 audience, disclosure, omissions, and model-step context. A provider cannot scan
 sessions/ancestors/siblings, construct history from current state, inject prior
-reasoning, compact content, or broaden an audience.
+reasoning, compact content, or broaden an audience. The ordinary same-run
+continuation is not prior-reasoning injection: the runtime may attach the
+current round's own accepted reasoning to the assistant tool-call message of
+that in-flight exchange as transient request state (ADR 0041); prior-run,
+cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one `RunEventCursorDto` for text, reasoning,
-summaries, tool calls, usage, and terminal facts:
+summaries, tool calls, usage, and terminal facts. The provider-neutral reasoning
+DTO surface is owned by `intention-model` (ADR 0037): the closed fragment
+category and the normalized model events are:
 
 ```text
 ReasoningFragmentCategoryDto
   Primary
   Detail
 
-ReasoningDeltaDto
+ModelEventDto::ReasoningDelta
   category
   content
 
-ReasoningSummaryDeltaDto
+ModelEventDto::ReasoningSummaryDelta
   content
 ```
 
@@ -309,10 +362,11 @@ corresponding: `ModelEventDto::ReasoningDelta { category, content }` and
 `ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it;
 and the domain taxonomy has matching `ReasoningDeltaRecorded` and
 `ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a
-separate closed durable fact, never a provider stream event. A supported legacy
-M4 `ReasoningDeltaRecorded { content }` decodes as historical `Primary`
-reasoning evidence without rewriting its stored bytes; it has no synthetic
-summary, category field, or history manifest.
+separate closed durable fact, never a provider stream event. Per
+[ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md),
+`category` is required on the wire in the model and domain reasoning
+representations with no defaulting to `Primary` and no historical decode
+class; reasoning never synthesizes a summary or history manifest.
 
 The existing 512 KiB canonical individual-fact bound remains in force. The
 combined canonical reasoning fragments and summaries of one run have a fixed
@@ -343,20 +397,27 @@ closed for future facts; M3/M4 replay remains unchanged.
 ## Reasoning capability slice and bounded `responses` v1
 
 The initial versioned capability slice selects text streaming, textual
-reasoning output, the closed supported sets of `reasoning_effort` and
-`reasoning.mode`, reasoning-summary support, and custom function-call
+reasoning output, the closed supported set of `reasoning_effort`,
+reasoning-summary support, and custom function-call
 admission. A kind descriptor declares the maximum protocol capability envelope;
 each profile explicitly declares a safe subset for its exact configured model,
-including reasoning availability, supported effort and mode values, summary
-availability, and custom-function-call availability. Model identifiers remain
+including reasoning availability, supported effort values, summary
+availability, and custom-function-call availability. The current ordinary
+`generic-chat-completion-api` driver declares reasoning output in its
+`ModelCapabilitiesDto` because it consumes and preserves `reasoning_content`
+(ADR 0041); that declaration is the existing driver capability contract, not a
+descriptor revision, and a future descriptor that cannot represent the selected
+model's reasoning dialect still requires its own closed capability
+declaration. Model identifiers remain
 byte-exact and are never used to infer capabilities. Preflight rejects a
 requested capability or value that is absent from either level before any
 outbound work occurs.
 
 The resolved reasoning policy includes the closed fragment-category and
 summary support, the `ReasoningHistoryTransferDto` mode, and `compatibility_id`
-when transfer is enabled. It also records the fixed 4 MiB output/history limits
-and the optional reasoning-usage interpretation. A selection that cannot
+when transfer is enabled. It also records the fixed 4 MiB output/history limits.
+The optional typed reasoning-usage interpretation and its `ReasoningUsageDto`
+were removed as unconsumed by the D-16 audit. A selection that cannot
 represent the descriptor's declared history transfer fails preflight before
 provider work; it never falls back to a different transfer policy.
 
@@ -366,11 +427,12 @@ history and does not use OpenAI Conversations or `previous_response_id`. It
 must neither request nor persist, publish, replay, or depend on encrypted
 reasoning, opaque response output items, remote conversation identifiers, or
 provider-managed history state. The provider-neutral contract adds closed
-`ReasoningEffortDto` values (`none`, `minimal`, `low`, `medium`, `high`,
-`xhigh`, and `max`) and a Responses-specific closed reasoning-mode projection
-(`standard` or `pro`). A profile may select only values declared in its model
-subset; an unsupported effort or mode fails preflight. The resolved execution
-policy records those values as immutable safe provenance.
+`ReasoningEffortLevel` values (`none`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, and `max`). A profile may select only values declared in its model
+subset; an unsupported effort fails preflight. The resolved execution policy
+records the selected effort as immutable safe provenance. The former
+Responses-specific reasoning-mode projection and the protocol-side effort copy
+were removed as unconsumed by the D-16 audit.
 
 For a `responses` profile whose model subset declares summary support, the
 default request asks for an automatic provider reasoning summary. A returned
@@ -432,12 +494,11 @@ readable with no synthetic manifests.
 
 ## Reasoning usage and initial delivery
 
-`UsageDto::Reported` includes an optional typed `ReasoningUsageDto` with optional
-input and output token counts; a missing value means the provider did not report
-that component, never zero. Reported reasoning values are components of the
-corresponding total input/output counts, not additional usage. Reconnect,
-replay, inheritance, and tree aggregation must not charge or count the same
-source `RunId` twice. There is no price, currency, or inferred cost.
+`UsageDto::Reported` carries only the ordinary reported input/output/total token
+counts; the optional typed `ReasoningUsageDto` was removed as unconsumed by the
+D-16 audit. A missing reported usage stays `NotReported`, never a zero count.
+Reconnect, replay, inheritance, and tree aggregation must not charge or count
+the same source `RunId` twice. There is no price, currency, or inferred cost.
 
 The negotiated `normalized_reasoning_stream_v1` capability provides automatic
 initial reasoning delivery through uncorrelated `RunReasoningHistoryPageDto` and
@@ -469,7 +530,10 @@ it never copies reasoning text into the snapshot. Each
 completed-sequence identity, final assistant-turn identity when present,
 ordered reasoning fact cursor/category/digest/size references, and the source
 descriptor's `compatibility_id`. `fork-model-context-v1` remains a text-only
-projection and does not add reasoning or summaries to ordinary model messages. A
+projection and does not add reasoning or summaries to ordinary model messages.
+The ordinary same-run continuation echo is out of scope here: it attaches only
+the current round's own reasoning to that round's assistant tool-call message
+and never adds fork or prior reasoning to ordinary messages (ADR 0041). A
 child run combines frozen references with its own completed compatible responses
 to construct its own `ReasoningHistoryManifestDto`; it never rescans the source
 or a sibling. An unavailable required reference blocks only the dependent
@@ -497,18 +561,25 @@ encrypted/opaque provider payloads, server-side vLLM/SGLang parser config, raw
 provider JSON, or generic request templates. Cross-turn policy is limited to the
 explicit typed textual history contract; provider-native `preserve_thinking`,
 `thinking.keep`, remote continuation identifiers, and non-fitting
-assistant-history requirements are excluded. Arbitrary authentication headers,
-provider-native preservation controls, and server-side parser setup are
-accepted post-M5 future directions under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be
-executed in Milestone 5+: a closed code-owned typed header policy, explicit
-typed preservation controls under the local-history-first law (never remote
-continuation), and explicit typed server-side parser configuration where a
-closed descriptor declares it (never raw JSON/templates and never unbounded
-parsing). They are not activated here. The current `async-openai` core
+assistant-history requirements are excluded. Arbitrary authentication headers
+are an accepted post-M5 direction under
+[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and are
+activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md):
+a closed code-owned typed header policy (the `intention-model`
+`AuthenticationHeaderPolicyV1` consumed by both provider adapters; the
+protocol-only duplicate was removed by the D-16 audit). The typed
+provider-native preservation-control and server-side-parser contracts were
+removed as unconsumed by the D-16 audit: no preservation-control or
+parser-configuration surface is activated. Live wire header
+injection (`SafeHeader`) and provider-native live extraction beyond the
+declared paths remain not activated. The current `async-openai` core
 Chat Completions adapter is not assumed sufficient for every descriptor; a future
 implementation must choose a pinned private SDK or an explicitly specified
-private typed decoder per closed descriptor. The descriptor registry never
+private typed decoder per closed descriptor. ADR 0041 follows this clause for
+the current ordinary adapter: it keeps the pinned `async-openai` SDK and uses
+its private `byot` typed-stream seam with crate-private request and chunk
+structs, rather than assuming the core adapter's fixed types are sufficient. The
+descriptor registry never
 authorizes arbitrary network protocol handling, unbounded parsing, or provider
 SDK data outside its owner adapter.
 
@@ -518,7 +589,7 @@ The first-scope fixed code-owned catalog limits are:
 
 | Subject | Limit | Enforcement |
 | --- | ---: | --- |
-| `ProviderProfileId` and user `ProviderKindId` length | 63 ASCII characters | Reject the field before canonical revision construction. |
+| `ProviderProfileId` and user `ProviderKindId` length | 256 characters (not bytes) | Reject the field before canonical revision construction. |
 | Validated `display_name` length | 128 Unicode scalar values after trim and NFC normalization | Reject the field before catalog-digest construction. |
 | Profiles in one catalog | 128 | Reject the candidate as oversized. |
 | User-declared kinds in one catalog | 32 | Reject the candidate as oversized. |
@@ -534,12 +605,16 @@ The first-scope fixed code-owned catalog limits are:
 closed stream/reasoning/activation/budget-effort/credential-transport parts
 fails with `provider_kind_immutable_mismatch`; the valid path is a new kind ID
 plus reassignment. Credential-free catalog/profile-revision rows are immutable
-append-only SQLite history. Removal writes a permanent `ProviderProfileTombstoneDto`
-(safe identity, removed catalog revision/time, provenance); a tombstoned ID
-cannot be reintroduced. Kind removal while referenced fails
-`provider_kind_has_dependents`; after removing or reassigning all dependents in
-the same candidate, accepted kind removal writes a permanent
-`ProviderKindTombstoneDto`. The audit taxonomy is:
+append-only SQLite history. Removal writes a removal-history
+`ProviderProfileTombstoneDto` (safe identity, removed catalog revision/time,
+provenance). Durable tombstones are append-only removal events keyed by (id,
+removed catalog revision); admission authority is the current active
+projection, so an identifier reintroduced by a later accepted catalog is
+admitted again and its next removal records a fresh history row (PR24-017).
+Kind removal while referenced fails `provider_kind_has_dependents`; after
+removing or reassigning all dependents in the same candidate, accepted kind
+removal writes a removal-history `ProviderKindTombstoneDto`. The audit
+taxonomy is:
 
 ```text
 ProviderCatalogCandidatePrepared
@@ -569,23 +644,14 @@ profile owns an independent private client/driver entry, and no SDK/credential/
 client/handle crosses a DTO, persistence, protocol, runtime public API, or
 adapter boundary.
 
-## Legacy M4 selection bridge
+## Legacy M4 selection bridge (removed)
 
-Migration eagerly maps every persisted legacy M4 `ConfigRevisionId` to one
-immutable `LegacyM4SelectionBindingDto` for its supported safe snapshot; equal
-snapshots may share one equivalent binding. The binding references the original
-legacy ID and snapshot bytes unchanged, records validation of the supported M4
-snapshot schema, materializes a deterministic first-party `default` profile ID,
-profile revision, kind descriptor revision, capability subset, execution policy,
-and M4 driver-contract revision, and protects the bridge fields with a canonical
-binding digest; it is never recomputed from future TOML. An old queued run
-executes only when the active `default` entry exactly matches the binding AND
-the current driver explicitly supports the materialized M4 contract; otherwise
-the same closed unavailable outcome applies. It preserves the original `RunId`,
-legacy `ConfigSnapshotDto`, event history, and replay data; the old snapshot JSON
-and old UUID are never replaced with a SHA ID. A missing, malformed, or
-digest-inconsistent binding is `historical_selection_corrupt`; replay remains
-readable where possible and is never reconstructed from current TOML.
+The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) is
+removed by [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md):
+no `LegacyM4SelectionBindingDto` is materialized, no `legacy_m4_selection_bindings`
+table exists, and no synthetic binding or provider selection is ever created for
+historical runs. Provider binding identity is owned by the provider catalog
+runtime; the composition resolves it through the catalog admission port.
 
 ## Session selection, degraded recovery, and protocol
 
@@ -617,13 +683,20 @@ meaning and gains no synthetic category, summary, or history.
 ## Dependencies, non-goals, and evidence
 
 This document depends on architectures 13, 14, 15, 16, and 21 plus decisions
-0001--0013. It does not define a Responses SDK/driver, user-kind parser, catalog
-database, wire tags, migrations, profile picker/editor, credential entry/keychain/
-rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
-structured output, arbitrary headers, plugin drivers, remote continuation,
-provider-side parser administration, while architecture 23 owns forks and lineage,
-architecture 29 owns session defaults/overrides and the profiles protocol,
-UI, Cargo, Makefile/CI, or production activation.
+0001--0013. It does not define a Responses SDK/driver, user-kind parser,
+profile picker/editor presentation, credential entry/keychain, telemetry,
+multimodal or structured output, plugin drivers, or remote continuation; the
+catalog database, the single current storage schema (logical version 1),
+credential rotation, health checks,
+discovery, pricing, controlled live reload, and typed header policy are
+activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
+preservation-control and server-side-parser contracts were removed as
+unconsumed by the D-16 audit, and no parser-configuration surface is
+activated. Architecture
+23 owns forks and lineage, architecture 29 owns session defaults/overrides and
+the profiles protocol, and UI, Cargo, Makefile/CI, or production activation
+beyond the activated Slice 2 contracts remain outside this document.
 
 Semantic content inspection of reasoning or provider content is an accepted
 post-M5 future direction under
@@ -635,12 +708,17 @@ The profile picker/editor, credential rotation, health test, discovery,
 pricing, telemetry, and live reload items are accepted post-M5 directions
 owned by [architecture 25](25-configuration-provider-control-plane.md) and
 activated under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment);
-they are not activated here.
+they are activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md).
+The profile picker/editor presentation and telemetry remain not activated.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`, `make
-verify`, and Linux/Windows CI. Required evidence includes:
+verify`, and Linux/Windows CI.
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
+activating specification: it declares the exact test targets, the single
+current-schema storage policy, and the per-direction evidence anchors. Required
+evidence includes:
 
 - IRCR canonical positive/negative goldens and cross-platform digests for
   descriptor/profile/catalog/selection/capability/driver records;

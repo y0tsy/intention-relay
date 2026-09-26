@@ -1,0 +1,6 @@
+# Text files are checked out with LF everywhere.
+#
+# Quality guards scan repository sources textually (source markers, documented
+# signatures), and Git's Windows default rewrites text files to CRLF, which
+# silently changes what those scans see.
+* text=auto eol=lf

@@ -2,5 +2,6 @@
 /quality/reports/
 /.cargo-home/
 /.rustup-home/
+/.env
 __pycache__/
 *.py[cod]
