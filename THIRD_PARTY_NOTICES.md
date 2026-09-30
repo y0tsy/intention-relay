@@ -5268,7 +5268,7 @@ SOFTWARE.
 #### Used by
 
 - [async-openai-macros 0.3.0](https://github.com/64bit/async-openai)
-- [async-openai 0.42.0](https://github.com/64bit/async-openai)
+- [async-openai 0.42.1](https://github.com/64bit/async-openai)
 
 ```text
 MIT License
