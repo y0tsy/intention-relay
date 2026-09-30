@@ -515,8 +515,7 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
         let ToolResult::Glob(result) = result else {
             unreachable!("non-glob result")
         };
-        assert!(!result.truncated, "unexpected truncation for: {pattern}");
-        // The reported subset is sorted and duplicate-free on every replay.
+        // The reported set is sorted and duplicate-free on every replay.
         let mut sorted = result.paths.clone();
         sorted.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         sorted.dedup_by(|a, b| a.as_str() == b.as_str());
@@ -1984,11 +1983,9 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
 }
 
 #[test]
-fn bounded_text_accepts_boundary_and_rejects_nul_or_oversize() {
+fn bounded_text_accepts_text_and_rejects_nul() {
     assert_eq!(BoundedText::new("ok").unwrap().as_str(), "ok");
     assert!(BoundedText::new("\0").is_err());
-    assert!(BoundedText::new("x".repeat(1_048_577)).is_err());
-    assert!(BoundedText::new("x".repeat(1_048_576)).is_ok());
 }
 
 #[test]
@@ -2211,13 +2208,12 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             (ToolProjectedContent::Mutation { bytes }, ToolId::Edit) => {
                 assert_eq!(*bytes, "gamma needle".len() as u64);
             }
-            (ToolProjectedContent::Paths { paths, truncated }, ToolId::Glob) => {
+            (ToolProjectedContent::Paths { paths }, ToolId::Glob) => {
                 let listed = paths
                     .iter()
                     .map(WorkspaceRelativePathDto::as_str)
                     .collect::<Vec<_>>();
                 assert_eq!(listed, vec!["data.txt"]);
-                assert!(!*truncated);
             }
             (ToolProjectedContent::Matches { matches, truncated }, ToolId::Grep) => {
                 assert_eq!(matches.len(), 1);
@@ -2240,20 +2236,15 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
 }
 
 #[test]
-fn projections_clamp_oversized_collections_and_round_trip() {
+fn projections_preserve_collections_and_round_trip() {
     let paths = (0..=10_000)
         .map(|index| WorkspaceRelativePathDto::parse(format!("f{index}.txt")).unwrap())
         .collect::<Vec<_>>();
-    let projection = ToolResult::Glob(PathsResult {
-        paths,
-        truncated: false,
-    })
-    .projection();
-    let ToolProjectedContent::Paths { paths, truncated } = projection.content else {
+    let projection = ToolResult::Glob(PathsResult { paths }).projection();
+    let ToolProjectedContent::Paths { paths } = projection.content else {
         unreachable!("glob projection content")
     };
-    assert_eq!(paths.len(), 10_000);
-    assert!(truncated);
+    assert_eq!(paths.len(), 10_001);
 
     let matches = (0..=10_000)
         .map(|index| GrepMatch {
@@ -2265,10 +2256,10 @@ fn projections_clamp_oversized_collections_and_round_trip() {
         .collect::<Vec<_>>();
     let projection = ToolResult::Grep(GrepResult {
         matches,
-        truncated: false,
+        truncated: true,
     })
     .projection();
-    // The bounded projection serializes losslessly for durable persistence.
+    // The projection serializes losslessly for durable persistence.
     let encoded = serde_json::to_string(&projection).unwrap();
     assert_eq!(
         serde_json::from_str::<ToolResultProjection>(&encoded).unwrap(),
@@ -2277,7 +2268,7 @@ fn projections_clamp_oversized_collections_and_round_trip() {
     let ToolProjectedContent::Matches { matches, truncated } = projection.content else {
         unreachable!("grep projection content")
     };
-    assert_eq!(matches.len(), 10_000);
+    assert_eq!(matches.len(), 10_001);
     assert!(truncated);
 }
 

@@ -144,10 +144,6 @@ mod spawn_observation_tests {
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_GLOB_MATCHES: usize = 10_000;
-const MAX_GREP_MATCHES: usize = 10_000;
-/// Upper bound on distinct files scanned by one directory/workspace grep.
-const MAX_GREP_FILES: usize = 10_000;
 /// Upper bound on the retained fragment bytes of one grep result. Per-line
 /// fragment caps alone still allow a very large aggregate result; the
 /// aggregate is clamped with the same truncation flag so durable, normalized
@@ -157,10 +153,6 @@ const MAX_GREP_AGGREGATE_BYTES: usize = 128 * 1024;
 /// Larger files can be read (truncated) but never edited or equality-checked,
 /// which keeps edit reads and write preflights bounded (PR24-022).
 const MAX_EDIT_TARGET_BYTES: usize = 1024 * 1024;
-/// Upper bound on the number of arguments of one execute invocation.
-const MAX_EXECUTE_ARGUMENTS: usize = 128;
-/// Upper bound on the aggregate argument bytes of one execute invocation.
-const MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES: usize = 256 * 1024;
 
 /// Redacted working-directory identity recorded in durable tool metadata. It
 /// marks the authorized workspace root as the effective CWD without disclosing
@@ -1244,22 +1236,20 @@ pub fn model_visible_descriptors() -> Vec<ToolDescriptor> {
 /// Bounded text accepted by tool contracts.
 ///
 /// Deserialization is validating: JSON arriving at the daemon tool boundary
-/// cannot bypass the constructor's size and NUL checks (PR24-023).
+/// cannot bypass the constructor's NUL check (PR24-023).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct BoundedText(String);
 impl BoundedText {
-    /// Maximum contract text size.
-    ///
     /// # Errors
     ///
-    /// Returns a validation error when the text exceeds the bound or contains a NUL byte.
+    /// Returns a validation error when the text contains a NUL byte.
     pub fn new(value: impl Into<String>) -> DtoResult<Self> {
         let value = value.into();
-        if value.len() > 1_048_576 || value.contains('\0') {
+        if value.contains('\0') {
             Err(intention_types::ErrorDto::validation(
                 "invalid_tool_text",
-                "tool text exceeds bounds or contains NUL",
+                "tool text contains NUL",
             ))
         } else {
             Ok(Self(value))
@@ -1396,59 +1386,10 @@ pub struct EditInput {
     #[serde(default)]
     pub expected_content: Option<BoundedText>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecuteInput {
     pub program: BoundedText,
     pub args: Vec<BoundedText>,
-}
-
-impl ExecuteInput {
-    /// Validates the invocation shape after each element passed its own text
-    /// bound: the argument count and aggregate argument bytes stay within the
-    /// execute contract (PR24-023).
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the argument count or aggregate bytes
-    /// exceed the execute bounds.
-    pub fn validate_bounds(&self) -> DtoResult<()> {
-        let aggregate = self
-            .args
-            .iter()
-            .map(|argument| argument.as_str().len())
-            .sum::<usize>();
-        if self.args.len() > MAX_EXECUTE_ARGUMENTS || aggregate > MAX_EXECUTE_ARGUMENTS_TOTAL_BYTES
-        {
-            Err(intention_types::ErrorDto::validation(
-                "invalid_tool_execute_arguments",
-                "execute argument count or aggregate size exceeds bounds",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ExecuteInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawExecuteInput {
-            program: BoundedText,
-            args: Vec<BoundedText>,
-        }
-        let raw = RawExecuteInput::deserialize(deserializer)?;
-        let input = Self {
-            program: raw.program,
-            args: raw.args,
-        };
-        input.validate_bounds().map_err(|error| {
-            serde::de::Error::custom(format!("invalid execute input ({})", error.code()))
-        })?;
-        Ok(input)
-    }
 }
 
 impl ToolInput {
@@ -1496,6 +1437,8 @@ pub struct TextResult {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GrepResult {
     pub matches: Vec<GrepMatch>,
+    /// Whether a dropped read window, an oversized line, or the retained
+    /// aggregate bound cut bytes; the match count never truncates.
     #[serde(default)]
     pub truncated: bool,
 }
@@ -1509,8 +1452,6 @@ pub struct GrepMatch {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PathsResult {
     pub paths: Vec<WorkspaceRelativePathDto>,
-    #[serde(default)]
-    pub truncated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WriteResult {
@@ -1520,20 +1461,18 @@ pub struct WriteResult {
 /// Normalized content shape of one projected concrete tool result.
 ///
 /// The projection keeps the typed payload bounded and workspace-relative: text
-/// stays in [`BoundedText`], path lists and grep matches are clamped to the
-/// search bounds with an explicit truncation flag, and mutations carry only a
-/// byte count.
+/// stays in [`BoundedText`], grep matches carry the byte-window truncation
+/// flag, path lists are complete, and mutations carry only a byte count.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolProjectedContent {
     /// Bounded text produced by Read or Execute.
     Text { text: BoundedText, truncated: bool },
-    /// Bounded workspace-relative path list produced by Glob.
+    /// Complete workspace-relative path list produced by Glob.
     Paths {
         paths: Vec<WorkspaceRelativePathDto>,
-        truncated: bool,
     },
-    /// Bounded workspace-relative matches produced by Grep.
+    /// Byte-windowed workspace-relative matches produced by Grep.
     Matches {
         matches: Vec<GrepMatch>,
         truncated: bool,
@@ -1547,8 +1486,8 @@ pub enum ToolProjectedContent {
 ///
 /// The projection never carries an absolute path, OS resource detail, command
 /// line, or environment value: the working-directory identity is redacted to
-/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and content is
-/// clamped to the search bounds.
+/// [`REDACTED_WORKSPACE_CWD`], paths stay workspace-relative, and grep content
+/// is clamped to its retained byte window.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultProjection {
     pub schema_version: u16,
@@ -1564,17 +1503,11 @@ fn projected_content(result: &ToolResult) -> ToolProjectedContent {
             truncated: value.truncated,
         },
         ToolResult::Glob(value) => ToolProjectedContent::Paths {
-            truncated: value.truncated || value.paths.len() > MAX_GLOB_MATCHES,
-            paths: value.paths.iter().take(MAX_GLOB_MATCHES).cloned().collect(),
+            paths: value.paths.clone(),
         },
         ToolResult::Grep(value) => ToolProjectedContent::Matches {
-            truncated: value.truncated || value.matches.len() > MAX_GREP_MATCHES,
-            matches: value
-                .matches
-                .iter()
-                .take(MAX_GREP_MATCHES)
-                .cloned()
-                .collect(),
+            truncated: value.truncated,
+            matches: value.matches.clone(),
         },
         ToolResult::Write(value) | ToolResult::Edit(value) => {
             ToolProjectedContent::Mutation { bytes: value.bytes }
@@ -1776,9 +1709,6 @@ fn execute_tool(
     input: ExecuteInput,
     cancellation: CancellationSignal,
 ) -> DtoResult<ExecutedTool> {
-    // In-process typed construction must observe the same execute bounds as
-    // the validating deserialize path.
-    input.validate_bounds()?;
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
@@ -1932,7 +1862,6 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         })?
         .to_owned();
     let mut paths = Vec::new();
-    let mut truncated = false;
     for entry in glob::glob(&pattern).map_err(|_| {
         intention_types::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
     })? {
@@ -1946,15 +1875,11 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         let Ok(value) = WorkspaceRelativePathDto::parse(relative.replace('\\', "/")) else {
             continue;
         };
-        if paths.len() >= MAX_GLOB_MATCHES {
-            truncated = true;
-            break;
-        }
         paths.push(value);
     }
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     paths.dedup();
-    Ok(ToolResult::Glob(PathsResult { paths, truncated }))
+    Ok(ToolResult::Glob(PathsResult { paths }))
 }
 
 fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
@@ -2010,10 +1935,6 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         let Some(column) = line.find(input.pattern.as_str()) else {
             continue;
         };
-        if matches.len() >= MAX_GREP_MATCHES {
-            truncated = true;
-            break;
-        }
         let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
             truncated = true;
             let end = line
@@ -2063,12 +1984,11 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
         ));
     }
     let mut files = Vec::new();
-    let mut file_scan_truncated = false;
     if metadata.is_file() {
         files.push(base);
     } else if metadata.is_dir() {
         let mut pending = vec![base];
-        'traverse: while let Some(directory) = pending.pop() {
+        while let Some(directory) = pending.pop() {
             let Ok(entries) = std::fs::read_dir(&directory) else {
                 continue;
             };
@@ -2089,10 +2009,6 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
                 if metadata.is_dir() {
                     pending.push(path);
                 } else if metadata.is_file() {
-                    if files.len() >= MAX_GREP_FILES {
-                        file_scan_truncated = true;
-                        break 'traverse;
-                    }
                     files.push(path);
                 } else {
                     continue;
@@ -2108,7 +2024,7 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     files.sort();
     let mut matches = Vec::new();
     let mut retained_bytes = 0usize;
-    let mut truncated = file_scan_truncated;
+    let mut truncated = false;
     for path in files {
         let mut file = std::fs::File::open(&path).map_err(|_| {
             intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
@@ -2135,10 +2051,6 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
             let Some(column) = line.find(input.pattern.as_str()) else {
                 continue;
             };
-            if matches.len() >= MAX_GREP_MATCHES {
-                truncated = true;
-                break;
-            }
             let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
                 truncated = true;
                 let end = line
@@ -2162,10 +2074,6 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
             )? {
                 return Ok(ToolResult::Grep(GrepResult { matches, truncated }));
             }
-        }
-        if matches.len() >= MAX_GREP_MATCHES {
-            truncated = true;
-            break;
         }
     }
     Ok(ToolResult::Grep(GrepResult { matches, truncated }))
@@ -2534,7 +2442,7 @@ mod direct_execution_tests {
     }
 
     #[test]
-    fn direct_grep_clamps_long_lines_and_execute_rejects_oversized_shapes() {
+    fn direct_grep_clamps_long_lines_within_the_fragment_window() {
         let dir = TempDir::new().expect("temporary fixture dir");
         let mut long_line = vec![b'x'; 70 * 1024];
         long_line.splice(70 * 1024 - 8.., b"needle!".iter().copied());
@@ -2562,36 +2470,12 @@ mod direct_execution_tests {
         for matched in &grep.matches {
             assert!(matched.fragment.as_str().len() <= 64 * 1024);
         }
-
-        let oversized = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new("echo").expect("program"),
-                args: (0..129)
-                    .map(|index| BoundedText::new(format!("arg-{index}")).expect("argument"))
-                    .collect(),
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(matches!(
-            &oversized,
-            Err(error) if error.code() == "invalid_tool_execute_arguments"
-        ));
     }
 
     #[test]
-    fn execute_input_serde_validates_argument_shapes() {
+    fn execute_input_serde_decodes_arguments() {
         let valid = serde_json::from_str::<ExecuteInput>(r#"{"program":"echo","args":["a","b"]}"#)
             .expect("valid execute input decodes");
         assert_eq!(valid.args.len(), 2);
-        let too_many = serde_json::from_str::<ExecuteInput>(&format!(
-            r#"{{"program":"echo","args":[{}]}}"#,
-            (0..129)
-                .map(|index| format!("\"arg-{index}\""))
-                .collect::<Vec<_>>()
-                .join(",")
-        ))
-        .expect_err("129 arguments fail validation at decode time");
-        assert!(too_many.to_string().contains("invalid execute input"));
     }
 }

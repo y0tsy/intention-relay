@@ -95,7 +95,7 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
 }
 
 #[test]
-fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
+fn scoped_search_handles_invalid_utf8_long_fragments_and_full_directory_scans() {
     let (dir, service) = service();
     let mut bytes = b"needle ".to_vec();
     bytes.extend(std::iter::repeat_n(b'x', 65_600));
@@ -138,12 +138,14 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
     let ToolResult::Grep(result) = result else {
         return;
     };
-    assert_eq!(result.matches.len(), 10_000);
-    assert!(result.truncated);
+    // No file-count or match-count cap drops results; every matching file and
+    // line is reported.
+    assert_eq!(result.matches.len(), 10_001);
+    assert!(!result.truncated);
 }
 
 #[test]
-fn glob_addresses_the_workspace_root_and_truncates_matches() {
+fn glob_addresses_the_workspace_root_and_returns_every_match() {
     let (dir, service) = service();
     std::fs::create_dir_all(dir.path().join("real/deep")).unwrap();
     std::fs::write(dir.path().join("root.txt"), "x").unwrap();
@@ -191,6 +193,6 @@ fn glob_addresses_the_workspace_root_and_truncates_matches() {
     let ToolResult::Glob(result) = result else {
         return;
     };
-    assert_eq!(result.paths.len(), 10_000);
-    assert!(result.truncated);
+    // Every match is reported; no match-count cap truncates the path list.
+    assert_eq!(result.paths.len(), 10_001);
 }

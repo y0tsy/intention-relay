@@ -136,7 +136,6 @@ fn all_result_projections_and_metadata_fallbacks_are_typed() {
         }),
         ToolResult::Glob(PathsResult {
             paths: vec![path("a")],
-            truncated: false,
         }),
         ToolResult::Grep(GrepResult {
             matches: vec![],

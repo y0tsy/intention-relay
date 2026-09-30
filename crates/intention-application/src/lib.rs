@@ -1247,10 +1247,7 @@ fn canonical_tool_result_document(result: &ToolResult) -> String {
                     break;
                 }
             }
-            finish_truncated_array(
-                &mut document,
-                value.truncated || emitted < value.paths.len(),
-            );
+            finish_truncated_array(&mut document, emitted < value.paths.len());
         }
         ToolResult::Grep(value) => {
             document.push_str("{\"result\":\"grep\",\"value\":{\"matches\":[");
@@ -1568,7 +1565,6 @@ mod tests {
         );
         let glob = ToolResult::Glob(intention_tools::PathsResult {
             paths: vec![relative("src/a.rs"), relative("src/b.rs")],
-            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&glob),
@@ -1628,10 +1624,7 @@ mod tests {
         let paths = (0..20_000)
             .map(|index| relative(&format!("dir-{index}/long-file-name-{index}.txt")))
             .collect();
-        let glob = ToolResult::Glob(intention_tools::PathsResult {
-            paths,
-            truncated: false,
-        });
+        let glob = ToolResult::Glob(intention_tools::PathsResult { paths });
         let document = canonical_tool_result_document(&glob);
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
         assert!(document.starts_with("{\"result\":\"glob\",\"value\":{\"paths\":[\""));

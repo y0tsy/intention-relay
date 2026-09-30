@@ -6,13 +6,13 @@
 )]
 
 //! Regression coverage for PR24-022 and PR24-023: tool text validates on
-//! Deserialize at the JSON boundary, execute invocations carry argument count
-//! and aggregate caps, and file-processing tools stay memory-bounded.
+//! Deserialize at the JSON boundary, and file-processing tools stay
+//! memory-bounded.
 
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, ExecuteInput, GrepInput, GrepScope, ReadInput,
-    ToolInput, ToolResult, ToolService, WriteInput,
+    BoundedText, CancellationSignal, EditInput, GrepInput, GrepScope, ReadInput, ToolInput,
+    ToolResult, ToolService, WriteInput,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use serde_json::json;
@@ -37,16 +37,7 @@ fn relative(path: &str) -> WorkspaceRelativePathDto {
 }
 
 #[test]
-fn bounded_text_deserialize_rejects_oversized_and_nul_text() {
-    let oversized = "x".repeat(1024 * 1024 + 1);
-    let error = serde_json::from_value::<BoundedText>(json!(oversized))
-        .expect_err("oversized text must fail deserialization");
-    assert!(
-        error
-            .to_string()
-            .contains("invalid tool text (invalid_tool_text)"),
-        "the deserialize error must surface the validation code: {error}"
-    );
+fn bounded_text_deserialize_rejects_nul_text() {
     let error = serde_json::from_value::<BoundedText>(json!("nul\0inside")).expect_err("NUL fails");
     assert!(error.to_string().contains("invalid_tool_text"));
     assert_eq!(
@@ -56,47 +47,21 @@ fn bounded_text_deserialize_rejects_oversized_and_nul_text() {
 }
 
 #[test]
-fn tool_input_execute_deserialize_rejects_excessive_argument_shapes() {
-    let too_many = json!({
+fn tool_input_execute_deserialize_decodes_any_argument_count() {
+    // No argument-count or aggregate-byte contract cap exists: a shape beyond
+    // the removed 128-argument bound decodes like any other invocation.
+    let input = json!({
         "tool": "execute",
         "input": {
             "program": "echo",
             "args": (0..129).map(|index| format!("arg-{index}")).collect::<Vec<_>>(),
         },
     });
-    let error = serde_json::from_value::<ToolInput>(too_many)
-        .expect_err("129 arguments must fail deserialization");
-    assert!(error.to_string().contains("invalid execute input"));
-    let oversized = json!({
-        "tool": "execute",
-        "input": {
-            "program": "echo",
-            "args": vec!["x".repeat(256 * 1024 + 1)],
-        },
-    });
-    assert!(
-        serde_json::from_value::<ToolInput>(oversized).is_err(),
-        "an aggregate argument payload beyond 256 KiB must fail deserialization"
-    );
-}
-
-#[test]
-fn execute_dispatch_rejects_in_memory_argument_cap_violations() {
-    let service = ToolService::new(workspace(&fixture_dir("execute-bounds")));
-    let result = service.dispatch_with_cancellation(
-        ToolCallId::new(),
-        ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new("echo").expect("program"),
-            args: (0..129)
-                .map(|index| BoundedText::new(format!("arg-{index}")).expect("argument"))
-                .collect(),
-        }),
-        CancellationSignal::new(),
-    );
-    let Err(error) = result else {
-        panic!("argument cap violation must be rejected");
+    let decoded = serde_json::from_value::<ToolInput>(input).expect("execute input decodes");
+    let ToolInput::Execute(execute) = decoded else {
+        panic!("execute input expected");
     };
-    assert_eq!(error.code(), "invalid_tool_execute_arguments");
+    assert_eq!(execute.args.len(), 129);
 }
 
 #[test]
@@ -400,11 +365,10 @@ fn edit_rejects_invalid_utf8_target_before_any_mutation() {
 }
 
 #[test]
-fn single_file_grep_stops_at_the_match_cap_and_truncates() {
-    // The pattern-only file grep (no scope) clamps its retained result set at
-    // the match cap even when the aggregate fragment bound is not reached,
-    // reporting the drop through the truncation flag.
-    let root_dir = fixture_dir("grep-match-cap");
+fn single_file_grep_retains_every_match_without_a_count_cap() {
+    // The pattern-only file grep (no scope) reports every match; only dropped
+    // byte windows set the truncation flag.
+    let root_dir = fixture_dir("grep-all-matches");
     let mut haystack = String::new();
     for _ in 0..(10_000 + 1) {
         haystack.push_str("a\n");
@@ -425,16 +389,15 @@ fn single_file_grep_stops_at_the_match_cap_and_truncates() {
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
-    assert_eq!(grep.matches.len(), 10_000);
-    assert!(grep.truncated, "the dropped matches must set truncation");
+    assert_eq!(grep.matches.len(), 10_001);
+    assert!(!grep.truncated, "no match or fragment was dropped");
 }
 
 #[test]
-fn scoped_directory_grep_stops_at_the_match_cap_and_truncates() {
-    // The scoped grep path applies the same per-file match cap: a single
-    // directory entry with more matches than the cap is clamped and reported
-    // truncated.
-    let root_dir = fixture_dir("scoped-grep-match-cap");
+fn scoped_directory_grep_retains_every_match_without_a_count_cap() {
+    // The scoped grep path reports every match of a directory entry; only the
+    // retained byte window clamps the result set.
+    let root_dir = fixture_dir("scoped-grep-all-matches");
     let haystack = root_dir.path().join("haystack");
     std::fs::create_dir(&haystack).expect("haystack directory");
     let mut content = String::new();
@@ -459,8 +422,8 @@ fn scoped_directory_grep_stops_at_the_match_cap_and_truncates() {
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
-    assert_eq!(grep.matches.len(), 10_000);
-    assert!(grep.truncated, "the dropped matches must set truncation");
+    assert_eq!(grep.matches.len(), 10_001);
+    assert!(!grep.truncated, "no match or fragment was dropped");
 }
 
 #[cfg(unix)]
