@@ -87,7 +87,6 @@ pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
     ProtocolCapabilityDto::ModelToolLoopV1,
 ];
 
-pub mod contract_families;
 pub mod negotiation;
 pub use negotiation::ProtocolNegotiationResultDto;
 

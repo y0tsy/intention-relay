@@ -11,9 +11,6 @@ use intention_types::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-pub mod canonical;
-pub mod run_execution_meaning;
-
 mod model_facts;
 
 pub use model_facts::{
