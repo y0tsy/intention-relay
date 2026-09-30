@@ -81,24 +81,32 @@ fn run_stream_dtos_round_trip_and_preserve_all_resync_reasons() {
     )
     .expect("replay is coherent");
     let subscription_value = serde_json::to_value(subscription).expect("subscription serializes");
-    let replay_value = serde_json::to_value(RunSubscriptionResponseDto::Replay(replay))
-        .expect("replay serializes");
-    let live_value =
-        serde_json::to_value(RunStreamFrameDto::LiveBatch(live)).expect("batch serializes");
-    let snapshot_value = serde_json::to_value(RunStreamFrameDto::Snapshot(
-        RunSnapshotFrameDto::new(snapshot(session_id, run_id, 2)),
-    ))
-    .expect("snapshot frame serializes");
+    let replay_response = RunSubscriptionResponseDto::Replay(replay);
+    let replay_value = serde_json::to_value(&replay_response).expect("replay serializes");
+    let live_frame = RunStreamFrameDto::LiveBatch(live);
+    let live_value = serde_json::to_value(&live_frame).expect("batch serializes");
+    let snapshot_frame =
+        RunStreamFrameDto::Snapshot(RunSnapshotFrameDto::new(snapshot(session_id, run_id, 2)));
+    let snapshot_value = serde_json::to_value(&snapshot_frame).expect("snapshot frame serializes");
     assert_eq!(
         serde_json::from_value::<SubscribeRunCommandDto>(subscription_value)
             .expect("subscription deserializes"),
         subscription
     );
-    let _: RunSubscriptionResponseDto =
-        serde_json::from_value(replay_value).expect("replay deserializes");
-    let _: RunStreamFrameDto = serde_json::from_value(live_value).expect("batch deserializes");
-    let _: RunStreamFrameDto =
-        serde_json::from_value(snapshot_value).expect("snapshot frame deserializes");
+    assert_eq!(
+        serde_json::from_value::<RunSubscriptionResponseDto>(replay_value)
+            .expect("replay deserializes"),
+        replay_response
+    );
+    assert_eq!(
+        serde_json::from_value::<RunStreamFrameDto>(live_value).expect("batch deserializes"),
+        live_frame
+    );
+    assert_eq!(
+        serde_json::from_value::<RunStreamFrameDto>(snapshot_value)
+            .expect("snapshot frame deserializes"),
+        snapshot_frame
+    );
     for reason in [
         RunResyncReasonDto::HistoryUnavailable,
         RunResyncReasonDto::InvalidCursor,

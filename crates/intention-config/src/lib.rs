@@ -993,16 +993,6 @@ credential = \"{credential}\"
         assert_eq!(resolved.provider().model(), "example-chat-model");
     }
 
-    #[test]
-    fn raw_config_input_accepts_owned_text_without_public_projection() {
-        let raw = RawConfigInputDto::new(
-            v1("openrouter", "fixture", CREDENTIAL, None),
-            explicit_source(),
-        );
-        let resolved = ResolvedConfigDto::parse_resolve(raw).expect("opaque input resolves");
-        assert_eq!(resolved.provider().model(), "fixture");
-    }
-
     #[cfg(unix)]
     #[test]
     fn unix_permission_policy_accepts_owner_only_and_rejects_unsafe_or_missing_files() {

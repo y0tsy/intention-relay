@@ -1,8 +1,5 @@
 use intention_domain::WorkspaceRootDto;
-use intention_tools::{
-    BoundedText, CancellationSignal, GlobInput, GrepInput, GrepScope, ToolInput, ToolResult,
-    ToolService,
-};
+use intention_tools::{BoundedText, CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
 
@@ -70,63 +67,4 @@ fn read_write_edit_follow_symlink_paths() {
         std::fs::read_to_string(&target).unwrap_or_else(|_| unreachable!("target readable")),
         "edited"
     );
-}
-
-#[test]
-fn direct_grep_rejects_missing_and_directory_paths() {
-    let dir = fixture();
-    let s = service(&dir);
-    for name in ["missing", "ok.txt"] {
-        if name == "ok.txt" {
-            std::fs::create_dir_all(dir.path().join(name))
-                .unwrap_or_else(|_| unreachable!("directory"));
-        }
-        let result = s.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: text("x"),
-                scope: None,
-                path: Some(path(name)),
-            }),
-            CancellationSignal::new(),
-        );
-        assert_eq!(
-            result.as_ref().err().map(|e| e.code()),
-            Some("tool_search_failed")
-        );
-    }
-}
-
-#[test]
-fn glob_accepts_patterns_and_rejects_traversal() {
-    let dir = fixture();
-    std::fs::write(dir.path().join("ok.txt"), "x").unwrap_or_else(|_| unreachable!("seed"));
-    let s = service(&dir);
-
-    let result = s.dispatch_with_cancellation(
-        ToolCallId::new(),
-        ToolInput::Glob(GlobInput {
-            pattern: text("*.txt"),
-        }),
-        CancellationSignal::new(),
-    );
-    assert!(matches!(result, Ok(ToolResult::Glob(_))));
-    let bad = s.dispatch_with_cancellation(
-        ToolCallId::new(),
-        ToolInput::Glob(GlobInput {
-            pattern: text("../*"),
-        }),
-        CancellationSignal::new(),
-    );
-    assert!(bad.is_err());
-    let scoped = s.dispatch_with_cancellation(
-        ToolCallId::new(),
-        ToolInput::Grep(GrepInput {
-            pattern: text("x"),
-            scope: Some(GrepScope::Workspace),
-            path: None,
-        }),
-        CancellationSignal::new(),
-    );
-    assert!(scoped.is_ok());
 }

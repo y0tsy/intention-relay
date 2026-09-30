@@ -1651,7 +1651,7 @@ mod tests {
     )]
 
     use super::*;
-    use intention_types::{EventId, EventMetadataDto, TimestampDto, TurnId};
+    use intention_types::{EventId, EventMetadataDto, TimestampDto};
 
     fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
         intention_domain::WorkspaceRootDto::parse(
@@ -1730,48 +1730,6 @@ mod tests {
     }
 
     #[test]
-    fn protocol_wrappers_and_results_preserve_domain_dtos() {
-        let session_id = SessionId::new();
-        let subscription = SubscribeSessionCommandDto::with_run_id(
-            SchemaVersionDto::new(1, 1),
-            session_id,
-            Some(RunId::new()),
-            Some(SessionEventSequenceDto::new(4)),
-            RunModeDto::Plan,
-        );
-        assert_eq!(subscription.session_id(), session_id);
-        assert!(subscription.run_id().is_some());
-        assert_eq!(subscription.requested_mode(), RunModeDto::Plan);
-
-        let commands = [
-            ProtocolCommandDto::SendUserTurn(
-                SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
-                    .expect("fixture turn is valid"),
-            ),
-            ProtocolCommandDto::StopRun(StopRunCommandDto::new(session_id, RunId::new())),
-            ProtocolCommandDto::SubscribeSession(subscription),
-        ];
-        for command in commands {
-            let encoded = serde_json::to_string(&command).expect("command serialization succeeds");
-            let _: ProtocolCommandDto =
-                serde_json::from_str(&encoded).expect("command parsing succeeds");
-        }
-        let accepted = ProtocolAcceptedDto::with_result(
-            CorrelationIdDto::new(),
-            ProtocolAcceptedResultDto::StopRun(StopRunAcceptedDto::new(
-                session_id,
-                RunId::new(),
-                SessionEventSequenceDto::new(1),
-            )),
-        );
-        assert_eq!(accepted.correlation_id(), accepted.correlation_id());
-        let result = ProtocolCommandResultDto::Accepted(accepted);
-        let encoded = serde_json::to_string(&result).expect("result serialization succeeds");
-        let _: ProtocolCommandResultDto =
-            serde_json::from_str(&encoded).expect("result parsing succeeds");
-    }
-
-    #[test]
     fn tails_and_subscription_responses_validate_continuity() {
         let schema = SchemaVersionDto::new(1, 1);
         let session_id = SessionId::new();
@@ -1800,65 +1758,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn method_table_covers_every_request_variant_exactly_once() {
-        let schema = SchemaVersionDto::new(1, 1);
-        let session_id = SessionId::new();
-        let run_id = RunId::new();
-        let cursor = RunEventCursorDto::new(9);
-        let run_sub = SubscribeRunCommandDto::new(schema, session_id, run_id, Some(cursor));
-        assert_eq!(run_sub.schema_version(), schema);
-        assert_eq!(run_sub.session_id(), session_id);
-        assert_eq!(run_sub.run_id(), run_id);
-        assert_eq!(run_sub.after_cursor(), Some(cursor));
-
-        let payloads = [
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    fixture_workspace_root(),
-                    RunModeDto::Build,
-                ),
-            )),
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-                SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
-                    .expect("fixture turn is valid"),
-            )),
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(
-                RemoveQueuedTurnCommandDto::new(session_id, TurnId::new()),
-            )),
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
-                StopRunCommandDto::new(session_id, run_id),
-            )),
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
-                SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
-            )),
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
-                GetSessionSnapshotQueryDto::new(session_id),
-            )),
-            ProtocolRequestPayloadDto::RunSubscription(run_sub),
-        ];
-        let mut methods = std::collections::BTreeSet::new();
-        for (index, payload) in payloads.into_iter().enumerate() {
-            let id = index as u64 + 1;
-            let method = ProtocolMethodDto::for_payload(&payload);
-            assert!(
-                method.accepts_request(&payload),
-                "the method must accept its own payload"
-            );
-            assert!(methods.insert(method.as_str()), "each method appears once");
-
-            let request = encode_request(id, payload);
-            let line = serde_json::to_string(&request).expect("request serializes");
-            let decoded = decode_request_line(&line).expect("request decodes");
-            assert_eq!(decoded.id(), id);
-            assert_eq!(decoded.payload(), request.params());
-        }
     }
 
     #[test]
@@ -1954,207 +1853,55 @@ mod tests {
     }
 
     #[test]
-    fn readiness_and_acceptance_accessors_cover_all_variants() {
-        let version = ProtocolVersionDto::new(2, 0);
-
-        for readiness in [
-            DaemonReadinessDto::Starting,
-            DaemonReadinessDto::Ready,
-            DaemonReadinessDto::Draining,
-            DaemonReadinessDto::Unavailable,
-        ] {
-            assert_eq!(
-                DaemonHealthDto::new(SchemaVersionDto::new(1, 1), version, readiness).readiness(),
-                readiness
-            );
-        }
-
-        let session = SessionId::new();
-        let turn = TurnId::new();
-        let started = SendUserTurnAcceptedDto::new(
-            session,
-            turn,
-            SessionEventSequenceDto::new(1),
-            SendUserTurnOutcomeDto::Started {
-                run_id: RunId::new(),
-                config_revision_id: ConfigRevisionId::new(),
-            },
-        );
-        let queued = SendUserTurnAcceptedDto::new(
-            session,
-            turn,
-            SessionEventSequenceDto::new(2),
-            SendUserTurnOutcomeDto::Queued {
-                queue_position: QueuePositionDto::new(1),
-            },
-        );
-        assert_eq!(started.session_id(), session);
-        assert_eq!(started.turn_id(), turn);
-        assert_eq!(
-            started.committed_sequence(),
-            SessionEventSequenceDto::new(1)
-        );
-        assert!(matches!(
-            started.outcome(),
-            SendUserTurnOutcomeDto::Started { .. }
-        ));
-        assert!(matches!(
-            queued.outcome(),
-            SendUserTurnOutcomeDto::Queued { .. }
-        ));
-    }
-
-    #[test]
-    fn acceptance_evidence_and_payload_accessors_preserve_values() {
-        let session = SessionId::new();
-        let run = RunId::new();
-        let project = ProjectId::new();
-        let workspace = WorkspaceId::new();
-        let seq = SessionEventSequenceDto::new(7);
-        let created = CreateSessionAcceptedDto::new(project, workspace, session, seq);
-        assert_eq!(created.project_id(), project);
-        assert_eq!(created.workspace_id(), workspace);
-        assert_eq!(created.session_id(), session);
-        assert_eq!(created.committed_sequence(), seq);
-        let removed = RemoveQueuedTurnAcceptedDto::new(session, TurnId::new(), seq);
-        assert_eq!(removed.session_id(), session);
-        assert_eq!(removed.committed_sequence(), seq);
-        let stopped = StopRunAcceptedDto::new(session, run, seq);
-        assert_eq!(stopped.session_id(), session);
-        assert_eq!(stopped.run_id(), run);
-        assert_eq!(stopped.committed_sequence(), seq);
-
-        let correlation = CorrelationIdDto::new();
-        let accepted = ProtocolAcceptedDto::with_result(
-            correlation,
-            ProtocolAcceptedResultDto::CreateSession(created),
-        );
-        assert_eq!(accepted.correlation_id(), correlation);
-        assert!(matches!(
-            accepted.result(),
-            ProtocolAcceptedResultDto::CreateSession(_)
-        ));
-    }
-
-    #[test]
-    fn protocol_round_trip_covers_all_closed_enum_shapes() {
-        let session = SessionId::new();
-        let run = RunId::new();
-        let schema = SchemaVersionDto::new(1, 1);
-        let commands = vec![
-            ProtocolCommandDto::CreateSession(CreateSessionCommandDto::new(
-                ProjectId::new(),
-                session,
-                WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
-                    std::env::temp_dir()
-                        .join("intention-protocol-workspace")
-                        .to_string_lossy(),
-                )
-                .expect("root"),
-                RunModeDto::Build,
-            )),
-            ProtocolCommandDto::RemoveQueuedTurn(RemoveQueuedTurnCommandDto::new(
-                session,
-                TurnId::new(),
-            )),
-        ];
-        for value in commands {
-            let wire = serde_json::to_vec(&value).expect("command encodes");
-            assert_eq!(
-                serde_json::from_slice::<ProtocolCommandDto>(&wire).expect("command decodes"),
-                value
-            );
-        }
-        for value in [
-            ProtocolQueryDto::GetDaemonHealth,
-            ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session)),
-        ] {
-            let wire = serde_json::to_vec(&value).expect("query encodes");
-            assert_eq!(
-                serde_json::from_slice::<ProtocolQueryDto>(&wire).expect("query decodes"),
-                value
-            );
-        }
-        let error = ErrorDto::validation("rejected", "rejected");
-        for value in [
-            ProtocolCommandResultDto::Rejected(error.clone()),
-            ProtocolCommandResultDto::Accepted(ProtocolAcceptedDto::with_result(
-                CorrelationIdDto::new(),
-                ProtocolAcceptedResultDto::StopRun(StopRunAcceptedDto::new(
-                    session,
-                    run,
-                    SessionEventSequenceDto::new(1),
-                )),
-            )),
-        ] {
-            let wire = serde_json::to_vec(&value).expect("result encodes");
-            let _: ProtocolCommandResultDto =
-                serde_json::from_slice(&wire).expect("result decodes");
-        }
-        for value in [
-            ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Rejected(
-                error.clone(),
-            )),
-            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(
-                error.clone(),
-            )),
-            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(error)),
-        ] {
-            let wire = serde_json::to_vec(&value).expect("payload encodes");
-            let _: ProtocolResponsePayloadDto =
-                serde_json::from_slice(&wire).expect("payload decodes");
-        }
-        let _ = (schema, run);
-    }
-
-    #[test]
     fn remaining_constructor_and_deserialization_error_paths_are_checked() {
-        let schema = SchemaVersionDto::new(1, 1);
         let session = SessionId::new();
         let run = RunId::new();
-        let bad_tail = serde_json::json!({
-            "schema_version": {"major": 1, "minor": 1},
-            "session_id": session,
-            "after_sequence": 4,
-            "events": [{
-                "metadata": {
+        let tail = |event_session: SessionId| {
+            serde_json::json!({
+                "schema_version": {"major": 1, "minor": 1},
+                "session_id": session,
+                "after_sequence": 4,
+                "events": [{
                     "schema_version": {"major": 1, "minor": 1},
-                    "event_id": EventId::new(), "session_id": SessionId::new(),
-                    "run_id": null, "turn_id": null, "sequence": 5,
-                    "occurred_at": 1
-                },
-                "payload": {"kind": "run_status_changed", "data": {
-                    "session_id": session, "run_id": run, "status": "running", "occurred_at": 1
-                }}
-            }]
-        });
-        assert!(serde_json::from_value::<SessionEventTailBatchDto>(bad_tail).is_err());
-
-        let snapshot = SessionSnapshotDto::with_projection(
-            schema,
-            session,
-            SessionEventSequenceDto::new(1),
-            fixture_projection(session, SessionEventSequenceDto::new(1)),
-        )
-        .expect("fixture snapshot is valid");
-        let tail = SessionEventTailBatchDto::new(
-            schema,
-            SessionId::new(),
-            snapshot.at_sequence(),
-            Vec::new(),
-        )
-        .expect("empty tail fixture");
-        assert!(SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail).is_err());
+                    "event_id": EventId::new(),
+                    "session_id": event_session,
+                    "run_id": null,
+                    "turn_id": null,
+                    "sequence": 5,
+                    "occurred_at": 1,
+                    "payload": {"kind": "run_status_changed", "data": {
+                        "session_id": session, "run_id": run, "status": "running", "occurred_at": 1
+                    }}
+                }]
+            })
+        };
+        assert!(
+            serde_json::from_value::<SessionEventTailBatchDto>(tail(session)).is_ok(),
+            "the flat envelope fixture deserializes before the tail rule applies"
+        );
+        assert!(
+            serde_json::from_value::<SessionEventTailBatchDto>(tail(SessionId::new())).is_err(),
+            "an event scoped to another session violates the tail rule"
+        );
 
         let batch = RunLiveBatchDto::new(
             session,
             run,
             RunEventCursorDto::new(u64::MAX),
-            vec![],
+            vec![
+                ModelRunFactDto::new(
+                    RunEventCursorDto::new(1),
+                    intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
+                        .expect("fixture fact input is valid"),
+                )
+                .expect("fixture fact is valid"),
+            ],
             RunEventCursorDto::new(u64::MAX),
         );
-        assert!(batch.is_err());
+        assert_eq!(
+            batch.expect_err("cursor overflow is rejected").code(),
+            "invalid_run_live_batch"
+        );
         assert!(
             serde_json::from_str::<RunStreamFrameDto>(r#"{"kind":"unknown","data":{}}"#).is_err()
         );

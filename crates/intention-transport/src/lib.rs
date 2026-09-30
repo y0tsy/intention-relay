@@ -1027,7 +1027,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn async_listener_enforces_private_permissions_and_removes_owned_socket() {
+    async fn async_listener_enforces_private_permissions_and_leaves_its_socket_for_reclaim() {
         use std::os::unix::fs::PermissionsExt;
 
         let endpoint = endpoint();

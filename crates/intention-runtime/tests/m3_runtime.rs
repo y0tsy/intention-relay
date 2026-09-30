@@ -280,26 +280,6 @@ impl StorageRepositoryDto for DurablePromotionRepository {
 }
 
 #[test]
-fn status_graph_allows_declared_edges_and_rejects_forbidden_edges() {
-    assert!(RuntimeService::<FakeRepository>::can_transition(
-        RunStatusDto::Starting,
-        RunStatusDto::Cancelling
-    ));
-    assert!(RuntimeService::<FakeRepository>::can_transition(
-        RunStatusDto::Cancelling,
-        RunStatusDto::Cancelled
-    ));
-    assert!(!RuntimeService::<FakeRepository>::can_transition(
-        RunStatusDto::Starting,
-        RunStatusDto::Completed
-    ));
-    assert!(!RuntimeService::<FakeRepository>::can_transition(
-        RunStatusDto::Completed,
-        RunStatusDto::Starting
-    ));
-}
-
-#[test]
 fn stopping_starting_run_cancels_then_atomically_promotes_next_turn() {
     let session_id = SessionId::new();
     let active_id = RunId::new();
@@ -397,16 +377,6 @@ fn terminal_promotion_uses_queued_snapshot_after_runtime_configuration_changes()
             .queued_turns()
             .is_empty()
     );
-}
-
-#[test]
-fn runtime_values_expose_the_selected_durable_values() {
-    let run_id = RunId::new();
-    let config = snapshot();
-    let values = RuntimeValuesDto::new(run_id, config.clone(), time(9));
-    assert_eq!(values.next_run_id(), run_id);
-    assert_eq!(values.config_snapshot(), &config);
-    assert_eq!(values.occurred_at(), time(9));
 }
 
 #[test]

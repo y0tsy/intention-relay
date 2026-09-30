@@ -1462,6 +1462,10 @@ fn port_infrastructure_error_terminalizes_without_leaking_text() {
                 && failure.retry() == ErrorRetryDto::Manual
     ));
     assert_eq!(appends[3].status(), Some(RunStatusDto::Failed));
+    // The injected provider diagnostic must never be recorded in the durable
+    // appends; only the safe code and retry classification cross the boundary.
+    let rendered_appends = format!("{appends:?}");
+    assert!(!rendered_appends.contains("sensitive provider detail"));
 }
 
 #[test]

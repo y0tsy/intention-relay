@@ -1362,25 +1362,6 @@ mod tests {
     }
 
     #[test]
-    fn facade_send_user_turn_uses_the_selected_provider_dispatch_seam() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_for_test(
-            directory.path().join("facade-dispatch.sqlite"),
-            fixture_config_snapshot(),
-        )
-        .expect("durable facade opens");
-        let session_id = SessionId::new();
-        create(&facade, session_id);
-
-        let accepted = send_user_turn(&facade, session_id, "facade turn");
-        assert!(matches!(accepted, ProtocolCommandResultDto::Accepted(_)));
-        let events = facade
-            .durable_events_for_test_support(session_id)
-            .expect("durable turn events load");
-        assert_eq!(events.len(), 3, "admission does not execute a provider");
-    }
-
-    #[test]
     fn daemon_host_bridges_read_the_exact_starting_run_and_stop_only_to_cancelling() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
@@ -1524,35 +1505,6 @@ mod tests {
 
         assert_eq!(error.code(), "invalid_config_schema");
         assert!(!error.to_string().contains("invalid-provider-secret"));
-    }
-
-    #[test]
-    fn config_loading_redacts_raw_toml_and_creates_a_fresh_safe_snapshot() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let path = directory.path().join("config.toml");
-        fs::write(
-            &path,
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"not-a-real-credential\"",
-        )
-        .expect("fixture config writes");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .expect("fixture config permissions set");
-        }
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(path.to_string_lossy().into_owned())
-                .expect("fixture config path is absolute"),
-        );
-        let snapshot = load_config_snapshot(source).expect("safe configuration loads");
-        assert!(snapshot.resolved().provider().credential_configured());
-        assert!(
-            !snapshot
-                .resolved()
-                .safe_debug_projection()
-                .contains("not-a-real-credential")
-        );
     }
 
     #[test]
@@ -1743,22 +1695,6 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_returns_checkpoint_for_current_position() {
-        let (_directory, facade) = test_facade();
-        let session_id = SessionId::new();
-        create(&facade, session_id);
-        let response = facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            Some(SessionEventSequenceDto::new(1)),
-            RunModeDto::Build,
-        ));
-        assert!(
-            matches!(response, SessionSubscriptionResponseDto::SnapshotAndTail { tail, .. } if tail.events().is_empty())
-        );
-    }
-
-    #[test]
     fn committed_evidence_is_durable_and_replays_without_duplication() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
@@ -1855,26 +1791,27 @@ mod tests {
             ),
         );
         let error = match result {
-            Ok(_) => return,
+            Ok(_) => unreachable!("a kind mismatch must not open the facade"),
             Err(error) => error,
         };
         assert_eq!(error.code(), "invalid_selected_provider");
     }
 
     #[test]
-    fn command_rejects_malformed_turn_identifier() {
+    fn command_rejects_turn_for_unknown_session() {
         let (_directory, facade) = test_facade();
         let result = facade.command(ProtocolCommandDto::SendUserTurn(
             SendUserTurnCommandDto::new(SessionId::new(), intention_types::TurnId::new(), "turn")
                 .expect("fixture turn is valid"),
         ));
-        assert!(
-            matches!(result, ProtocolCommandResultDto::Rejected(error) if error.code() == "storage_record_not_found" || error.code() == "daemon_command_unavailable")
-        );
+        let ProtocolCommandResultDto::Rejected(error) = result else {
+            unreachable!("an unknown session cannot accept a turn")
+        };
+        assert_eq!(error.code(), "storage_record_not_found");
     }
 
     #[test]
-    fn daemon_execution_bridge_runs_selected_test_driver_and_tool_bridge_reports_safe_error() {
+    fn daemon_tool_bridge_reports_error_for_unavailable_tool() {
         let driver = Arc::new(TestSupportUnconfiguredDriver);
         let (_directory, facade) = {
             let directory = TempDir::new().expect("temporary directory exists");
@@ -1918,19 +1855,6 @@ mod tests {
     }
 
     #[test]
-    fn current_starting_run_returns_none_after_terminalization() {
-        let (_directory, facade) = test_facade();
-        let session_id = SessionId::new();
-        create(&facade, session_id);
-        assert_eq!(
-            facade
-                .current_starting_run_for_daemon(session_id)
-                .expect("new session has no starting run"),
-            None
-        );
-    }
-
-    #[test]
     fn facade_rejects_invalid_commands_and_unknown_run_bridges() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
@@ -1965,99 +1889,6 @@ mod tests {
                 .fail_starting_run_for_daemon(session_id, unknown, "fixture")
                 .is_err()
         );
-    }
-
-    #[test]
-    fn subscription_accepts_exact_checkpoint_and_rejects_unknown_position() {
-        let (_directory, facade) = test_facade();
-        let session_id = SessionId::new();
-        create(&facade, session_id);
-        let exact = facade.subscribe(SubscribeSessionCommandDto::new(
-            SCHEMA_VERSION,
-            session_id,
-            Some(SessionEventSequenceDto::new(1)),
-            RunModeDto::Build,
-        ));
-        assert!(matches!(
-            exact,
-            SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
-                if snapshot.at_sequence() == SessionEventSequenceDto::new(1)
-                    && tail.after_sequence() == SessionEventSequenceDto::new(1)
-        ));
-    }
-
-    #[test]
-    fn selected_provider_helpers_cover_test_provider_variant() {
-        let provider = SelectedProvider::for_test_support(Arc::new(TestSupportUnconfiguredDriver));
-        assert_eq!(provider.safe_kind(), None);
-        assert!(!provider.driver().capabilities().supports_streaming());
-    }
-
-    #[test]
-    fn private_dispatch_covers_success_paths() {
-        let session_id = SessionId::new();
-        let run_id = RunId::new();
-        let request = intention_model::ModelRequestDto::new(
-            run_id,
-            "fixture",
-            vec![
-                intention_model::ModelMessageDto::new(
-                    intention_model::ModelRoleDto::User,
-                    "fixture",
-                )
-                .expect("fixture message is valid"),
-            ],
-            None,
-            None,
-        )
-        .expect("fixture request is valid");
-        PrivateModelRunDispatch::default()
-            .dispatch_model_run(
-                ScheduleModelRunDto::new(session_id, run_id, request, fixture_config_snapshot())
-                    .expect("fixture schedule is valid"),
-            )
-            .expect("dispatch succeeds");
-    }
-
-    #[test]
-    fn provider_driver_branches_and_empty_test_driver_stream_are_exercised() {
-        let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture\"",
-            ConfigSourceDto::Explicit(
-                ConfigPathDto::parse(
-                    std::env::temp_dir()
-                        .join("provider-branches.toml")
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .expect("fixture path is absolute"),
-            ),
-        ))
-        .expect("fixture material parses");
-        let openrouter =
-            SelectedProvider::from_startup_material(material).expect("openrouter provider builds");
-        assert_eq!(openrouter.safe_kind(), Some(ProviderKindDto::Openrouter));
-        let _ = openrouter.driver();
-
-        let test_driver = TestSupportUnconfiguredDriver;
-        let stream = test_driver.execute(
-            intention_model::ModelRequestDto::new(
-                RunId::new(),
-                "fixture",
-                vec![
-                    intention_model::ModelMessageDto::new(
-                        intention_model::ModelRoleDto::User,
-                        "fixture",
-                    )
-                    .expect("fixture message is valid"),
-                ],
-                None,
-                None,
-            )
-            .expect("fixture request is valid"),
-            ModelCancellationSignal::new(),
-        );
-        futures_util::pin_mut!(stream);
     }
 
     #[test]

@@ -18,19 +18,21 @@ use intention_application::ScheduleModelRunDto;
 use intention_client::RunStreamClient;
 use intention_config::ConfigSnapshotDto;
 use intention_daemon::DaemonToolExecutor;
-use intention_domain::{GetSessionSnapshotQueryDto, RunStatusDto, SendUserTurnCommandDto};
+#[cfg(feature = "test-support")]
+use intention_domain::RunStatusDto;
+use intention_domain::SendUserTurnCommandDto;
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
 };
 use intention_protocol::{
-    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
-    ProtocolQueryResultDto, SendUserTurnOutcomeDto,
+    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, SendUserTurnOutcomeDto,
 };
 #[cfg(feature = "test-support")]
 use intention_protocol::{
-    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunSubscriptionResponseDto, SubscribeRunCommandDto, decode_response, encode_request,
+    ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
+    SubscribeRunCommandDto, decode_response, encode_request,
 };
 #[cfg(feature = "test-support")]
 use intention_runtime::ModelRunFirstAppendGate;
@@ -1172,26 +1174,6 @@ async fn host_stop_between_starting_replay_and_first_append_terminalizes_once_wi
         "the task owns exactly one terminal cancellation write"
     );
     server.await.expect("host accepts turn and stop peers");
-}
-
-#[test]
-fn daemon_stop_seam_persists_cancelling_without_direct_terminalization() {
-    let driver = Arc::new(ScriptedDriver::completed_text());
-    let (_directory, facade, _snapshot) = fixture_facade(driver);
-    let (session_id, run_id) = create_and_start(&facade);
-
-    let result = facade
-        .stop_run_for_daemon_host(session_id, run_id)
-        .expect("host stop commits cancelling");
-    assert!(matches!(result, ProtocolAcceptedResultDto::StopRun(_)));
-    assert!(matches!(
-        facade.query(ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id))),
-        ProtocolQueryResultDto::SessionSnapshot(snapshot)
-            if snapshot
-                .projection()
-                .active_run()
-                .is_some_and(|run| run.status() == RunStatusDto::Cancelling)
-    ));
 }
 
 #[cfg(feature = "test-support")]

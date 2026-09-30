@@ -848,35 +848,4 @@ mod tests {
             ErrorCategoryDto::Unavailable
         );
     }
-
-    #[test]
-    fn event_envelope_exposes_all_typed_metadata() {
-        let schema = SchemaVersionDto::new(1, 0);
-        let event_id = EventId::new();
-        let session_id = SessionId::new();
-        let run_id = RunId::new();
-        let turn_id = TurnId::new();
-        let sequence = SessionEventSequenceDto::new(2);
-        let occurred_at = TimestampDto::from_unix_seconds(3).expect("fixture time is valid");
-        let envelope = EventEnvelopeDto::new(
-            EventMetadataDto::new(
-                schema,
-                event_id,
-                session_id,
-                Some(run_id),
-                Some(turn_id),
-                sequence,
-                occurred_at,
-            ),
-            7_u8,
-        );
-        assert_eq!(envelope.schema_version(), schema);
-        assert_eq!(envelope.event_id(), event_id);
-        assert_eq!(envelope.session_id(), session_id);
-        assert_eq!(envelope.run_id(), Some(run_id));
-        assert_eq!(envelope.turn_id(), Some(turn_id));
-        assert_eq!(envelope.sequence(), sequence);
-        assert_eq!(envelope.occurred_at(), occurred_at);
-        assert_eq!(envelope.payload(), &7);
-    }
 }

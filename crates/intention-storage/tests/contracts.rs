@@ -85,8 +85,6 @@ fn storage_input_and_commit_evidence_reject_invalid_boundaries() {
 
 #[test]
 fn repository_contracts_supply_ids_timestamps_and_config_revisions_for_all_mutating_paths() {
-    fn accepts_repository(_repository: &dyn StorageRepositoryDto) {}
-    let _ = accepts_repository;
     let time = TimestampDto::from_unix_seconds(1).expect("fixture time is valid");
     let session_id = SessionId::new();
     let create = CreateSessionInputDto::new(
@@ -300,7 +298,6 @@ fn storage_dtos_expose_all_fields_and_default_repository_failures_safely() {
             unreachable!()
         }
     }
-    let _ = AppendModelRunFactsOutcomeDto::new;
     let repository = Empty;
     let event = ToolLifecycleEventDto::new(
         session_id,

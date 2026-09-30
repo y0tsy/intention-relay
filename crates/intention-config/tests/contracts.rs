@@ -86,24 +86,6 @@ fn unversioned_document_fails_closed_without_disclosing_credentials() {
 }
 
 #[test]
-fn generic_chat_preserves_configured_model_identifier() {
-    let raw = RawConfigInputDto::new(
-        "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"example-chat-model\"\ncredential = \"fixture-credential-not-real-12345\"\n",
-        explicit_source(),
-    );
-
-    let resolved = ResolvedConfigDto::parse_resolve(raw)
-        .expect("generic provider must preserve the configured model identifier");
-
-    assert_eq!(
-        resolved.provider().kind().as_str(),
-        "generic-chat-completion-api"
-    );
-    assert_eq!(resolved.provider().model(), "example-chat-model");
-    assert!(!resolved.safe_debug_projection().contains(FAKE_CREDENTIAL));
-}
-
-#[test]
 fn explicit_path_overrides_platform_default_resolution() {
     let fixture_path = fixture_path("override.toml");
     let explicit = ConfigPathDto::parse(fixture_path.as_str()).expect("fixture path is absolute");

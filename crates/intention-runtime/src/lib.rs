@@ -84,12 +84,6 @@ where
         Self { repository, values }
     }
 
-    /// Returns whether a durable state graph edge is declared by the domain.
-    #[must_use]
-    pub fn can_transition(from: RunStatusDto, to: RunStatusDto) -> bool {
-        validate_run_status_transition(from, to).is_ok()
-    }
-
     /// Commits cancellation for an active run.
     ///
     /// A starting run follows `Starting -> Cancelling`; final cancellation and
@@ -1417,47 +1411,4 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
 
 fn failure_from_error(error: &ErrorDto) -> DtoResult<RunFailureDto> {
     RunFailureDto::new(error.code(), error.retry(), error.correlation_id())
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Reasoning-attachment fixtures use expect to provide precise test failure messages."
-    )]
-
-    use super::*;
-    use intention_types::ToolCallId;
-
-    #[test]
-    fn round_reasoning_attachment_keeps_presence_without_text() {
-        let call =
-            ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("fixture tool call is valid");
-        let attachment =
-            round_reasoning_attachment(true, String::new(), std::slice::from_ref(&call), false)
-                .expect("presence-only reasoning is valid")
-                .expect("the reasoning channel marks presence");
-        assert_eq!(attachment.tool_call_ids(), &[call.call_id()]);
-        assert!(attachment.text().is_empty());
-        assert!(
-            round_reasoning_attachment(
-                false,
-                "unused".to_owned(),
-                std::slice::from_ref(&call),
-                false
-            )
-            .expect("an absent reasoning channel is valid")
-            .is_none()
-        );
-        assert!(
-            round_reasoning_attachment(
-                true,
-                "bounded".to_owned(),
-                std::slice::from_ref(&call),
-                true
-            )
-            .is_err(),
-            "an echo that crossed the per-round bound is unrepresentable"
-        );
-    }
 }

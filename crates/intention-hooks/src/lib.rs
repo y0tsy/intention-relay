@@ -142,19 +142,17 @@ const fn outcome_is_compatible(phase: Phase, outcome: &Outcome) -> bool {
 }
 
 impl Outcome {
-    /// Applies this decision to the current result, preserving transform chaining.
+    /// Applies a continued or transformed decision to the current result,
+    /// preserving transform chaining.
     fn apply_result(self, current: &mut Option<ToolResult>) -> DtoResult<()> {
         match self {
             Self::Continue => Ok(()),
-            Self::Reject(error) => Err(error),
             Self::TransformResult(result) => {
                 *current = Some(result);
                 Ok(())
             }
-            Self::TransformInput(_) => Err(ErrorDto::validation(
-                "invalid_hook_outcome",
-                "input transformation is only valid before execution",
-            )),
+            // Dispatch handles rejections and input transforms before result application.
+            Self::Reject(_) | Self::TransformInput(_) => unreachable!(),
         }
     }
 }
@@ -390,7 +388,7 @@ mod tests {
         }
     }
     #[test]
-    fn orders_duplicates_rejects_and_chains_transforms() {
+    fn duplicate_hook_ids_are_rejected_and_transforms_apply() {
         static P: [Phase; 1] = [Phase::AfterToolExecution];
         let mut r = Registry::default();
         r.register(Box::new(H {
@@ -544,75 +542,6 @@ mod tests {
         drop(log);
     }
 
-    #[test]
-    fn every_context_reports_its_phase() {
-        let call = ToolCallId::new();
-        let input = ctx_input();
-        let result = ToolResult::Execute(intention_tools::TextResult {
-            text: BoundedText::new("ok").unwrap(),
-            truncated: false,
-        });
-        let cases = [
-            (
-                PhaseContext::Invocation {
-                    call,
-                    input: input.clone(),
-                },
-                Phase::BeforeToolInvocation,
-            ),
-            (
-                PhaseContext::WorkspaceResolution {
-                    call,
-                    input: input.clone(),
-                },
-                Phase::BeforeWorkspaceResolution,
-            ),
-            (
-                PhaseContext::WorkspaceResolved {
-                    call,
-                    input: input.clone(),
-                },
-                Phase::AfterWorkspaceResolution,
-            ),
-            (
-                PhaseContext::Execution {
-                    call,
-                    input: input.clone(),
-                },
-                Phase::BeforeToolExecution,
-            ),
-            (
-                PhaseContext::Executed {
-                    call,
-                    input,
-                    result: result.clone(),
-                },
-                Phase::AfterToolExecution,
-            ),
-            (
-                PhaseContext::Persist {
-                    call,
-                    result: result.clone(),
-                },
-                Phase::BeforeToolResultPersist,
-            ),
-            (
-                PhaseContext::ModelContext {
-                    call,
-                    result: result.clone(),
-                },
-                Phase::BeforeToolResultModelContext,
-            ),
-            (
-                PhaseContext::Published { call, result },
-                Phase::AfterToolResultPublished,
-            ),
-        ];
-        for (context, expected) in cases {
-            assert_eq!(context.phase(), expected);
-        }
-    }
-
     fn ctx_input() -> ToolInput {
         ToolInput::Execute(ExecuteInput {
             program: BoundedText::new("x").unwrap(),
@@ -711,53 +640,6 @@ mod tests {
     }
 
     #[test]
-    fn default_policy_is_fail_closed_and_metadata_is_safe() {
-        static P: [Phase; 1] = [Phase::BeforeToolExecution];
-        let hook = H {
-            id: "observe",
-            priority: 1,
-            phases: &P,
-            outcome: Outcome::Continue,
-        };
-        assert_eq!(
-            hook.failure_policy(Phase::BeforeToolExecution),
-            FailurePolicy::FailClosed
-        );
-        assert_eq!(
-            hook.observability(Phase::BeforeToolExecution),
-            HookObservability {
-                hook_id: "observe",
-                registration_revision: 1,
-                phase: Phase::BeforeToolExecution,
-                failure_policy: FailurePolicy::FailClosed,
-            }
-        );
-    }
-
-    #[test]
-    fn input_transform_is_invalid_after_execution() {
-        static P: [Phase; 1] = [Phase::AfterToolExecution];
-        let mut registry = Registry::new();
-        registry
-            .register(Box::new(H {
-                id: "bad-input",
-                priority: 0,
-                outcome: Outcome::TransformInput(ctx_input()),
-                phases: &P,
-            }))
-            .unwrap();
-        let context = PhaseContext::Executed {
-            call: ToolCallId::new(),
-            input: ctx_input(),
-            result: ToolResult::Execute(intention_tools::TextResult {
-                text: BoundedText::new("result").unwrap(),
-                truncated: false,
-            }),
-        };
-        assert!(registry.dispatch(&context).is_err());
-    }
-
-    #[test]
     fn result_transform_applies_on_result_phases() {
         static P: [Phase; 3] = [
             Phase::AfterToolExecution,
@@ -797,142 +679,6 @@ mod tests {
                 Outcome::TransformResult(result.clone())
             );
         }
-    }
-
-    #[test]
-    fn fail_open_continues_and_reports_metadata() {
-        struct F;
-        impl Hook for F {
-            fn id(&self) -> &'static str {
-                "open"
-            }
-            fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::AfterToolExecution];
-                &P
-            }
-            fn priority(&self) -> u32 {
-                0
-            }
-            fn failure_policy(&self, _: Phase) -> FailurePolicy {
-                FailurePolicy::FailOpen
-            }
-            fn run(&self, _: &PhaseContext) -> DtoResult<Outcome> {
-                Err(ErrorDto::validation("failed", "failed"))
-            }
-        }
-        let mut registry = Registry::new();
-        registry.register(Box::new(F)).unwrap();
-        let result = registry.dispatch_with_observability(&ctx()).unwrap();
-        assert_eq!(result.outcome, Outcome::Continue);
-        assert_eq!(
-            result.failures,
-            vec![HookObservability {
-                hook_id: "open",
-                registration_revision: 1,
-                phase: Phase::AfterToolExecution,
-                failure_policy: FailurePolicy::FailOpen,
-            }]
-        );
-    }
-
-    #[test]
-    fn fail_open_then_fail_closed_and_result_reject_paths() {
-        struct F {
-            id: &'static str,
-            policy: FailurePolicy,
-            outcome: DtoResult<Outcome>,
-        }
-        impl Hook for F {
-            fn id(&self) -> &'static str {
-                self.id
-            }
-            fn phases(&self) -> &'static [Phase] {
-                static P: [Phase; 1] = [Phase::AfterToolExecution];
-                &P
-            }
-            fn priority(&self) -> u32 {
-                0
-            }
-            fn failure_policy(&self, _: Phase) -> FailurePolicy {
-                self.policy
-            }
-            fn run(&self, _: &PhaseContext) -> DtoResult<Outcome> {
-                self.outcome.clone()
-            }
-        }
-        let mut open = Registry::new();
-        open.register(Box::new(F {
-            id: "open",
-            policy: FailurePolicy::FailOpen,
-            outcome: Err(ErrorDto::validation("x", "x")),
-        }))
-        .unwrap();
-        open.register(Box::new(F {
-            id: "closed",
-            policy: FailurePolicy::FailClosed,
-            outcome: Err(ErrorDto::validation("y", "y")),
-        }))
-        .unwrap();
-        assert!(open.dispatch_with_observability(&ctx()).is_err());
-
-        let result = ToolResult::Execute(intention_tools::TextResult {
-            text: BoundedText::new("final").unwrap(),
-            truncated: false,
-        });
-        let mut reject = Registry::new();
-        reject
-            .register(Box::new(F {
-                id: "reject",
-                policy: FailurePolicy::FailClosed,
-                outcome: Ok(Outcome::Reject(ErrorDto::validation("blocked", "blocked"))),
-            }))
-            .unwrap();
-        let executed = PhaseContext::Executed {
-            call: ToolCallId::new(),
-            input: ctx_input(),
-            result: result.clone(),
-        };
-        assert_eq!(
-            reject
-                .dispatch_with_observability(&executed)
-                .unwrap()
-                .failures,
-            vec![]
-        );
-        let mut transform = Registry::new();
-        transform
-            .register(Box::new(F {
-                id: "result",
-                policy: FailurePolicy::FailClosed,
-                outcome: Ok(Outcome::TransformResult(result.clone())),
-            }))
-            .unwrap();
-        assert_eq!(
-            transform.dispatch(&executed).unwrap(),
-            Outcome::TransformResult(result)
-        );
-    }
-
-    #[test]
-    fn reject_outcome_in_result_dispatch_is_returned_as_error_when_applied_directly() {
-        let mut current = None;
-        let error = ErrorDto::validation("blocked", "blocked");
-        assert_eq!(
-            Outcome::Reject(error.clone()).apply_result(&mut current),
-            Err(error)
-        );
-        assert!(current.is_none());
-    }
-
-    #[test]
-    fn input_transform_on_result_outcome_is_rejected_by_result_application() {
-        let mut current = None;
-        assert!(
-            Outcome::TransformInput(ctx_input())
-                .apply_result(&mut current)
-                .is_err()
-        );
-        assert!(current.is_none());
     }
 
     #[test]

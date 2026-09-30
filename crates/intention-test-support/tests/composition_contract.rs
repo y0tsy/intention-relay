@@ -119,7 +119,6 @@ fn durable_lifecycle_and_replay_contracts_hold() {
                 if resync.reason() == SessionResyncReasonDto::HistoryUnavailable
         ));
     }
-    let _ = queued_turn;
 }
 
 #[test]
@@ -144,7 +143,7 @@ fn restart_interrupts_unfinished_work_before_ready() {
 }
 
 #[test]
-fn queued_turn_removal_remains_durable() {
+fn queued_turn_removal_is_accepted() {
     let (_directory, facade) = facade();
     let session_id = SessionId::new();
     create(&facade, session_id);

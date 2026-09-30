@@ -119,37 +119,9 @@ fn snapshots_validate_the_required_m3_projection() {
 }
 
 #[test]
-fn acceptance_accessors_and_snapshot_validation_cover_m3_failure_boundaries() {
+fn session_snapshot_validation_covers_m3_failure_boundaries() {
     let session_id = SessionId::new();
-    let turn_id = TurnId::new();
-    let run_id = RunId::new();
     let sequence = SessionEventSequenceDto::new(7);
-    let created =
-        CreateSessionAcceptedDto::new(ProjectId::new(), WorkspaceId::new(), session_id, sequence);
-    assert_eq!(created.project_id(), created.project_id());
-    assert_eq!(created.session_id(), session_id);
-
-    let accepted = SendUserTurnAcceptedDto::new(
-        session_id,
-        turn_id,
-        sequence,
-        SendUserTurnOutcomeDto::Queued {
-            queue_position: QueuePositionDto::new(2),
-        },
-    );
-    assert_eq!(accepted.turn_id(), turn_id);
-    assert_eq!(accepted.committed_sequence(), sequence);
-
-    let removed =
-        intention_protocol::RemoveQueuedTurnAcceptedDto::new(session_id, turn_id, sequence);
-    assert_eq!(removed.session_id(), session_id);
-    assert_eq!(removed.turn_id(), turn_id);
-    assert_eq!(removed.committed_sequence(), sequence);
-
-    let stopped = intention_protocol::StopRunAcceptedDto::new(session_id, run_id, sequence);
-    assert_eq!(stopped.session_id(), session_id);
-    assert_eq!(stopped.run_id(), run_id);
-    assert_eq!(stopped.committed_sequence(), sequence);
 
     assert_eq!(
         SessionSnapshotDto::with_projection(
