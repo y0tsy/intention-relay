@@ -13,7 +13,7 @@ preserves M3/M4 bytes, meanings, and the current single-version model contract
 It authorizes no crate, DTO, wire, storage schema, configuration field, UI
 page, feature profile, quality-policy target, or production behavior. Delivery
 belongs to the fifth activating slice of Milestone 5+; a later activating
-specification must declare crates, contract versions, tests, coverage tiers,
+specification must declare crates, contract versions, tests, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md),
 and evidence before any of it is implemented.
 
 The instruction channel applies to newly admitted runs only. Historical M3/M4
@@ -338,7 +338,7 @@ reconsideration owners in the deferred and excluded register.
 ## Required evidence before implementation
 
 A later activating specification must declare exact crate owners, test targets,
-coverage tiers, feature profiles, storage/wire versions, and fixtures, then pass
+coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, storage/wire versions, and fixtures, then pass
 `make quick`, `make verify`, docs-check, and Linux/Windows CI. It must cover:
 
 - deterministic assembly, ordering, separators, and projection identity

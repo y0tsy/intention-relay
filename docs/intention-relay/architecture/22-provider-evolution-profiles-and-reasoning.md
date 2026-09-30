@@ -741,7 +741,7 @@ so they are again documentation-only. The profile picker/editor presentation
 and telemetry remain not activated.
 
 A later activating specification must declare exact crates, dependencies, test
-targets, coverage tiers, feature profiles, storage/wire schema, retention, and
+targets, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`, `make
 verify`, and Linux/Windows CI.
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) was the Slice 2

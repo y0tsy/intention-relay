@@ -40,14 +40,14 @@ ledger. The capability, tag-registry, canonical-codec, digest, and identity
 families named here were removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md) and [ADR 0046](../decisions/0046-typed-serde-json-contracts.md); the remaining DTO,
 storage, daemon, and adapter ownership split stays as recorded.
 
-| Family | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| Family | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Canonical meaning and selections | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | DTO/canonical goldens | Existing declared tiers |
-| Public frames and negotiation | `intention-domain` facts | `intention-domain` nested values | `intention-domain` | existing storage owners | `intention-protocol` | negotiation/round-trip fixtures | Existing declared tiers |
-| Typed tools and loop | `intention-tools` | `intention-domain` meaning | `intention-domain` | existing storage owners | `intention-protocol` | tool contract fixtures | Existing declared tiers |
-| Provider translation | provider crates | provider-private translation | domain registry | existing storage owners | protocol DTOs | provider mapping fixtures | Existing declared tiers |
-| Process/publication and assembly | `intention-daemon` / `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
-| Adapters | `intention-client`, then TUI/Tauri | client mapping | domain facts | no adapter authority | protocol client | adapter parity fixtures | Existing declared tiers |
+| Canonical meaning and selections | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | DTO/canonical goldens | Base 80% threshold (ADR 0049) |
+| Public frames and negotiation | `intention-domain` facts | `intention-domain` nested values | `intention-domain` | existing storage owners | `intention-protocol` | negotiation/round-trip fixtures | Base 80% threshold (ADR 0049) |
+| Typed tools and loop | `intention-tools` | `intention-domain` meaning | `intention-domain` | existing storage owners | `intention-protocol` | tool contract fixtures | Base 80% threshold (ADR 0049) |
+| Provider translation | provider crates | provider-private translation | domain registry | existing storage owners | protocol DTOs | provider mapping fixtures | Base 80% threshold (ADR 0049) |
+| Process/publication and assembly | `intention-daemon` / `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Base 80% threshold (ADR 0049) |
+| Adapters | `intention-client`, then TUI/Tauri | client mapping | domain facts | no adapter authority | protocol client | adapter parity fixtures | Base 80% threshold (ADR 0049) |
 
 ## M5+ Slice 2 control-plane ownership (reverted by ADR 0044)
 
@@ -55,20 +55,20 @@ The Slice 2 assignment below was activated under ADR 0037 and reverted by
 [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md): the
 modules, targets, and surfaces named here no longer exist, and the table is
 retained as the ownership record a re-introduction must restore. No ownership
-or tier boundary was moved by the revert.
+or coverage boundary was moved by the revert.
 
-| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Provider catalog and capability resolution | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_control_plane_canonical`, `m5_catalog_runtime` | Existing declared tiers |
-| Provider selection and rejection semantics | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_control_plane_rejections`, `control_plane_contracts` | Existing declared tiers |
-| Session defaults and per-turn/fork overrides | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_session_selection_overrides`, `session_selection_client` | Existing declared tiers |
-| Configuration reload and editing | `intention-config` | `intention-config` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_config` | Existing declared tiers |
-| Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `intention-application` | `intention-domain` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_runtime`, `control_plane_client` | Existing declared tiers |
-| Reasoning surface (DTO-level) | `intention-model` | `intention-domain` | domain registry | existing storage owners | protocol DTOs | `m6_reasoning_surface` | Existing declared tiers |
-| Current storage schema and durable rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `sqlite_contracts` (current-schema tests) | Existing declared tiers |
-| Daemon hosting and degraded gate | `intention-daemon` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
-| Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `control_plane_client`, `session_selection_client` | Existing declared tiers |
-| Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Existing declared tiers |
+| Provider catalog and capability resolution | `intention-domain` | `intention-domain` | `intention-domain` | `intention-storage` + `intention-storage-sqlite` | `intention-protocol` | `m5_control_plane_canonical`, `m5_catalog_runtime` | Base 80% threshold (ADR 0049) |
+| Provider selection and rejection semantics | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_control_plane_rejections`, `control_plane_contracts` | Base 80% threshold (ADR 0049) |
+| Session defaults and per-turn/fork overrides | `intention-domain` | `intention-domain` | `intention-domain` | existing storage owners | `intention-protocol` | `m5_session_selection_overrides`, `session_selection_client` | Base 80% threshold (ADR 0049) |
+| Configuration reload and editing | `intention-config` | `intention-config` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_config` | Base 80% threshold (ADR 0049) |
+| Control-plane runtime (reload, rotation, health, discovery, pricing, raw-TOML/typed editing) | `intention-application` | `intention-domain` | domain registry | existing storage owners | `intention-protocol` | `m5_control_plane_runtime`, `control_plane_client` | Base 80% threshold (ADR 0049) |
+| Reasoning surface (DTO-level) | `intention-model` | `intention-domain` | domain registry | existing storage owners | protocol DTOs | `m6_reasoning_surface` | Base 80% threshold (ADR 0049) |
+| Current storage schema and durable rows | `intention-storage` + `intention-storage-sqlite` | domain codec | domain registry | `intention-storage-sqlite` | protocol | `sqlite_contracts` (current-schema tests) | Base 80% threshold (ADR 0049) |
+| Daemon hosting and degraded gate | `intention-daemon` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Base 80% threshold (ADR 0049) |
+| Typed client surface | `intention-client` | client mapping | domain facts | no adapter authority | protocol client | `control_plane_client`, `session_selection_client` | Base 80% threshold (ADR 0049) |
+| Composition and facade assembly | `intention` | domain codec | domain registry | storage owners | protocol | outcome/architecture fixtures | Base 80% threshold (ADR 0049) |
 
 The reverted activation introduced no second authority: while it was in force
 the control-plane surface was served through the daemon facade with typed
@@ -79,17 +79,18 @@ commands remain Slice 4.
 
 ## M5+ Slice 5 instruction-source ownership
 
-| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
+| Surface | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Instruction source model and profile revisions | architecture 30 | declared by the activating specification (`intention-domain`) | declared by the activating specification (`intention-domain`) | `intention-config` for configuration; existing storage owners for safe provenance | declared by the activating specification (`intention-protocol`) | assembly and revision fixtures | Existing declared tiers |
-| Workspace project instructions | architecture 30; boundary rules by architecture 05 | bounded text plus content digest | not applicable | digest only outside the projection | not applicable | boundary and absence fixtures | Existing declared tiers |
-| Effective instruction projection and digests | architecture 30 | `intention-domain` | `intention-domain` | fork, plan, and handoff records through existing storage owners | protocol DTOs on the frozen records | freeze, inheritance, and digest fixtures | Existing declared tiers |
-| Editing and preview control plane | architectures 30 and 25 | `intention-config` | domain registry | `intention-config` | `intention-protocol` | editing and preview fixtures | Existing declared tiers |
-| Request delivery and driver translation | architecture 08 | existing model contract | domain registry | no durable instruction text | existing `system_context` channel | model and provider translation fixtures | Existing declared tiers |
-| Primary UI surface | architecture 24 adapter rules | client mapping | not applicable | no adapter authority | protocol client | adapter parity fixtures (Milestone 6) | Existing declared tiers |
+| Instruction source model and profile revisions | architecture 30 | declared by the activating specification (`intention-domain`) | declared by the activating specification (`intention-domain`) | `intention-config` for configuration; existing storage owners for safe provenance | declared by the activating specification (`intention-protocol`) | assembly and revision fixtures | Base 80% threshold (ADR 0049) |
+| Workspace project instructions | architecture 30; boundary rules by architecture 05 | bounded text plus content digest | not applicable | digest only outside the projection | not applicable | boundary and absence fixtures | Base 80% threshold (ADR 0049) |
+| Effective instruction projection and digests | architecture 30 | `intention-domain` | `intention-domain` | fork, plan, and handoff records through existing storage owners | protocol DTOs on the frozen records | freeze, inheritance, and digest fixtures | Base 80% threshold (ADR 0049) |
+| Editing and preview control plane | architectures 30 and 25 | `intention-config` | domain registry | `intention-config` | `intention-protocol` | editing and preview fixtures | Base 80% threshold (ADR 0049) |
+| Request delivery and driver translation | architecture 08 | existing model contract | domain registry | no durable instruction text | existing `system_context` channel | model and provider translation fixtures | Base 80% threshold (ADR 0049) |
+| Primary UI surface | architecture 24 adapter rules | client mapping | not applicable | no adapter authority | protocol client | adapter parity fixtures (Milestone 6) | Base 80% threshold (ADR 0049) |
 
 The fifth slice's activating specification names the exact crates, contract
-versions, tag values, and coverage tiers; this package activates none of them.
+versions, tag values, and coverage declarations (base 80% threshold and
+designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)); this package activates none of them.
 
 ```mermaid
 flowchart TD

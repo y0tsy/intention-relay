@@ -194,7 +194,7 @@ cancelling is durable it suppresses later provider events/errors and retries.
 
 ## Quality-gate integration
 
-`intention-model` and provider adapters are Tier C coverage targets. Stream normalization, capability validation, retry, SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile. Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+`intention-model` and provider adapters are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)). Stream normalization, capability validation, retry, SDK-isolation, and secret-redaction fixtures are blocking `make verify` inputs under every relevant feature profile. Dependency and public-API checks must prevent provider SDK types and secrets from escaping their crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 

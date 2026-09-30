@@ -350,7 +350,7 @@ This document depends on Mandate lifecycle, external-attempt evidence, and the o
 
 ## Required evidence before implementation
 
-A later activating specification must define exact crate owners, test targets, coverage tiers, feature profiles, and architecture fixtures, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
+A later activating specification must define exact crate owners, test targets, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, and architecture fixtures, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
 
 - typed JSON registry/descriptor/selection fixtures, plus missing/reordered/duplicate slot and owner/revision negatives;
 - reserved-slot non-visibility/non-execution, composition-only assembly, and no-bypass fixtures;

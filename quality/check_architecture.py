@@ -102,7 +102,6 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
     declarations = policy.get("future_crates")
     if not isinstance(declarations, list) or not declarations:
         fail("future crate declarations are required")
-    valid_tiers = {"A", "B", "C", "adapter"}
     result: dict[str, dict[str, object]] = {}
     for crate in declarations:
         if not isinstance(crate, dict):
@@ -120,8 +119,6 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
             fail(f"future crate {name} requires test_targets as a string list")
         if len(targets) != len(set(targets)):
             fail(f"future crate {name} has duplicate test targets")
-        if crate.get("coverage_tier") not in valid_tiers:
-            fail(f"future crate {name} has invalid coverage tier")
         result[name] = crate
     return result
 
@@ -625,28 +622,22 @@ def check_provider_sdk_ownership(
 def check_coverage_policy(root: Path, architecture: dict[str, object]) -> list[str]:
     coverage = load_toml(root / "quality" / "coverage.toml")
     state = coverage.get("policy")
-    tiers = coverage.get("crate_tiers")
     architecture_state = architecture.get("policy")
     if not isinstance(state, dict) or not isinstance(architecture_state, dict):
         return ["coverage and architecture policies require policy tables"]
+    failures: list[str] = []
+    if "tiers" in coverage or "crate_tiers" in coverage:
+        failures.append("coverage policy must not define tier tables")
     phase = architecture_state.get("phase")
     if state.get("phase") != phase:
         return ["coverage policy phase must equal architecture policy phase"]
-    if not isinstance(tiers, dict):
-        return ["coverage policy requires [crate_tiers]"]
     active = architecture_state["active_production_crates"]
     if state.get("production_crates") != active:
         return ["coverage production crates must equal active production crate list"]
-    declared = policy_crates(architecture)
-    failures: list[str] = []
-    if set(tiers) != set(active):
-        failures.append("coverage tiers must declare exactly the active production crates")
-    for name in active:
-        expected_tier = declared[name]["coverage_tier"]
-        if expected_tier not in {"A", "B", "C"}:
-            failures.append(f"active crate {name} must have a numeric coverage tier")
-        elif tiers.get(name) != expected_tier:
-            failures.append(f"coverage tier for {name} must be {expected_tier}")
+    for field in ("base_threshold_percent", "designated_threshold_percent"):
+        threshold = state.get(field)
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            failures.append(f"coverage policy {field} must be numeric")
     return failures
 
 def main() -> None:

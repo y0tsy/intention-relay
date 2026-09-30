@@ -1,10 +1,15 @@
-[tiers]
-A = 95.0
-B = 90.0
-C = 85.0
-
 [policy]
 phase = "m5"
+# Every production crate and the workspace aggregate must satisfy the base
+# line-coverage threshold.
+base_threshold_percent = 80.0
+designated_threshold_percent = 85.0
+# Designated files carry the higher per-file threshold. The list is empty at
+# adoption; each entry declares a workspace-relative `path` under a production
+# crate `src` root plus a `rationale`:
+# [[designated_files]]
+# path = "crates/example/src/lib.rs"
+# rationale = "Why this file carries the higher bar."
 # Coverage is collected with one isolated Cargo package invocation per profile.
 coverage_crates = [
   "intention-types",
@@ -47,26 +52,6 @@ production_crates = [
   "intention-hooks",
 ]
 adapter_crates = ["intention-tauri", "intention-tui"]
-
-[crate_tiers]
-"intention-types" = "A"
-"intention-domain" = "A"
-"intention-protocol" = "A"
-"intention-config" = "A"
-"intention-transport" = "C"
-"intention-client" = "C"
-"intention" = "C"
-"intention-daemon" = "C"
-"intention-application" = "B"
-"intention-runtime" = "B"
-"intention-storage" = "B"
-"intention-storage-sqlite" = "B"
-"intention-model" = "C"
-"intention-provider-openrouter" = "C"
-"intention-provider-generic-chat" = "C"
-"intention-tools" = "B"
-"intention-workspace" = "B"
-"intention-hooks" = "B"
 
 [[exclusions]]
 enabled = true

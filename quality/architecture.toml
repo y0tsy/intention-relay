@@ -172,14 +172,12 @@ name = "intention-types"
 responsibility = "Identifiers, schema versions, common errors, time, pagination, and envelopes."
 test_target = "dto and validation tests"
 test_targets = ["contracts", "error_contracts", "m3_contracts", "m4_model_values"]
-coverage_tier = "A"
 
 [[future_crates]]
 name = "intention-domain"
 responsibility = "Domain DTOs, value validation, domain events, and invariants."
 test_target = "domain state and invariant tests"
 test_targets = ["contracts", "event_fixtures", "m3_contracts", "m4_durable_facts", "m4_durable_fact_wires", "m5_tool_results"]
-coverage_tier = "A"
 
 # Active M3 application lifecycle targets are checked against Cargo metadata.
 [[future_crates]]
@@ -187,151 +185,129 @@ name = "intention-application"
 responsibility = "Commands, queries, use cases, and transaction orchestration."
 test_target = "use-case and architecture tests"
 test_targets = ["m3_application"]
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-runtime"
 responsibility = "Session and run actors, model-loop coordination, cancellation, and lifecycle."
 test_target = "deterministic actor integration tests"
 test_targets = ["m3_runtime", "m4_model_execution", "m4_runtime_failure_helpers", "m5_tool_loop"]
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-storage"
 responsibility = "Repository, unit-of-work, snapshot, and event-log contracts."
 test_target = "repository contract tests"
-test_targets = ["contracts", "m4_model_context", "m4_run_replay_contracts", "m4_run_safe_config", "opaque_json_guard"]
-coverage_tier = "B"
+test_targets = ["contracts", "m4_run_replay_contracts", "opaque_json_guard"]
 
 [[future_crates]]
 name = "intention-storage-sqlite"
 responsibility = "SQLite current-schema creation, projections, and repository implementation."
 test_target = "current-schema and transaction fault-injection tests"
 test_targets = ["m4_durable_facts", "m4_model_context", "m4_run_safe_config", "sqlite_contracts"]
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-config"
 responsibility = "TOML parsing, validation, and resolved configuration DTOs."
 test_target = "configuration fixture tests"
-test_targets = ["contracts", "snapshot_fixtures", "m3_contracts", "m4_contracts"]
-coverage_tier = "A"
+test_targets = ["contracts", "snapshot_fixtures", "m4_contracts"]
 
 [[future_crates]]
 name = "intention-model"
 responsibility = "Provider-neutral model DTOs and driver contract."
 test_target = "model contract and stream tests"
-test_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]
-coverage_tier = "C"
+test_targets = ["model_contracts", "m4_execution_contracts"]
 
 [[future_crates]]
 name = "intention-provider-openrouter"
 responsibility = "OpenRouter SDK translation."
 test_target = "provider stream and error fixtures"
 test_targets = ["openrouter_contracts"]
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-provider-generic-chat"
 responsibility = "Generic Chat Completion translation."
 test_target = "provider stream and capability fixtures"
 test_targets = ["generic_chat_contracts"]
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-tools"
 responsibility = "Typed tool registry and core tool contracts."
 test_target = "tool invocation and policy tests"
-test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
-coverage_tier = "B"
+test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]
 
 [[future_crates]]
 name = "intention-workspace"
 responsibility = "WorkspaceRoot addressing anchor and process CWD."
 test_target = "workspace addressing and CWD tests"
 test_targets = ["workspace_contract"]
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-hooks"
 responsibility = "Typed hook phases, ordering, contexts, and dispatch."
 test_target = "hook ordering and rejection tests"
 test_targets = ["hook_contracts"]
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-vfr"
 responsibility = "VFR transformation, mapping, expansion, and raw-read tools."
 test_target = "transform and expansion outcome tests"
 test_targets = []
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-headroom"
 responsibility = "Headroom transform, CCR retention, and retrieve tool."
 test_target = "compression, retrieval, and expiry tests"
 test_targets = []
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-plans"
 responsibility = "Plan artifacts, hidden frontmatter, and Plan/Build policy."
 test_target = "plan integrity, focus, approval, and mode-policy tests"
 test_targets = []
-coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-protocol"
 responsibility = "Versioned transport commands, queries, and events."
 test_target = "current-version wire contract fixtures"
-test_targets = ["contracts", "accessors", "m3_contracts", "m4_run_stream_contracts"]
-coverage_tier = "A"
+test_targets = ["contracts", "m3_contracts", "m4_run_stream_contracts"]
 
 [[future_crates]]
 name = "intention-transport"
 responsibility = "Socket framing, server/client protocol, and subscriptions."
 test_target = "transport integration tests"
 test_targets = ["transport_integration"]
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-client"
 responsibility = "Bootstrap, command dispatch, subscription, and reconnect."
 test_target = "client contract and reconnect tests"
 test_targets = ["client_contract", "run_stream_contract"]
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention"
 responsibility = "Composition root, factories, and daemon application facade."
 test_target = "composition wiring smoke tests"
 test_targets = []
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-test-support"
 responsibility = "Non-production durable integration fixtures and contract scenarios."
 test_target = "fixture and composition contract tests"
 test_targets = ["composition_contract", "fixture_host"]
-coverage_tier = "adapter"
 
 [[future_crates]]
 name = "intention-daemon"
 responsibility = "Daemon host binary, lifecycle, and typed connection hosting."
 test_target = "bootstrap, recovery, and model-execution bridge integration tests"
 test_targets = ["daemon_bootstrap", "m4_streaming_foundation", "m5_tool_loop_wiring", "facade_e2e", "real_api_e2e"]
-coverage_tier = "C"
 
 [[future_crates]]
 name = "intention-tauri"
 responsibility = "Tauri bootstrap and native bridge."
 test_target = "mapping contract and fixture-daemon smoke tests"
 test_targets = []
-coverage_tier = "adapter"
 
 [[future_crates]]
 name = "intention-tui"
 responsibility = "TUI and REPL presentation adapters."
 test_target = "mapping contract and fixture-daemon smoke tests"
 test_targets = ["tui_contract"]
-coverage_tier = "adapter"

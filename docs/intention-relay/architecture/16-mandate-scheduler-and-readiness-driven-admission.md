@@ -265,7 +265,7 @@ activated only by a later M5+ specification.
 ## Required evidence before implementation
 
 A later activating specification must declare exact crate owners, test targets,
-coverage tiers, feature profiles, and architecture fixtures, then pass `make
+coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, and architecture fixtures, then pass `make
 quick`, `make verify`, and Linux/Windows CI. It must cover:
 
 - durable reason versus observation versus candidate versus unavailable outcome

@@ -457,7 +457,7 @@ A later implementation specification must define fixtures for:
   startup.
 
 Before code, the activating package must declare exact crate owners, test
-targets, coverage tiers, feature profiles, and expected-failure architecture
+targets, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, and expected-failure architecture
 fixtures, then satisfy `make quick` and `make verify`.
 
 Architecture 20 owns run-scoped kernel lifecycle. Kernel state creates neither a

@@ -288,7 +288,7 @@ and observed state, not proof of external atomicity.
 
 ## Quality-gate integration
 
-Session, run, queue, event, snapshot, and transaction tests are mandatory `make verify` inputs. Their crates are Tier B coverage targets and must exercise every declared feature profile. Numeric coverage does not excuse missing fault-injection, recovery, ordering, or durable queue outcome tests. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Session, run, queue, event, snapshot, and transaction tests are mandatory `make verify` inputs. Their crates are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) and must exercise every declared feature profile. Numeric coverage does not excuse missing fault-injection, recovery, ordering, or durable queue outcome tests. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 

@@ -127,7 +127,7 @@ The v1 default presentation policy is:
 
 ## Quality-gate integration
 
-`intention-vfr` and `intention-headroom` are Tier B coverage targets. Their transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove base tools do not import either extension implementation crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+`intention-vfr` and `intention-headroom` are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)). Their transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove base tools do not import either extension implementation crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
 

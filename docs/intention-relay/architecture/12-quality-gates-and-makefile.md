@@ -12,7 +12,7 @@ The implemented policy covers:
 
 - pinned Rust toolchain and external quality tools;
 - strict pragmatic linting and formatting;
-- immediate tiered coverage requirements;
+- an immediate base coverage threshold with a designated-files mechanism;
 - required Cargo feature profiles;
 - tests, doctests, documentation, and architecture checks;
 - dependency, license, advisory, unused-dependency, stale-dependency, and manifest hygiene checks;
@@ -124,39 +124,51 @@ The policy deliberately does **not** deny all `pedantic` or all `restriction` li
 
 Coverage is a blocking guardrail from the moment a crate contains production code. There is no grace baseline and no gradual ramp.
 
-M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source files to each declared production crate, normalizing CI report paths back to workspace-relative sources before per-crate and exclusion arithmetic, enforces that crate's individual line tier, requires branch metrics, and emits JSON report artifacts. Enabled exclusions are exact repository-relative source-file paths with rationale, owner, and equivalent test evidence; they must resolve under the active owner's `src` root, appear exactly once in the coverage report, and are subtracted from that crate's numerator and denominator. The M1 reports prove the policy for its four active Tier A crates.
+M0 provides the versioned coverage-policy file and checker over `cargo llvm-cov` output. Branch-aware reports use the pinned dated nightly toolchain; ordinary application checks remain on pinned stable. The checker maps reportable source files to each declared production crate, normalizing CI report paths back to workspace-relative sources before per-crate and exclusion arithmetic, enforces the base 80% threshold for that crate and the workspace aggregate and applies the higher designated-file threshold where declared, requires branch metrics, and emits JSON report artifacts. Enabled exclusions are exact repository-relative source-file paths with rationale, owner, and equivalent test evidence; they must resolve under the active owner's `src` root, appear exactly once in the coverage report, and are subtracted from that crate's numerator and denominator. The M1 reports prove the policy for its four active Tier A crates under the tier scheme that [ADR 0049](../decisions/0049-base-coverage-threshold.md) supersedes.
 
 The coverage runner always uses `--all-targets` for every coverage crate. Explicit target narrowing is intentionally disabled because explicit target sets do not reliably reproduce the `--all-targets` coverage set (Windows integration-target behavior differs, which is why the coverage gate runs on Linux), and per-crate thresholds must remain comparable across every coverage run. Boundary crates whose library test harness is not reliably merged by nextest (`intention-daemon`, `intention-workspace`) use `cargo test` instead of nextest for package coverage so the library harness remains in the report. Platform-gated fixture tests distort per-crate denominators: `cfg(unix)`-only tests inflate the report with self-covering test lines while a `cfg(windows)`-only build would measure only production lines. Fixtures that exercise the same production paths on both platforms therefore use platform-native APIs and run on every supported OS instead of being gated to Unix.
 
-### Tiered line coverage thresholds
+### Base threshold and designated files
 
-| Tier | Crate categories | Minimum line coverage |
-| --- | --- | ---: |
-| A | `types`, `domain`, `config`, `protocol` | 95% |
-| B | `application`, `runtime`, `storage`, `storage-sqlite`, `tools`, `workspace`, `hooks`, `plans`, `vfr`, `headroom` | 90% |
-| C | `model`, provider adapters, `transport`, `client`, `daemon` | 85% |
-| Adapter exception | Tauri and TUI presentation crates | No aggregate UI line threshold. Require complete command/event mapping contracts, all mandatory fixture-daemon smoke/outcome scenarios, and required platform CI evidence. |
+| Scope | Minimum line coverage |
+| --- | ---: |
+| Every production crate | 80% |
+| Workspace aggregate | 80% |
+| Designated files (list empty at adoption) | 85% |
+| Tauri and TUI presentation crates | No aggregate UI line threshold. Require complete command/event mapping contracts, all mandatory fixture-daemon smoke/outcome scenarios, and required platform CI evidence. |
 
-Branch coverage is reported. Critical safety and recovery branches are not excused by a passing line threshold. Those branches remain independently mandatory in the scenario tests defined by [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md).
+The single base line-coverage threshold is 80%, applied to every production
+crate and to the workspace aggregate. A versioned designated-files list names
+individual source files that must reach 85%; each entry carries a
+workspace-relative path under a production crate `src` root with a rationale.
+The list is empty at adoption: the mechanism exists so a future high-risk file
+can carry a higher bar without reintroducing crate categories
+([ADR 0049](../decisions/0049-base-coverage-threshold.md)).
 
-All Tier B crates, including `intention-tools` and `intention-hooks`, require at
-least 90% line coverage. M5 has no coverage override. Branch metrics and all
-semantic safety, workspace-boundary, ordering, rejection, and short-circuit
-tests remain mandatory independently of the line threshold.
+Branch coverage is reported. Critical safety and recovery branches are not
+excused by a passing line threshold. Those branches remain independently
+mandatory in the scenario tests defined by [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md).
+
+Every production crate, including `intention-tools` and `intention-hooks`, is
+subject to the base 80% line-coverage threshold. There is no coverage override.
+Branch metrics and all semantic safety, workspace-boundary, ordering,
+rejection, and short-circuit tests remain mandatory independently of the line
+threshold.
 
 ### Coverage constraints
 
-- Every production crate declares its tier before production code is merged.
+- Every production crate is subject to the base 80% line-coverage threshold before production code is merged.
 - Every required feature profile contributes to coverage where the crate supports that profile.
 - A coverage decrease fails `make coverage` and `make verify`.
 - Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with rationale, owner, and equivalent test evidence.
 - Exclusions cannot hide core runtime, policy, provider translation, persistence, redaction, or security logic.
+- The designated-files list is empty at adoption; an entry is added only with a workspace-relative path under a production crate `src` root and a rationale, and only when the file is intended to carry the 85% bar.
 - Coverage reports are stored as CI artifacts.
 - Test code and generated code must not inflate the production coverage denominator.
 
 The `intention-daemon` feature-profile normalization in `quality/run_coverage.py` (the `seen_effective` deduplication) is the one deliberate equivalence in the runner: because the daemon report always appends `--all-features` to the flags declared in `quality/features.toml`, a profile whose flags are only that selector, `--no-default-features`, or a `--features` list denotes the same instrumented daemon package set. The runner therefore drops the default-toggle and `--features` selector tokens for `intention-daemon`, deduplicates the resulting effective flag tuples per crate, and lets the first profile (the default one) keep its report name while later equivalent profiles are skipped without producing a second, identical daemon report. This does not weaken the feature-profile policy: the daemon still contributes one complete all-features coverage report per invocation, and it is the only crate the normalization touches. Genuinely different tuples are never merged: each other covered crate runs every profile and critical combination under its own report name, and a daemon tuple that reduces to anything other than the canonical `--all-features` set still runs and produces its own report. `quality/self_test.py` binds both halves of this rule.
 
-Applying an enabled exclusion is explicit and reviewable. The checker rejects duplicate, absolute, traversing, unowned, out-of-source-root, absent, unreported, and all-source-removing exclusions. The sole enabled M2 exclusion is `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to Tier C coverage.
+Applying an enabled exclusion is explicit and reviewable. The checker rejects duplicate, absolute, traversing, unowned, out-of-source-root, absent, unreported, and all-source-removing exclusions. The sole enabled M2 exclusion is `intention-daemon/src/main.rs`: it is a thin process adapter whose unsafe-argument and concurrent bootstrap behavior are exercised through the real binary in `daemon_bootstrap`; the entry point carries no library logic, and those real-binary tests are accepted as equivalent coverage evidence. All daemon library behavior remains subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)).
 
 ## Cargo feature-profile policy
 
@@ -192,7 +204,7 @@ The root `Makefile` is the sole supported orchestration surface for local and CI
 | `make test` | No | Run nextest suites and doctests for all feature profiles. |
 | `make docs-check` | No | Build Rust docs with warnings denied and validate Markdown links, Mermaid diagrams, and documentation navigation. |
 | `make architecture` | No | Run crate-set, dependency, import, DTO, WorkspaceRoot, hook, plan, and provider-SDK ownership boundary checks. |
-| `make coverage` | No | Collect coverage and apply the tier policy. |
+| `make coverage` | No | Collect coverage and apply the base threshold, designated-file bars, and exclusion policy. |
 | `make coverage-default` | No | Collect coverage for the default profile only (`run_coverage.py --profile default`). |
 | `make coverage-no-default` | No | Collect coverage for the no-default profile only (`run_coverage.py --profile no_default`). |
 | `make coverage-all` | No | Collect coverage for the all-features profile only (`run_coverage.py --profile all`). |
@@ -254,7 +266,7 @@ Exceptions use reviewed, versioned policy/allowlist files. Every exception has a
 
 Every implementation slice must:
 
-1. identify the owning architecture document and crate coverage tier;
+1. identify the owning architecture document and the applicable coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md);
 2. create or update DTO/contract fixtures first;
 3. create failing domain, architecture, and outcome tests appropriate to the change;
 4. implement the smallest code that makes those tests pass;
@@ -288,7 +300,7 @@ reverted the Slice 2 activation, removed the targets and their goldens from the
 tree, and removed the corresponding declarations from the machine-readable
 policy. The current-schema tests in the existing `sqlite_contracts` target
 remain. The revert added no CI job, Makefile target, crate, dependency, feature
-profile, coverage tier, or exclusion: the existing check count and the
+profile, or exclusion: the existing check count and the
 `make quick`, `make verify`, `docs-check`, and `architecture` gates are the
 revert's acceptance gate. A re-introduction through a new activating
 specification must restore the reload transaction fault-injection, rotation
@@ -314,7 +326,7 @@ environment). The manual
 never triggered by push, pull request, or schedule, is never a required status
 check, takes its credential only from the repository secret
 `REAL_API_E2E_PROVIDER_KEY`, and never alters the blocking Quality workflow.
-The channel adds no blocking CI job, no required check, no coverage tier, no
+The channel adds no blocking CI job, no required check, no
 exclusion, and no dependency, so the nine required status checks and the
 `ci-*` alias list stay exactly as documented; the reverted Slice 2 activation
 also added no CI job or Makefile target, so the blocking gate is unchanged. A
@@ -354,7 +366,7 @@ M0 proves that the quality system fails correctly for controlled fixtures:
 | Missing required crate/test-target policy metadata | `make architecture`. |
 | Forbidden crate dependency or import | `make architecture`. |
 | DTO/SDK implementation leak | `make architecture`. |
-| Coverage below declared tier | `make coverage`. |
+| Coverage below the base threshold or a designated-file threshold | `make coverage`. |
 | Unapproved coverage exclusion metadata | `make coverage`. |
 | Uncovered required feature profile | `make features`. |
 | Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
@@ -370,7 +382,7 @@ M0 is accepted because its implementation establishes that:
 - formatting, compilation, linting, tests, documentation, architecture checks, coverage, and supply-chain checks are blocking;
 - tool versions are pinned and checked before every reproducible quality run;
 - Makefile commands orchestrate every non-mutating quality gate and CI invokes the `ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-selftest`, and `ci-deps` job aliases as its sole verification commands after explicit setup;
-- coverage thresholds apply immediately by crate tier with no unreviewed escape hatch;
+- the base 80% line-coverage threshold applies immediately to every production crate and the workspace aggregate, with the designated-files mechanism for a future higher bar and no unreviewed escape hatch;
 - adapters use mapping/contract/outcome evidence rather than a misleading aggregate UI line target;
 - linting is strict but pragmatic, with narrow justified exceptions rather than a blanket unworkable lint set;
 - default, no-default, all-features, and enabled critical combinations are verified;
@@ -400,7 +412,7 @@ compatibility checks.
 
 The Post-M4 authority reconciliation package is documentation-only. It does not
 weaken, replace, or extend the implemented Makefile gate, and it does not
-activate a production crate, coverage tier, feature combination, quality tool,
+activate a production crate, feature combination, quality tool,
 or policy exception. Existing `make quick` and `make verify` remain mandatory
 for the documentation change itself and for every later implementation slice.
 
@@ -411,28 +423,28 @@ fixtures and outcome evidence. Research or a reconciliation row alone is not a
 quality-policy declaration.
 
 The post-M4 tool-registry and Mandate tool-loop package is likewise
-documentation-only. It activates no crate, test target, coverage tier, feature
+documentation-only. It activates no crate, test target, feature
 combination, protocol implementation, migration, quality tool, or Makefile
 target. A later activating change must add its exact owners, test targets,
 coverage/features, expected-failure architecture fixtures, and outcome evidence
 atomically with production work.
 
 The post-M4 Mandate scheduler and readiness package is documentation-only. It
-activates no crate, test target, coverage tier, feature combination, protocol
+activates no crate, test target, feature combination, protocol
 implementation, migration, quality tool, or Makefile target. A later activating
 change must declare scheduler owners, test targets, coverage/features,
 expected-failure architecture fixtures, and outcome evidence atomically with
 production work.
 
 The post-M4 child graph and delegated verifier authority package is likewise
-documentation-only. It activates no crate, test target, coverage tier, feature
+documentation-only. It activates no crate, test target, feature
 combination, protocol implementation, migration, quality tool, or Makefile
 target. A later activating change must declare exact graph/verifier owners,
 test targets, coverage/features, expected-failure architecture fixtures, and
 outcome evidence atomically with production work.
 
 The post-M4 Mandate MCP capability package is likewise documentation-only. It
-activates no crate, test target, coverage tier, feature combination, protocol
+activates no crate, test target, feature combination, protocol
 implementation, migration, quality tool, Makefile target, network connection,
 or local process. A later activating change must declare exact MCP owners,
 test targets, coverage/features, storage/wire versions, expected-failure
@@ -440,7 +452,7 @@ architecture fixtures, redaction evidence, and cross-platform outcomes
 atomically with production work.
 
 The post-M4 Gateway/RLM bridge package is likewise documentation-only. It
-activates no crate, Python dependency, test target, coverage tier, feature
+activates no crate, Python dependency, test target, feature
 combination, protocol implementation, listener, kernel, migration, quality tool,
 or Makefile target. A later activating change must declare exact bridge owners,
 test targets, coverage/features, storage/wire versions, expected-failure
@@ -448,7 +460,7 @@ architecture fixtures, redaction evidence, and Linux/Windows outcomes atomically
 with production work.
 
 The post-M4 run-scoped IPython kernel package is likewise documentation-only.
-It activates no crate, Python/Jupyter dependency, test target, coverage tier,
+It activates no crate, Python/Jupyter dependency, test target,
 feature combination, protocol implementation, listener, process, migration,
 quality tool, or Makefile target. A later activating change must declare exact
 kernel owners, dependencies, test targets, coverage/features, storage/wire
@@ -457,7 +469,7 @@ and Linux/Windows outcomes atomically with production work.
 
 The post-M4 Goals, Skills, context, memory, and compaction package is likewise
 documentation-only. It activates no crate, retrieval/index/search engine, prompt
-builder, test target, coverage tier, feature combination, protocol
+builder, test target, feature combination, protocol
 implementation, migration, quality tool, or Makefile target. A later activating
 change must declare exact context owners, test targets, coverage/features,
 storage/wire/retention treatment, expected-failure architecture fixtures,
@@ -465,7 +477,7 @@ redaction evidence, and Linux/Windows outcomes atomically with production work.
 
 The post-M4 Provider evolution, profiles, and reasoning package is likewise
 documentation-only. It activates no provider crate, SDK, parser, test target,
-coverage tier, feature combination, protocol implementation, migration, quality
+feature combination, protocol implementation, migration, quality
 tool, or Makefile target. A later activating change must declare exact provider
 owners, dependencies, test targets, coverage/features, storage/wire policy,
 expected-failure architecture fixtures, redaction evidence, and Linux/Windows
@@ -481,11 +493,11 @@ documentation-only until a new activating change declares them atomically with
 production work.
 
 The post-M4 Session branching and regeneration package is documentation-only. It
-activates no crate, test target, coverage tier, feature profile, storage/wire
+activates no crate, test target, feature profile, storage/wire
 schema, protocol, quality tool, or Makefile target. A later activating change
 must declare those exact policies and architecture fixtures atomically.
 
 The post-M4 Activity, UI, and adapters package is documentation-only. It
-activates no crate, test target, coverage tier, feature profile, storage/wire
+activates no crate, test target, feature profile, storage/wire
 schema, protocol, quality tool, or Makefile target. A later M6 activating change
 must declare exact adapter and activity policies atomically.

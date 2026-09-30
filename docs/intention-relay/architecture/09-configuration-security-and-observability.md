@@ -198,7 +198,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Quality-gate integration
 
-`intention-config` remains a Tier A coverage target. TOML parsing,
+`intention-config` remains subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)). TOML parsing,
 M1 snapshot serialization, permissions, redaction, and safe observability tests
 are blocking `make verify` inputs. M3 adds canonical snapshot-persistence,
 restart-only application, and per-run snapshot integration coverage. A

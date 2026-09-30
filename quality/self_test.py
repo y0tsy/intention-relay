@@ -592,7 +592,7 @@ def test_m4_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
 
@@ -610,7 +610,7 @@ def test_m5_activation_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
+            'test_targets = ["bounded_contracts", "tool_contracts", "tool_coverage_extra", "tool_coverage_final", "tool_coverage_invocation", "tool_coverage_last", "tool_coverage_remaining", "tool_coverage_search"]',
             'test_targets = []',
         )
         run(
@@ -971,21 +971,28 @@ def test_coverage_failures(root: Path) -> None:
     report = root / "quality/fixtures/coverage-low.json"
     with modified(policy), modified(report):
         report.write_text(
-            coverage_report(
-                root,
-                [
-                    ("crates/intention-types/src/lib.rs", 100, 1),
-                    ("crates/intention-daemon/src/main.rs", 1, 1),
-                ],
-            ),
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 79)]),
             encoding="utf-8",
         )
         run(
-            [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
+            [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
             cwd=root,
             expect_success=False,
+            expected_output="intention-types line coverage 79.00% is below required base threshold 80.00%",
         )
-def test_coverage_tier_policy_requires_exact_numeric_tiers(root: Path) -> None:
+        report.write_text(
+            coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 80)]),
+            encoding="utf-8",
+        )
+        run(
+            [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 80.00% satisfies base threshold 80.00%",
+        )
+
+
+def test_coverage_policy_requires_numeric_thresholds_and_rejects_tier_tables(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/coverage-low.json"
     with modified(policy), modified(report):
@@ -997,24 +1004,201 @@ def test_coverage_tier_policy_requires_exact_numeric_tiers(root: Path) -> None:
             [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
             cwd=root,
             expect_success=True,
-            expected_output="intention-types line coverage 100.00% satisfies tier A",
+            expected_output="intention-types line coverage 100.00% satisfies base threshold 80.00%",
         )
-        invalid_tiers = [
-            ("missing-tier", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\n"),
-            ("extra-tier", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\nC = 85.0\nD = 80.0\n"),
-            ("non-numeric", "A = 95.0\nB = 90.0\nC = 85.0\n", "A = 95.0\nB = 90.0\nC = \"high\"\n"),
+        baseline = policy.read_text(encoding="utf-8")
+        invalid_policies = [
+            (
+                "missing-base",
+                "base_threshold_percent = 80.0\n",
+                "",
+                "coverage policy base_threshold_percent must be numeric",
+            ),
+            (
+                "non-numeric-base",
+                "base_threshold_percent = 80.0\n",
+                'base_threshold_percent = "high"\n',
+                "coverage policy base_threshold_percent must be numeric",
+            ),
+            (
+                "missing-designated",
+                "designated_threshold_percent = 85.0\n",
+                "",
+                "coverage policy designated_threshold_percent must be numeric",
+            ),
+            (
+                "non-numeric-designated",
+                "designated_threshold_percent = 85.0\n",
+                'designated_threshold_percent = "high"\n',
+                "coverage policy designated_threshold_percent must be numeric",
+            ),
+            ("tiers-table", "", "[tiers]\nA = 95.0\n", "coverage policy must not define a [tiers] table"),
+            (
+                "crate-tiers-table",
+                "",
+                '[crate_tiers]\n"intention-types" = "A"\n',
+                "coverage policy must not define a [crate_tiers] table",
+            ),
         ]
-        for _name, old, new in invalid_tiers:
-            policy.write_text(
-                policy.read_text(encoding="utf-8").replace(old, new, 1),
-                encoding="utf-8",
-            )
+        for _name, old, new, expected_output in invalid_policies:
+            policy.write_text(baseline.replace(old, new, 1), encoding="utf-8")
             run(
-                [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report)],
+                [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
                 cwd=root,
                 expect_success=False,
-                expected_output="tiers must define numeric A, B, and C thresholds",
+                expected_output=expected_output,
             )
+
+
+def test_coverage_designated_file_semantics(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/coverage-low.json"
+    designated = root / "crates/intention-types/src/designated_fixture.rs"
+    foreign = root / "crates/intention-domain/src/designated_fixture.rs"
+    unreported = root / "crates/intention-types/src/unreported_designated_fixture.rs"
+    outside_source = root / "crates/intention-types/outside_designated_fixture.rs"
+    check = [
+        sys.executable,
+        "quality/check_coverage.py",
+        "--policy",
+        str(policy),
+        "--report",
+        str(report),
+        "--crate",
+        "intention-types",
+    ]
+    with (
+        modified(designated),
+        modified(foreign),
+        modified(unreported),
+        modified(outside_source),
+        modified(policy),
+        modified(report),
+    ):
+        designated.write_text("pub const DESIGNATED_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        foreign.write_text("pub const FOREIGN_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        unreported.write_text("pub const UNREPORTED_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        outside_source.write_text("pub const OUTSIDE_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/designated_fixture.rs", 100, 85),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        valid = (
+            '\n[[designated_files]]\n'
+            'path = "crates/intention-types/src/designated_fixture.rs"\n'
+            'rationale = "Synthetic designated-file fixture."\n'
+        )
+        baseline = policy.read_text(encoding="utf-8") + valid
+        policy.write_text(baseline, encoding="utf-8")
+        run(
+            check,
+            cwd=root,
+            expect_success=True,
+            expected_output=(
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "line coverage 85.00% satisfies designated threshold 85.00%"
+            ),
+        )
+        # A per-crate report skips designated entries owned by other crates.
+        policy.write_text(
+            baseline
+            + '\n[[designated_files]]\n'
+            + 'path = "crates/intention-domain/src/designated_fixture.rs"\n'
+            + 'rationale = "Synthetic foreign designated fixture."\n',
+            encoding="utf-8",
+        )
+        run(check, cwd=root, expect_success=True, expected_output="satisfies designated threshold 85.00%")
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/designated_fixture.rs", 100, 84),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=False,
+            expected_output=(
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "line coverage 84.00% is below designated threshold 85.00%"
+            ),
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/designated_fixture.rs", 100, 90),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=True,
+            expected_output=(
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "line coverage 90.00% satisfies designated threshold 85.00%"
+            ),
+        )
+        invalid_cases = [
+            (
+                "missing-rationale",
+                valid.replace('rationale = "Synthetic designated-file fixture."', 'rationale = ""'),
+                "designated file requires rationale",
+            ),
+            (
+                "absolute-path",
+                valid.replace(
+                    'path = "crates/intention-types/src/designated_fixture.rs"',
+                    f"path = '''{designated}'''",
+                ),
+                "workspace-relative without traversal",
+            ),
+            (
+                "traversal",
+                valid.replace(
+                    'path = "crates/intention-types/src/designated_fixture.rs"',
+                    'path = "crates/intention-types/src/../src/designated_fixture.rs"',
+                ),
+                "workspace-relative without traversal",
+            ),
+            (
+                "unowned",
+                valid.replace(
+                    "crates/intention-types/src/designated_fixture.rs",
+                    "crates/intention-types/outside_designated_fixture.rs",
+                ),
+                "must be under an active production crate source root",
+            ),
+            (
+                "missing-file",
+                valid.replace("designated_fixture.rs", "absent_designated_fixture.rs"),
+                "must be an existing regular file",
+            ),
+            (
+                "unreported",
+                valid.replace("designated_fixture.rs", "unreported_designated_fixture.rs"),
+                "must appear exactly once in coverage report",
+            ),
+            ("duplicate", valid + valid, "duplicate designated file path"),
+        ]
+        for _name, invalid, expected_output in invalid_cases:
+            policy.write_text(baseline.split("\n[[designated_files]]", 1)[0] + invalid, encoding="utf-8")
+            run(check, cwd=root, expect_success=False, expected_output=expected_output)
+
+
 def test_coverage_exclusion_semantics(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/m1plus-coverage.json"
@@ -1202,8 +1386,8 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
             coverage_report(
                 root,
                 [
-                    ("crates/intention-types/src/lib.rs", 1, 0),
-                    ("crates/intention-daemon/src/main.rs", 1, 0),
+                    ("crates/intention-types/src/lib.rs", 100, 79),
+                    ("crates/intention-daemon/src/main.rs", 100, 100),
                 ],
             ),
             encoding="utf-8",
@@ -1211,17 +1395,17 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
         run(
             [sys.executable, "quality/check_coverage.py", "--report", str(report), "--workspace-aggregate"],
             cwd=root,
-            expect_success=True,
+            expect_success=False,
             expected_outputs=(
                 "excluding crates/intention-daemon/src/main.rs from intention-daemon denominator",
-                "workspace aggregate line coverage 0.000% (0/1)",
+                "workspace aggregate line coverage 79.000% (79/100) is below required base threshold 80.00%",
             ),
         )
         report.write_text(
             coverage_report(
                 root,
                 [
-                    ("crates/intention-types/src/lib.rs", 100, 1),
+                    ("crates/intention-types/src/lib.rs", 100, 80),
                     ("crates/intention-daemon/src/main.rs", 100, 100),
                 ],
             ),
@@ -1231,7 +1415,7 @@ def test_workspace_aggregate_coverage_check(root: Path) -> None:
             [sys.executable, "quality/check_coverage.py", "--report", str(report), "--workspace-aggregate"],
             cwd=root,
             expect_success=True,
-            expected_output="workspace aggregate line coverage 1.000% (1/100)",
+            expected_output="workspace aggregate line coverage 80.000% (80/100) satisfies base threshold 80.00%",
         )
 
 
@@ -1260,7 +1444,7 @@ def test_coverage_metadata_snapshot(root: Path) -> None:
             ],
             cwd=root,
             expect_success=True,
-            expected_output="intention-types line coverage 100.00% satisfies tier A",
+            expected_output="intention-types line coverage 100.00% satisfies base threshold 80.00%",
         )
         report.write_text(
             coverage_report(
@@ -1286,7 +1470,7 @@ def test_coverage_metadata_snapshot(root: Path) -> None:
             expect_success=True,
             expected_outputs=(
                 "excluding crates/intention-daemon/src/main.rs from intention-daemon denominator",
-                "workspace aggregate line coverage 100.000% (100/100)",
+                "workspace aggregate line coverage 100.000% (100/100) satisfies base threshold 80.00%",
             ),
         )
 
@@ -1309,7 +1493,7 @@ def test_coverage_metadata_standalone_fallback(root: Path) -> None:
             ],
             cwd=root,
             expect_success=True,
-            expected_output="intention-types line coverage 100.00% satisfies tier A",
+            expected_output="intention-types line coverage 100.00% satisfies base threshold 80.00%",
         )
 
 
@@ -1383,7 +1567,7 @@ def test_coverage_metadata_escape_rejected(root: Path) -> None:
             [sys.executable, "quality/check_coverage.py", "--report", str(report), "--crate", "intention-types", "--metadata", str(metadata)],
             cwd=root,
             expect_success=True,
-            expected_output="intention-types line coverage 100.00% satisfies tier A",
+            expected_output="intention-types line coverage 100.00% satisfies base threshold 80.00%",
         )
 
 
@@ -2190,7 +2374,8 @@ def main() -> None:
         test_provider_sdk_public_contract_boundary,
         test_error_detail_and_correlation_validation,
         test_coverage_failures,
-        test_coverage_tier_policy_requires_exact_numeric_tiers,
+        test_coverage_policy_requires_numeric_thresholds_and_rejects_tier_tables,
+        test_coverage_designated_file_semantics,
         test_coverage_exclusion_semantics,
         test_coverage_runner_policy_and_profile_names,
         test_coverage_target_narrowing_requires_exact_inventory,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate per-crate coverage tiers and exact exclusion semantics."""
+"""Validate base coverage thresholds, designated-file bars, and exclusion semantics."""
 
 from __future__ import annotations
 
@@ -151,6 +151,17 @@ def coverage_path(root: Path, filename: str) -> Path:
     return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
+def report_path_index(root: Path, files: list[dict[str, object]]) -> dict[Path, list[dict[str, object]]]:
+    """Group coverage report entries by their resolved workspace path."""
+    index: dict[Path, list[dict[str, object]]] = {}
+    for item in files:
+        filename = item.get("filename")
+        if isinstance(filename, str):
+            path = coverage_path(root, filename)
+            index.setdefault(path, []).append(item)
+    return index
+
+
 def enabled_exclusion_paths(
     root: Path,
     exclusions: object,
@@ -160,12 +171,7 @@ def enabled_exclusion_paths(
 ) -> set[Path]:
     if not isinstance(exclusions, list):
         fail("exclusions must be a list")
-    report_paths: dict[Path, int] = {}
-    for item in files:
-        filename = item.get("filename")
-        if isinstance(filename, str):
-            path = coverage_path(root, filename)
-            report_paths[path] = report_paths.get(path, 0) + 1
+    report_paths = report_path_index(root, files)
 
     excluded: set[Path] = set()
     for exclusion in exclusions:
@@ -194,12 +200,84 @@ def enabled_exclusion_paths(
         source_root = source_roots.get(owner)
         if source_root is None or not is_under(path, source_root):
             fail(f"enabled exclusion path must be under {owner} source root: {relative}")
-        occurrences = report_paths.get(path, 0)
+        occurrences = len(report_paths.get(path, []))
         if occurrences != 1:
             fail(f"enabled exclusion path must appear exactly once in coverage report: {relative}, got {occurrences}")
         excluded.add(path)
         print(f"coverage-check: excluding {relative.as_posix()} from {owner} denominator")
     return excluded
+
+
+def numeric_threshold(policy_state: dict[str, object], field: str) -> float:
+    value = policy_state.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        fail(f"coverage policy {field} must be numeric")
+    return float(value)
+
+
+def designated_owner(path: Path, production_crates: set[str], source_roots: dict[str, Path]) -> str | None:
+    for crate in sorted(production_crates):
+        source_root = source_roots.get(crate)
+        if source_root is not None and is_under(path, source_root):
+            return crate
+    return None
+
+
+def check_designated_files(
+    root: Path,
+    designated: object,
+    crate: str | None,
+    production_crates: set[str],
+    source_roots: dict[str, Path],
+    files: list[dict[str, object]],
+    threshold: float,
+) -> None:
+    """Enforce the higher per-file threshold on declared designated files."""
+    if not isinstance(designated, list):
+        fail("designated_files must be a list")
+    report_paths = report_path_index(root, files)
+    seen: set[Path] = set()
+    for entry in designated:
+        if not isinstance(entry, dict):
+            fail("coverage designated file must be a table")
+        declared = entry.get("path")
+        if not isinstance(declared, str) or not declared:
+            fail("designated file requires path")
+        relative = Path(declared)
+        if relative.is_absolute() or ".." in relative.parts:
+            fail(f"designated file path must be workspace-relative without traversal: {relative}")
+        path = (root / relative).resolve()
+        owner = designated_owner(path, production_crates, source_roots)
+        if owner is None:
+            fail(f"designated file path must be under an active production crate source root: {relative}")
+        # An isolated package report cannot contain designated files owned by
+        # another package; validate only entries relevant to this report.
+        if crate is not None and owner != crate:
+            continue
+        rationale = entry.get("rationale")
+        if not isinstance(rationale, str) or not rationale:
+            fail(f"designated file requires rationale: {relative}")
+        if path in seen:
+            fail(f"duplicate designated file path: {relative}")
+        if not path.is_file():
+            fail(f"designated file path must be an existing regular file: {relative}")
+        seen.add(path)
+        occurrences = report_paths.get(path, [])
+        if len(occurrences) != 1:
+            fail(f"designated file must appear exactly once in coverage report: {relative}, got {len(occurrences)}")
+        covered, count = line_totals(occurrences)
+        if count == 0:
+            fail(f"designated file {relative} has no reportable source lines")
+        observed = 100.0 * covered / count
+        if observed < threshold:
+            fail(
+                f"designated file {relative} line coverage {observed:.2f}% "
+                f"is below designated threshold {threshold:.2f}%"
+            )
+        print(
+            f"coverage-check: designated file {relative} line coverage {observed:.2f}% "
+            f"satisfies designated threshold {threshold:.2f}%"
+        )
 
 
 def main() -> None:
@@ -218,23 +296,25 @@ def main() -> None:
     with arguments.report.open(encoding="utf-8") as report_file:
         report = json.load(report_file)
 
-    tiers = policy.get("tiers")
     policy_state = policy.get("policy")
-    classifications = policy.get("crate_tiers")
-    exclusions = policy.get("exclusions", [])
-    if not isinstance(tiers, dict) or not isinstance(policy_state, dict) or not isinstance(classifications, dict):
-        fail("coverage policy is missing required tables")
-    if set(tiers) != {"A", "B", "C"} or not all(isinstance(threshold, (int, float)) for threshold in tiers.values()):
-        fail("tiers must define numeric A, B, and C thresholds")
+    if not isinstance(policy_state, dict):
+        fail("coverage policy is missing the [policy] table")
+    if "tiers" in policy:
+        fail("coverage policy must not define a [tiers] table")
+    if "crate_tiers" in policy:
+        fail("coverage policy must not define a [crate_tiers] table")
+    # The approved policy intentionally has no coverage override mechanism.
+    if "coverage_overrides" in policy:
+        fail("coverage policy must not define coverage_overrides")
+    base_threshold = numeric_threshold(policy_state, "base_threshold_percent")
+    designated_threshold = numeric_threshold(policy_state, "designated_threshold_percent")
 
     production_crates = policy_state.get("production_crates")
     if not isinstance(production_crates, list) or not all(isinstance(crate, str) for crate in production_crates):
         fail("production_crates must be a string list")
     production_set = set(production_crates)
-    # Thresholds come directly from each crate's declared tier.  The approved
-    # policy intentionally has no coverage override mechanism.
-    if "coverage_overrides" in policy:
-        fail("coverage policy must not define coverage_overrides")
+    exclusions = policy.get("exclusions", [])
+    designated = policy.get("designated_files", [])
     if arguments.crate is not None:
         if arguments.crate not in production_set:
             fail(f"coverage crate {arguments.crate!r} is not an active production crate")
@@ -247,8 +327,8 @@ def main() -> None:
     require_branch_metrics(files)
     if arguments.workspace_aggregate:
         # Aggregate reports intentionally contain production source files from
-        # every crate. Validate their aggregate line metric and exclusion
-        # declarations, while leaving per-crate thresholds to crate reports.
+        # every crate, so the shared base threshold applies to their aggregate
+        # line metric, and every exclusion and designated file must be valid.
         aggregate_files = production_files(root, files, production_set, source_roots)
         if not aggregate_files:
             fail("workspace aggregate report contains no production source files")
@@ -259,21 +339,29 @@ def main() -> None:
         if count == 0:
             fail("workspace aggregate has no reportable non-excluded source lines")
         observed = 100.0 * covered / count
-        print(f"coverage-check: workspace aggregate line coverage {observed:.3f}% ({covered}/{count})")
+        if observed < base_threshold:
+            fail(
+                f"workspace aggregate line coverage {observed:.3f}% ({covered}/{count}) "
+                f"is below required base threshold {base_threshold:.2f}%"
+            )
+        check_designated_files(root, designated, None, production_set, source_roots, files, designated_threshold)
+        print(
+            f"coverage-check: workspace aggregate line coverage {observed:.3f}% ({covered}/{count}) "
+            f"satisfies base threshold {base_threshold:.2f}%"
+        )
         return
-    # An isolated package report legitimately cannot contain exclusions owned by
-    # another package. Validate only exclusions relevant to the report's crate.
+    # An isolated package report legitimately cannot contain exclusions or
+    # designated files owned by another package. Validate only the entries
+    # relevant to the report's crate.
     report_exclusions = (
         [item for item in exclusions if isinstance(item, dict) and item.get("owner") == arguments.crate]
         if arguments.crate is not None
         else exclusions
     )
     excluded_paths = enabled_exclusion_paths(root, report_exclusions, production_set, source_roots, files)
+    check_designated_files(root, designated, arguments.crate, production_set, source_roots, files, designated_threshold)
 
     for crate in production_crates:
-        tier = classifications.get(crate)
-        if tier not in tiers:
-            fail(f"production crate {crate!r} lacks a valid coverage tier")
         source_root = source_roots.get(crate)
         if source_root is None:
             fail(f"production crate {crate!r} is absent from Cargo metadata")
@@ -288,10 +376,15 @@ def main() -> None:
         if count == 0:
             fail(f"production crate {crate!r} has no reportable non-excluded source lines")
         observed = 100.0 * covered / count
-        required = float(tiers[tier])
-        if observed < required:
-            fail(f"{crate} line coverage {observed:.2f}% is below required {required:.2f}%")
-        print(f"coverage-check: {crate} line coverage {observed:.2f}% satisfies tier {tier}")
+        if observed < base_threshold:
+            fail(
+                f"{crate} line coverage {observed:.2f}% is below required base threshold "
+                f"{base_threshold:.2f}%"
+            )
+        print(
+            f"coverage-check: {crate} line coverage {observed:.2f}% "
+            f"satisfies base threshold {base_threshold:.2f}%"
+        )
 
     if not production_crates:
         print("coverage-check: M0 has no production crate coverage thresholds")

@@ -18,6 +18,11 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
 - M5 activates the typed tool/workspace/hook path. The composition root (`intention`) owns assembly of the six active tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
+The M1-M5 activation notes above are historical records:
+[ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced the
+coverage-tier classification with the base 80% line-coverage threshold and the
+designated-files mechanism.
+
 ## Planned crates
 
 | Crate | Owns | May depend on |
@@ -140,7 +145,7 @@ The workspace must have tests that fail when these rules are broken:
 7. every planned crate has a stated test target before implementation begins;
 8. every declared boundary has an isolated expected-failure fixture in the quality self-test.
 
-The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The mandatory pinned tooling, coverage tiers, feature profiles, lint policy, and Makefile/CI contract are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The mandatory pinned tooling, coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, lint policy, and Makefile/CI contract are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 
@@ -179,8 +184,10 @@ semantics but activate no crate or dependency edge. Kernel activation must split
 typed contracts, lifecycle orchestration, and private Python/Jupyter translation
 without exposing implementation resources. Skill, provider-profile, and fork
 boundaries remain separate delivery decisions. Any split must preserve this
-acyclic direction, DTO-first contracts, a declared test target, a coverage tier,
-and isolated architecture fixtures before production activation.
+acyclic direction, DTO-first contracts, a declared test target, the base 80%
+line-coverage threshold and designated-files mechanism
+([ADR 0049](../decisions/0049-base-coverage-threshold.md)), and isolated
+architecture fixtures before production activation.
 
 Architecture 16 creates no scheduler crate or dependency edge. Exact crate
 allocation remains activation-time work.

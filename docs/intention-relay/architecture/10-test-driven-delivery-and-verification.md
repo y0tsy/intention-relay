@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document makes TTD a delivery requirement for Intention Relay. It defines how architecture rules become executable checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. The mandatory pinned tooling, strict linting, coverage tiers, feature profiles, Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+This document makes TTD a delivery requirement for Intention Relay. It defines how architecture rules become executable checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. The mandatory pinned tooling, strict linting, the coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 It applies to every crate, vertical slice, and adapter.
 
@@ -45,7 +45,9 @@ Compilation is necessary but never sufficient acceptance evidence.
 
 For each implementation slice:
 
-1. reference the owning architecture document, crate coverage tier, and acceptance criteria;
+1. reference the owning architecture document, the applicable coverage
+   declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), and
+   acceptance criteria;
 2. add or update DTO/contract fixtures before implementation;
 3. add failing domain, architecture, and outcome tests appropriate to the slice;
 4. implement the smallest code that makes the intended tests pass;
@@ -101,7 +103,7 @@ Every planned crate must declare a test target before implementation. Minimum ex
 | Tauri, TUI | Shared-client contract tests and smoke flows over fixture daemon. |
 | composition root | Wiring smoke tests using explicit test configuration only. |
 
-The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated invariant, contract, failure mode, and outcome. Immediate tiered coverage targets are mandatory guardrails and are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
+The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated invariant, contract, failure mode, and outcome. The base 80% line-coverage threshold and the designated-files mechanism are mandatory guardrails defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
 
 ## M1 serialized-contract evidence
 
@@ -133,6 +135,9 @@ M3 activates Tier B `intention-application`, `intention-runtime`,
 line-coverage threshold defined in [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md). The threshold is necessary but
 never substitutes for the following required semantic evidence.
+This is the historical M3 record: the tier threshold below was the policy in
+force at M3, and [ADR 0049](../decisions/0049-base-coverage-threshold.md) later
+replaced the tiers with the base 80% line-coverage threshold.
 
 | M3 concern | Required test/evidence target | Required observable result |
 | --- | --- | --- |
@@ -327,7 +332,8 @@ real credential. It runs only under the explicit opt-in ([ADR
 
 Each completed implementation slice must report:
 
-- the architecture document, crate coverage tier, and acceptance criteria it implements;
+- the architecture document, the applicable coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), and acceptance criteria it implements;
 - tests added before or alongside behavior;
 - `make quick`, narrow, integration, and `make verify` checks run;
 - outcome scenarios covered;

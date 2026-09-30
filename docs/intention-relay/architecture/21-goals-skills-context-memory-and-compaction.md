@@ -456,7 +456,7 @@ Plan artifacts, direct MCP administration, Python/Jupyter process behavior,
 Cargo, Makefile/CI, or production activation.
 
 A later activating specification must declare exact crate owners, test targets,
-coverage tiers, feature profiles, storage/wire versions, retention/deletion/
+coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, storage/wire versions, retention/deletion/
 encryption policy, and intrinsic versus capacity bounds. It must pass `make
 quick`, `make verify`, and Linux/Windows CI, and cover:
 
