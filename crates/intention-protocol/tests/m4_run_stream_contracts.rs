@@ -8,8 +8,8 @@ use intention_domain::{
     RunEventTailPageDto, RunProjectionDto, RunSnapshotDto,
 };
 use intention_protocol::{
-    ProtocolCapabilityDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunSnapshotFrameDto,
-    RunStreamFrameDto, RunSubscriptionResponseDto, SubscribeRunCommandDto,
+    RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunSnapshotFrameDto, RunStreamFrameDto,
+    RunSubscriptionResponseDto, SubscribeRunCommandDto,
 };
 use intention_types::{
     ConfigRevisionId, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId,
@@ -115,10 +115,6 @@ fn run_stream_dtos_round_trip_and_preserve_all_resync_reasons() {
         );
     }
     assert!(serde_json::from_str::<RunResyncReasonDto>("\"future_reason\"").is_err());
-    assert_eq!(
-        ProtocolCapabilityDto::RunStreamSubscriptions,
-        ProtocolCapabilityDto::RunStreamSubscriptions
-    );
 }
 
 #[test]

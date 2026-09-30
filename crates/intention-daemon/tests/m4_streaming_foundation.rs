@@ -23,13 +23,14 @@ use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
 };
-#[cfg(feature = "test-support")]
-use intention_protocol::ProtocolResponsePayloadDto;
-#[cfg(feature = "test-support")]
-use intention_protocol::SubscribeRunCommandDto;
 use intention_protocol::{
     ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto,
     ProtocolQueryResultDto, SendUserTurnOutcomeDto,
+};
+#[cfg(feature = "test-support")]
+use intention_protocol::{
+    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    RunSubscriptionResponseDto, SubscribeRunCommandDto, decode_response, encode_request,
 };
 #[cfg(feature = "test-support")]
 use intention_runtime::ModelRunFirstAppendGate;
@@ -38,8 +39,6 @@ use intention_runtime::{
 };
 #[cfg(feature = "test-support")]
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
-#[cfg(feature = "test-support")]
-use intention_types::CorrelationIdDto;
 use intention_types::{RunId, SessionId, TimestampDto, TurnId};
 use tempfile::TempDir;
 
@@ -319,52 +318,50 @@ fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
 }
 
 #[cfg(feature = "test-support")]
-async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> RunId {
-    use intention_protocol::{
-        ProtocolHelloDto, ProtocolMessageDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
-    };
+async fn send_request_through_host(
+    endpoint: &LocalEndpoint,
+    adapter_name: &str,
+    request_id: u64,
+    payload: ProtocolRequestPayloadDto,
+) -> ProtocolResponsePayloadDto {
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
 
     let connection = AsyncLocalClientConnection::connect(endpoint)
         .await
-        .expect("ordinary client connects");
-    let (_remote, mut requests, mut responses) = connection
+        .expect("host client connects");
+    let (_remote, mut requests, mut messages) = connection
         .negotiate(
-            ProtocolHelloDto::new(
-                local_protocol_version(),
-                vec![
-                    intention_protocol::ProtocolCapabilityDto::SessionSubscriptions,
-                    intention_protocol::ProtocolCapabilityDto::CorrelatedRequests,
-                    intention_protocol::ProtocolCapabilityDto::DaemonHealth,
-                ],
-                "m4-host-command-test",
-            )
-            .expect("ordinary hello is valid"),
+            ProtocolHelloDto::new(local_protocol_version(), adapter_name)
+                .expect("host hello is valid"),
         )
         .await
-        .expect("ordinary client negotiates");
-    let correlation = CorrelationIdDto::new();
+        .expect("host client negotiates");
+    let method = ProtocolMethodDto::for_payload(&payload);
     requests
-        .send(&ProtocolRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation,
-            ProtocolMessageDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-                    SendUserTurnCommandDto::new(session_id, TurnId::new(), "host turn")
-                        .expect("turn is valid"),
-                )),
-            ),
-        ))
+        .send_message(&encode_request(request_id, payload))
         .await
-        .expect("host turn sends");
-    let response = responses
-        .receive()
+        .expect("host request sends");
+    let line = messages
+        .receive_line()
         .await
-        .expect("host turn response arrives");
-    assert_eq!(response.correlation_id(), correlation);
+        .expect("host response arrives");
+    decode_response(&line, method, request_id).expect("host response decodes")
+}
+
+#[cfg(feature = "test-support")]
+async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> RunId {
+    let response = send_request_through_host(
+        endpoint,
+        "m4-host-command-test",
+        1,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+            SendUserTurnCommandDto::new(session_id, TurnId::new(), "host turn")
+                .expect("turn is valid"),
+        )),
+    )
+    .await;
     let ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted)) =
-        response.message().payload()
+        response
     else {
         panic!("host accepts the turn")
     };
@@ -379,47 +376,17 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
 
 #[cfg(feature = "test-support")]
 async fn stop_run_through_host(endpoint: &LocalEndpoint, session_id: SessionId, run_id: RunId) {
-    use intention_protocol::{
-        ProtocolHelloDto, ProtocolMessageDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
-    };
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
-
-    let connection = AsyncLocalClientConnection::connect(endpoint)
-        .await
-        .expect("stop client connects");
-    let (_remote, mut requests, mut responses) = connection
-        .negotiate(
-            ProtocolHelloDto::new(
-                local_protocol_version(),
-                vec![
-                    intention_protocol::ProtocolCapabilityDto::SessionSubscriptions,
-                    intention_protocol::ProtocolCapabilityDto::CorrelatedRequests,
-                    intention_protocol::ProtocolCapabilityDto::DaemonHealth,
-                ],
-                "m4-host-stop-test",
-            )
-            .expect("stop hello is valid"),
-        )
-        .await
-        .expect("stop client negotiates");
-    let correlation = CorrelationIdDto::new();
-    requests
-        .send(&ProtocolRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation,
-            ProtocolMessageDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
-                    intention_domain::StopRunCommandDto::new(session_id, run_id),
-                )),
-            ),
-        ))
-        .await
-        .expect("stop request sends");
-    let response = responses.receive().await.expect("stop response arrives");
-    assert_eq!(response.correlation_id(), correlation);
+    let response = send_request_through_host(
+        endpoint,
+        "m4-host-stop-test",
+        1,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
+            intention_domain::StopRunCommandDto::new(session_id, run_id),
+        )),
+    )
+    .await;
     assert!(matches!(
-        response.message().payload(),
+        response,
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(_))
     ));
 }
@@ -430,51 +397,18 @@ async fn send_queued_turn_through_host(
     session_id: SessionId,
     turn_id: TurnId,
 ) {
-    use intention_protocol::{
-        ProtocolHelloDto, ProtocolMessageDto, ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto,
-    };
-    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
-
-    let connection = AsyncLocalClientConnection::connect(endpoint)
-        .await
-        .expect("queued-turn client connects");
-    let (_remote, mut requests, mut responses) = connection
-        .negotiate(
-            ProtocolHelloDto::new(
-                local_protocol_version(),
-                vec![
-                    intention_protocol::ProtocolCapabilityDto::SessionSubscriptions,
-                    intention_protocol::ProtocolCapabilityDto::CorrelatedRequests,
-                    intention_protocol::ProtocolCapabilityDto::DaemonHealth,
-                ],
-                "m4-host-queue-test",
-            )
-            .expect("queue hello is valid"),
-        )
-        .await
-        .expect("queued-turn client negotiates");
-    let correlation = CorrelationIdDto::new();
-    requests
-        .send(&ProtocolRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation,
-            ProtocolMessageDto::new(
-                intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-                    SendUserTurnCommandDto::new(session_id, turn_id, "queued host turn")
-                        .expect("queued turn is valid"),
-                )),
-            ),
-        ))
-        .await
-        .expect("queued turn sends");
-    let response = responses
-        .receive()
-        .await
-        .expect("queued turn response arrives");
-    assert_eq!(response.correlation_id(), correlation);
+    let response = send_request_through_host(
+        endpoint,
+        "m4-host-queue-test",
+        1,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+            SendUserTurnCommandDto::new(session_id, turn_id, "queued host turn")
+                .expect("queued turn is valid"),
+        )),
+    )
+    .await;
     assert!(matches!(
-        response.message().payload(),
+        response,
         ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
             if matches!(
                 accepted.result(),
@@ -947,76 +881,65 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         restarted,
         1,
     ));
-    use intention_protocol::{
-        ProtocolCapabilityDto, ProtocolHelloDto, ProtocolMessageDto,
-        RunSubscriptionRequestEnvelopeDto,
-    };
     use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
     let connection = AsyncLocalClientConnection::connect(&restart_endpoint)
         .await
         .expect("restart stream client connects");
-    let (_remote, mut requests, mut frames) = connection
-        .negotiate_daemon_frames(
-            ProtocolHelloDto::new(
-                local_protocol_version(),
-                vec![ProtocolCapabilityDto::RunStreamSubscriptions],
-                "m4-restart-redaction-test",
-            )
-            .expect("restart stream hello is valid"),
+    let (_remote, mut requests, mut messages) = connection
+        .negotiate(
+            ProtocolHelloDto::new(local_protocol_version(), "m4-restart-redaction-test")
+                .expect("restart stream hello is valid"),
         )
         .await
         .expect("restart stream client negotiates");
-    let replay_correlation = CorrelationIdDto::new();
     requests
-        .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            replay_correlation,
-            ProtocolMessageDto::new(
+        .send_message(&encode_request(
+            1,
+            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                SubscribeRunCommandDto::new(
-                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                    session_id,
-                    first_run,
-                    None,
-                ),
-            ),
+                session_id,
+                first_run,
+                None,
+            )),
         ))
         .await
         .expect("restart replay request sends");
-    let initial_frame = frames
-        .receive()
+    let initial_line = messages
+        .receive_line()
         .await
-        .expect("restart initial frame arrives");
-    let error_correlation = CorrelationIdDto::new();
+        .expect("restart initial response arrives");
+    let initial_frame = decode_response(&initial_line, ProtocolMethodDto::RunSubscribe, 1)
+        .expect("restart initial response decodes");
     requests
-        .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            error_correlation,
-            ProtocolMessageDto::new(
+        .send_message(&encode_request(
+            2,
+            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                SubscribeRunCommandDto::new(
-                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                    session_id,
-                    RunId::new(),
-                    None,
-                ),
-            ),
+                session_id,
+                RunId::new(),
+                None,
+            )),
         ))
         .await
         .expect("unknown-run request sends");
-    let transport_error_frame = frames.receive().await.expect("restart error frame arrives");
+    let error_line = messages
+        .receive_line()
+        .await
+        .expect("restart error response arrives");
+    let transport_error_frame = decode_response(&error_line, ProtocolMethodDto::RunSubscribe, 2)
+        .expect("restart error response decodes");
     let initial_frame_json =
         serde_json::to_string(&initial_frame).expect("initial frame serializes");
     let transport_error_json =
         serde_json::to_string(&transport_error_frame).expect("error frame serializes");
     assert!(matches!(
         initial_frame,
-        intention_protocol::ProtocolDaemonFrameDto::Response(_)
+        ProtocolResponsePayloadDto::RunSubscription(_)
     ));
     assert!(matches!(
         transport_error_frame,
-        intention_protocol::ProtocolDaemonFrameDto::Response(ref response)
-            if response.correlation_id() == error_correlation
+        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(ref error))
+            if error.code() == "run_replay_not_found"
     ));
     restart_server
         .await

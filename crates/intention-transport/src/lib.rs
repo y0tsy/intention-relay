@@ -1,8 +1,9 @@
-//! Framed, local-only IPC for Intention Relay.
+//! NDJSON-framed, local-only IPC for Intention Relay.
 //!
-//! The public surface accepts only `intention-protocol` DTOs. A bounded,
-//! length-prefixed JSON codec remains private to this crate, and the underlying
-//! Unix-domain socket or Windows named pipe never crosses its crate boundary.
+//! The public surface carries serialized JSON-RPC 2.0 envelopes defined by
+//! `intention-protocol`; one envelope is written per NDJSON line. Framing stays
+//! private to this crate, and the underlying Unix-domain socket or Windows
+//! named pipe never crosses its crate boundary.
 
 #[cfg(unix)]
 use std::fs;
@@ -12,8 +13,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use intention_protocol::{
-    ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolRequestEnvelopeDto,
-    ProtocolResponseEnvelopeDto, ProtocolVersionDto, RunSubscriptionRequestEnvelopeDto,
+    JsonRpcRequestDto, JsonRpcResponseDto, ProtocolHelloDto, ProtocolVersionDto,
+    decode_hello_request, decode_hello_response, encode_hello_request, encode_hello_response,
 };
 use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
 use interprocess::ConnectWaitMode;
@@ -29,8 +30,7 @@ use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use interprocess::local_socket::{ConnectOptions, GenericFilePath, ListenerOptions, PathNameType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-const FRAME_LENGTH_BYTES: usize = 4;
-const MAX_FRAME_BYTES: usize = 1_048_576;
+const MAX_MESSAGE_BYTES: usize = 1_048_576;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -154,9 +154,10 @@ fn platform_endpoint_path(instance_id: &str) -> DtoResult<PathBuf> {
     }
 }
 
-/// A local framed connection which exchanges only typed protocol DTOs.
+/// A local NDJSON connection carrying serialized JSON-RPC envelopes.
 pub struct LocalConnection {
     stream: LocalSocketStream,
+    residual: Vec<u8>,
 }
 
 impl LocalConnection {
@@ -184,67 +185,30 @@ impl LocalConnection {
             .connect_sync()
             .map_err(|_| unavailable("local_daemon_unavailable"))?;
         apply_sync_io_timeout(&stream, io_timeout)?;
-        Ok(Self { stream })
+        Ok(Self {
+            stream,
+            residual: Vec::new(),
+        })
     }
 
-    /// Writes one bounded request envelope.
+    /// Writes one bounded JSON message followed by a newline.
     ///
     /// # Errors
     ///
     /// Returns a typed unavailable error when the connected peer no longer
-    /// accepts data or the DTO cannot be encoded into the fixed protocol codec.
-    pub fn send_request(&mut self, request: &ProtocolRequestEnvelopeDto) -> DtoResult<()> {
-        write_frame(&mut self.stream, request)
+    /// accepts data or the message cannot be encoded.
+    pub fn send_message<T: serde::Serialize + ?Sized>(&mut self, value: &T) -> DtoResult<()> {
+        write_message(&mut self.stream, value)
     }
 
-    /// Reads one bounded request envelope.
+    /// Reads one bounded NDJSON line carrying one JSON-RPC envelope.
     ///
     /// # Errors
     ///
-    /// Returns a typed validation or unavailable error for malformed, oversized,
-    /// incomplete, or disconnected frames.
-    pub fn receive_request(&mut self) -> DtoResult<ProtocolRequestEnvelopeDto> {
-        read_frame(&mut self.stream)
-    }
-
-    /// Writes one bounded response envelope.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed unavailable error when the connected peer no longer
-    /// accepts data or the DTO cannot be encoded into the fixed protocol codec.
-    pub fn send_response(&mut self, response: &ProtocolResponseEnvelopeDto) -> DtoResult<()> {
-        write_frame(&mut self.stream, response)
-    }
-
-    /// Reads one bounded response envelope.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or unavailable error for malformed, oversized,
-    /// incomplete, or disconnected frames.
-    pub fn receive_response(&mut self) -> DtoResult<ProtocolResponseEnvelopeDto> {
-        read_frame(&mut self.stream)
-    }
-
-    /// Sends a typed protocol hello during connection negotiation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed unavailable error when the connection cannot send a
-    /// complete frame.
-    pub fn send_hello(&mut self, hello: &ProtocolHelloDto) -> DtoResult<()> {
-        write_frame(&mut self.stream, hello)
-    }
-
-    /// Receives a typed protocol hello during connection negotiation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or unavailable error for malformed, oversized,
-    /// incomplete, or disconnected frames.
-    pub fn receive_hello(&mut self) -> DtoResult<ProtocolHelloDto> {
-        read_frame(&mut self.stream)
+    /// Returns a typed validation or unavailable error for a malformed,
+    /// oversized, incomplete, or disconnected line.
+    pub fn receive_line(&mut self) -> DtoResult<String> {
+        read_line(&mut self.stream, &mut self.residual)
     }
 }
 
@@ -295,7 +259,10 @@ impl LocalListener {
             .accept()
             .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
         apply_sync_io_timeout(&stream, SYNC_IO_TIMEOUT)?;
-        Ok(LocalConnection { stream })
+        Ok(LocalConnection {
+            stream,
+            residual: Vec::new(),
+        })
     }
 }
 
@@ -371,7 +338,7 @@ impl AsyncLocalClientConnection {
     /// Exchanges the client hello and consumes the connection into client roles.
     ///
     /// The returned roles retain only the appropriate typed protocol direction:
-    /// requests flow to the daemon and responses flow from it.
+    /// requests flow to the daemon, and responses or notifications flow from it.
     ///
     /// # Errors
     ///
@@ -380,40 +347,19 @@ impl AsyncLocalClientConnection {
     pub async fn negotiate(
         mut self,
         local: ProtocolHelloDto,
-    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncResponseReceiver)> {
-        write_async_frame(&mut self.stream, &local).await?;
-        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        require_exact_protocol_version(local.version(), remote.version())?;
+    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncMessageReceiver)> {
+        let request = encode_hello_request(1, local);
+        write_async_message(&mut self.stream, &request).await?;
+        let mut residual = Vec::new();
+        let line = read_async_line(&mut self.stream, &mut residual).await?;
+        let response: JsonRpcResponseDto<ProtocolHelloDto> =
+            JsonRpcResponseDto::parse(&line).map_err(|error| error.to_error())?;
+        let remote = decode_hello_response(&response)?;
         let (receiver, sender) = self.stream.split();
         Ok((
             remote,
             AsyncRequestSender { sender },
-            AsyncResponseReceiver { receiver },
-        ))
-    }
-
-    /// Exchanges hello and consumes the connection into a daemon-frame receiver.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed incompatibility or safe framing/connection error when the
-    /// hello exchange cannot complete.
-    pub async fn negotiate_daemon_frames(
-        mut self,
-        local: ProtocolHelloDto,
-    ) -> DtoResult<(
-        ProtocolHelloDto,
-        AsyncRequestSender,
-        AsyncDaemonFrameReceiver,
-    )> {
-        write_async_frame(&mut self.stream, &local).await?;
-        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        require_exact_protocol_version(local.version(), remote.version())?;
-        let (receiver, sender) = self.stream.split();
-        Ok((
-            remote,
-            AsyncRequestSender { sender },
-            AsyncDaemonFrameReceiver { receiver },
+            AsyncMessageReceiver { receiver, residual },
         ))
     }
 }
@@ -424,98 +370,52 @@ pub struct AsyncLocalDaemonConnection {
 }
 
 impl AsyncLocalDaemonConnection {
-    /// Negotiates one connection and selects its typed response role from the
-    /// peer's declared run-stream capability.
-    ///
-    /// This keeps ordinary M3 peers on their established response framing while
-    /// allowing opt-in run-stream peers to receive daemon frames on the same
-    /// endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed incompatibility or framing error when hello negotiation
-    /// cannot complete.
-    pub async fn negotiate_by_capability(
-        mut self,
-        local: ProtocolHelloDto,
-    ) -> DtoResult<(ProtocolHelloDto, AsyncDaemonConnectionRoles)> {
-        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        require_exact_protocol_version(local.version(), remote.version())?;
-        write_async_frame(&mut self.stream, &local).await?;
-        let (receiver, sender) = self.stream.split();
-        let roles = if remote
-            .capabilities()
-            .contains(&intention_protocol::ProtocolCapabilityDto::RunStreamSubscriptions)
-        {
-            AsyncDaemonConnectionRoles::RunStream(
-                AsyncRequestReceiver { receiver },
-                AsyncDaemonFrameSender { sender },
-            )
-        } else {
-            AsyncDaemonConnectionRoles::Ordinary(
-                AsyncRequestReceiver { receiver },
-                AsyncResponseSender { sender },
-            )
-        };
-        Ok((remote, roles))
-    }
-
     /// Exchanges the daemon hello and consumes the connection into daemon roles.
     ///
     /// The returned roles retain only the appropriate typed protocol direction:
-    /// requests arrive from the client and responses flow back to it.
+    /// requests arrive from the client, and responses or notifications flow
+    /// back to it on the same connection.
     ///
     /// # Errors
     ///
     /// Returns a typed incompatibility or safe framing/connection error when the
-    /// hello exchange cannot complete.
+    /// hello exchange cannot complete. A malformed hello or a differing version
+    /// is answered with a typed JSON-RPC error before the connection closes.
     pub async fn negotiate(
         mut self,
         local: ProtocolHelloDto,
-    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestReceiver, AsyncResponseSender)> {
-        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        require_exact_protocol_version(local.version(), remote.version())?;
-        write_async_frame(&mut self.stream, &local).await?;
+    ) -> DtoResult<(ProtocolHelloDto, AsyncRequestReceiver, AsyncMessageSender)> {
+        let mut residual = Vec::new();
+        let line = read_async_line(&mut self.stream, &mut residual).await?;
+        let request: JsonRpcRequestDto<ProtocolHelloDto> = match JsonRpcRequestDto::parse(&line) {
+            Ok(request) => request,
+            Err(failure) => {
+                let (id, error) = failure.into_parts();
+                let reply = JsonRpcResponseDto::<ProtocolHelloDto>::error(id, error.clone());
+                let _ = write_async_message(&mut self.stream, &reply).await;
+                return Err(error.to_error());
+            }
+        };
+        let remote = match decode_hello_request(&request) {
+            Ok(remote) => remote,
+            Err(error) => {
+                let reply = JsonRpcResponseDto::<ProtocolHelloDto>::error(
+                    Some(request.id()),
+                    error.clone(),
+                );
+                let _ = write_async_message(&mut self.stream, &reply).await;
+                return Err(error.to_error());
+            }
+        };
+        let response = encode_hello_response(request.id(), local);
+        write_async_message(&mut self.stream, &response).await?;
         let (receiver, sender) = self.stream.split();
         Ok((
             remote,
-            AsyncRequestReceiver { receiver },
-            AsyncResponseSender { sender },
+            AsyncRequestReceiver { receiver, residual },
+            AsyncMessageSender { sender },
         ))
     }
-
-    /// Exchanges hello and consumes the connection into a daemon-frame sender.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed incompatibility or safe framing/connection error when the
-    /// hello exchange cannot complete.
-    pub async fn negotiate_daemon_frames(
-        mut self,
-        local: ProtocolHelloDto,
-    ) -> DtoResult<(
-        ProtocolHelloDto,
-        AsyncRequestReceiver,
-        AsyncDaemonFrameSender,
-    )> {
-        let remote: ProtocolHelloDto = read_async_frame(&mut self.stream).await?;
-        require_exact_protocol_version(local.version(), remote.version())?;
-        write_async_frame(&mut self.stream, &local).await?;
-        let (receiver, sender) = self.stream.split();
-        Ok((
-            remote,
-            AsyncRequestReceiver { receiver },
-            AsyncDaemonFrameSender { sender },
-        ))
-    }
-}
-
-/// Opaque daemon roles selected after the peer's hello capabilities are known.
-pub enum AsyncDaemonConnectionRoles {
-    /// The retained correlated M3 response roles.
-    Ordinary(AsyncRequestReceiver, AsyncResponseSender),
-    /// The opt-in correlated-response plus uncorrelated-stream roles.
-    RunStream(AsyncRequestReceiver, AsyncDaemonFrameSender),
 }
 
 /// The client-to-daemon half of an established asynchronous connection.
@@ -524,116 +424,69 @@ pub struct AsyncRequestSender {
 }
 
 impl AsyncRequestSender {
-    /// Sends one bounded correlated protocol request.
+    /// Sends one bounded JSON message.
     ///
     /// # Errors
     ///
-    /// Returns a safe framing or connection error when the request cannot be sent.
-    pub async fn send(&mut self, request: &ProtocolRequestEnvelopeDto) -> DtoResult<()> {
-        write_async_frame(&mut self.sender, request).await
-    }
-
-    /// Sends a correlated run subscription request on this established connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the request cannot be sent.
-    pub async fn send_run_subscription(
+    /// Returns a safe framing or connection error when the message cannot be sent.
+    pub async fn send_message<T: serde::Serialize + Sync + ?Sized>(
         &mut self,
-        request: &RunSubscriptionRequestEnvelopeDto,
+        value: &T,
     ) -> DtoResult<()> {
-        write_async_frame(&mut self.sender, request).await
+        write_async_message(&mut self.sender, value).await
     }
 }
 
-/// The daemon-to-client half of an established asynchronous connection.
-pub struct AsyncResponseReceiver {
+/// The daemon-to-client half that receives responses and notifications.
+pub struct AsyncMessageReceiver {
     receiver: TokioRecvHalf,
+    residual: Vec<u8>,
 }
 
-impl AsyncResponseReceiver {
-    /// Receives one bounded correlated protocol response.
+impl AsyncMessageReceiver {
+    /// Receives one bounded NDJSON line carrying one JSON-RPC envelope.
     ///
     /// # Errors
     ///
-    /// Returns a safe framing or connection error when the response cannot be read.
-    pub async fn receive(&mut self) -> DtoResult<ProtocolResponseEnvelopeDto> {
-        read_async_frame(&mut self.receiver).await
+    /// Returns a safe framing or connection error when the line cannot be read.
+    pub async fn receive_line(&mut self) -> DtoResult<String> {
+        read_async_line(&mut self.receiver, &mut self.residual).await
     }
 }
 
 /// The client-to-daemon half that receives established requests.
 pub struct AsyncRequestReceiver {
     receiver: TokioRecvHalf,
+    residual: Vec<u8>,
 }
 
 impl AsyncRequestReceiver {
-    /// Receives one bounded correlated protocol request.
+    /// Receives one bounded NDJSON line carrying one JSON-RPC request.
     ///
     /// # Errors
     ///
-    /// Returns a safe framing or connection error when the request cannot be read.
-    pub async fn receive(&mut self) -> DtoResult<ProtocolRequestEnvelopeDto> {
-        read_async_frame(&mut self.receiver).await
+    /// Returns a safe framing or connection error when the line cannot be read.
+    pub async fn receive_line(&mut self) -> DtoResult<String> {
+        read_async_line(&mut self.receiver, &mut self.residual).await
     }
+}
 
-    /// Receives a correlated run subscription request on this established connection.
+/// The daemon-to-client half that sends responses and notifications.
+pub struct AsyncMessageSender {
+    sender: TokioSendHalf,
+}
+
+impl AsyncMessageSender {
+    /// Sends one bounded JSON message.
     ///
     /// # Errors
     ///
-    /// Returns a safe framing or connection error when the request cannot be read.
-    pub async fn receive_run_subscription(
+    /// Returns a safe framing or connection error when the message cannot be sent.
+    pub async fn send_message<T: serde::Serialize + Sync + ?Sized>(
         &mut self,
-    ) -> DtoResult<RunSubscriptionRequestEnvelopeDto> {
-        read_async_frame(&mut self.receiver).await
-    }
-}
-
-/// The daemon-to-client half that sends established responses.
-pub struct AsyncResponseSender {
-    sender: TokioSendHalf,
-}
-
-impl AsyncResponseSender {
-    /// Sends one bounded correlated protocol response.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the response cannot be sent.
-    pub async fn send(&mut self, response: &ProtocolResponseEnvelopeDto) -> DtoResult<()> {
-        write_async_frame(&mut self.sender, response).await
-    }
-}
-
-/// The client-side receive role for correlated responses and uncorrelated stream frames.
-pub struct AsyncDaemonFrameReceiver {
-    receiver: TokioRecvHalf,
-}
-
-impl AsyncDaemonFrameReceiver {
-    /// Receives one bounded daemon-originated frame.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the frame cannot be read.
-    pub async fn receive(&mut self) -> DtoResult<ProtocolDaemonFrameDto> {
-        read_async_frame(&mut self.receiver).await
-    }
-}
-
-/// The daemon-side send role for correlated responses and uncorrelated stream frames.
-pub struct AsyncDaemonFrameSender {
-    sender: TokioSendHalf,
-}
-
-impl AsyncDaemonFrameSender {
-    /// Sends one bounded daemon-originated frame.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe framing or connection error when the frame cannot be sent.
-    pub async fn send(&mut self, frame: &ProtocolDaemonFrameDto) -> DtoResult<()> {
-        write_async_frame(&mut self.sender, frame).await
+        value: &T,
+    ) -> DtoResult<()> {
+        write_async_message(&mut self.sender, value).await
     }
 }
 
@@ -641,62 +494,62 @@ impl AsyncDaemonFrameSender {
 ///
 /// # Errors
 ///
-/// Returns the typed protocol mismatch error when the peer protocol version
-/// differs from the current version, or a typed transport error when the
-/// handshake cannot complete.
+/// Returns the typed error carried by a version-mismatch response, or a typed
+/// transport error when the handshake cannot complete.
 pub fn negotiate_client(
     connection: &mut LocalConnection,
     local: ProtocolHelloDto,
 ) -> DtoResult<ProtocolHelloDto> {
-    connection.send_hello(&local)?;
-    let remote = connection.receive_hello()?;
-    require_exact_protocol_version(local.version(), remote.version())?;
-    Ok(remote)
+    let request = encode_hello_request(1, local);
+    connection.send_message(&request)?;
+    let line = connection.receive_line()?;
+    let response: JsonRpcResponseDto<ProtocolHelloDto> =
+        JsonRpcResponseDto::parse(&line).map_err(|error| error.to_error())?;
+    decode_hello_response(&response)
 }
 
 /// Performs the daemon side of the mandatory hello exchange.
 ///
+/// A malformed hello or a differing version is answered with a typed JSON-RPC
+/// error before this function returns.
+///
 /// # Errors
 ///
-/// Returns the typed protocol mismatch error when the peer protocol version
-/// differs from the current version, or a typed transport error when the
-/// handshake cannot complete.
+/// Returns the typed error that was sent to the peer, or a typed transport
+/// error when the handshake cannot complete.
 pub fn negotiate_daemon(
     connection: &mut LocalConnection,
     local: ProtocolHelloDto,
 ) -> DtoResult<ProtocolHelloDto> {
-    let remote = connection.receive_hello()?;
-    require_exact_protocol_version(local.version(), remote.version())?;
-    connection.send_hello(&local)?;
-    Ok(remote)
+    let line = connection.receive_line()?;
+    let request: JsonRpcRequestDto<ProtocolHelloDto> = match JsonRpcRequestDto::parse(&line) {
+        Ok(request) => request,
+        Err(failure) => {
+            let (id, error) = failure.into_parts();
+            let reply = JsonRpcResponseDto::<ProtocolHelloDto>::error(id, error.clone());
+            let _ = connection.send_message(&reply);
+            return Err(error.to_error());
+        }
+    };
+    match decode_hello_request(&request) {
+        Ok(remote) => {
+            let response = encode_hello_response(request.id(), local);
+            connection.send_message(&response)?;
+            Ok(remote)
+        }
+        Err(error) => {
+            let reply =
+                JsonRpcResponseDto::<ProtocolHelloDto>::error(Some(request.id()), error.clone());
+            let _ = connection.send_message(&reply);
+            Err(error.to_error())
+        }
+    }
 }
 
 /// Returns the currently implemented local protocol version.
 #[must_use]
 pub const fn local_protocol_version() -> ProtocolVersionDto {
     intention_protocol::CURRENT_PROTOCOL_VERSION
-}
-
-/// Requires the peer hello to carry the exact current protocol version.
-///
-/// # Errors
-///
-/// Returns an unavailable error when either peer version differs from
-/// [`intention_protocol::CURRENT_PROTOCOL_VERSION`].
-fn require_exact_protocol_version(
-    local: ProtocolVersionDto,
-    remote: ProtocolVersionDto,
-) -> DtoResult<()> {
-    if local != remote
-        || local != intention_protocol::CURRENT_PROTOCOL_VERSION
-        || remote != intention_protocol::CURRENT_PROTOCOL_VERSION
-    {
-        return Err(ErrorDto::unavailable(
-            "incompatible_protocol_version",
-            "protocol version must equal the current version",
-        ));
-    }
-    Ok(())
 }
 
 fn listener_options(endpoint: &LocalEndpoint) -> DtoResult<ListenerOptions<'_>> {
@@ -737,72 +590,45 @@ const fn prepare_parent_directory(_endpoint: &LocalEndpoint) -> DtoResult<()> {
     Ok(())
 }
 
-fn write_frame<T: serde::Serialize>(stream: &mut LocalSocketStream, value: &T) -> DtoResult<()> {
-    let payload = serde_json::to_vec(value).map_err(|_| {
-        ErrorDto::validation(
-            "local_protocol_encode_failed",
-            "a typed local protocol message could not be encoded",
-        )
-    })?;
-    let length = u32::try_from(payload.len()).map_err(|_| oversized_frame())?;
-    if payload.len() > MAX_FRAME_BYTES {
-        return Err(oversized_frame());
-    }
+fn write_message<T: serde::Serialize + ?Sized>(
+    stream: &mut LocalSocketStream,
+    value: &T,
+) -> DtoResult<()> {
+    let mut payload = encode_message(value)?;
+    payload.push(b'\n');
     stream
-        .write_all(&length.to_be_bytes())
-        .and_then(|_| stream.write_all(&payload))
-        .and_then(|_| stream.flush())
+        .write_all(&payload)
+        .and_then(|()| stream.flush())
         .map_err(|_| unavailable("local_daemon_connection_unavailable"))
 }
 
-fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut LocalSocketStream) -> DtoResult<T> {
-    let mut header = [0_u8; FRAME_LENGTH_BYTES];
-    stream
-        .read_exact(&mut header)
-        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
-    let length = usize::try_from(u32::from_be_bytes(header)).map_err(|_| oversized_frame())?;
-    if length > MAX_FRAME_BYTES {
-        return Err(oversized_frame());
+fn read_line(stream: &mut LocalSocketStream, residual: &mut Vec<u8>) -> DtoResult<String> {
+    loop {
+        if let Some(position) = residual.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = residual.drain(..position).collect();
+            residual.drain(..1);
+            return decode_line(line);
+        }
+        let mut chunk = [0_u8; 8192];
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+        if read == 0 {
+            return Err(unavailable("local_daemon_connection_unavailable"));
+        }
+        residual.extend_from_slice(&chunk[..read]);
+        if residual.len() > MAX_MESSAGE_BYTES {
+            return Err(oversized_message());
+        }
     }
-    let mut payload = vec![0_u8; length];
-    stream
-        .read_exact(&mut payload)
-        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
-    serde_json::from_slice(&payload).map_err(|_| {
-        ErrorDto::validation(
-            "invalid_local_protocol_frame",
-            "a local protocol frame was invalid",
-        )
-    })
 }
 
-async fn timeout_async_connect<T>(
-    timeout: Duration,
-    connect: impl Future<Output = std::io::Result<T>>,
-) -> std::io::Result<T> {
-    tokio::time::timeout(timeout, connect)
-        .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "local connect timed out"))?
-}
-
-async fn write_async_frame<T: serde::Serialize + Sync>(
+async fn write_async_message<T: serde::Serialize + Sync + ?Sized>(
     stream: &mut (impl AsyncWrite + Send + Unpin),
     value: &T,
 ) -> DtoResult<()> {
-    let payload = serde_json::to_vec(value).map_err(|_| {
-        ErrorDto::validation(
-            "local_protocol_encode_failed",
-            "a typed local protocol message could not be encoded",
-        )
-    })?;
-    let length = u32::try_from(payload.len()).map_err(|_| oversized_frame())?;
-    if payload.len() > MAX_FRAME_BYTES {
-        return Err(oversized_frame());
-    }
-    stream
-        .write_all(&length.to_be_bytes())
-        .await
-        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+    let mut payload = encode_message(value)?;
+    payload.push(b'\n');
     stream
         .write_all(&payload)
         .await
@@ -813,24 +639,49 @@ async fn write_async_frame<T: serde::Serialize + Sync>(
         .map_err(|_| unavailable("local_daemon_connection_unavailable"))
 }
 
-async fn read_async_frame<T: serde::de::DeserializeOwned>(
+async fn read_async_line(
     stream: &mut (impl AsyncRead + Send + Unpin),
-) -> DtoResult<T> {
-    let mut header = [0_u8; FRAME_LENGTH_BYTES];
-    stream
-        .read_exact(&mut header)
-        .await
-        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
-    let length = usize::try_from(u32::from_be_bytes(header)).map_err(|_| oversized_frame())?;
-    if length > MAX_FRAME_BYTES {
-        return Err(oversized_frame());
+    residual: &mut Vec<u8>,
+) -> DtoResult<String> {
+    loop {
+        if let Some(position) = residual.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = residual.drain(..position).collect();
+            residual.drain(..1);
+            return decode_line(line);
+        }
+        let mut chunk = [0_u8; 8192];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
+        if read == 0 {
+            return Err(unavailable("local_daemon_connection_unavailable"));
+        }
+        residual.extend_from_slice(&chunk[..read]);
+        if residual.len() > MAX_MESSAGE_BYTES {
+            return Err(oversized_message());
+        }
     }
-    let mut payload = vec![0_u8; length];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(|_| unavailable("local_daemon_connection_unavailable"))?;
-    serde_json::from_slice(&payload).map_err(|_| {
+}
+
+fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>> {
+    let payload = serde_json::to_vec(value).map_err(|_| {
+        ErrorDto::validation(
+            "local_protocol_encode_failed",
+            "a typed local protocol message could not be encoded",
+        )
+    })?;
+    if payload.len() > MAX_MESSAGE_BYTES {
+        return Err(oversized_message());
+    }
+    Ok(payload)
+}
+
+fn decode_line(line: Vec<u8>) -> DtoResult<String> {
+    if line.len() > MAX_MESSAGE_BYTES {
+        return Err(oversized_message());
+    }
+    String::from_utf8(line).map_err(|_| {
         ErrorDto::validation(
             "invalid_local_protocol_frame",
             "a local protocol frame was invalid",
@@ -838,11 +689,20 @@ async fn read_async_frame<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn oversized_frame() -> ErrorDto {
+fn oversized_message() -> ErrorDto {
     ErrorDto::validation(
         "local_protocol_frame_too_large",
         "a local protocol frame exceeded the configured limit",
     )
+}
+
+async fn timeout_async_connect<T>(
+    timeout: Duration,
+    connect: impl Future<Output = std::io::Result<T>>,
+) -> std::io::Result<T> {
+    tokio::time::timeout(timeout, connect)
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "local connect timed out"))?
 }
 
 fn unavailable(code: &'static str) -> ErrorDto {
@@ -1273,7 +1133,7 @@ mod tests {
                 .expect("client connects");
         let started = std::time::Instant::now();
         let error = client
-            .receive_hello()
+            .receive_line()
             .expect_err("a silent peer must fail closed");
         assert_eq!(error.code(), "local_daemon_connection_unavailable");
         assert!(
@@ -1325,66 +1185,54 @@ mod tests {
     }
 
     #[test]
-    fn receive_request_rejects_oversized_malformed_and_incomplete_frames() {
-        for frame in [
-            (
-                u32::try_from(MAX_FRAME_BYTES + 1).expect("frame length fits"),
-                Vec::new(),
-            ),
-            (3, b"{".to_vec()),
-            (8, b"{}".to_vec()),
-        ] {
-            let endpoint = endpoint();
-            let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
-            let server = thread::spawn(move || {
-                let mut connection = listener.accept().expect("server accepts");
-                connection
-                    .receive_request()
-                    .expect_err("invalid frame is rejected")
-            });
-            let mut client = LocalConnection::connect(&endpoint).expect("client connects");
-            client
-                .stream
-                .write_all(&frame.0.to_be_bytes())
-                .and_then(|_| client.stream.write_all(&frame.1))
-                .expect("raw fixture frame writes");
-            drop(client);
-            let error = server.join().expect("server completes");
-            assert!(matches!(
-                error.code(),
-                "local_protocol_frame_too_large"
-                    | "invalid_local_protocol_frame"
-                    | "local_daemon_connection_unavailable"
-            ));
-        }
+    fn receive_line_rejects_an_oversized_line() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = thread::spawn(move || {
+            let mut connection = listener.accept().expect("server accepts");
+            connection
+                .receive_line()
+                .expect_err("an oversized line is rejected")
+        });
+        let mut client = LocalConnection::connect(&endpoint).expect("client connects");
+        client
+            .stream
+            .write_all(&vec![b'x'; MAX_MESSAGE_BYTES + 1])
+            .expect("raw oversized line writes");
+        drop(client);
+        let error = server.join().expect("server completes");
+        assert_eq!(error.code(), "local_protocol_frame_too_large");
+    }
+
+    #[test]
+    fn receive_line_rejects_a_truncated_line() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = thread::spawn(move || {
+            let mut connection = listener.accept().expect("server accepts");
+            connection
+                .receive_line()
+                .expect_err("a truncated line is rejected")
+        });
+        let mut client = LocalConnection::connect(&endpoint).expect("client connects");
+        client
+            .stream
+            .write_all(b"{\"jsonrpc\":\"2.0\"")
+            .expect("raw partial line writes");
+        drop(client);
+        let error = server.join().expect("server completes");
+        assert_eq!(error.code(), "local_daemon_connection_unavailable");
     }
 
     #[tokio::test]
-    async fn async_negotiation_rejects_oversized_malformed_and_truncated_frames() {
-        for (header, payload, expected_code) in [
+    async fn daemon_negotiation_rejects_oversized_malformed_and_truncated_lines() {
+        for (line, expected_code) in [
             (
-                u32::try_from(MAX_FRAME_BYTES + 1)
-                    .expect("frame length fits")
-                    .to_be_bytes()
-                    .to_vec(),
-                Vec::new(),
+                vec![b'x'; MAX_MESSAGE_BYTES + 1],
                 "local_protocol_frame_too_large",
             ),
-            (
-                3_u32.to_be_bytes().to_vec(),
-                b"bad".to_vec(),
-                "invalid_local_protocol_frame",
-            ),
-            (
-                8_u32.to_be_bytes().to_vec(),
-                b"{}".to_vec(),
-                "local_daemon_connection_unavailable",
-            ),
-            (
-                vec![0_u8, 0_u8],
-                Vec::new(),
-                "local_daemon_connection_unavailable",
-            ),
+            (b"not json\n".to_vec(), "jsonrpc_parse_error"),
+            (b"{}\n".to_vec(), "jsonrpc_invalid_request"),
         ] {
             let endpoint = endpoint();
             let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
@@ -1392,12 +1240,12 @@ mod tests {
                 let connection = listener.accept().await.expect("server accepts");
                 match connection
                     .negotiate(
-                        ProtocolHelloDto::new(local_protocol_version(), Vec::new(), "async-server")
+                        ProtocolHelloDto::new(local_protocol_version(), "async-server")
                             .expect("fixture hello is valid"),
                     )
                     .await
                 {
-                    Ok(_) => panic!("invalid hello frame is rejected"),
+                    Ok(_) => panic!("an invalid hello line is rejected"),
                     Err(error) => error,
                 }
             });
@@ -1411,15 +1259,104 @@ mod tests {
                 .connect_tokio()
                 .await
                 .expect("raw client connects");
-            client.write_all(&header).await.expect("raw header writes");
             client
-                .write_all(&payload)
+                .write_all(&line)
                 .await
-                .expect("raw payload writes");
+                .expect("raw fixture line writes");
             drop(client);
             let error = server.await.expect("server completes");
             assert_eq!(error.code(), expected_code);
         }
+
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(async move {
+            let connection = listener.accept().await.expect("server accepts");
+            match connection
+                .negotiate(
+                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
+                        .expect("fixture hello is valid"),
+                )
+                .await
+            {
+                Ok(_) => panic!("a truncated hello line is rejected"),
+                Err(error) => error,
+            }
+        });
+        let mut client = ConnectOptions::new()
+            .name(
+                endpoint
+                    .socket_name()
+                    .expect("fixture socket name is valid"),
+            )
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+            .connect_tokio()
+            .await
+            .expect("raw client connects");
+        client
+            .write_all(b"{\"jsonrpc\":\"2.0\"")
+            .await
+            .expect("raw partial line writes");
+        drop(client);
+        let error = server.await.expect("server completes");
+        assert_eq!(error.code(), "local_daemon_connection_unavailable");
+    }
+
+    #[tokio::test]
+    async fn daemon_hello_answers_a_version_mismatch_with_a_typed_error() {
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(async move {
+            let connection = listener.accept().await.expect("server accepts");
+            match connection
+                .negotiate(
+                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
+                        .expect("fixture hello is valid"),
+                )
+                .await
+            {
+                Ok(_) => panic!("a stale peer is rejected"),
+                Err(error) => error,
+            }
+        });
+        let mut client = ConnectOptions::new()
+            .name(
+                endpoint
+                    .socket_name()
+                    .expect("fixture socket name is valid"),
+            )
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+            .connect_tokio()
+            .await
+            .expect("raw client connects");
+        client
+            .write_all(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{\"version\":{\"major\":1,\"minor\":1},\"adapter_name\":\"old\"}}\n",
+            )
+            .await
+            .expect("raw stale hello writes");
+        let mut reply = Vec::new();
+        let mut byte = [0_u8; 1];
+        loop {
+            client.read_exact(&mut byte).await.expect("reply reads");
+            if byte[0] == b'\n' {
+                break;
+            }
+            reply.push(byte[0]);
+        }
+        let line = String::from_utf8(reply).expect("reply is UTF-8");
+        let response: JsonRpcResponseDto<ProtocolHelloDto> =
+            JsonRpcResponseDto::parse(&line).expect("error response parses");
+        let error = response.error_value().expect("an error object is present");
+        assert_eq!(error.code(), intention_protocol::JSONRPC_VERSION_MISMATCH);
+        assert_eq!(
+            error.data().map(intention_types::ErrorDto::code),
+            Some("incompatible_protocol_version")
+        );
+        assert_eq!(
+            server.await.expect("server completes").code(),
+            "incompatible_protocol_version"
+        );
     }
 
     #[tokio::test]
@@ -1430,7 +1367,7 @@ mod tests {
             let connection = listener.accept().await.expect("server accepts");
             match connection
                 .negotiate(
-                    ProtocolHelloDto::new(local_protocol_version(), Vec::new(), "async-server")
+                    ProtocolHelloDto::new(local_protocol_version(), "async-server")
                         .expect("fixture hello is valid"),
                 )
                 .await
@@ -1442,12 +1379,9 @@ mod tests {
         let connection = AsyncLocalClientConnection::connect(&endpoint)
             .await
             .expect("client connects");
-        let oversized = ProtocolHelloDto::new(
-            local_protocol_version(),
-            Vec::new(),
-            "x".repeat(MAX_FRAME_BYTES + 1),
-        )
-        .expect("non-empty fixture hello is valid");
+        let oversized =
+            ProtocolHelloDto::new(local_protocol_version(), "x".repeat(MAX_MESSAGE_BYTES + 1))
+                .expect("non-empty fixture hello is valid");
         let error = match connection.negotiate(oversized).await {
             Ok(_) => panic!("oversized outbound hello is rejected"),
             Err(error) => error,
@@ -1460,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn receive_hello_reports_a_typed_error_when_peer_disconnects() {
+    fn receive_line_reports_a_typed_error_when_peer_disconnects() {
         let endpoint = endpoint();
         let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = thread::spawn(move || {
@@ -1469,7 +1403,7 @@ mod tests {
         });
         let mut client = LocalConnection::connect(&endpoint).expect("client connects");
         server.join().expect("server completes");
-        let error = client.receive_hello().expect_err("closed peer is typed");
+        let error = client.receive_line().expect_err("closed peer is typed");
         assert_eq!(error.code(), "local_daemon_connection_unavailable");
     }
 }
