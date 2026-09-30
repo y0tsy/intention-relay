@@ -22,7 +22,7 @@ listener, storage migration, wire implementation, process supervisor, or
 production kernel execution.
 
 It applies only to future Mandate and VerifierMandate execution. M3/M4 bytes,
-IDs, UUIDs, digests, cursors, events, snapshots, queue tickets, provider
+IDs, UUIDs, cursors, events, snapshots, queue tickets, provider
 behavior, replay, recovery, and M4 `ToolCallRecorded -> tool_execution_unavailable`
 retain their recorded ordinary semantics. Retained session-scoped IPython/RLM
 material remains research provenance and historical-only where it conflicts with
@@ -31,12 +31,12 @@ architectures 13--19.
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact
-reconciliation. Architecture 14 owns canonical execution meaning and decode
-compatibility. Architecture 15 owns registry selection, direct tool admission,
+reconciliation. Architecture 14 is the historical record of the removed execution-meaning
+machinery (ADR 0046). Architecture 15 owns registry selection, direct tool admission,
 `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication.
 Architecture 16 owns readiness-driven admission. Architecture 17 owns child
 graph and verifier authority. Architecture 18 owns MCP lifecycle. Architecture
-19 owns bridge negotiation, grants, operation identity, ingress, delivery, and
+19 owns bridge attachment, grants, operation identity, ingress, delivery, and
 bridge recovery.
 
 This document owns only private sidecar creation/disposal, kernel epochs,
@@ -60,8 +60,9 @@ provenance, not future Mandate policy.
 
 ## Immutable selection and run scope
 
-Architecture 14 owns canonical framing. This document owns the semantic fields
-of the credential-free kernel selection in future Mandate execution meaning:
+This document owns the semantic fields
+of the credential-free kernel selection in future Mandate execution meaning
+(typed serde JSON, ADR 0046):
 
 ```text
 MandateKernelSelectionV1
@@ -74,7 +75,6 @@ MandateKernelSelectionV1
   host_request_contract_revision
   safe_projection_revision
   script_library_reference
-  canonical_kernel_selection_digest
 ```
 
 The selection freezes executable contract, never a live process or namespace. It
@@ -86,9 +86,9 @@ work before process creation or restoration and never falls back to current stat
 
 One additive bounded reference joins the selection: `script_library_reference`
 points at a `KernelScriptLibraryV1` value (contract, import-surface, and evidence
-revisions plus the canonical library digest over the logical workspace-relative
+revisions for the logical workspace-relative
 path `.ir/scripts`, [ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)).
-It is credential-free and content-free, carries no absolute, canonical, or
+It is credential-free and content-free, carries no absolute or
 symlink-target path, and its absence means an empty import surface.
 
 One live `KernelEpochId` belongs to exactly one admitted `RunId`. It is created
@@ -130,7 +130,7 @@ KernelExecutionBindingV1
   model_step_id
   kernel_selection_reference
   kernel_epoch_id
-  typed_source_digest
+  typed_source_reference
   operation_identity
   attempt_reference
 ```
@@ -174,11 +174,13 @@ epoch, task, or host-request resource, and no selection, cell, or checkpoint
 carries its source.
 
 An epoch's import surface is exactly the library directory named by
-`script_library_reference`: the parent, the workspace root, a second library, and
-any outside path never enter it, and the directory joins the surface only after
-the workspace boundary check proves it inside the session root. A missing library
+`script_library_reference`: the parent, the workspace root as a second library,
+and any other path never enter it. The directory is addressed as
+`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and
+not a security boundary (ADR 0047), so no lexical symlink or containment check
+gates the surface. A missing library
 directory yields an empty import surface, so a project without saved modules
-behaves as if the capability were absent. A boundary or symbolic-link escape fails
+behaves as if the capability were absent. An unreadable library directory fails
 before effect with `kernel_script_library_unavailable`. Python-level import errors
 inside a cell stay ordinary safe `Error` output under the closed text-only
 projection.
@@ -189,14 +191,14 @@ and the trusted-local model is unchanged: library code is project material, not 
 sandbox, and direct Python OS APIs remain outside the facade.
 
 Every foreground cell that imports library modules records bounded script-import
-evidence: for each imported module the logical workspace-relative path and the
-content digest, inside bounded counts and sizes. Evidence contains no source text,
-no absolute, canonical, or symlink-target path, and no Python value, and it is
+evidence: for each imported module the logical workspace-relative path, inside
+bounded counts and sizes. Evidence contains no source text,
+no absolute or symlink-target path, and no Python value, and it is
 published as run facts through architecture 15's post-commit publication gate under
 this document's cell rules. Evidence that cannot be represented inside its bounds
 fails before publication with `kernel_script_library_unavailable`; it is never
-truncated, sampled, or stringified. Verified checkpoint metadata may carry the
-canonical library digest as safe verification metadata, while checkpoint payload
+truncated, sampled, or stringified. Verified checkpoint metadata may record the
+script-library reference as safe verification metadata, while checkpoint payload
 and metadata keep excluding script source and any executable payload. Deleting a
 module stays an explicit user or agent action through the ordinary tools; idle
 disposal, checkpoint promotion, and restart never collect one.
@@ -219,18 +221,16 @@ KernelCheckpointMetadataV1
   source_run_id
   source_mandate_revision
   parent_checkpoint_reference
-  payload_digest
   bounded_size
   verification_status
   omission_summary
-  canonical_metadata_digest
 ```
 
 Payload is deterministic, typed, versioned, bounded, and private. It contains no
 executable payload, open file/process/socket/task handle, provider/MCP/Jupyter
 resource, bridge grant, credential, endpoint, raw traceback, or implementation
-resource. Verified metadata may additionally carry the canonical project
-script-library digest
+resource. Verified metadata may additionally carry the project
+script-library reference
 ([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the
 payload never carries script source. Unsupported values are explicitly omitted
 with safe metadata, never guessed or stringified. Payload, metadata,
@@ -284,11 +284,11 @@ widens verifier authority or mutates a target. Kernel-originated MCP work still
 uses the fixed `mcp` slot through architectures 19, 15, and 18; checkpoints never
 contain live MCP state and later runs reacquire capabilities.
 
-Future kernel delivery is separately negotiated, correlated initial replay or
-typed resync/error followed by history-before-live frames under existing durable
-sequence owners. It is read-only: replay/reconnect cannot create a kernel,
-restore a namespace, execute a cell, issue a grant, repeat a host request, start
-a child, or invoke MCP. Unnegotiated peers fail closed.
+Future kernel delivery uses typed JSON-RPC 2.0 methods (ADR 0045): correlated
+results or typed resync/error followed by history-before-live notifications under
+existing durable sequence owners. It is read-only: replay/reconnect cannot create
+a kernel, restore a namespace, execute a cell, issue a grant, repeat a host
+request, start a child, or invoke MCP. Partial delivery is never permitted.
 
 M3/M4 and retained IPython/RLM records gain no kernel selection, epoch,
 checkpoint, grant, operation, Mandate, child, verifier, MCP, activity, policy, or
@@ -347,14 +347,14 @@ contain only safe status, bounded sizes, failure codes, and correlation
 references; they never include raw output, Python values, tracebacks, frames,
 or implementation resources.
 
-The first-scope canonical checkpoint representation is `kernel-state-snapshot-v1`:
+The first-scope checkpoint representation is `kernel-state-snapshot-v1`:
 a typed, deterministic, size-bounded collection of values accepted by the
 code-owned serializer, with no open file/process/socket handle, task handle,
 provider SDK object, raw Jupyter frame, executable code payload, grant,
 credential, or implementation resource. Unsupported or non-serializable values
 are omitted with typed metadata. Checkpoint payload stays private to the
 daemon-owned session kernel service; public artifacts contain only safe
-generation, schema, digest, bounded size, and restoration status. An
+generation, schema, bounded size, and restoration status. An
 uncreatable or unverifiable checkpoint after a successful cell produces
 `kernel_checkpoint_unavailable`; the cell is not rerun and the run cannot
 silently continue. On restart, no execution or action resumes; the next explicit
@@ -404,7 +404,7 @@ coverage tiers, feature profiles, storage/wire versions, dependency policy, and
 architecture fixtures, then pass `make quick`, `make verify`, and Linux/Windows
 CI. It must cover:
 
-- canonical selection/checkpoint metadata goldens and invalid vectors;
+- typed selection/checkpoint metadata fixtures and invalid vectors;
 - run-scoped lazy creation, epoch fencing, no sharing, required/optional restore,
   and no-current-state reconstruction;
 - binding/start/output/result/checkpoint/publish fault injection and no effect
@@ -413,12 +413,12 @@ CI. It must cover:
   matrices and exact uncertainty/reconciliation;
 - bridge-only host operations, idempotency, changed reuse, stale grants/tasks,
   and no-bypass fixtures;
-- project script library import surface: missing library, boundary,
-  symbolic-link, and outside-path escape fixtures, reuse by reading the file in a
+- project script library import surface: missing and unreadable library
+  fixtures, reuse by reading the file in a
   fresh epoch, bounded import evidence without source text or absolute paths, and
   explicit-only deletion;
 - child checkpoint-copy isolation, verifier non-authority, MCP reacquisition,
-  negotiated replay/resync/history-before-live, and zero-effect reconnect;
+  replay/resync/history-before-live, and zero-effect reconnect;
 - M3/M4 and retained IPython/RLM byte/meaning/recovery/provider/tool-denial
   preservation and historical startup; and
 - fake-secret, Python value, traceback, Jupyter frame, path, handle, process,

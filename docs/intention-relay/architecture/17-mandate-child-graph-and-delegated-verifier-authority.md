@@ -14,11 +14,11 @@
 
 **Approved future architecture, documentation-only.** This document is the sole detailed owner for future Mandate child-graph relations, immutable delegation, direct-parent controls, graph terminalization, and separately issued delegated verifier authority. It does not authorize a crate, schema migration, wire implementation, executor, runtime worker, UI, or production child work.
 
-It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider selection, tool-call denial, replay, recovery, bytes, IDs, UUIDs, digests, cursors, events, and snapshots retain their recorded ordinary semantics. Retained RLM child/activity material remains research and historical provenance, not future Mandate graph authority.
+It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider selection, tool-call denial, replay, recovery, bytes, IDs, UUIDs, cursors, events, and snapshots retain their recorded ordinary semantics. Retained RLM child/activity material remains research and historical provenance, not future Mandate graph authority.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, reason validity/order, fresh admission, uncertainty, and user-conflict precedence. Architecture 14 owns the execution envelope, canonical framing, digest, decoder, and compatibility outcomes. Architecture 15 owns the fixed `sub_agent` registry slot, frozen selection, direct tool admission, and generic tool-loop evidence. Architecture 16 owns durable reevaluation, readiness, candidate selection, and admission handoff.
+Architecture 13 owns Mandate lifecycle, reason validity/order, fresh admission, uncertainty, and user-conflict precedence. Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); records are typed serde JSON. Architecture 15 owns the fixed `sub_agent` registry slot, frozen selection, direct tool admission, and generic tool-loop evidence. Architecture 16 owns durable reevaluation, readiness, candidate selection, and admission handoff.
 
 This document owns child/verifier payload semantics and their durable relations. It is not a second lifecycle, scheduler, registry, provider/tool selector, session-fork model, activity/UI system, or general notification system. Parenthood, ancestry, activity, a prompt, Goal, Skill, tool, model, provider, MCP source, bridge/kernel, evidence, or verdict never grants lifecycle, scheduling, tool, or target-mutation authority.
 
@@ -37,7 +37,6 @@ MandateChildEdgeV1
   child_mandate_id
   child_initial_revision
   delegation_snapshot_reference
-  canonical_edge_digest
 
 MandateChildDelegationSnapshotV1
   delegation_id
@@ -54,7 +53,6 @@ MandateChildDelegationSnapshotV1
   provider_capability_selection
   activity_graph_id
   typed_provenance_references
-  canonical_delegation_digest
 ```
 
 `required_evidence_contract_references` freezes the explicit evidence contracts
@@ -63,9 +61,9 @@ freeze the child's provider-capability selection rule and its activity-graph
 identity. They are immutable credential-free references, never live provider
 material or activity authority.
 
-The snapshot is immutable, canonical, and credential-free. It may freeze only explicitly selected child objective, scope, mode, safe context, Goal, Skill, evidence, continuation, capability and provenance references. It excludes credentials, endpoints, SDK values, handles, raw transcript/output, mutable parent state, tool permissions, provider/MCP/process/kernel/bridge connections, policy/corridor/quota/confirmation inheritance, and unfinished external effects.
+The snapshot is an immutable typed JSON record and credential-free. It may freeze only explicitly selected child objective, scope, mode, safe context, Goal, Skill, evidence, continuation, capability and provenance references. It excludes credentials, endpoints, SDK values, handles, raw transcript/output, mutable parent state, tool permissions, provider/MCP/process/kernel/bridge connections, policy/quota/confirmation inheritance, and unfinished external effects.
 
-Every child fresh run resolves its own immutable meaning from its child revision and delegation snapshot. Parent revision, ancestry, configuration, registry, provider, Goal, Skill, activity, UI, or live resources cannot repair missing child meaning. Architecture 14 owns the encoding, this document owns the child-link nested selection that binds exact edge and snapshot references and digests.
+Every child fresh run resolves its own immutable meaning from its child revision and delegation snapshot. Parent revision, ancestry, configuration, registry, provider, Goal, Skill, activity, UI, or live resources cannot repair missing child meaning. Typed serde JSON owns the encoding (ADR 0046); this document owns the child-link nested selection that binds exact edge and snapshot references.
 
 ## Atomic child creation and graph integrity
 
@@ -75,9 +73,9 @@ One idempotent transaction commits all or nothing:
 - direct edge, root-graph identity, and delegation snapshot;
 - graph projection and later activity reference;
 - parent `sub_agent` terminal creation result;
-- all affected events, snapshots, sequences, canonical digests, and idempotency evidence.
+- all affected events, snapshots, sequences, and idempotency evidence.
 
-Equal creation identity and semantic digest return the original child, edge, snapshot, and result. Changed reuse fails before another child, edge, run, activity record, or external action exists. No provider, tool, process, network, kernel, MCP, bridge, child runtime, or scheduler effect occurs inside the transaction. Publication occurs only after commit and a scoped durable reread.
+Equal creation identity and equal typed content return the original child, edge, snapshot, and result. Changed reuse fails before another child, edge, run, activity record, or external action exists. No provider, tool, process, network, kernel, MCP, bridge, child runtime, or scheduler effect occurs inside the transaction. Publication occurs only after commit and a scoped durable reread.
 
 Creation validates authoritative edge ancestry under the same storage linearization as insertion. It rejects self-link, cycle, second parent, reparent, detach, merge, root conversion, cross-root/project/workspace relation, missing or stale parent revision, wrong creating run/tool call, incompatible duplicate creation, and malformed identity before durable mutation. A committed graph is a rooted directed tree, each non-root has one parent, shares one root, and is reachable from that root.
 
@@ -133,7 +131,6 @@ VerifierAuthorityV1
   allowed_operations
   audit_contract_reference
   issuance_expiry_revocation_consumption
-  canonical_digest
 
 VerifierAuditBaselineV1
   authority_reference
@@ -144,26 +141,25 @@ VerifierAuditBaselineV1
   frozen_goal_gate_evidence_references
   optional_unknown_effect_reference
   audit_contract_reference
-  canonical_digest
 ```
 
 Authority revisions, target sets, audit baselines, evidence, verdicts, mutations, and reconciliation records are immutable. A target set is explicit and never expands through parent/child, ancestry, descendants, siblings, Goals, sessions, branches, activity, or shared evidence. A verifier cannot target itself. Its children may gather evidence but cannot inherit, relay, consume, amplify, or exercise target-mutation authority.
 
-Architecture 14 owns the `VerifierMandate` envelope/codec/decode behavior. This document owns verifier nested selection field semantics. A verifier payload with missing, corrupt, stale, or unsupported mandatory selection cannot downgrade to Mandate or Ordinary execution.
+Typed serde JSON owns the `VerifierMandate` record shape (ADR 0046). This document owns verifier nested selection field semantics. A verifier payload with missing, corrupt, stale, or unsupported mandatory selection cannot downgrade to Mandate or Ordinary execution.
 
 ### Stale baseline tuple
 
 A verifier baseline is fresh only when all required values match the committed
 state: exact target identity, target revision, aggregate sequence, lifecycle,
-authority revision/digest, audit contract, graph epoch where applicable, and
-operation idempotency identity/digest. Any mismatch is a typed pre-mutation stale
+authority revision, audit contract, graph epoch where applicable, and
+operation idempotency identity. Any mismatch is a typed pre-mutation stale
 failure. The system never best-effort merges, retargets, substitutes current state,
 or retries with changed meaning.
 
 
 ## Audit, mutations, conflicts, and reconciliation
 
-A verdict is durable evidence only. It neither schedules work nor reserves or mutates a target. Before dependent verifier work or mutation, validate exact verifier identity/revision, authority revision/digest/lifecycle, target membership, allowed operation, audit contract, frozen target baseline, and operation-specific lifecycle prerequisites. Missing, revoked, expired, consumed, corrupt, mismatched, stale, or unsupported authority/baseline fails closed before mutation. No path substitutes current authority, target revision, Goal, configuration, registry, ancestry, readiness, evidence store, or UI state.
+A verdict is durable evidence only. It neither schedules work nor mutates a target. Before dependent verifier work or mutation, validate exact verifier identity/revision, authority revision/lifecycle, target membership, allowed operation, audit contract, frozen target baseline, and operation-specific lifecycle prerequisites. Missing, revoked, expired, consumed, corrupt, mismatched, stale, or unsupported authority/baseline fails closed before mutation. No path substitutes current authority, target revision, Goal, configuration, registry, ancestry, readiness, evidence store, or UI state.
 
 Primary delegated operations are `MarkNeedsRework`, `MarkComplete`, `Stop`, `ReviseFull`, and `ResolveUnknownEffect`. `Pause` and `Resume` are not implicit verifier powers.
 
@@ -173,7 +169,7 @@ Primary delegated operations are `MarkNeedsRework`, `MarkComplete`, `Stop`, `Rev
 - `ReviseFull` requires its own authority and creates only an immutable future revision. It never rewrites an admitted run or historical evidence.
 - `ResolveUnknownEffect` names the exact target uncertainty and baseline and may yield only `Active` for later fresh work or `Stopped`. It never asserts rollback, absence, idempotence, repeatability, or safe replay.
 
-One target-mutation transaction validates the authority, baseline, evidence, verdict, target revision/sequence/lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity/digest. It commits all or nothing: applied/rejected result, target projection/events/snapshots when changed, authority consumption where selected, audit/reconciliation linkage, sequence, safe activity/notification reference, and idempotency evidence.
+One target-mutation transaction validates the authority, baseline, evidence, verdict, target revision/sequence/lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity. It commits all or nothing: applied/rejected result, target projection/events/snapshots when changed, authority consumption where selected, audit/reconciliation linkage, sequence, safe activity/notification reference, and idempotency evidence.
 
 User lifecycle, revision, reconciliation, revocation, and authority-revision mutations win optimistic conflicts. A losing parent, daemon, or verifier action performs a scoped reread and cannot merge, retarget, select another operation, or retry with changed meaning.
 
@@ -181,7 +177,7 @@ User lifecycle, revision, reconciliation, revocation, and authority-revision mut
 
 If verifier external work becomes unknown, pause only the verifier Mandate. Do not mutate a target, complete the audit, reuse partial evidence as qualifying verdict, or treat verifier uncertainty as target uncertainty. Recovery preserves all authority/audit/mutation history but never replays verifier evidence work or reapplies a committed mutation.
 
-Future child/verifier projections use a separately negotiated Mandate protocol family with authoritative snapshot/replay or typed resync/error and fail closed for unsupported peers. Replay is read-only. It cannot resend messages, start children, repeat a cascade, consume authority, collect evidence, or reapply a target mutation. Exact wire tags, pages, retention, SQL, migrations, and UI remain deferred.
+Future child/verifier projections use typed JSON-RPC 2.0 methods with authoritative snapshot/replay or typed resync/error and never deliver partial data (ADR 0045). Replay is read-only. It cannot resend messages, start children, repeat a cascade, consume authority, collect evidence, or reapply a target mutation. Exact method shapes, pages, retention, SQL, migrations, and UI remain deferred.
 
 ## Delegated child-agent detail (`sub_agent`)
 
@@ -237,7 +233,7 @@ RlmChildMessageOperation
 ```
 
 bound to the child's immutable `RlmParentLinkDto`, current `ModelStepId`,
-daemon-assigned `RlmMessageId`, and canonical payload digest; it is not a
+daemon-assigned `RlmMessageId`; it is not a
 `ToolId`/`ToolCallId`/registry invocation/bridge operation/MCP command/
 independent authority. `GetStatus` returns a bounded safe direct-child status
 plus a bounded descendant summary. `AwaitResult` returns one child terminal
@@ -264,7 +260,6 @@ MandateChildMessageDto
   safe_text
   typed_references
   delivery_state
-  canonical_message_digest
 
 MandateChildTerminalSummaryDto
   child_mandate_id
@@ -276,11 +271,10 @@ MandateChildTerminalSummaryDto
   external_effect_unknown_reference_when_present
   evidence_references
   safe_conclusion
-  canonical_summary_digest
 ```
 
 Each edge owns one durable monotonic order across both directions. Messages are
-redacted typed records (identity, revision/cursor, digest, safe visibility,
+redacted typed records (identity, revision/cursor, safe visibility,
 provenance references). Equal replay returns the stored message; changed reuse
 fails before publication. A terminal child run records one redacted summary; the
 parent receives the summary reference once in the next eligible model exchange,
@@ -296,8 +290,8 @@ child, emits an urgent graph safety observation, and blocks only automatic
 parent continuation that depends on its result.
 
 **Queue limits.** Each parent-to-child and child-to-parent direction holds at
-most sixteen undelivered messages and 512 KiB of canonical safe content. One
-slot and 64 KiB in each direction are reserved respectively for
+most sixteen undelivered messages and 512 KiB of safe message content. One
+slot and 64 KiB in each direction are set aside respectively for
 `ClarificationReply` and `ClarificationRequest`; ordinary `Instruction`/`Report`
 use at most fifteen slots and 448 KiB. A message is never merged, overwritten,
 or silently dropped. A message committed before a child's terminal decision is
@@ -342,8 +336,8 @@ model name, endpoint, or credential, nor falls back to a current default when a
 class is unavailable. Every child receives one immutable
 `SubAgentDelegationSnapshotDto` (task, bounded safe textual projection, typed
 provenance references, parent provenance, selected effective
-programmatic-caller-policy snapshot reference, inherited authorization-corridor
-reference when one exists, selected `AgentActivitySelectionV1` reference;
+programmatic-caller-policy snapshot reference, selected
+`AgentActivitySelectionV1` reference;
 excludes raw provider items, reasoning text, tool output, Python objects, live
 state, grants, credentials, paths, and implementation resources). One snapshot
 is at most 512 KiB; all snapshots in one root RLM tree total at most 4 MiB; the
@@ -430,12 +424,12 @@ M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegati
 
 A later activating specification must declare exact crate owners, test targets, coverage tiers, feature profiles, architecture fixtures, and storage/wire versions, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
 
-- canonical child-edge/delegation/message/summary and verifier authority/target/baseline/evidence/verdict/mutation/reconciliation goldens and negative vectors;
+- typed child-edge/delegation/message/summary and verifier authority/target/baseline/evidence/verdict/mutation/reconciliation fixtures and negative vectors;
 - atomic idempotent creation, message, cascade, authority, and mutation fault injection at every projection/event/snapshot/sequence/idempotency stage;
 - rooted-tree/cycle/reparent/cross-project defenses, graph-epoch races, direct edge isolation, non-scheduling messages, and fresh-RunId recovery;
 - terminalization closure, child-local uncertainty, deterministic cascades, and no-resume/retry/reattach across all external owners;
 - authority issue/revision/revocation/expiry/consumption, explicit target sets, self-target/no-inheritance failures, stale baseline, full operation/state matrix, and user/verifier/parent/daemon conflict races;
-- negotiated replay/resync, DTO-only boundary/no-second-registry fixtures, and no-current-state reconstruction;
+- replay/resync, DTO-only boundary/no-second-registry fixtures, and no-current-state reconstruction;
 - M3/M4 and retained-RLM byte/meaning preservation, M4 tool-denial preservation, historical startup, redaction, and safe failure outcomes; and
 - end-to-end idempotent child creation, graph closure, stale audit, verifier uncertainty, exact reconciliation, recovery, and historical database outcomes.
 

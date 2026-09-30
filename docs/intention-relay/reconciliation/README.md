@@ -100,7 +100,9 @@ implementation specification can be prepared:
   [architecture 30](../architecture/30-instruction-sources-and-system-context.md));
 - M5+ Slice 1 contract ledger: the frozen and activated contracts/versions,
   capabilities, tags, fields, ownership, and preservation ledger
-  ([ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md)); and
+  ([ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md)); its
+  capabilities, tag registry, canonical codec, digests, and identity ledger are
+  superseded and removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md) and [ADR 0046](../decisions/0046-typed-serde-json-contracts.md);
 - M5+ Slice 2 control-plane activation (reverted): the Slice 2 activation added
   controlled live reload, credential rotation, health checks, discovery,
   pricing, raw-TOML/configuration editing, session defaults and per-turn/fork
@@ -111,11 +113,21 @@ implementation specification can be prepared:
   migration chain)
   ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md));
   [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
-  removed that surface, and the directions are again documentation-only; and
+  removed that surface, and [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) removes the
+  unavailable-queue promotion/reconciliation and corridor/reservation/period
+  directions from the corpus, so the remaining directions are again
+  documentation-only;
 - M5+ no-backward-compatibility policy: the single-version rule for every
   versioned system and the removal of legacy, fallback, and migration
   machinery
-  ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
+  ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md));
+  and
+- the post-M5 Slice 1 theater cleanup: JSON-RPC 2.0 over NDJSON with protocol
+  version 2.0 and no capabilities ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)), typed serde JSON with the binary
+  canonical codec and contract families deleted ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)), `WorkspaceRoot` as
+  an addressing anchor rather than a boundary ([ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md)), and limits by
+  precedent with the runtime content-scan ban and the corridor/reservation,
+  period-engine, and queue-audit removals ([ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)).
 
 It maps, but does not detail or implement, later child, verifier, MCP, Skill,
 provider, reasoning, fork, kernel, activity, notification, and UI packages.
@@ -183,8 +195,12 @@ following map is navigation and provenance; it does not restate their rules:
 | Accepted execution directions (control-plane editing, provider-native controls, fork execution, harness autonomy, RLM packaging) | architectures 25/22/23/26/28/18/24/29 | decision 0033 |
 | Accepted retained-deferral directions (kernel output projection, retention policy, supervision topology, calendar semantics, activity limit classification) | architectures 20/04/03/16/24 | decision 0034 |
 | M5+ complete foundation activation | architectures 25-29, 23, 22, 24, roadmap | decision 0035 |
-| M5+ Slice 1 contract ledger | architectures 03/02/04/14, roadmap | decision 0036 |
-| M5+ Slice 2 control-plane activation (reverted) | architectures 25/29/22, roadmap, quality gates | decision 0037; the revert is recorded by decision 0044 |
+| M5+ Slice 1 contract ledger (superseded) | architectures 03/02/04/14, roadmap | decision 0036; the capabilities, tag registry, canonical codec, digests, and identity ledger are removed by decisions 0045 and 0046 |
+| M5+ Slice 2 control-plane activation (reverted) | architectures 25/29/22, roadmap, quality gates | decision 0037; the revert is recorded by decision 0044, and the queue-promotion/corridor/period directions are removed by decision 0048 |
+| Daemon transport and protocol | architecture 03 | decision 0045 |
+| DTO and contract policy | architecture 02 | decision 0046 |
+| Tools, workspace, and hooks | architecture 05 | decision 0047 |
+| Limits, content scanning, and deferred-surface policy | architecture 12, architecture 00 | decision 0048 |
 | No backward compatibility and legacy removal | all current architecture owners, quality gates | decision 0038 |
 | Request-side tool advertisement | architecture 08, architecture 05 | decision 0039 |
 | Opt-in live-provider e2e channel | architecture 10, architecture 12 | decision 0040 |

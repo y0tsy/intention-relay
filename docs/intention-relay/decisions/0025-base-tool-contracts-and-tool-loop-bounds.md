@@ -9,6 +9,11 @@ directions. It does not activate implementation: the contracts are bound to
 and are implemented only through a separately accepted activating
 specification at the start of that milestone.
 
+Amended 2026-09-30: the numeric tool-group, output, and replay-page bounds and
+the capability gate are superseded by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) and
+[ADR 0045](0045-local-json-rpc-2-0-transport.md) as recorded below.
+
 ## Decision
 
 The following detail from
@@ -26,26 +31,25 @@ The following detail from
   trusted-local (no-OS-sandbox) model;
 - the fragment stream contract (`ToolOutputDeltaRecorded` +
   `ToolCallResultRecorded`, per-call positive positions, `tool_result_stream_invalid`);
-- the 16-call tool-group maximum and its `provider_tool_group_invalid` outcome
-  (a provider step emitting more than 16 calls fails closed before any local
-  effect; the same closed outcome applies to a step with calls but lacking the
-  `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or
-  malformed group, or later provider facts for an already closed step);
 - the descriptor `model_schema_availability` field (whether an active
   descriptor can supply a code-owned function schema to a compatible model
   subset) and the typed-reference alternatives for non-path tools (typed URL,
   question, todo, retained-content, plan, child-agent, or MCP-method reference);
 - the explicit statement that the first scope adds no numeric model-step limit;
-- the first-scope bounds (512 KiB per canonical fact, 4 MiB combined per group,
-  `tool_output_limit_exceeded`);
+- the removal of the first-scope numeric bounds (previously 512 KiB per
+  canonical fact, 4 MiB combined per group, and `tool_output_limit_exceeded`):
+  no per-fact, per-group, or per-page cap is asserted, and only the transport
+  and IO liveness safeguards remain
+  ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md));
 - the closed terminal outcome taxonomy (`Succeeded`,
   `DeniedBeforeExecution`, `FailedBeforeExternalEffect`, `CancelledBeforeStart`,
-  `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`,
-  `ExternalEffectUnknown`); and
+  `InterruptedBeforeStart`, `ExecutionUnavailable`,
+  `ExternalEffectUnknown`), with the former `OutputLimitExceeded` member
+  removed together with the numeric output budget
+  ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)); and
 - tool-history replay negotiation (`RunToolHistoryPageDto` /
-  `RunToolHistoryCompletedDto`, 256 facts / 512 KiB per page,
-  `model_tool_loop_required`), including the combined publication-gate order
-  when the same subscription also negotiates the normalized reasoning stream
+  `RunToolHistoryCompletedDto`), including the combined publication-gate order
+  when the same subscription also delivers the normalized reasoning stream
   (`RunReplayDto` → reasoning pages/completion → tool pages/completion → live
   frames, with omit-if-absent for either history class).
 
@@ -73,36 +77,38 @@ implemented without code evidence.
    `WaitingInput` semantics.
 3. Every accepted fragment commits as its own durable fact before publication;
    a fragment is never model context by itself.
-4. Output is never truncated or partly committed; an over-budget fragment
-   terminalizes only its own call with `tool_output_limit_exceeded`.
+4. Output is never truncated, sampled, or partly committed; a fragment is
+   either accepted whole as its own durable fact or not published.
 5. An `ExternalEffectUnknown` result never permits another model step.
-6. Unnegotiated clients fail closed with `model_tool_loop_required`; historical
-   M4 runs retain byte-identical replay and denial.
+6. Capability negotiation no longer exists
+   ([ADR 0045](0045-local-json-rpc-2-0-transport.md)); historical M4 runs
+   retain byte-identical replay and denial.
 
 ## Failure semantics
 
 - Malformed fragment streams fail closed as `tool_result_stream_invalid`.
-- A next fragment that cannot fit the 4 MiB group budget is not written; only
-  its call receives `tool_output_limit_exceeded`; remaining calls continue.
 - Missing/incomplete tool history requires typed resynchronization and never
   causes a live-tool retry.
-- `provider_tool_group_invalid` is one closed outcome for every invalid group
-  shape: more than 16 calls, calls without the closing `ToolCalls` reason, a
-  `ToolCalls` reason without calls, a duplicate or malformed group, or later
-  provider facts for the closed step; all fail before any local effect.
+- The removed numeric budgets and the `provider_tool_group_invalid` outcome are
+  superseded by
+  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); an invalid
+  fragment stream still fails before effect through `tool_result_stream_invalid`.
 
 ## Compatibility and supersession
 
 This decision supersedes the absence of the detail in architecture 15's
-principle-level text. The closed M4 baseline, M3/M4 bytes, and existing behavior
-remain unchanged. Activation remains deferred: no code changes are authorized
-by this decision.
+principle-level text. The numeric tool-group, output, and replay-page bounds and
+the capability gate are superseded by ADRs 0045 and 0048 as recorded above; the
+qualitative contracts, the fragment stream, the effect profiles, and the
+terminal taxonomy stand. The closed M4 baseline, M3/M4 bytes, and existing
+behavior remain unchanged. Activation remains deferred: no code changes are
+authorized by this decision.
 
 ## Security and residual risk
 
-The contracts remain trusted-local. Tool output and history are bounded and
-credential-free; redaction stays central and every activating specification must
-pass the fake-secret regression suite.
+The contracts remain trusted-local. Tool output and history are credential-free;
+redaction stays central and every activating specification must pass the
+fake-secret regression suite.
 
 ## Affected documents
 

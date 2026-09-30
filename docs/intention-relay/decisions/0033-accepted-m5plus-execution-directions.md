@@ -9,6 +9,15 @@ It does not activate implementation: each direction is bound to Milestone 5+
 and is implemented only through a separately accepted activating specification
 at the start of that milestone.
 
+Amended 2026-09-30: the capability families, the binary canonical codec, the
+corridor and reservation model, and fixed numeric contract limits named by the
+owning packages are removed by
+[ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md),
+[ADR 0045](0045-local-json-rpc-2-0-transport.md),
+[ADR 0046](0046-typed-serde-json-contracts.md), and
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md). The thirteen
+directions otherwise stand, non-authorizing as before.
+
 ## Decision
 
 The following items, named in the
@@ -117,8 +126,8 @@ evidence.
 ## Failure semantics
 
 - Each direction fails closed before effect when its future contract is
-  unsupported, unnegotiated, or over-limit; no partial projection, partial
-  export, or partial rebind is delivered.
+  unsupported or inconsistent; no partial projection, partial export, or
+  partial rebind is delivered.
 - Recovery never resumes, retries, reattaches, or reruns work under any of
   the thirteen directions.
 - Configuration/TOML edits that cannot be applied atomically fail closed and

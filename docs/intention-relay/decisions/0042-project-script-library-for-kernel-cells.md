@@ -12,6 +12,11 @@ protocol implementation, storage schema, migration, feature profile,
 quality-policy target, process supervisor, or production kernel execution, and
 it leaves the M5+ Slice 3 and Slice 4 reservations untouched.
 
+Amended 2026-09-30: the canonical digest fields, the bounded import-evidence
+wording, and the workspace-boundary failure clause are superseded by
+[ADR 0046](0046-typed-serde-json-contracts.md) and
+[ADR 0047](0047-workspace-root-addressing-anchor.md) as recorded below.
+
 ## Scope and supersession
 
 This decision adds one accepted capability to the future run-scoped IPython
@@ -41,7 +46,6 @@ KernelScriptLibraryV1
   library_path = .ir/scripts
   import_surface_revision
   script_evidence_revision
-  canonical_script_library_digest
 ```
 
 - The library holds plain Python module files. It is not a package repository:
@@ -54,58 +58,57 @@ KernelScriptLibraryV1
 - Saving is deliberate. An agent persists a module when reuse is expected; the
   daemon never writes, rewrites, or collects a script on its own, and no
   namespace or checkpoint migration creates one.
-- The immutable kernel selection gains one additive bounded reference to
-  `KernelScriptLibraryV1`. The reference carries the contract revisions, the
-  logical relative library path, and the canonical library digest; it carries
-  no file content, no absolute, canonical, or symlink-target path, and no
-  credential.
+- The immutable kernel selection gains one additive reference to
+  `KernelScriptLibraryV1`. The reference carries the contract revisions and the
+  logical relative library path; it carries no file content, no absolute path,
+  and no credential.
 - An epoch's import surface contains exactly the referenced library directory.
   The parent, the workspace root, a second library, and any path outside the
-  workspace never enter it. A missing library directory yields an empty import
-  surface rather than a failure, so a project without saved scripts behaves
-  exactly as today.
+  workspace never enter it. This is a kernel-side scope choice, not a
+  containment guarantee
+  ([ADR 0047](0047-workspace-root-addressing-anchor.md)). A missing library
+  directory yields an empty import surface rather than a failure, so a project
+  without saved scripts behaves exactly as today.
 - A fresh run reuses a script by reading the file inside its own new epoch; a
   live namespace, cell, grant, task, checkpoint, or process is never carried
   over to provide reuse.
-- Every foreground cell that imports library modules records bounded
-  script-import evidence: for each imported module, the logical
-  workspace-relative path and the content digest, inside bounded counts and
-  sizes. The evidence contains no source text, no absolute, canonical, or
-  symlink-target path, and no Python value, and it is published as run facts
-  through architecture 15's post-commit publication gate under architecture 20's
-  cell rules.
-- Verified checkpoint metadata may carry the canonical library digest as safe
-  verification metadata. Checkpoint payload and metadata never contain script
-  source, and the existing exclusion of executable payload is unchanged.
+- Every foreground cell that imports library modules records script-import
+  evidence: for each imported module, the logical workspace-relative path. The
+  evidence contains no source text, no absolute path, and no Python value, and
+  it is published as run facts through architecture 15's post-commit
+  publication gate under architecture 20's cell rules.
+- Checkpoint payload and metadata never contain script source, and the existing
+  exclusion of executable payload is unchanged.
 - Retention and deletion stay explicit user or agent actions through the
   ordinary tools. No silent garbage collection, no age-based eviction, and no
   deletion triggered by idle disposal, checkpoint promotion, or restart.
 
 ## Invariants
 
-1. No authority. A library path, a digest, an import, or a persisted module
-   grants no lifecycle, scheduling, tool, child, verifier, MCP, bridge,
-   reconciliation, or confirmation authority, and it never substitutes for a
-   frozen registry selection.
+1. No authority. A library path, an import, or a persisted module grants no
+   lifecycle, scheduling, tool, child, verifier, MCP, bridge, reconciliation,
+   or confirmation authority, and it never substitutes for a frozen registry
+   selection.
 2. No executable payload in checkpoint payload, namespace snapshot, or any
    public or durable surface. The library is file material, not state carried
    inside a checkpoint.
 3. Epoch isolation holds: one live epoch belongs to exactly one admitted run, a
    fresh run never reuses a live kernel or namespace, and reuse happens only
    through the persisted project file.
-4. The import surface is exact and fail-closed. A library path that fails the
-   workspace boundary check, or that resolves through an outward, unprovable,
-   or dangling symbolic link, fails before any cell effect with the closed
-   `kernel_script_library_unavailable`.
-5. Import evidence is bounded and deterministic. The same modules with the same
-   content produce the same digest list; an unrepresentable list fails before
-   publication instead of being truncated, sampled, or stringified.
+4. The import surface is exact. A library path that cannot be addressed under
+   the session `WorkspaceRoot` fails before any cell effect with the closed
+   `kernel_script_library_unavailable`. The root is an addressing anchor, not a
+   security boundary
+   ([ADR 0047](0047-workspace-root-addressing-anchor.md)).
+5. Import evidence is deterministic. The same modules in the same order produce
+   the same evidence list; an unrepresentable list fails before publication
+   instead of being truncated, sampled, or stringified.
 6. Scripts are untrusted project material executed under the existing
    trusted-local model. They are not sandboxed, and the library neither widens
    nor narrows that model.
 7. No secret material. Credentials, tokens, endpoints, and provider values are
    never written into the library, and the redaction rules of architecture 09
-   apply to every path, digest, and error this capability produces.
+   apply to every path and error this capability produces.
 
 ## Compatibility
 
@@ -126,10 +129,10 @@ The closed kernel safe-failure set gains one member:
 kernel_script_library_unavailable
 ```
 
-It covers a library path that fails boundary validation and script-import
-evidence that cannot be represented inside its bounds. It discloses no
-credential, absolute, canonical, or symlink-target path, no Python value, no
-Jupyter frame, no raw traceback, and no implementation detail. A Python-level
+It covers a library path that cannot be addressed under the session root and
+script-import evidence that cannot be represented. It discloses no credential,
+no absolute path, no Python value, no Jupyter frame, no raw traceback, and no
+implementation detail. A Python-level
 import error raised inside a cell remains ordinary safe `Error` output under
 architecture 20's closed text-only projection.
 
@@ -146,7 +149,10 @@ implementation authorization are outside this decision.
 
 - [Architecture 20](../architecture/20-ipython-kernel-lifecycle.md) owns the
   kernel-side selection reference, import surface, script-import evidence,
-  checkpoint-digest rule, and closed failure.
+  checkpoint exclusion rule, and closed failure.
+- [ADR 0046](0046-typed-serde-json-contracts.md) removes the canonical digest
+  fields and [ADR 0047](0047-workspace-root-addressing-anchor.md) replaces the
+  boundary-validation wording, as recorded in the status above.
 - [Architecture 05](../architecture/05-tools-workspace-and-hooks.md) owns the
   project-local path convention and the ordinary tool rules that create,
   read, and run the modules.
@@ -175,12 +181,11 @@ coverage tiers, feature profiles, and architecture fixtures, then pass
   the workspace root, a second library, or an outside path;
 - a missing library directory yielding an empty import surface and unchanged
   behavior;
-- fail-closed handling of outward, unprovable, and dangling symbolic links with
-  `kernel_script_library_unavailable` before effect;
-- deterministic bounded script-import evidence, its rejection beyond the
-  bounds, and the absence of source text, absolute paths, and Python values;
-- checkpoint payload and metadata that carry no script source and at most the
-  canonical library digest;
+- fail-closed handling of a library path that cannot be addressed under the
+  session root, with `kernel_script_library_unavailable` before effect;
+- deterministic script-import evidence and the absence of source text,
+  absolute paths, and Python values;
+- checkpoint payload and metadata that carry no script source;
 - no automatic save, rewrite, or collection path, and explicit-only deletion;
 - project reuse across runs through the file with no namespace, cell, grant,
   task, or checkpoint carry-over; and

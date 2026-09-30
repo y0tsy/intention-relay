@@ -9,6 +9,12 @@ legacy, fallback, and migration machinery from the project, in accordance with t
 which remains the activation home and slice-sequence authority, and it supersedes
 the specific preservation and migration commitments listed in the inventory below.
 
+Amended 2026-09-30: the wave plan below predates the Slice 2 revert of
+[ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) and the transport,
+codec, root, and limit records of ADRs 0045 to 0048. The "Post-revert
+reconciliation of the wave plan" section records what is already removed or
+superseded; the single-version policy and every other wave removal stand.
+
 ## Scope and supersession
 
 This record activates the single-version policy for every versioned system in the
@@ -39,7 +45,7 @@ Rationale (binding, from AGENTS.md):
 | SQLite schema 3 to 4 additive migration, `user_version` tracking, and future-schema rejection | ADR 0036 "Version ledger"; ADR 0037 "Version ledger"; architecture 04; roadmap Slice 1/2 rows | One live schema (logical version 1) created directly on open; no migration chain, no `user_version` gate, no opening of older schemas |
 | M3/M4 byte-preservation evidence (schema-3 reopen fixtures, migration rollback fixtures, `TEST_SCHEMA_3_SQL`, standalone `M3_SCHEMA_SQL` fixture block) | ADR 0037 evidence; architecture 04; roadmap; reconciliation EVD-045/EVD-058, SL2-006 | Removed with the migration machinery; current-schema round-trip tests remain |
 | Legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C; `LegacyM4SelectionBindingDto`; `legacy_m4_selection_bindings` table; `LegacyBindingRepositoryDto`; `load_config_revision_records`; application `LegacyM4Bridge`; composition `SnapshotBindingSource` mirror derivation) | ADR 0036 ownership/preservation invariants; ADR 0037 numeric tag registry and Appendix tables; ADR 0028 invariant 7; architecture 22 "Legacy M4 selection bridge" section | Removed entirely; tag 0x020C returns to unallocated and is removed from the ledger and `PUBLIC_WIRE_CONTRACT_FAMILIES`; no synthetic bindings are ever materialized |
-| Protocol same-major compatibility (1.0 to 1.1) via `ensure_compatible_with` on protocol and DTO schema versions | ADR 0036/0037 resolution notes; architecture 02; compatibility-register | Exact current-version equality (1.1) on negotiation; no minor tolerance |
+| Protocol same-major compatibility (1.0 to 1.1) via `ensure_compatible_with` on protocol and DTO schema versions | ADR 0036/0037 resolution notes; architecture 02; compatibility-register | Exact current-version equality on negotiation; no minor tolerance (protocol 2.0 after [ADR 0045](0045-local-json-rpc-2-0-transport.md)) |
 | 1.0 wire fixtures and legacy-shape deserializers (`ProtocolAcceptedDto`/`SessionSnapshotDto` additive-field tolerance, `protocol_fixtures` target, error-v1 legacy fixture, `hello-compatible-minor-v1.json` naming) | ADR 0036; architecture 02 additive-field policy; closeout m0-m1; compatibility-register | Current-version fixtures only; additive fields become required on the wire |
 | TOML configuration v0 migration (`migrate_v0`, `RawV0Config`, `RawV0ModelConfig`, `model.api_key` credential fallback, `collect_v0_issues`) | architecture 09 "TOML parsing, migrations"; roadmap | Unversioned documents fail closed (`invalid_config_schema`); only the current `[provider]` shape parses |
 | Historical reasoning wire defaults (uncategorized `ReasoningDelta` decoding as `Primary`) in domain and model crates | ADR 0028 invariant 8; architecture 22 | `category` is required on the wire; no defaulting |
@@ -81,16 +87,24 @@ Rationale (binding, from AGENTS.md):
 
 ### Out of scope (explicitly NOT superseded, NOT scheduled for removal)
 
-- Slice 1/2 current functionality: catalog controller, private registry,
-  control-plane gate, degraded readiness, unavailable-queue promotion and
-  reconciliation, usage aggregation, held recovered-run admission, session
-  profile selection, provider control-plane services (reload, rotation, health,
-  discovery, pricing, editing), reasoning categories/summaries and bounds,
-  `provider_profiles_v1` negotiation gates, and the current protocol 1.1 surface.
-- Roadmap reservations: `TagStatus::ReservedForSlice3` and
-  `ReservedForSlice4`, all reserved ledger tags (0x0203-0x0205, 0x0301-0x0304,
-  0x0401-0x0403, 0x0501-0x0505), and reserved contract-family DTOs for slices
-  3/4 (goal, harness, MCP, tool-loop, bridge, fork, activity).
+- Post-revert current functionality: the ordinary runtime that survives
+  ADRs 0044 to 0048, including the M4 normalized reasoning events of
+  [ADR 0041](0041-same-run-reasoning-round-trip.md). The Slice 2 control plane
+  (catalog controller, private registry, control-plane gate, degraded
+  readiness, unavailable-queue promotion and reconciliation, usage
+  aggregation, held recovered-run admission, session profile selection,
+  provider control-plane services, `provider_profiles_v1` gates, and the
+  protocol 1.1 surface) is reverted by
+  [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md); the capability
+  plane is removed by [ADR 0045](0045-local-json-rpc-2-0-transport.md); the
+  canonical codec is removed by
+  [ADR 0046](0046-typed-serde-json-contracts.md); and the speculative contract
+  limits are removed by
+  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md).
+- Roadmap scope for slices 3 and 4. The reserved ledger tags with their
+  `TagStatus` entries and the reserved contract-family DTOs are superseded by
+  [ADR 0046](0046-typed-serde-json-contracts.md) and removed with the canonical
+  codec and the contract-family tables; the slice scope itself is untouched.
 - Approved M1 skeleton crates `intention-headroom`, `intention-plans`,
   `intention-vfr`, and `intention-tauri` and their policy entries.
 - Current quality tooling (`quality/` checkers, self-tests, run scripts, policy
@@ -111,23 +125,21 @@ Rationale (binding, from AGENTS.md):
 
 | Contract | Version/status after this record |
 | --- | --- |
-| Local protocol | 1.1, exact equality on negotiation (single live minor; no minor tolerance) |
+| Local protocol | 2.0 over JSON-RPC 2.0 with NDJSON framing, exact equality on the handshake ([ADR 0045](0045-local-json-rpc-2-0-transport.md)); the recorded point, exact equality with no minor tolerance, stands |
 | Public DTO schema | 1.1, additive fields are required fields |
 | TOML configuration schema | 1, single shape |
 | SQLite storage schema | Logical version 1, single live schema: the current physical DDL (previously labeled "schema 4") is retained as the one schema and created directly on open; no migrations, no version gate |
-| Canonical records | one live record version per family (for example execution-meaning V4) |
+| Canonical records | Removed: no canonical record, tag, digest, or identity exists ([ADR 0046](0046-typed-serde-json-contracts.md)) |
 | Reasoning wire format | one shape; `category` required |
 | Provider tool-call wire handling | `tool_calls` fragments only |
 
-## Numeric tag registry
+## Numeric tag registry (superseded)
 
-`intention-domain` owns this registry. The `TagStatus` enum keeps exactly the
-variants `Wired`, `ReservedForSlice3`, and `ReservedForSlice4`. Slice 2 wired
-tags 0x0206-0x020B remain wired. Tag 0x020C (`legacy-m4-selection-binding`) is
-removed from the ledger and from `PUBLIC_WIRE_CONTRACT_FAMILIES`; unallocated
-tags are not represented in `TagStatus`. The `quality/self_test.py` tag-parity
-fixture (lines 1532-1557) is updated in the same change. No future activation
-reuses tag 0x020C without a new activating record.
+Superseded by [ADR 0046](0046-typed-serde-json-contracts.md): the registry, the
+`TagStatus` vocabulary, the tag-parity fixture, and
+`PUBLIC_WIRE_CONTRACT_FAMILIES` are removed with the canonical codec. The
+paragraph and table below are historical text and carry no current state.
+No tag value is reused or reserved.
 
 | Tag | Value | Status after this record |
 | --- | --- | --- |
@@ -168,6 +180,26 @@ full validation matrix (all gates) runs after Wave 9.
 Waves run in order; a later wave may start once the previous wave's workspace
 is green. Waves 1 and 8 are independent and may run in parallel. All work lands
 on the PR #24 branch (`impl/m5plus-slice2-control-plane`).
+
+### Post-revert reconciliation of the wave plan (2026-09-30)
+
+The waves below describe the pre-revert Slice 2 tree and are read through the
+records that followed:
+
+| Wave | Post-revert state |
+| --- | --- |
+| 1 | The legacy M4 bridge removal stands; the tag ledger it edits is itself removed by [ADR 0046](0046-typed-serde-json-contracts.md) |
+| 2 | The whole execution-meaning codec and its goldens are removed by [ADR 0046](0046-typed-serde-json-contracts.md), not only the V3 record |
+| 3 | The capability gates named here are removed by [ADR 0045](0045-local-json-rpc-2-0-transport.md); the protocol version is 2.0, so the "keep the 1.1 negotiation gates" instruction is void |
+| 4 | The single live SQLite schema stays; the control-plane tables and `control_plane::SCHEMA_M5_SQL` named here were reverted by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) |
+| 5 | The single-TOML-shape removal stands; the control-plane candidate machinery in its keep list was reverted by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) |
+| 6 | The provider and reasoning single-path removals stand, except that the Slice 2 reasoning/catalog families were reverted by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) |
+| 7 | Its selection-carrying-only instruction and its Slice 2 keep list (catalog, queue promotion and reconciliation, held-run admission) are superseded by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md): selection-less turn acceptance is the only live path |
+| 8 | The tooling and meta removals stand; the removed glob match cap is covered by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) |
+| 9 | The policy and pin consolidation stands; the final validation matrix applies with the protocol, codec, root, and limit changes of ADRs 0045 to 0048 |
+
+The `Docs` lists attached to each wave name files and line numbers of the
+pre-revert tree and are historical references, not current instructions.
 
 ## Removal plan by wave
 
@@ -625,11 +657,13 @@ functionality.
   reopening closed milestones; closeout evidence stays immutable provenance,
   only active indexes/links and command/evidence rows that reference removed
   test targets may change.
-- **Physical version interpretation:** the concrete protocol version remains
-  1.1 as the single live minor; "exact equality" removes minor tolerance, not
-  the version constant. The SQLite physical DDL previously labeled "schema 4"
-  is retained as the one current schema (logical version 1); no version marker
-  or migration machinery accompanies it.
+- **Physical version interpretation:** the concrete protocol version is 2.0
+  after [ADR 0045](0045-local-json-rpc-2-0-transport.md), which raised the
+  constant with the JSON-RPC wire change; the recorded point, "exact equality"
+  removes minor tolerance, not the version constant itself, stands. The SQLite
+  physical DDL previously labeled "schema 4" is retained as the one current
+  schema (logical version 1); no version marker or migration machinery
+  accompanies it.
 - **Transition of reconciliation/evidence rows:** rows that record removed
   behavior (migration, preservation, legacy bridge, 1.0 compat) are rewritten
   or retired in the same change as the code removal; rows recording retained

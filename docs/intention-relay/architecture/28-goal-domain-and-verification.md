@@ -30,8 +30,10 @@ semantics are historical-only where they conflict with architectures 13--27.
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle and fresh admission. Architecture 14
-owns execution-envelope framing and canonical records. Architecture 15 owns the
-registry and tool loop. Architecture 17 owns child graph and verifier
+owns run-execution meaning and historical compatibility; its canonical codec
+was removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 15
+owns the registry and tool loop. Architecture 17 owns child graph and verifier
 authority. Architecture 18 owns MCP lifecycle. Architecture 21 owns context
 selection and projection (Goal context selection, Skills, memory/compaction
 selection). Architecture 24 owns activity/UI projections. Architecture 27 owns
@@ -76,27 +78,27 @@ GoalRevisionDto
   inherited_rule_references
   local_rule_references
   required_gate_references
-  canonical_revision_digest
+  revision_identity
 
 GoalParentLinkDto
   parent_goal_id
   child_goal_id
   child_revision_at_link
   required = true
-  canonical_link_digest
+  link_identity
 
 GoalSessionLinkDto
   project_goal_id
   session_id
   effective_from_revision
-  canonical_link_digest
+  link_identity
 ```
 
 The tree is a DAG; every child is an obligatory component, and a parent is not
 technically ready until every obligatory child reaches a terminal user-decision
 state. Self-link, cycle, duplicate direct child, cross-project link, or
 out-of-link session child fails before partial record. A revision is
-credential-free, typed, bounded, immutable, and canonicalized; edits create new
+credential-free, typed, bounded, and immutable; edits create new
 revisions and never rewrite admitted-run meaning. A child may add a stricter
 rule, remove an optional presentation item, or narrow a limit, but cannot widen
 a tool subset, class, quota, scope, required gate, or hard policy; the
@@ -150,30 +152,22 @@ Goal); never multiple coequal Goals after admission. A verification run has
 that one Goal with kind `VerificationOnly`; it may collect gate evidence but
 cannot alter Goal, memory, Skill, role, template, or connection state.
 
-```text
-RunExecutionMeaningDto
-  schema_version = run-execution-meaning-v4
-  resolved_provider_selection
-  model_capability_set
-  context_projection_selection
-  tool_execution_selection
-  reasoning_history_manifest_reference
-  terminal_provenance_references
-  harness_selection = Disabled | ContinualHarnessSelectionV1 { ... }
-  goal_selection = Disabled | GoalRunSelectionV1 { ... }
-  mcp_selection = Disabled | McpMethodCatalogSelectionV1 { ... }
-  programmatic_caller_policy_selection =
-    Disabled | ProgrammaticCallerPolicySelectionV1 { ... }
-  agent_activity_selection = AgentActivitySelectionV1 { ... }
-```
+A run's immutable selections are typed serde JSON records rather than one
+canonical execution-meaning envelope; the former `run-execution-meaning-v4`
+carrier was removed with the canonical codec by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). The applicable
+records are `GoalRunSelectionV1`, `ContinualHarnessSelectionV1`,
+`McpMethodCatalogSelectionV1`, `ProgrammaticCallerPolicySelectionV1`, and
+`AgentActivitySelectionV1`; an absent record means the feature does not apply,
+and historical M4 records gain nothing.
 
 A launch admitted by the selected continual-harness model carries a separately
-versioned `ContinualHarnessSelectionV1` nested record (owned by
+versioned `ContinualHarnessSelectionV1` record (owned by
 [architecture 26](26-continual-harness.md#selection-record-and-closed-safe-failures))
 containing the harness identity, active rule revision, durable trigger reason,
-class resolution, dossier digest, checkpoint reference, time-zone application,
-and immutable bounds. Historical M4 and other non-harness runs do not acquire a
-synthetic harness record.
+class resolution, dossier reference, checkpoint reference, time-zone
+application, and the applicable rule references. Historical M4 and other
+non-harness runs do not acquire a synthetic harness record.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision,
 scope/session-link provenance, ordered parent revision chain, effective
@@ -181,7 +175,7 @@ obligatory-component references, selected gate/template revisions and valid
 evidence references, selected memory/Skill/role cards and revisions,
 already-revealed full-record references, the selected effective
 programmatic-caller policy snapshot reference, an `AgentActivitySelectionV1`
-reference, run kind, canonical target-snapshot digest, and immutable bounds. It
+reference, run kind, the target-snapshot reference, and immutable bounds. It
 holds no full memory/Skill/role/summary, credential, provider value, current
 machine state, raw transcript, grant, process resource, or handle. Factory
 Skills use the exact `SkillSelectionV1` under the frozen snapshot.
@@ -197,7 +191,7 @@ operations before external work; queue promotion, replay, retry, child
 admission, fork, and recovery never substitute current state.
 `McpMethodCatalogSelectionV1` is `Disabled` when `mcp` is absent from the
 frozen model-tool selection; each `mcp` call records the exact one method
-reference and typed input digest before external action.
+reference and typed input identity before external action.
 
 ## Delegated Verification Mandates
 
@@ -214,12 +208,12 @@ VerificationMandateAuthorityDto
   target_set_reference
   allowed_operations
   audit_contract_reference
-  canonical_authority_digest
+  authority_identity
 
 VerificationTargetSetDto
   target_set_id
   immutable_targets
-  canonical_target_set_digest
+  target_set_identity
 
 VerificationTargetDto
   target_mandate_id
@@ -235,7 +229,7 @@ VerificationAuditContractDto
   required_evidence_kinds
   completion_standard
   reconciliation_standard_when_allowed
-  canonical_contract_digest
+  contract_identity
 
 VerificationAuditEvidenceDto
   evidence_id
@@ -246,7 +240,7 @@ VerificationAuditEvidenceDto
   frozen_gate_and_evidence_contract_references
   evidence_kind
   retained_content_reference
-  canonical_evidence_digest
+  evidence_identity
 
 VerificationTargetOperationDto
   MarkCompleted
@@ -266,7 +260,7 @@ VerificationTargetMutationDto
   audit_evidence_references
   expected_target_revision
   idempotency_key
-  canonical_mutation_digest
+  mutation_identity
 
 VerificationAuditVerdictDto
   Pass
@@ -342,15 +336,16 @@ Records are first-class typed durable records with scopes `Project`/`Goal`/
 `Session`; session scope stays in its session; project/Goal records reach a
 session only via the selected Goal/session link and frozen target snapshot.
 Every record has a daemon-assigned identity, owner scope, immutable revisions,
-canonical digest, safe card, lifecycle state, source/provenance, bounded typed
-references, and explicit archive/restore and replacement/rollback relation. The
+a typed record identity, safe card, lifecycle state, source/provenance, bounded
+typed references, and explicit archive/restore and replacement/rollback
+relation. The
 daemon never decides two texts conflict; a newer record replaces an older one
 only via an explicit typed replacement link (identity and revision); without it
 both cards are visible; rollback creates a new immutable revision linked to an
 earlier record and never rewrites a historical selection. Every applicable
 active card (project, selected Goal chain, current session) enters the target
 snapshot; a card includes only kind, title, scope, bounded safe purpose, exact
-revision, digest, and typed retained-content reference. Full content is revealed
+revision, and typed retained-content reference. Full content is revealed
 only by explicit `retrieve` against that reference (no new `ToolId`, no body in
 the snapshot, no replacement of a historical reference); an unavailable or
 incompatible full record blocks only the dependent disclosure/model step.
@@ -373,7 +368,7 @@ readiness; user acceptance, acceptance with exception, or stop; required-gate
 failure; or a terminal outcome of an obligatory child. `RefinementDraftDto`
 contains a daemon-assigned identity, selected source run/Goal and milestone,
 exact base revisions, bounded typed edit set, evidence references, safe
-rationale, and canonical digest. It is not a current record, does not appear in
+rationale, and a typed record identity. It is not a current record, does not appear in
 cards or model context, cannot be used by a child/Skill/role/gate/harness/MCP
 method, and grants no execution authority. A later equal proposal adds evidence
 to the one pending draft rather than producing an unbounded queue. The daemon
@@ -391,8 +386,8 @@ Compaction is a versioned model-context projection, not a replacement for the
 source transcript, model facts, tool facts, reasoning, kernel checkpoint,
 harness checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`
 covers one continuous completed durable-history range and contains schema/
-canonicalization version, start/end references, a previous-summary reference
-when present, bounded safe content, digest, and provenance; original facts
+contract version, start/end references, a previous-summary reference
+when present, bounded safe content, identity, and provenance; original facts
 remain readable. The working form is one cumulative current summary plus the
 later uncompacted suffix. A new revision made inside an already active run uses
 the previous selected summary plus the next bounded completed source range and

@@ -17,6 +17,15 @@ Amended 2026-09-26 by [ADR 0043](0043-instruction-sources-and-system-context.md)
 the pre-approved slice sequence gains a fifth activating slice, instruction
 sources and system context, without changing slices 1-4.
 
+Amended 2026-09-30 by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md),
+[ADR 0045](0045-local-json-rpc-2-0-transport.md),
+[ADR 0046](0046-typed-serde-json-contracts.md), and
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md): the Slice 1
+canonical-codec and capability-family items, the Slice 2 control-plane
+reversion, the queue-audit and corridor wording, and the numeric contract
+limits are reconciled in the slice list below without changing the five-slice
+order.
+
 ## Decision
 
 Milestone 5+ is the single activation home for the full post-M5 stack
@@ -29,51 +38,54 @@ the Mandate track does not extend the slice sequence or renumber M6-M9. The
 milestone is delivered as a pre-approved sequence
 of activating slices, all approved together as one package:
 
-1. **Contracts and versions** — the versioned protocol/schema/
-   execution-meaning/DTO contract ledger for the full post-M5 stack, including
-   `run-execution-meaning-v4` (the single live record version; v3 is removed by
-   [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)), the
-   negotiated capability families
-   (`provider_profiles_v1`, `session_fork_v1`,
-   `normalized_reasoning_stream_v1`, `agent_activity_v1`,
-   `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`),
-   additive storage migration with M3/M4 byte preservation, canonical tags and
-   digests under the existing `typed-tlv-v1`/SHA-256 policy, and crate
+1. **Contracts and versions** — the versioned protocol/schema/DTO contract
+   ledger for the full post-M5 stack over JSON-RPC 2.0 and typed serde JSON
+   ([ADR 0045](0045-local-json-rpc-2-0-transport.md),
+   [ADR 0046](0046-typed-serde-json-contracts.md)), the single live
+   configuration and storage schemas with M3/M4 byte preservation, and crate
    ownership, feature-profile, and coverage-tier declarations for every
-   activated family.
+   activated family. The former execution-meaning record, capability families,
+   canonical tags, and digests are removed by those records.
 2. **Control plane** — the ADR 0020 cluster and provider session selection
    (architectures 25/29/22): controlled live reload, credential rotation,
    provider health checks, model discovery, pricing policy, profile UI and
    raw-TOML/configuration editing, arbitrary authentication headers, session
-   defaults and per-turn/fork overrides, unavailable-queue promotion and
-   reconciliation, `provider_profiles_v1`, pending-removal and degraded
-   recovery, and the provider reasoning/catalog surface. The unconsumed-surface audit (2026-09)
-   removed the unconsumed provider-native preservation-control and
-   server-side-parser contracts, the Responses reasoning-mode projection, the
-   reasoning-usage DTOs, and the model-capability envelope.
+   defaults and per-turn/fork overrides, pending-removal and degraded
+   recovery, and the provider reasoning/catalog surface. The Slice 2
+   activation is reverted by
+   [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) and can return
+   only through a new activating specification; the queue promotion,
+   reconciliation, and held-run admission wording is removed by
+   [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md). The
+   unconsumed-surface audit (2026-09) removed the unconsumed provider-native
+   preservation-control and server-side-parser contracts, the Responses
+   reasoning-mode projection, the reasoning-usage DTOs, and the
+   model-capability envelope.
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers, dossiers/checkpoints,
    execution classes, the 15 closed `harness_*` safe failures, the two closed
-   root origins, corridors and reservations, the Goal tree and Verification
-   Mandates, and Build-mode autonomous continuation.
+   root origins, the Goal tree and Verification Mandates, and Build-mode
+   autonomous continuation.
 4. **UI foundation** — session branching, activity/notification, reasoning/
    catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/
    0028/0029/0032/0033/0034): `session_fork_v1`, activity journal and
-   notification projections, normalized reasoning delivery, the legacy M4
-   selection bridge, RLM packaging and export, and the exact typed
-   client/protocol surface that M6 consumes.
+   notification projections, normalized reasoning delivery, RLM packaging and
+   export, and the exact typed client/protocol surface that M6 consumes.
 5. **Instruction sources and system context** — the instruction channel added
    by [ADR 0043](0043-instruction-sources-and-system-context.md) and owned by
    [architecture 30](../architecture/30-instruction-sources-and-system-context.md):
    the closed instruction source kinds and scopes, the deployment instruction
    profile adapted from the legacy Antibusy static prompt set, user-editable
    fragments, workspace `AGENTS.md` project instructions, the reserved `Mode`
-   and `Vfr` contributions, canonical assembly, the immutable effective
-   instruction projection with its digests, intrinsic bounds, closed
-   `instruction_*` safe failures, and digest-only observability. Its activating
-   specification declares the instruction contract families under the Slice 1
-   ledger policy without changing slices 1-4.
+   and `Vfr` contributions, deterministic assembly, the immutable effective
+   instruction projection with its revision identity, closed `instruction_*`
+   safe failures, and identity-only observability. Numeric bounds and digest
+   wording are settled at activation under
+   [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) and
+   [ADR 0046](0046-typed-serde-json-contracts.md). Its activating specification
+   declares the instruction contract families under the Slice 1 ledger policy
+   without changing slices 1-4.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
@@ -115,9 +127,8 @@ quality-policy changes.
 
 ## Failure semantics
 
-- Each slice fails closed before effect when its contract is unsupported,
-  unnegotiated, or over-limit; no partial contract, partial projection, or
-  partial migration is delivered.
+- Each slice fails closed before effect when its contract is unsupported or
+  inconsistent; no partial contract or partial projection is delivered.
 - Recovery never resumes, retries, reattaches, or reruns work under any
   slice.
 - A slice that cannot be completed atomically (contracts, tests, policy,

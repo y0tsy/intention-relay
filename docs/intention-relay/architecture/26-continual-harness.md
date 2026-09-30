@@ -34,7 +34,8 @@ scheduler readiness reevaluation; calendar/interval/time-zone semantics for
 harness scheduling are owned here. Architecture 17 owns child creation and
 verifier authority. Architecture 22 owns provider selection. Architecture 24
 owns activity/UI projections. Architecture 27 owns programmatic-caller policy
-and admission, including the corridor that gates harness `sub_agent` use.
+and admission, including the exact confirmation that gates harness `sub_agent`
+use.
 
 The daemon remains the sole owner of rule definition, trigger capture,
 admission, launch, durable memory, journal, publication, and recovery. A
@@ -153,8 +154,8 @@ sixteen unique explicit sources and up to sixty-four typed references. The
 complete dossier is at most 512 KiB and is rejected rather than truncated.
 
 A rule has a separate optional verified checkpoint, distinct from the
-user-visible conclusion. It is typed, versioned, digest-protected, linked to its
-producing run, and at most 512 KiB. A successful run may replace it only after
+user-visible conclusion. It is typed, versioned, linked to its producing run,
+and at most 512 KiB. A successful run may replace it only after
 complete validation. Failure, cancellation, interruption, `ExternalEffectUnknown`,
 or an oversized or invalid checkpoint retains the previous verified checkpoint;
 an older checkpoint is never presented as the state of the current run.
@@ -178,13 +179,16 @@ When the selected class permits them, the allowed registered tools are `read`,
 `glob`, `grep`, `expand`, `retrieve`, and `sub_agent`. Direct write, edit,
 process start, network retrieval, user interaction, and model-created rule
 changes are outside this first scope. `sub_agent` is admitted only through the
-user-confirmed typed corridor selected by that harness rule under
-[architecture 27](27-programmatic-caller-policy-and-admission.md). The corridor
-fixes the permitted class, tool subset, depth, child count, input constraints,
-and all applicable limits; a launch creates a fresh run-bound use of that
-selection and cannot widen it. A harness never calls `ask_user`, prepares a new
-corridor, or receives a fallback authorization when the corridor is absent,
-expired, suspended, revoked, exhausted, or incompatible.
+user-confirmed typed policy selected by that harness rule under
+[architecture 27](27-programmatic-caller-policy-and-admission.md); the former
+bounded-confirmation corridor was removed by
+[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), so
+the surviving admission is an exact confirmation bound to the call. That
+selection fixes the permitted class, tool subset, depth, child count, input
+constraints, and all applicable rules; a launch creates a fresh run-bound use of
+it and cannot widen it. A harness never calls `ask_user`, creates its own
+confirmation, or receives a fallback authorization when the selected policy is
+absent, suspended, revoked, or incompatible.
 
 ## Bounds
 
@@ -213,13 +217,14 @@ inside a durable transition transaction.
 ## Selection record and closed safe failures
 
 A launch admitted by the selected continual-harness model carries a separately
-versioned credential-free `ContinualHarnessSelectionV1` nested record in
-`run-execution-meaning-v4` `harness_selection` (see
-[architecture 28](28-goal-domain-and-verification.md)). It contains the harness
-identity, active rule revision, durable trigger reason, class resolution,
-dossier digest, checkpoint reference, time-zone application, and immutable
-bounds. Historical M4 and other non-harness runs do not acquire a synthetic
-harness record.
+versioned credential-free `ContinualHarnessSelectionV1` typed serde JSON record
+(see [architecture 28](28-goal-domain-and-verification.md)); the former
+`run-execution-meaning-v4` carrier was removed with the canonical codec by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). It contains the
+harness identity, active rule revision, durable trigger reason, class
+resolution, dossier reference, checkpoint reference, time-zone application,
+and the applicable rule references. Historical M4 and other non-harness runs do
+not acquire a synthetic harness record.
 
 The harness adds these closed safe failures through `ErrorDto`:
 
@@ -265,8 +270,9 @@ acquires no synthetic harness facts.
   remain authoritative and unchanged; no harness rule becomes a queue ticket or
   Mandate reason.
 - Historical M4 and retained records gain no synthetic harness state.
-- Harness limits are intrinsic/capacity/product-classified in the activating
-  specification and never become Mandate admission quotas.
+- Harness limits return only with a recorded precedent under
+  [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)
+  and never become Mandate admission quotas.
 - All directions affect fresh runs only, activated under Milestone 5+.
 
 ## Dependencies and non-goals
@@ -300,7 +306,8 @@ bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 - schedule/time fixtures: minimum interval, calendar time-zone, DST
   nearest-valid-local-time, clock-change no-repeat;
 - dossier/checkpoint/conclusion bound and rejection fixtures with redaction;
-- read-and-delegate execution-boundary and corridor admission fixtures;
+- read-and-delegate execution-boundary and exact-confirmation admission
+  fixtures;
 - limit/concurrency/chain-depth fixtures with retained-reason waiting;
 - cancellation cascade, restart `Interrupted`, no-resume, and post-commit
   reread publication fixtures;

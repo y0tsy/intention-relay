@@ -1,5 +1,18 @@
 # M4+ Concept: Post-M4 Runtime and Session Evolution
 
+> **Historical concept record.** This document preserves an M4-era research
+> investigation and is not current direction. [ADR 0045](decisions/0045-local-json-rpc-2-0-transport.md) supersedes its TLV/IPC
+> transport with JSON-RPC 2.0 over NDJSON at protocol version 2.0 and no
+> capabilities; [ADR 0046](decisions/0046-typed-serde-json-contracts.md) supersedes its binary canonical codec, tag registry,
+> digests, and identity records with typed serde JSON (RFC 8785
+> canonicalization only when a first real consumer exists); [ADR 0047](decisions/0047-workspace-root-addressing-anchor.md)
+> supersedes its `WorkspaceRoot` containment framing with a plain addressing
+> anchor; and [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) supersedes its corridor/reservation, calendar
+> period-engine (Day/Week/Month), and queue-promotion/reconciliation
+> directions, which are removed from the corpus. The sections below retain
+> their original wording as provenance; any live claim in them is superseded
+> by the approved architecture and the decision records.
+
 ## Status
 
 **Research concept, not an approved implementation scope.** This document
@@ -604,6 +617,11 @@ have distinct record tags, fixed increasing field tables, lowercase tagged
 digest identifiers, retained decoders, and golden fixtures for every claimed
 executable revision. Display labels, implementation handles, live readiness,
 and opaque owner resources are outside both revisions.
+
+> **Superseded by [ADR 0046](decisions/0046-typed-serde-json-contracts.md).** The `typed-tlv-v1`/SHA-256 family, record tags,
+> tagged digest identifiers, retained decoders, and golden fixtures are
+> removed; revision identities are typed serde JSON values with no binary
+> codec.
 
 The descriptor record contains its `ToolId`, intended owner, typed input/result
 schema references, required model capabilities, effect profile, workspace
@@ -2070,6 +2088,10 @@ selection and cannot widen it. A harness never calls `ask_user`, prepares a
 new corridor, or receives a fallback authorization when the corridor is absent,
 expired, suspended, revoked, exhausted, or incompatible.
 
+> **Superseded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md).** The typed corridor is removed from the corpus:
+> `sub_agent` admission is the same direct typed admission as any other tool
+> call, and the no-`ask_user` and no-fallback rules remain.
+
 #### Bounds
 
 The first scope uses these code-owned limits:
@@ -2865,7 +2887,9 @@ opaque token, and returns `has_more`; a malformed, cross-scope, or stale token
 fails typed conflict/resynchronization. An older client keeps existing
 session/run behavior and receives `skill_capability_required` for a Skill
 operation rather than a partially understood frame. Canonical Skill records use
-new fixed tags/field tables in the selected typed-TLV/SHA-256 family. Unknown,
+new fixed tags/field tables in the selected typed-TLV/SHA-256 family (that
+family is removed by [ADR 0046](decisions/0046-typed-serde-json-contracts.md); Skill records are typed serde JSON values).
+Unknown,
 corrupt, incompatible, stale, missing, archived, revoked, or over-limit content
 blocks only the dependent disclosure/model step before external work while
 unrelated history remains readable; no current card, body, origin, or live path
@@ -3233,6 +3257,9 @@ long-lived workers, leases, attach/detach, force-kill, or supervisor recovery.
 > preserved for historical decoding, audit, and migration analysis. They cannot
 > authorize, narrow, deny, reserve, quota, or gate a new Mandate tool call. No
 > new policy decoder requirement is created beyond preserving historic bytes.
+> [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) removes the corridor, reservation, and calendar period-engine
+> directions from the corpus: the sections below are provenance only, and no
+> future implementation may revive them.
 
 
 This is a selected concept constraint for future replanning. It closes the
@@ -3593,6 +3620,11 @@ Rejection changes no policy. No harness rule, policy, or policy revision exists
 because a model merely proposed it.
 
 #### Run and calendar limits, reservations, and recovery
+
+> **Superseded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md).** The corridors, reservations, calendar
+> period-engine (Day/Week/Month), and their fixed counters and bounds in this
+> section are removed from the corpus. Limits may exist only with a real,
+> demonstrated precedent; liveness safeguards are the only exception.
 
 Every selected policy supplies both a per-run action limit and a per-run
 concurrency limit. A user may select values no greater than 256 actions and 16
@@ -5060,6 +5092,11 @@ or reconstructs a remote continuation.
 
 ### Common historical-version policy
 
+> **Superseded by [ADR 0046](decisions/0046-typed-serde-json-contracts.md).** The canonical record tags, digest identity, and
+> the `typed-tlv` versioning family are removed; version policy now applies to
+> typed serde JSON contracts, and historical records keep their recorded
+> meaning.
+
 `intention-domain` owns versions for domain facts, semantic snapshots, and
 canonical record tags. `intention-storage` owns storage migrations and their
 ordering. `intention-protocol` owns public command, query, and frame schemas.
@@ -5936,6 +5973,11 @@ display, pagination, or other catalog-only value changed.
 
 ### Canonical revision encoding and immutable selection identity
 
+> **Superseded by [ADR 0046](decisions/0046-typed-serde-json-contracts.md).** The `IRCD`/`typed-tlv-v1` byte layout, record
+> tags, and SHA-256 digest identity below are removed; revision identity is a
+> typed serde JSON value, and RFC 8785 canonicalization is added only with a
+> first real consumer.
+
 All future safe revision digests in this direction use one closed
 canonicalization family, `typed-tlv-v1`, and SHA-256. This explicitly excludes
 JSON object ordering, Rust struct layout, serde behavior, and a third-party
@@ -6539,6 +6581,9 @@ reload, and a full configuration control plane remain separate future decisions.
 > quota, and fixed-limit fixtures test historical decoding and compatibility
 > only; they do not define admission or ceilings for new Mandate work. The
 > additive Mandate and verifier checks follow before the retained portfolio.
+> [ADR 0046](decisions/0046-typed-serde-json-contracts.md) additionally removes the `typed-tlv-v1`/SHA-256 and canonical-digest
+> fixtures, and [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) removes the corridor, reservation, calendar, and
+> queue-reconciliation fixtures with their directions.
 
 
 ### Additive Mandate and delegated-verifier evidence
@@ -6850,9 +6895,10 @@ Any approved implementation of this concept must add evidence for:
 - session default creation/migration, idempotent optimistic default changes,
   current availability projections, turn/fork/start-fork override expected
   revision conflicts, accepted selection results, and source provenance;
-- exact immutable selection persistence in queued turns, eight-step unavailable
-  promotion cascade, 32-selection user-only queue reconciliation, no reroute,
-  and safe profile availability details for queue/session reads;
+- exact immutable selection persistence in queued turns, the no-reroute
+  constraint, and safe profile availability details for queue/session reads
+  (the eight-step unavailable promotion cascade and the 32-selection user-only
+  queue reconciliation are removed by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md));
 - held recovery-promoted run fixtures proving no automatic scheduling, exact
   enabled-registry/driver/selection checks before idempotent explicit admission,
   failed admission retaining `Starting`, and ordinary two-step cancellation with
@@ -7310,7 +7356,10 @@ change, configuration change, or implementation.
 > `MandateRunExecutionMeaningV1`. It also does not require user-created MCP
 > catalogues, retained RLM tree or message ceilings, or run-rooted activity
 > identity for new Mandate work; those requirements remain historical
-> compatibility evidence only.
+> compatibility evidence only. [ADR 0046](decisions/0046-typed-serde-json-contracts.md) additionally removes the
+> `typed-tlv-v1`/SHA-256 identity family, and [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) removes the
+> held-recovery promotion, queue-reconciliation, and fixed-limit directions
+> from the corpus entirely.
 
 | Direction | State | Already selected | Still to decide | Candidate next decision package |
 | --- | --- | --- | --- | --- |
@@ -7667,7 +7716,9 @@ assigning milestone numbers here:
    execution remain active. Root origin, frozen policy snapshots,
    confirmations, corridors, delegation narrowing, live tightening, and
    calendar reservations are historical compatibility semantics only and must
-   not gate a new Mandate tool call.
+   not gate a new Mandate tool call. [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) additionally removes the
+   corridor, reservation, and calendar period-engine directions from the
+   corpus entirely.
 5. Add presentation only after each daemon/client contract exists. Persistent
    kernels, RLM delegation, session forks, continual harness, provider profiles,
    and reload must not be forced into one delivery package merely because this

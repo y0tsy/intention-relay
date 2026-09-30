@@ -2,7 +2,13 @@
 
 ## Status
 
-Superseded by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md).
+Superseded by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md). Its
+capability and connection-role clauses are further superseded by
+[ADR 0045](0045-local-json-rpc-2-0-transport.md), its canonical-codec and tag
+registry clauses by [ADR 0046](0046-typed-serde-json-contracts.md), and its
+fixed-limit clauses by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); the frozen
+text below is historical.
 
 ## Scope and supersession
 

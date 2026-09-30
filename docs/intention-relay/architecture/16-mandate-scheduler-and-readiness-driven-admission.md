@@ -35,7 +35,8 @@ Neither is activated here.
 
 Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason
 order, conflict precedence, uncertainty, and the atomic fresh-admission
-transaction. Architecture 14 owns immutable meaning and decoder compatibility.
+transaction. Architecture 14 is the historical record of the removed
+execution-meaning machinery (ADR 0046).
 Architecture 15 owns frozen tool selection and tool/resource compatibility.
 Architecture 18 owns MCP source/capability semantics and MCP-specific readiness.
 
@@ -68,7 +69,7 @@ The stages have distinct authority:
    immutable compatibility, and readiness. It creates neither `RunId` nor
    `Working` state.
 3. **Candidate selection** chooses from current eligible candidates. It creates
-   no claim, lease, reservation, retry counter, or scheduler-owned queue item.
+   no claim, lease, retry counter, or scheduler-owned queue item.
 4. **Fresh admission** is architecture 13's one atomic transaction. It alone
    binds a new `RunId`, frozen meaning, and selected reason and transitions
    `Active -> Working`.
@@ -91,7 +92,7 @@ scheduler only observes the resulting eligibility after reconciliation.
 
 Readiness is credential-free, typed live operational evidence from the owner of
 a required resource. It is neither Mandate authority, immutable execution
-meaning, compatibility, a reservation, nor a guarantee of later execution.
+meaning, compatibility, nor a guarantee of later execution.
 
 ```text
 MandateReadinessObservationV1
@@ -112,7 +113,7 @@ MandateReadinessObservationV1
 contains no credential, endpoint, handle, SDK value, raw provider error, path,
 or process topology. Absence, stale evidence, or unknown evidence is not ready.
 Owner-local `(source_instance_id, source_epoch, source_sequence)` orders
-observations; timestamps are diagnostic only. Equal identity/digest is
+observations; timestamps are diagnostic only. Equal identity and equal typed observation is
 idempotent, while changed reuse fails before mutation.
 
 The scheduler may aggregate observations but cannot manufacture, override, or
@@ -126,7 +127,7 @@ provider, configuration, hook, or model cannot repair missing meaning.
 intrinsic invalidity, confirmation denial, or quota exhaustion. A
 `CapacityUnavailable` result retains the exact reason and its provenance, leaves
 the Mandate `Active`, creates no `RunId`, consumes no reason, and creates no
-reservation, retry counter, escalation threshold, or product ceiling. Repeated
+retry counter, escalation threshold, or product ceiling. Repeated
 identical observations are coalesced by observation identity rather than causing
 unbounded durable outcome facts.
 
@@ -155,7 +156,7 @@ modification:
 4. `ReasonId`.
 
 This is deterministic selection, not a fairness entitlement, strict execution
-guarantee, or capacity reservation. The scheduler cannot add priority aging,
+guarantee, or capacity claim. The scheduler cannot add priority aging,
 weighted classes, round-robin, quotas, retry budgets, or starvation promises.
 An unavailable candidate retains its reason and can be reevaluated after a later
 durable observation.
@@ -228,17 +229,18 @@ work; architecture 19 owns those bridge details.
 
 ## Compatibility and protocol boundary
 
-No new execution kind or top-level execution-meaning envelope field is needed.
-Scheduler task IDs, wakeups, leases, polling cadence, current wall time, current
-capacity, process state, and handles are not canonical execution meaning. A
-reason retains its captured Mandate revision and provenance; current schedule,
-time zone, configuration, registry, provider, or readiness cannot retarget it.
+Scheduler state is operational state, not execution meaning: the removed
+execution-meaning envelope no longer exists (ADR 0046). Scheduler task IDs,
+wakeups, leases, polling cadence, current wall time, current capacity, process
+state, and handles never become execution meaning. A reason retains its captured
+Mandate revision and provenance; current schedule, time zone, configuration,
+registry, provider, or readiness cannot retarget it.
 
-Future scheduler projections belong to the separately negotiated Mandate
-protocol family. They use Mandate-local sequence, correlated initial replay or
-typed resync/error, and fail closed for unsupported peers. Reconnect/replay is
-read-only and cannot replay a wakeup, admission, or external action. Exact wire
-tags, pages, retention, and schema remain deferred.
+Future scheduler projections use typed JSON-RPC 2.0 methods (ADR 0045). They use
+Mandate-local sequence, correlated results or typed resync/error, and never
+deliver partial snapshots. Reconnect/replay is read-only and cannot replay a
+wakeup, admission, or external action. Exact method shapes, pages, retention,
+and schema remain deferred.
 
 M3 session replay, M4 run streaming, ordinary queue tickets, provider kinds,
 tool-call denial, snapshots, interruption, and all historical bytes/meaning
@@ -252,7 +254,7 @@ This document depends on architectures 13, 14, 15, 17, and 18 and decisions
 syntax, time-zone/DST semantics, timer or worker topology, child/verifier
 semantics, MCP capability lifecycle, bridge/IPython,
 Skills/Goals/context, provider evolution, UI, distributed coordination, leases,
-reservations, quotas, schema, migrations, crates, Cargo, Makefile/CI, or
+quotas, schema, migrations, crates, Cargo, Makefile/CI, or
 production implementation.
 Calendar/interval/time-zone/DST semantics for Mandate scheduler triggers and
 worker/process supervision topology are accepted post-M5 future directions
@@ -270,8 +272,8 @@ quick`, `make verify`, and Linux/Windows CI. It must cover:
   versus fresh admission;
 - explicit-user-first ordering, deterministic ties, duplicate/late observation
   idempotency, source epochs, stale/unknown readiness, and no event storms;
-- unavailable reason preservation without `RunId`, reservation, retry counter,
-  quota, or lifecycle mutation;
+- unavailable reason preservation without `RunId`, retry counter, quota, or
+  lifecycle change;
 - user/scheduler races, concurrent schedulers, exactly-once admission, and
   scoped reread of conflict losers;
 - trigger/readiness/admission fault injection at every projection, event,
@@ -284,7 +286,7 @@ quick`, `make verify`, and Linux/Windows CI. It must cover:
   tool-denial/model-name behavior;
 - no-current-state reconstruction from current schedule, configuration, time
   zone, readiness, provider, registry, handles, or UI;
-- negotiated/unnegotiated scheduler replay/resync and read-only reconnect;
+- scheduler replay/resync and read-only reconnect;
 - intrinsic versus capacity versus forbidden product-ceiling classification;
 - fake-secret, SDK/resource, unsafe-path, and corrupt-byte absence from all
   durable/public surfaces; and
@@ -295,14 +297,14 @@ Kernel readiness is non-authoritative operational evidence only. The scheduler
 cannot create, restore, attach, or execute a kernel; architecture 20 owns those
 kernel details.
 
-Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Their references are non-authorizing evidence and cannot create a scheduler candidate, readiness observation, reservation, quota, trigger reason, or fresh admission.
+Architecture 21 owns Goal, Skill, context, memory, and compaction semantics. Their references are non-authorizing evidence and cannot create a scheduler candidate, readiness observation, quota, trigger reason, or fresh admission.
 
 Architecture 22 owns provider availability evidence. Provider readiness is
 non-authorizing: it retains and reevaluates an existing reason but cannot create
-a reason, reservation, retry budget, RunId, or direct admission.
+a reason, retry budget, RunId, or direct admission.
 
 Architecture 23 owns ordinary Session forks. Fork creation and ordinary
 regeneration create no Mandate reason, readiness observation, or admission.
 
 Architecture 24 activity and notification observations are non-authorizing. They
-cannot create reasons, candidates, readiness, reservations, or fresh admission.
+cannot create reasons, candidates, readiness, or fresh admission.

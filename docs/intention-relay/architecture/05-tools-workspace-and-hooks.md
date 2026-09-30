@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document specifies typed core tools, mandatory `WorkspaceRoot` enforcement, tool execution policy, and the hook system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
+This document specifies typed core tools, `WorkspaceRoot` addressing semantics, tool execution policy, and the hook system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
 
 ## Tool ownership
 
@@ -64,29 +64,34 @@ The concrete Rust API can use traits and generic DTOs, but the runtime registry 
 
 ### Execution-kind scope
 
-The containment rules in this document apply to ordinary M3/M4 and ordinary v1
+The addressing rules in this document apply to ordinary M3/M4 and ordinary v1
 execution. Future Mandate WorkspaceRoot semantics are owned by architecture 15:
-WorkspaceRoot supplies the default relative base and `execute` CWD, while explicit
-absolute or parent paths are observed and evidenced rather than denied solely by
-location. Hooks remain typed and mandatory in both modes, but future Mandate hooks
-cannot add discretionary confirmation, risk, corridor, quota, reservation, or
-root-origin authorization.
+WorkspaceRoot supplies the default relative base, the `execute` CWD, and the
+default search scope, while absolute or parent paths are addressed as given.
+Hooks remain typed and mandatory in both modes, but future Mandate hooks
+cannot add discretionary confirmation, risk, or root-origin authorization.
 
-
-## WorkspaceRoot is mandatory
+## WorkspaceRoot is a required addressing anchor
 
 A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searches, expands, or executes against a local path/process.
 
 ### Required behavior
 
-- all relative paths resolve from `workspace_root`;
+- `resolve_path(relative) = workspace_root.join(relative)`: exactly one
+  resolution rule, no per-path canonicalization, and no per-tool alias;
 - tools must not use process `pwd` as a fallback;
-- absolute paths are normalized and rejected if outside the allowed root;
-- symbolic-link and path traversal behavior must be explicitly verified before access. The proven v1 policy allows symlinks only when their resolved target is proven to remain within `workspace_root`; outward, unprovable, and dangling symlinks are rejected fail-closed;
+- absolute paths and `..` are not contained; they are addressed as given, and
+  this is deliberate (ADR 0047);
+- symbolic links are ordinary filesystem material: no lexical symlink parser,
+  no containment check, and no fail-closed path rejection exists;
+- `glob` and `grep` with no explicit path search from `workspace_root`; the
+  default scope decides what a pathless call addresses, not what the process
+  may read;
 - `execute` always starts with `cwd = workspace_root` and inherits the
   invoking process environment without name-based filtering. WorkspaceRoot is
-  a filesystem and CWD boundary, not an environment or privilege boundary.
-- a tool result identifies the normalized path/CWD used, with safe redaction as necessary;
+  an addressing anchor and default CWD, not a security, environment, or
+  privilege boundary.
+- a tool result identifies the path/CWD used, with safe redaction as necessary;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 ### Project script library
@@ -100,8 +105,8 @@ root for agent-authored reusable material
   in, or excluded from, any other policy, and no plan artifact, daemon state,
   checkpoint, or configuration lives there;
 - modules are created and edited only through `write` and `edit`, read through
-  `read`, `glob`, and `grep`, and run through `execute`; the relative-path,
-  symbolic-link, and traversal rules above apply unchanged and fail closed;
+  `read`, `glob`, and `grep`, and run through `execute`; the relative-path
+  addressing rules above apply unchanged;
 - a tool result or error identifies a module by its logical relative path, with
   the same redaction as every other workspace path; and
 - `write` and `edit` remain incompatible in Plan mode, so library mutation stays
@@ -109,14 +114,14 @@ root for agent-authored reusable material
 
 A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
 
-This check is necessarily subject to a TOCTOU residual risk: validation and the
-subsequent filesystem operation are separate OS operations. M5 narrows that
-risk with repeated symlink metadata checks and fail-closed errors, but does not
-claim atomic filesystem confinement or sandbox/privilege isolation.
+WorkspaceRoot is an anchor for addressing, not a security boundary: the daemon
+and its child processes run with the user's ordinary OS authority. Real
+isolation, if it is ever required, must be an OS-level boundary such as a
+sandbox, container, or ACL, never a lexical path check.
 
 ### Safe missing-path outcome
 
-When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath { path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the authorized workspace, such as `src/missing.rs`. The tool must not disclose the absolute workspace root, a canonical or symlink target, an OS error string, command details, or file content in the error message, detail, or display form.
+When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath { path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the session workspace, such as `src/missing.rs`. The tool must not disclose the absolute workspace root, a resolved symlink target, an OS error string, command details, or file content in the error message, detail, or display form.
 
 ## Tool pipeline
 
@@ -125,7 +130,7 @@ flowchart LR
   MT[Model tool call] --> IV[Invocation DTO]
   IV --> BI[Before invocation]
   BI --> WR[Workspace resolve]
-  WR --> BV[Boundary validate]
+  WR --> BV[Hook validate]
   BV --> BE[Before execute]
   BE --> EX[Base tool]
   EX --> AE[After execute]
@@ -201,7 +206,7 @@ implementations merely because their hook phases exist.
 
 | Hook owner | Responsibility |
 | --- | --- |
-| `intention-workspace` | Resolve paths, validate workspace boundary, set process CWD. |
+| `intention-workspace` | Resolve paths from the root anchor, set process CWD, apply the default search scope. |
 | `intention-plans` | Enforce Plan-mode artifact directory mutations and hide frontmatter. |
 | `intention-vfr` | Transform eligible read output into a virtual representation. |
 | `intention-headroom` | Transform eligible tool output before model-context insertion. |
@@ -213,7 +218,7 @@ The following must remain distinct:
 | Concern | Owner |
 | --- | --- |
 | Tool's primitive work | Base tool implementation. |
-| Path/CWD enforcement | WorkspaceRoot hook. |
+| Path addressing and CWD | WorkspaceRoot hook. |
 | Plan-mode mutation authorization | Plan policy hook. |
 | Compression and retrieval metadata | Headroom hook. |
 | Virtual source transformation | VFR hook. |
@@ -223,19 +228,19 @@ The following must remain distinct:
 
 ## Trusted workspace boundary
 
-v1 does not sandbox tools or containerize processes. `WorkspaceRoot` prevents
-accidental path drift and tool-level filesystem escape for regular typed path
-operations, but a shell command can still interact with the wider user
-environment. This limitation is explicit in Plan and Build Autopilot. Plan's
-advisory instruction is not a technical boundary.
+v1 does not sandbox tools or containerize processes. `WorkspaceRoot` anchors
+relative addressing, starts `execute` at the root, and scopes pathless
+`glob`/`grep`; it does not contain absolute paths, parent paths, or symbolic
+links, and a shell command can still interact with the wider user environment.
+This limitation is explicit in Plan and Build Autopilot. Plan's advisory
+instruction is not a technical boundary.
 
 ## Required tests and outcomes
 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
-| Relative resolution | Tool contract test with changed process CWD. | Tool reads/writes only under declared `WorkspaceRoot`. |
-| Absolute escape | Path-policy test. | Outside-root path returns typed policy error. |
-| Traversal/symlink | Security-focused workspace test. | Escape attempt is rejected or safely resolved according to documented policy. |
+| Relative resolution | Tool contract test with changed process CWD. | A relative path resolves from the declared root, never from process CWD. |
+| Addressing anchor | Workspace contract test. | A pathless `glob`/`grep` searches from the root; absolute and parent paths are addressed as given, not contained. |
 | Execute CWD | Process fixture test. | Child process observes workspace root as CWD. |
 | Hook ordering | Registry unit/property test. | Same registration yields deterministic execution order. |
 | Hook rejection | Integration test. | Rejected invocation persists/publishes a typed outcome without base tool execution. |
@@ -243,7 +248,7 @@ advisory instruction is not a technical boundary.
 
 ## Quality-gate integration
 
-Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocking `make verify` inputs. Architecture checks must reject direct process-CWD fallback and VFR/Headroom coupling inside base tools. Line coverage cannot replace the explicit path-escape, execute-CWD, hook-order, and policy-denial scenarios above. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocking `make verify` inputs. Architecture checks must reject direct process-CWD fallback and VFR/Headroom coupling inside base tools. Line coverage cannot replace the explicit relative-addressing, search-scope, execute-CWD, hook-order, and policy-denial scenarios above. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions
 
@@ -253,7 +258,7 @@ Tool, WorkspaceRoot, and hook enforcement are Tier B coverage targets and blocki
 
 ## Autopilot and Mandate tool boundary
 
-Existing M3/M4 containment and confirmation behavior remains historical. The
+Existing M3/M4 path-handling and confirmation behavior remains historical. The
 accepted Build Autopilot policy intentionally removes per-action confirmation
 for the configured Build surface. Future Mandate execution also differs:
 WorkspaceRoot is a required default base/CWD with safe observation, not a path

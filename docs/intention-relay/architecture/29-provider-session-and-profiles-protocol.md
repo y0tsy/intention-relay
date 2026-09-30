@@ -13,12 +13,16 @@
 **Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This
 document is the sole detailed owner for the provider session-selection and
 profiles protocol layer: session default selection, per-turn and fork
-overrides, unavailable-queue promotion and reconciliation, profile-keyed usage,
-`provider_profiles_v1` public protocol and presentation, and held
-recovery-promoted run admission. The Slice 2 activation delivered that layer
-and was reverted, so no session-selection, catalog-serving, or held-run surface
+overrides, profile-keyed usage, and safe presentation. The Slice 2 activation
+delivered that layer
+and was reverted, so no session-selection or catalog-serving surface
 exists in the tree and a new activating specification is required to
-re-introduce it. The document does not authorize a `responses` SDK/driver,
+re-introduce it. The unavailable-queue promotion and reconciliation and the
+held-run admission path were removed from the direction by
+[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md);
+the negotiated capability plane is removed by
+[ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md). The document does
+not authorize a `responses` SDK/driver,
 user-kind parser, catalog database, profile picker/editor presentation,
 credential entry/keychain, health test, discovery, pricing, telemetry, live
 reload, or production behavior.
@@ -34,21 +38,24 @@ the configuration/provider control plane is owned by
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle and fresh admission. Architecture 14
-owns canonical framing and digests. Architecture 15 owns the registry and tool
-loop. Architecture 16 owns scheduler readiness reevaluation. Architecture 22
+owns run-execution meaning and historical compatibility; its canonical codec
+was removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 15
+owns the registry and tool loop. Architecture 16 owns scheduler readiness
+reevaluation. Architecture 22
 owns provider kinds, profiles, catalogs, selections, and driver compatibility.
 Architecture 23 owns session branching. Architecture 25 owns the configuration/
 provider control plane. Architecture 27 owns programmatic-caller policy.
 
 This document owns only the session-selection and presentation layer. A
-session default, override, promotion, reconciliation, usage aggregate, or
-protocol frame cannot create a `RunId`, Mandate reason, lifecycle transition,
+session default, override, usage aggregate, or protocol frame cannot create a
+`RunId`, Mandate reason, lifecycle transition,
 scheduler candidate, tool permission, registry slot, child edge, verifier
 authority, MCP capability, bridge grant, kernel epoch, context projection,
 branch, or reconciliation result. It is not a second runtime, registry,
 scheduler, persistence authority, catalog, or sandbox.
 
-## Session selection, runs, queues, and usage
+## Session selection, runs, and usage
 
 **Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.** The
 following records the direction as it was activated and then reverted; none of
@@ -84,7 +91,7 @@ persisted one `ResolvedRunProviderSelectionDto`:
 
 ```text
 ResolvedRunProviderSelectionDto
-  selection_canonicalization_version
+  selection_contract_revision
   profile_id
   provider_profile_revision_id
   kind_id
@@ -98,20 +105,18 @@ ResolvedRunProviderSelectionDto
   effective_execution_policy
   effective_loopback_policy_or_not_applicable
   provider_driver_contract_revision
-  selection_source                 # immutable provenance, outside execution digest
+  selection_source                 # immutable provenance, not part of the selection contract
 ```
 
-One profile per run, no fallback chain. Promotion of an unavailable exact
-selection: the original `RunId`, `Starting -> Failed` with
-`provider_configuration_unavailable`, a closed detail, and promotion
-provenance, with no provider call. Unavailable promotion FIFO proceeded only
-through **8** unavailable selections per terminal transition; exhaustion wrote
-a typed queue-reconciliation-needed marker. `ReconcileUnavailableQueueCommandDto`
-(user-only, idempotent) handled at most **32** currently unavailable immutable
-selections per page; the request carried no page cursor, because the durable
-reconciliation marker was the single paging authority and its cursor is what
-the acceptance reported. It terminalized only those, might promote the first
-available item, and never rerouted to a current default or new revision. Usage
+One profile per run, no fallback chain. An unavailable exact selection failed
+the original `RunId` with `provider_configuration_unavailable`, a closed detail,
+and recorded provenance, with no provider call, and never rerouted to a current
+default or new revision. The unavailable-queue promotion and reconciliation
+machinery (`ReconcileUnavailableQueueCommandDto`, its durable reconciliation
+marker, and its per-transition and per-page selection bounds) was removed from
+the direction by
+[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)
+and is not part of this document. Usage
 was keyed by exact profile identity and revision; aggregated by profile into
 one bounded entry per `(revision, model)` identity and separately by
 revision/model; no price, currency, or estimated cost; different profiles
@@ -126,16 +131,20 @@ and were never activated by Slice 2.
 ## Public protocol and presentation
 
 **Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
-`provider_profiles_v1` was one additive negotiated capability for paginated
-catalog reads, catalog status, session default query/command, safe per-turn and
-fork overrides, resolved-selection projections, pending-removal accept/reject,
-and explicit admission of a held recovered run. It did not imply live reload,
+The Slice 2 profiles protocol served paginated catalog reads, catalog status,
+session default query/command, safe per-turn and fork overrides,
+resolved-selection projections, and pending-removal accept/reject. It was the
+additive negotiated capability `provider_profiles_v1`; that capability mechanism
+was removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md), so
+a re-introduced surface uses plain typed methods with no capability or family
+gate. It did not imply live reload,
 configuration editing, profile testing, credential entry, or model discovery.
 Configuration editing was activated for M5+ Slice 2 by
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) through the
 atomic reload contract of [architecture 25](25-configuration-provider-control-plane.md);
-it was not part of `provider_profiles_v1`, and ADR 0044 removed both surfaces.
-The daemon no longer advertises or serves `provider_profiles_v1`.
+it was not part of this surface, and ADR 0044 removed both. The daemon no longer
+advertises or serves `provider_profiles_v1`, and the held-run admission path was
+removed by [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md).
 
 A catalog list was bounded, paginated by an opaque token, sorted by stable
 `ProfileId`, carried the active `CatalogRevisionId`, and returned `has_more`; a
@@ -149,7 +158,7 @@ capabilities, and local readiness. The closed readiness projection was `ready`,
 `GetProviderCatalogStatusQueryDto` returned the closed activation state
 `preparing`, `active`, `pending_removal`, or `activation_recovery_required`;
 the applicable closed degraded reason; active/candidate safe revisions; the
-default; safe validation/removal impact; and the negotiated capability state.
+default; and safe validation/removal impact.
 
 Adapters could only read safe state, set session defaults, supply
 user-originated overrides, accept/reject pending removal, and admit a held
@@ -184,7 +193,7 @@ private candidate and pending status, recorded
 In the reverted activation, startup opened storage first, interrupted unfinished
 runs before any read response, then prepared and activated the catalog. A
 degraded daemon served health, safe catalog status/validation, and
-session/run/tree reads; all provider state changes, admission, promotion, and
+session/run/tree reads; all provider state changes, admission, and
 default changes were rejected with `execution_not_ready`; the only exceptions
 were accept/reject of the one pending candidate. A crash after acceptance
 produced `ProviderCatalogActivationRecoveryRequired` before reconstruction and
@@ -194,16 +203,10 @@ reasons were `removal_candidate_pending`, `removal_candidate_rejected`,
 `removal_candidate_expired`, and `activation_recovery_required`. ADR 0044
 removed this startup path, the readiness gate, and every catalog table.
 
-A recovery-promoted `Starting` run was never auto-scheduled; it was held as a
-durable active run. The user issued the idempotent `AdmitRecoveredRunCommandDto`
-(exact session/run identities and an operation ID), which verified the complete
-immutable selection, the enabled exact registry entry, driver compatibility,
-and active catalog readiness before scheduling; a repeat could not schedule a
-second task; failed verification returned a closed safe error and the run
-stayed held; the ordinary stop path terminalized
-`Starting -> Cancelling -> Cancelled` without provider/tool/external work. With
-the revert, no recovery-promoted held run exists and the ordinary recovery path
-is again the only one.
+The reverted Slice 2 also held a recovery-promoted `Starting` run for explicit
+`AdmitRecoveredRunCommandDto` admission; ADR 0048 removed that held-run
+admission path from the direction, and the ordinary recovery path is again the
+only one.
 
 ## Compatibility and historical preservation
 
@@ -248,14 +251,9 @@ return to the accepted direction and a re-introduction must restore them:
   `SessionProviderProfileChanged` publication per committed change (no durable
   copy in Slice 2);
 - per-turn/fork override binding and mismatch-rejection fixtures;
-- unavailable-queue promotion (8 per transition), reconciliation (32 per page)
-  with the durable marker as the single paging authority, and no-reroute
-  fixtures;
 - profile-keyed usage aggregation and no-double-count fixtures;
-- `provider_profiles_v1` pagination, catalog-status, and readiness-projection
+- profiles-method pagination, catalog-status, and readiness-projection
   fixtures;
 - pending-removal accept/reject/expiry and degraded-mode fixtures;
-- held recovered-run admission (`AdmitRecoveredRunCommandDto`) idempotency and
-  no-auto-schedule fixtures;
 - M3/M4 byte/meaning/replay/recovery preservation and fake-secret regression
   across logs, errors, snapshots, events, and adapter DTOs.

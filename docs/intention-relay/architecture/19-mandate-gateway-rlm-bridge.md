@@ -18,7 +18,7 @@ ingress operation correlation, safe bridge-visible delivery, and bridge recovery
 It does not authorize a crate, Python dependency, kernel, listener, storage
 migration, wire implementation, runtime, or production bridge work.
 
-It applies only to future Mandate execution. M3/M4 bytes, IDs, UUIDs, digests,
+It applies only to future Mandate execution. M3/M4 bytes, IDs, UUIDs,
 cursors, events, snapshots, queue tickets, provider behavior, replay, recovery,
 and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded
 ordinary semantics. Retained RLM bridge, child, and activity material remains
@@ -28,8 +28,8 @@ research provenance and historical-only where it conflicts with architectures
 ## Ownership and one capability path
 
 Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact
-reconciliation. Architecture 14 owns the execution envelope, canonical framing,
-digest, decoder, and compatibility classes. Architecture 15 owns the fixed
+reconciliation. Architecture 14 is the historical record of the removed
+execution-meaning envelope and decoders (ADR 0046). Architecture 15 owns the fixed
 registry, frozen tool selection, direct admission, model-tool loop, `ToolCallId`,
 generic effect evidence, and recovery. Architecture 16 owns scheduler
 reevaluation and readiness-driven admission. Architecture 17 owns child Mandates,
@@ -52,17 +52,16 @@ capability path.
 
 ## Immutable bridge selection and ephemeral grant
 
-Architecture 14 owns canonical record framing. This document owns the semantic
-fields of the credential-free nested bridge selection in future Mandate meaning:
+This document owns the semantic
+fields of the credential-free nested bridge selection in future Mandate meaning
+(typed serde JSON, ADR 0046):
 
 ```text
 MandateBridgeSelectionV1
   gateway_contract_revision
   ingress_family
-  required_protocol_capabilities
   safe_projection_revision
   operation_binding_revision
-  canonical_bridge_selection_digest
 ```
 
 It freezes the executable bridge contract, not a live attachment. It excludes a
@@ -91,17 +90,17 @@ context. It is not a credential, durable fact, semantic selection, lifecycle
 permission, policy decision, child delegation, verifier authority, or
 caller-selected identity. It expires on model-step closure, run terminalization
 or interruption, cancellation reaching the bridge gate, channel detachment, or
-daemon exit. It never enters canonical meaning, events, snapshots, tool facts,
+daemon exit. It never enters execution meaning, events, snapshots, tool facts,
 model context, logs, diagnostics, child delegation, or public replay.
 
 ## Attachment, operation identity, and admission
 
-`daemon_tool_gateway_v1` is a future additive capability. Attachment uses the
-existing local protocol negotiation and requires `model_tool_loop_v1` whenever
-the peer receives future tool-loop facts. Unsupported or incomplete negotiation
-fails closed before a partial bridge result, history page, snapshot, or live fact
-is delivered. The package creates no second local listener, TCP/HTTP endpoint,
-remote attachment, or daemon.
+Bridge attachment is a future additive surface on the repository's JSON-RPC 2.0
+local protocol (ADR 0045) and requires `model_tool_loop_v1` descriptor/model
+support whenever the peer receives future tool-loop facts. An unsupported
+request fails with a typed error before a partial bridge result, history page,
+snapshot, or live notification is delivered. The package creates no second
+local listener, TCP/HTTP endpoint, remote attachment, or daemon.
 
 `BridgeOperationId` is the caller-stable idempotency identity of one bridge
 ingress request. It is distinct from diagnostic correlation and daemon-assigned
@@ -116,7 +115,7 @@ BridgeOperationV1
   model_step_id
   tool_id
   descriptor_revision
-  typed_input_digest
+  typed_input_reference
   tool_call_id
   admission_outcome
   attempt_reference
@@ -124,7 +123,7 @@ BridgeOperationV1
 
 It excludes the grant, raw input, Python/Jupyter value, provider value, path,
 endpoint, credential, SDK object, handle, process, socket, and raw output. Equal
-operation identity and semantic digest return the committed binding or safe
+operation identity and equal typed content return the committed binding or safe
 durable outcome without another `ToolCallId`, child, or effect. Changed reuse
 fails before mutation or effect.
 
@@ -133,8 +132,8 @@ bridge and descriptor selection, operation idempotency, typed input, intrinsic
 bounds, and live availability. It then invokes architecture 15's generic
 admission contract. For Mandate execution the only bridge admission outcomes are
 `Admitted`, typed `Incompatible`, typed `Unavailable`, an idempotent existing
-binding, or an operation conflict. `AwaitingConfirmation`, corridor, quota,
-reservation, root-origin, parent, Goal, Skill, provider, or bridge-specific
+binding, or an operation conflict. `AwaitingConfirmation`, quota, root-origin,
+parent, Goal, Skill, provider, or bridge-specific
 authorization cannot be introduced.
 
 ```mermaid
@@ -145,7 +144,7 @@ sequenceDiagram
   participant D as Durable state
   participant T as Tool owner
 
-  F->>B: Attach and negotiate
+  F->>B: Attach over JSON-RPC
   B->>D: Reread active context
   D-->>B: Ephemeral grant
   F->>B: Operation ID and typed call
@@ -211,7 +210,7 @@ authority/baseline/evidence operation. Verifier uncertainty remains verifier
 local. Similarly, bridge transport may carry only architecture-18 safe MCP
 projections; it cannot discover, select, invoke, reattach, or recreate MCP work.
 
-Bridge replay is a negotiated read-only projection layered on the underlying
+Bridge replay is a read-only projection layered on the underlying
 sequence owners. It provides correlated initial replay, typed resync/error, and
 then live post-commit facts after required history completes. It cannot create a
 bridge-owned sequence, resend a graph message, start a child, consume verifier
@@ -228,7 +227,6 @@ BridgeRunGrantDto
 
 BridgeAttachmentResponseDto
   bridge_run_grant
-  negotiated_capabilities
   initial_run_cursor
 
 BridgeInvocationCommandDto
@@ -242,18 +240,17 @@ BridgeInvocationAcceptedDto
   admission_state
 ```
 
-The first bridge capability is `daemon_tool_gateway_v1`; it requires the existing
-local hello/version negotiation and the negotiated `model_tool_loop_v1`
-capability whenever the peer receives post-M4 tool-loop facts; a peer lacking
-either fails closed. The bridge reuses the existing private per-user
-Unix-socket/Windows-named-pipe endpoint, `ProtocolHelloDto` negotiation, the
-**1 MiB frame bound**, and the OS-user access boundary; there is no second
-listener, TCP/HTTP endpoint, remote attachment, credential, sandbox, or second
-daemon.
+The bridge reuses the repository's JSON-RPC 2.0 local protocol (ADR 0045), its
+version-only hello, the existing private per-user
+Unix-socket/Windows-named-pipe endpoint, the **1 MiB message bound**, and the
+OS-user access boundary; it requires `model_tool_loop_v1` descriptor/model
+support whenever the peer receives post-M4 tool-loop facts, and a request that
+cannot be served fails with a typed error. There is no second listener, TCP/HTTP
+endpoint, remote attachment, credential, sandbox, or second daemon.
 
 A grant binds its holder to one daemon-held `SessionId`, `RunId`, originating
 `TurnId`, and `ModelStepId` (daemon-assigned, never caller-selected). It is
-non-secret capability state for one live daemon process and never enters
+non-secret ephemeral state for one live daemon process and never enters
 `RunExecutionMeaningDto`, a snapshot, model message, tool fact, log, diagnostic,
 or safe public history. It expires when the run becomes terminal, the run is
 interrupted, the daemon process exits, or the channel detaches. A persistent
@@ -266,8 +263,8 @@ request, distinct from the diagnostic `CorrelationIdDto` and the daemon-assigned
 direct-model ingress receives an equivalent stable ID from the gateway before
 admission. The daemon validates the opaque grant, resolves the selected active
 descriptor, and assigns the canonical `ToolCallId`, durably binding the
-operation to the authority context, `ToolId`, descriptor revision, and a
-non-public canonical typed-input digest before any external action. The
+operation to the authority context, `ToolId`, descriptor revision, and the
+non-public typed input before any external action. The
 operation record contains no grant value, credential, raw input, Python/Jupyter
 value, provider value, workspace root, implementation handle, or source path.
 Repeating an equal command with the same `BridgeOperationId` returns the saved
@@ -295,7 +292,7 @@ first-scope limits are:
   group limit, policy quotas, or tool-effect serialization);
 - **1 MiB** per local frame;
 - a **64-frame, 10-second** bounded slow-peer subscription path;
-- **512 KiB** per canonical fact;
+- **512 KiB** per durable fact;
 - **4 MiB** of commit-order tool output and successful result content in one
   group; and
 - **256 facts or 512 KiB** per initial-history page.
@@ -305,8 +302,8 @@ queue. The bounded slow-peer path never delays durable execution or healthy
 subscribers: a slow, resyncing, or detached peer receives typed
 resynchronization and is bounded by the 64-frame/10-second path without
 blocking execution, persistence, or healthy peers. A detached peer recovers
-only from durable history: reconnect,
-renegotiate, request the run from the last accepted cursor, and receive captured
+only from durable history: reconnect and request the run from the last accepted
+cursor, and receive captured
 replay, reasoning pages/completion, tool-history pages/completion, then later
 live frames in the selected order; if either history class is absent, its pages
 and completion frame are omitted and the remaining frames retain this order. The
@@ -338,10 +335,10 @@ activity, policy, or execution-kind state. No current mutable state may
 reconstruct missing bridge meaning.
 
 Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted trees,
-policy/corridor inheritance, queues, activity identities, and product limits
-remain historical only. An explicit later ordinary bridge may reference exact
-legacy bytes under architecture 14, but cannot rewrite, normalize, make old work
-Mandate-executable, or synthesize future state.
+policy inheritance, queues, activity identities, and product limits
+remain historical only. No later bridge may reference exact
+legacy bytes, rewrite, normalize, make old work
+Mandate-executable, or synthesize future state (ADR 0038).
 
 This document depends on architectures 13--18 and decisions 0001, 0002, 0003,
 0004, 0006, 0007, 0008, 0009, and 0010. Architecture 20 owns kernel
@@ -358,11 +355,11 @@ coverage tiers, feature profiles, storage/wire versions, and architecture
 fixtures, then pass `make quick`, `make verify`, and Linux/Windows CI. It must
 cover:
 
-- canonical bridge-selection goldens and negative kind/version/revision cases;
+- typed bridge-selection fixtures and negative kind/version/revision cases;
 - grant scope/expiry for wrong run, revision, step, daemon epoch, detachment,
   terminalization, cancellation, and restart;
 - no-bypass/composition-only gateway fixtures and impossible Mandate
-  confirmation/corridor/quota/reservation admission states;
+  confirmation/quota admission states;
 - equal operation replay, changed reuse, concurrent duplicate ingress, and
   atomic operation/admission/`ToolCallId` binding;
 - fault injection across binding, admission, start, fragment/result, event,
@@ -372,7 +369,7 @@ cover:
   consumers;
 - atomic `sub_agent` child creation without retained-RLM identity conversion,
   verifier non-authority, and MCP isolation;
-- negotiated/unnegotiated replay, history-before-live, cursor/resync, detached
+- replay, history-before-live, cursor/resync, detached
   peer, and zero-effect reconnect outcomes;
 - M3/M4 and retained-RLM byte/meaning/replay/recovery preservation, M4 tool
   denial, historical startup, and no-current-state reconstruction;

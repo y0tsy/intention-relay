@@ -10,7 +10,7 @@ projection, its bounds, failures, and observability. It is adopted by
 preserves M3/M4 bytes, meanings, and the current single-version model contract
 ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
 
-It authorizes no crate, DTO, tag, wire, storage schema, configuration field, UI
+It authorizes no crate, DTO, wire, storage schema, configuration field, UI
 page, feature profile, quality-policy target, or production behavior. Delivery
 belongs to the fifth activating slice of Milestone 5+; a later activating
 specification must declare crates, contract versions, tests, coverage tiers,
@@ -77,7 +77,7 @@ scopes are closed sets; a new kind or scope requires a new decision.
 | `ToolUsage` | Adapted legacy tool-usage guidance; daemon-owned default | Deployment configuration |
 | `CodingConventions` | Adapted legacy coding conventions; daemon-owned default | Deployment configuration |
 | `Custom` | User-authored fragment | User, project, or session configuration |
-| `ProjectInstructions` | Workspace `AGENTS.md` under the session `WorkspaceRoot` | Project file, addressed by digest |
+| `ProjectInstructions` | Workspace `AGENTS.md` under the session `WorkspaceRoot` | Project file, addressed by workspace path |
 | `Mode` | Plan/Build policy instruction, owned by architecture 07 | Reserved contribution |
 | `Vfr` | VFR placeholder/expansion instructions, owned by architecture 06 | Reserved contribution, configuration-dependent |
 
@@ -96,14 +96,20 @@ InstructionSourceV1
   source_identity
   declared_order
   enabled
-  text_digest
-  canonical_source_digest
+  text_reference
 ```
 
 A source carries no authority, no executable content, no credential, no
 provider or tool payload, and no implementation resource. Instruction text is
 UTF-8 configuration content; a source that is not representable as bounded text
 fails closed.
+
+The records in this document are typed serde JSON; the former `typed-tlv`
+framing, canonical bytes, SHA-256 digests, and goldens were removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md), and no canonical
+digest or identity layer exists. Any content addressing or canonicalization is
+introduced only with its first real consumer under the RFC 8785 policy
+(ADR 0046).
 
 ## Profile revisions and immutable configuration
 
@@ -117,20 +123,19 @@ InstructionProfileRevisionV1
   profile_contract_revision
   ordered_source_references
   profile_revision_identity
-  canonical_profile_digest
 ```
 
 The profile is durable configuration with exactly one live format version; no
 migration, no second format, and no compatibility layer exists
 ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
-The revision identity and digest are the only profile data that may leave the
+The profile revision identity is the only profile data that may leave the
 configuration surface; fragments themselves stay readable only where the user
 edits them.
 
 ## Canonical assembly and the effective instruction projection
 
 Assembly happens once per admitted run, before the first model step, from the
-profile revision, the workspace instruction digest, the run's mode, and the
+profile revision, the workspace instruction content, the run's mode, and the
 resolved VFR configuration:
 
 1. `Deployment` fragments in declared order;
@@ -142,8 +147,8 @@ resolved VFR configuration:
 7. `Vfr`.
 
 Fragments of one scope are ordered by `declared_order` with `source_identity`
-as the deterministic tie-break. Contributions are joined by a fixed canonical
-separator whose bytes are part of the projection digest; the initial canonical
+as the deterministic tie-break. Contributions are joined by a fixed
+separator whose bytes are part of the projection identity; the initial
 separator is the legacy `\n\n---\n\n` join. The order, the separators, and the
 canonicalization are fixed by this document and can only change by a new
 decision.
@@ -152,22 +157,22 @@ decision.
 InstructionProjectionV1
   projection_contract_revision
   ordered_contribution_references
-  contribution_revision_and_digest
+  contribution_revision_references
   declared_audience
   total_instruction_size
-  canonical_projection_digest
+  projection_revision_identity
 ```
 
 ```mermaid
 flowchart TD
   P[Profile revision] --> A[Assembly at admission]
-  W[AGENTS.md digest] --> A
+  W[AGENTS.md content] --> A
   M[Mode contribution] --> A
   V[VFR contribution] --> A
   A --> J[Immutable projection]
   J --> R[Request system context]
   J --> F[Fork and handoff records]
-  J --> D[Safe usage digest]
+  J --> D[Safe usage reference]
 ```
 
 The projection is frozen before the first model step of the run. Every later
@@ -179,7 +184,7 @@ current session state, or a live ancestor. The projection is the contents of
 the `effective_instruction_projection` and
 `materialized_effective_instruction_projection` fields of the fork base and
 preview records ([architecture 23](23-non-destructive-session-branching-and-regeneration.md)),
-and its canonical digest is recorded as safe usage provenance. It adds no event
+and its revision identity is recorded as safe usage provenance. It adds no event
 sequence, no lifecycle transition, and no authority.
 
 ## Workspace project instructions
@@ -187,11 +192,12 @@ sequence, no lifecycle transition, and no authority.
 `AGENTS.md` at the session's `WorkspaceRoot` is the only file-based instruction
 source and the only part of the projection that comes from project material.
 
-- The file is resolved inside the workspace boundary with the ordinary
-  `WorkspaceRoot` rules; a path that escapes the boundary, resolves through an
-  outward, unprovable, or dangling symbolic link, or is not a regular file fails
-  closed.
-- The file is read as bounded UTF-8 text and addressed by content digest. Its
+- The file is addressed by joining its path onto the session's `WorkspaceRoot`;
+  the root is an addressing anchor, not a security boundary, and no symlink or
+  containment check exists
+  ([ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md)). An
+  unreadable or non-regular file fails closed.
+- The file is read as bounded UTF-8 text. Its
   content is never executed, never parsed as configuration, and never treated
   as a hook, tool definition, or policy input.
 - An absent file contributes nothing and is not a failure; a project without
@@ -199,7 +205,8 @@ source and the only part of the projection that comes from project material.
 - The file is project content, not authority: it cannot widen tool policy,
   provider selection, admission policy, or confirmation requirements, and its
   text is labeled as project material inside the projection.
-- The digest, not the text, is durable outside the projection itself.
+- The workspace reference, not the text, is durable outside the projection
+  itself.
 
 ## Editing surface and preview
 
@@ -210,7 +217,7 @@ exposes the instruction configuration surface:
   fragments;
 - validate an edit before it commits and reject it with a typed failure when it
   is invalid, inconsistent, or over bound;
-- show the current profile revision identity and canonical digest;
+- show the current profile revision identity;
 - preview the effective instruction projection for a chosen session, policy,
   and mode without admitting a run, creating a reason or selection, or writing
   durable instruction state;
@@ -240,7 +247,7 @@ three rules are normative:
 3. a provider cannot scan, inject, rewrite, or reorder the projection, and no
    driver may add framing, caching, or templating of its own.
 
-## Bounds, canonicalization, and digests
+## Bounds and deterministic assembly
 
 Intrinsic bounds are:
 
@@ -250,12 +257,17 @@ Intrinsic bounds are:
 - at most 64 enabled fragments;
 - workspace project instructions at most 16,384 characters.
 
-Canonical bytes reuse the `typed-tlv-v1` framing and SHA-256 digest policy of
-the owning records ([architecture 14](14-run-execution-meaning-and-historical-compatibility.md)).
-Digests cover content, kind, scope, order, enabled state, and audience, and
-exclude credentials, absolute paths, current state, and display data. The same
-profile revision, project instruction digest, mode, and configuration must
-produce byte-identical projection bytes and the same digest, on every platform.
+Assembly is deterministic: the same profile revision, project instruction
+content, mode, and configuration must produce the same ordered contribution
+list and the same rendered projection on every platform. The former
+`typed-tlv-v1` framing, canonical bytes, and SHA-256 digest policy of the owning
+records were removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md); the records are
+typed serde JSON, and any canonical serialization or digest is introduced only
+with its first real consumer under the RFC 8785 policy (ADR 0046). A future
+projection identity must cover content, kind, scope, order, enabled state, and
+audience, and exclude credentials, absolute paths, current state, and display
+data.
 
 ## Failure behavior
 
@@ -272,8 +284,7 @@ instruction_source_unavailable
 - `instruction_projection_too_large`: the projection exceeds an intrinsic
   bound.
 - `instruction_source_unavailable`: a workspace instruction source is
-  unreadable, escapes the workspace boundary, is not bounded text, or exceeds
-  its own bound.
+  unreadable, is not bounded text, or exceeds its own bound.
 
 Each failure is a typed known pre-effect rejection at admission. It discloses no
 credential, absolute path, file content, raw payload, or implementation detail.
@@ -285,8 +296,8 @@ may be repaired by current state.
 
 Instruction text is durable configuration content, not a secret and not an
 activity fact. Logs, activity records, notification projections, and audit
-records carry the profile revision identity, the workspace instruction digest,
-and the canonical projection digest only; they never carry fragment text,
+records carry the profile revision identity and the workspace instruction
+reference only; they never carry fragment text,
 `AGENTS.md` content, or the assembled projection. Fake-secret regression covers
 every public, durable, log, and activity surface.
 
@@ -330,15 +341,14 @@ A later activating specification must declare exact crate owners, test targets,
 coverage tiers, feature profiles, storage/wire versions, and fixtures, then pass
 `make quick`, `make verify`, docs-check, and Linux/Windows CI. It must cover:
 
-- deterministic canonical assembly, ordering, separators, and digest stability
-  across repeated admissions and across platforms;
+- deterministic assembly, ordering, separators, and projection identity
+  stability across repeated admissions and across platforms;
 - profile revision immutability for every edit operation, with typed validation
   failures;
 - intrinsic-bound rejection for the total projection, one fragment, the
   fragment count, and workspace instructions, without truncation or sampling;
-- an absent `AGENTS.md` contributing nothing, and an unreadable,
-  boundary-escaping, non-text, or oversized one failing closed with
-  `instruction_source_unavailable`;
+- an absent `AGENTS.md` contributing nothing, and an unreadable, non-text, or
+  oversized one failing closed with `instruction_source_unavailable`;
 - `instruction_profile_unavailable` and `instruction_projection_too_large`
   failing closed with no fallback or partial projection;
 - projection freeze at admission, reuse across later steps, verbatim fork and

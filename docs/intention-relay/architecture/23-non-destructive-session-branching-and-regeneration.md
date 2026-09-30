@@ -27,8 +27,10 @@ snapshots, replay, recovery, and M4 `ToolCallRecorded ->
 
 Architecture 04 owns current Session/Run persistence and recovery. Architecture
 13 owns Mandate lifecycle, triggers, fresh admission, uncertainty, and
-reconciliation. Architecture 14 owns execution-meaning canonical framing and
-compatibility. Architectures 15--20 own tool, scheduler, child/verifier, MCP,
+reconciliation. Architecture 14 owns run-execution meaning and historical
+compatibility; its canonical framing was removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Architectures 15--20
+own tool, scheduler, child/verifier, MCP,
 bridge, and kernel semantics. Architecture 21 owns Goal/Skill/context source,
 audience, and disclosure semantics. Architecture 22 owns provider/profile/
 capability/reasoning semantics.
@@ -109,12 +111,16 @@ Missing, corrupt, unknown, or incompatible data blocks dependent work before an
 effect and never falls back to a live source, current catalog, provider, file,
 index, memory, registry, bridge, kernel, MCP, or UI state.
 
-The retained v1 snapshot/preview/command canonical records preserve their
-recorded bytes and meaning. New fork snapshot and preview records use v2 only
-when typed, ordered, compatibility-bound inherited reasoning references are
-needed. References carry source identity/cursor/category/digest/size and never
-reasoning text. Architecture 22 owns reasoning compatibility; this document owns
-only the immutable fork-reference transfer.
+Fork snapshot, preview, and command records are typed serde JSON shapes; the
+former `typed-tlv` framing, canonicalization-version byte, and SHA-256 digest
+construction were removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md), and under the
+single-version policy ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md))
+there is one live shape per record, carrying the typed, ordered,
+compatibility-bound inherited reasoning references. References carry source
+identity, cursor, category, and size and never reasoning text. Architecture 22
+owns reasoning compatibility; this document owns only the immutable
+fork-reference transfer.
 
 `WorkspaceStateDto::Unverified` is the only initial workspace-state value. It
 makes no claim about files, processes, repositories, remote systems, or effects.
@@ -126,18 +132,18 @@ Future storage adds fork-owned records for conversation trees, child lineage,
 base snapshots, fork operations, and a separately sequenced lineage journal. It
 does not alter source Session event sequences, run cursors, or ordinary replay.
 
-One transaction validates the source head and preview digest, then atomically
-creates the child projection/snapshots, lineage, base snapshot, optional anchor,
-child events, lineage event, and idempotency result. No provider, scheduler,
-tool, process, network, kernel, MCP, bridge, or other external work occurs in
-that transaction.
+One transaction validates the source head and the accepted preview binding,
+then atomically creates the child projection/snapshots, lineage, base snapshot,
+optional anchor, child events, lineage event, and idempotency result. No
+provider, scheduler, tool, process, network, kernel, MCP, bridge, or other
+external work occurs in that transaction.
 
 Child events order as `SessionCreated`, `SessionForked`, then optional
 `ForkAnchorMaterialized`. The separate journal records `ConversationTreeCreated`
 and `ConversationBranchLinked`. No synthetic source `SessionForked` event is
 allowed.
 
-Equal operation identity and command digest return the same child without new
+Equal operation identity and command semantics return the same child without new
 records. Changed reuse, stale source state, preview mismatch, ineligible
 boundary, unavailable history, unsupported snapshot, or unavailable reference
 fails closed before a side effect. A failed transaction leaves no partial child,
@@ -155,16 +161,19 @@ scheduler behavior, or Mandate-child creation. Snapshot, title, and page bounds
 remain intrinsic representation/protocol constraints where their owning field
 table requires them.
 
-`session_fork_v1` is a separately negotiated family containing typed preview,
-fork, ordinary regeneration, tree page, rename, archive, and restore DTOs. Tree
-reads are bounded immediate-child projections with stable continuation order and
-their own lineage sequence. They are not tree-wide event streams. Existing M3
-session replay and M4 run streams remain unchanged; old peers fail closed for
-this additive family.
+The typed fork preview, fork, ordinary regeneration, tree page, rename, archive,
+and restore DTOs are exposed as ordinary JSON-RPC methods over the single local
+connection; the former `session_fork_v1` negotiated family and its capability
+gate were removed by
+[ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md). Tree reads are
+bounded immediate-child projections with stable continuation order and their own
+lineage sequence. They are not tree-wide event streams. Existing M3 session
+replay and M4 run streams remain unchanged; a peer that does not speak protocol
+2.0 receives the typed version-mismatch error before any method is served.
 
 ## Detailed protocol DTOs, field tables, and limits
 
-The `session_fork_v1` public contract families are:
+The fork public DTOs are:
 
 ```text
 ForkSessionCommandDto
@@ -181,24 +190,24 @@ RestoreSessionCommandDto
 ```
 
 `ForkSessionCommandDto` contains source session identity, the typed boundary,
-`ForkOperationId`, expected source sequence, expected preview digest, an
+`ForkOperationId`, expected source sequence, the expected preview binding, an
 optional validated title, and an optional safe future-profile override. It never
 accepts a client-selected child ID, raw snapshot, raw event, configuration path,
 credential, workspace path, or opaque implementation value. `ForkSessionResultDto`
 is bounded and returns child and tree identities, immediate parent, accepted
 boundary, optional child-anchor `TurnId`, snapshot and context schema
-versions/digests, inherited future defaults, and the closed `unverified`
+versions, inherited future defaults, and the closed `unverified`
 workspace notice; it does not return the up-to-1-MiB base snapshot inside a
 transport response.
 
 `GetForkPreviewQueryDto` takes only a source session and a candidate typed
-boundary. `ForkPreviewDto` returns a fresh source sequence, the `fork-preview`
-digest, accepted boundary data, safe inherited future defaults, the
+boundary. `ForkPreviewDto` returns a fresh source sequence, accepted boundary
+data, safe inherited future defaults, the
 deterministic fallback title, counts and safe types of retained terminal
-references, the count and aggregate canonical size of inherited
+references, the count and aggregate size of inherited
 reasoning-history references, and the closed `unverified` workspace state. The
-client must send the exact preview digest it accepted; it must not manufacture a
-preview digest locally.
+client must bind its command to the exact preview it accepted; it must not
+manufacture a preview binding locally.
 
 `StartForkRunCommandDto` names the child session, the immutable anchor turn, and
 a separate operation ID. It is valid only for a non-archived child created from
@@ -243,75 +252,55 @@ the stable presentation fallback until renamed. Rename changes one session only,
 writes `SessionRenamed`, and never changes lineage, a base snapshot, or a
 tree-wide title.
 
-### Canonical field tables
+### Field tables
 
-The retained `fork-base-snapshot-v1`, `fork-preview-v1`, and `fork-command-v1`
-records keep their existing `typed-tlv-v1` framing and SHA-256 inputs exactly.
-Their v1 field tables are:
+Fork snapshot, preview, and command records are typed serde JSON shapes; the
+former `typed-tlv` framing, type tags, length encoding, canonicalization-version
+byte, and SHA-256 digest construction were removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Under the
+single-version policy ([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md))
+each record keeps exactly one live shape, which carries the typed, ordered,
+compatibility-bound inherited reasoning references.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`,
   `3 source_session_id`, `4 conversation_tree_id`, `5 boundary`,
   `6 source_boundary_sequence`, `7 source_run_cursors`,
   `8 effective_instruction_projection`, `9 materialized_model_messages`,
   `10 inherited_future_defaults`, `11 historical_config_policy_references`,
-  `12 safe_usage_provenance`, `13 terminal_tool_result_references`,
-  `14 policy_decision_references`, `15 terminal_child_result_references`,
-  `16 workspace_state`.
-- `fork-preview`: `1 preview_schema_version`, `2 source_session_id`,
-  `3 conversation_tree_id`, `4 boundary`, `5 source_head_sequence`,
-  `6 materialized_effective_instruction_projection`,
-  `7 materialized_model_messages`, `8 inherited_future_defaults`,
-  `9 historical_config_policy_references`, `10 safe_usage_provenance`,
-  `11 terminal_tool_result_references`, `12 policy_decision_references`,
-  `13 terminal_child_result_references`, `14 workspace_state`. Field 6 is the
-  selected boundary sequence, not the current source head observed during the
-  fork operation.
-- `fork-command` (unchanged, `typed-tlv-v1`): `1 source_session_id`,
-  `2 boundary`, `3 expected_source_sequence`, `4 expected_preview_digest`,
-  `5 title_present`, `6 requested_title`, `7 future_profile_override_present`,
-  `8 future_profile_override`.
-
-`typed-tlv-v2` preserves the v1 framing, type tags, length encoding, collection
-ordering, SHA-256 construction, and rejection behavior, changing only the
-canonicalization-version byte and the fixed field tables. New forks use
-`fork-base-snapshot-v2` and `fork-preview-v2`:
-
-- base: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
-  `4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`,
-  `7 source_run_cursors`, `8 effective_instruction_projection`,
-  `9 materialized_model_messages`, `10 inherited_future_defaults`,
-  `11 historical_config_policy_references`,
   `12 inherited_reasoning_history_references`, `13 safe_usage_provenance`,
   `14 terminal_tool_result_references`, `15 policy_decision_references`,
   `16 terminal_child_result_references`, `17 workspace_state`.
-- preview: `1 preview_schema_version`, `2 source_session_id`,
+- `fork-preview`: `1 preview_schema_version`, `2 source_session_id`,
   `3 conversation_tree_id`, `4 boundary`, `5 source_head_sequence`,
   `6 materialized_effective_instruction_projection`,
   `7 materialized_model_messages`, `8 inherited_future_defaults`,
   `9 historical_config_policy_references`,
   `10 inherited_reasoning_history_references`, `11 safe_usage_provenance`,
   `12 terminal_tool_result_references`, `13 policy_decision_references`,
-  `14 terminal_child_result_references`, `15 workspace_state`.
+  `14 terminal_child_result_references`, `15 workspace_state`. Field 6 is the
+  selected boundary sequence, not the current source head observed during the
+  fork operation.
+- `fork-command`: `1 source_session_id`, `2 boundary`,
+  `3 expected_source_sequence`, `4 expected_preview_binding`,
+  `5 title_present`, `6 requested_title`, `7 future_profile_override_present`,
+  `8 future_profile_override`.
 
-`canonical_snapshot_digest` is SHA-256 over the record excluding the resulting
-digest field; `model_context_digest` is SHA-256 over the complete versioned
-materialized instruction projection and ordered materialized model-message
-projection, not over a later reconstructed request. The command's
-`expected_preview_digest` is a distinct version-matched digest of the
-source/tree identities, selected boundary, source head sequence, inherited
-future defaults, materialized context, retained safe references, and
-`unverified` workspace state. A `fork-command` digest protects the complete
-semantic idempotency input (source, boundary, expected sequence, expected
-preview digest, requested title, safe future-profile override) and excludes the
-daemon-assigned child ID and time.
+The former `canonical_snapshot_digest`, `model_context_digest`, and
+`fork-command` digest construction are removed with the codec
+([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)). A command binds
+to the exact source state the client accepted through
+`expected_source_sequence` and `expected_preview_binding`; a later activating
+specification may define a canonical binding for the preview together with its
+first real consumer under the RFC 8785 policy (ADR 0046), and no canonical
+digest is part of the current contract.
 
 `effective_instruction_projection` and
-`materialized_effective_instruction_projection` carry the canonical
+`materialized_effective_instruction_projection` carry the typed
 `InstructionProjectionV1` of
 [architecture 30](30-instruction-sources-and-system-context.md)
 ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)): the
-exact ordered contributions with their source revisions and digests, the
-declared audience, and the canonical projection digest, materialized when the
+exact ordered contributions with their source revisions, the
+declared audience, and the projection revision identity, materialized when the
 fork is created. A child inherits the projection verbatim; no fork,
 regeneration, replay, or later run re-derives it from current configuration,
 current project instructions, or current session state.
@@ -330,7 +319,7 @@ unstructured storage error:
 | Forks from one source boundary | 16 in a rolling hour | Count accepted operations by exact source and boundary; reject with `fork_boundary_rate_limit`. |
 | Canonical `ForkBaseSnapshotDto` | 1 MiB | Reject before persistence with `fork_snapshot_too_large`; never truncate context or references. |
 | Tree query page | 64 summaries | Reject page sizes outside 1..=64 with `invalid_conversation_tree_page`. |
-| Session title | 128 NFC Unicode scalar values | Reject invalid title before the command digest or presentation event. |
+| Session title | 128 NFC Unicode scalar values | Reject invalid title before the presentation event. |
 
 The source boundary rate window uses durable accepted timestamps; a rejected,
 expired, or rolled-back attempt consumes no quota. Boundaries, base snapshots,
@@ -415,9 +404,10 @@ None of these directions are activated here.
 A later activating specification must declare exact crate owners, test targets,
 coverage tiers, feature profiles, storage/wire versions, and architecture
 fixtures, then pass `make quick`, `make docs-check`, `make architecture`, `make
-verify`, and Linux/Windows CI. It must cover canonical v1/v2 goldens, boundary
-eligibility, flattened context, transaction fault injection, idempotency and
-preview races, additive migration byte preservation, negotiated tree paging,
+verify`, and Linux/Windows CI. It must cover typed JSON round trips for the
+fork records, boundary eligibility, flattened context, transaction fault
+injection, idempotency and
+preview races, additive migration byte preservation, tree paging,
 authority isolation, restart/no-resume, no-current-state fallback, archive
 behavior, fake-secret redaction, and end-to-end fork/regeneration outcomes.
 

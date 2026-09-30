@@ -14,6 +14,12 @@ no crate, DTO, tag, wire, storage schema, configuration field, UI page,
 migration, feature profile, quality-policy target, or production behavior is
 authorized here, and it is not the Slice 5 activating specification.
 
+Amended 2026-09-30: the intrinsic numeric bounds are superseded by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md), and the digest
+wording and the workspace-boundary failure condition are read through
+[ADR 0046](0046-typed-serde-json-contracts.md) and
+[ADR 0047](0047-workspace-root-addressing-anchor.md) as recorded below.
+
 ## Scope and supersession
 
 This decision defines the one instruction channel of a model request: which
@@ -55,22 +61,17 @@ InstructionSourceV1
   source_identity
   declared_order
   enabled
-  text_digest
-  canonical_source_digest
 
 InstructionProfileRevisionV1
   profile_contract_revision
   ordered_source_references
   profile_revision_identity
-  canonical_profile_digest
 
 InstructionProjectionV1
   projection_contract_revision
   ordered_contribution_references
-  contribution_revision_and_digest
+  contribution_revision
   declared_audience
-  total_instruction_size
-  canonical_projection_digest
 ```
 
 - **Source kinds are closed**: `Identity`, `Guidelines`, `ToolUsage`,
@@ -85,10 +86,11 @@ InstructionProjectionV1
   one live configuration format version exists; there is no migration and no
   second format ([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)).
 - **Workspace project instructions**: `AGENTS.md` at the session's
-  `WorkspaceRoot` is the only file-based instruction source. It is resolved
-  inside the workspace boundary, read as text, addressed by digest, never
-  executed, and never treated as authority. An absent file contributes
-  nothing and is not a failure.
+  `WorkspaceRoot` is the only file-based instruction source. It is addressed
+  as the session root joined with `AGENTS.md`, read as text, identified by its
+  source identity, never executed, and never treated as authority
+  ([ADR 0047](0047-workspace-root-addressing-anchor.md)). An absent file
+  contributes nothing and is not a failure.
 - **Fragment profile**: all configured fragments form an immutable
   `InstructionProfileRevisionV1`. Creating, editing, reordering, enabling,
   disabling, or re-scoping a fragment produces a new profile revision identity;
@@ -96,7 +98,7 @@ InstructionProjectionV1
 - **Canonical assembly order** is fixed: `Deployment` fragments in declared
   order, then `User`, `Project`, and `Session` fragments in declared order,
   then `ProjectInstructions`, then `Mode`, then `Vfr`. Order is part of the
-  canonical bytes and the digest.
+  projection identity.
 - **The effective instruction projection is frozen at admission**, before the
   first model step of a run. Every later model step of that run reuses it; a
   fork inherits the materialized projection verbatim; a plan handoff
@@ -112,24 +114,23 @@ InstructionProjectionV1
   `effective_instruction_projection` and
   `materialized_effective_instruction_projection` fields of the fork records
   ([architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)),
-  and its canonical digest is recorded as safe usage provenance. It adds no
+  and its revision identity is recorded as safe usage provenance. It adds no
   event sequence and no authority.
 - **Required editing surface**: the control plane lists, creates, edits,
   duplicates, enables, disables, reorders, and re-scopes fragments, rejects
-  invalid edits with typed errors, shows the profile revision identity and
-  digest, and previews the effective instruction projection for a chosen
-  session, policy, and mode without admitting a run. The primary UI exposes the
+  invalid edits with typed errors, shows the profile revision identity, and
+  previews the effective instruction projection for a chosen session, policy,
+  and mode without admitting a run. The primary UI exposes the
   surface; TUI/REPL remains contract-equivalent.
-- **Intrinsic bounds** are total projection at most 100,000 characters, one
-  fragment at most 16,384 characters, at most 64 enabled fragments, and
-  project instructions at most 16,384 characters. The Slice 5 activating
-  specification aligns the total bound with the existing `system_context`
-  validation. An unrepresentable, oversized, inconsistent, unreadable, or
-  boundary-violating source fails closed before admission; text is never
-  truncated, sampled, or silently replaced by a previous revision.
+- **Numeric bounds** are not fixed now. Any future character, fragment-count,
+  or size bound is introduced together with a recorded precedent under
+  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); until then
+  no cap is asserted and text is never truncated, sampled, or silently
+  replaced by a previous revision. An unrepresentable, inconsistent, or
+  unreadable source fails closed before admission.
 - **Observability**: logs, activity, notification, and audit surfaces carry
-  revision identities and digests only. Instruction text stays on the
-  configuration surface where the user edits it.
+  revision identities only. Instruction text stays on the configuration
+  surface where the user edits it.
 
 ## Invariants
 
@@ -147,15 +148,17 @@ InstructionProjectionV1
 4. Immutability. Profile revisions and materialized projections are immutable;
    a change creates a new revision; forks and historical records are never
    rewritten or reconstructed.
-5. Determinism. The same profile revision, project instruction digest, mode,
-   and configuration produce byte-identical canonical projection bytes and the
-   same digest; order, separators, and canonicalization are fixed.
-6. Boundedness. The projection is bounded, credential-free, and safe to record;
-   no instruction source may carry a secret, a credential, raw provider or tool
+5. Determinism. The same profile revision, project instruction source, mode,
+   and configuration produce the same ordered projection and the same
+   projection identity; order and separators are fixed. Byte-level
+   canonicalization is settled at activation under
+   [ADR 0046](0046-typed-serde-json-contracts.md).
+6. Safety. The projection is credential-free and safe to record; no
+   instruction source may carry a secret, a credential, raw provider or tool
    payload, an implementation resource, or executable content.
-7. Fail closed. A missing, unreadable, inconsistent, boundary-violating, or
-   oversized configured source blocks admission with a closed typed failure; no
-   fallback, partial assembly, or silent omission is permitted.
+7. Fail closed. A missing, unreadable, or inconsistent configured source
+   blocks admission with a closed typed failure; no fallback, partial assembly,
+   or silent omission is permitted.
 8. Fresh runs only. Instructions affect newly admitted runs. M3/M4 runs,
    retained history, and recorded bytes gain no instruction state.
 
@@ -184,17 +187,13 @@ The closed instruction failure set is:
 
 ```text
 instruction_profile_unavailable
-instruction_projection_too_large
 instruction_source_unavailable
 ```
 
 - `instruction_profile_unavailable` covers a configured profile revision that
   is missing, corrupt, inconsistent, or no longer resolvable.
-- `instruction_projection_too_large` covers a projection that exceeds an
-  intrinsic bound.
 - `instruction_source_unavailable` covers a workspace instruction source that
-  is unreadable, escapes the workspace boundary, is not representable as text,
-  or exceeds its own bound.
+  is unreadable or not representable as text.
 
 Each failure is a typed known pre-effect rejection that discloses no
 credential, absolute path, file content, raw payload, or implementation detail.
@@ -247,17 +246,16 @@ targets, coverage tiers, feature profiles, storage/wire versions, and fixtures,
 then pass `make quick`, `make verify`, docs-check, and Linux/Windows CI. It must
 cover at least:
 
-- deterministic canonical assembly, ordering, separators, and digest stability
-  across repeated admissions;
+- deterministic assembly, ordering, separators, and identity stability across
+  repeated admissions;
 - profile revision immutability for create, edit, duplicate, enable, disable,
   reorder, and re-scope operations, with typed validation failures;
-- intrinsic-bound rejection for the total projection, a single fragment, the
-  fragment count, and workspace instructions, with no truncation or sampling;
-- an absent `AGENTS.md` contributing nothing, and an unreadable,
-  boundary-escaping, non-text, or oversized one failing closed with
-  `instruction_source_unavailable`;
+- limit precedence: any future numeric bound carries its recorded precedent,
+  and no text is truncated or sampled;
+- an absent `AGENTS.md` contributing nothing, and an unreadable or non-text one
+  failing closed with `instruction_source_unavailable`;
 - fail-closed behavior for `instruction_profile_unavailable` and
-  `instruction_projection_too_large`, with no fallback or partial projection;
+  `instruction_source_unavailable`, with no fallback or partial projection;
 - projection freeze at admission, reuse across later steps, verbatim fork and
   plan handoff inheritance, and proof that no current-configuration
   re-derivation occurs;
@@ -277,8 +275,8 @@ cover at least:
   read-only reference copy of the legacy static session prompts (source
   revision `8604fde0566d4dfadf8124e0724c5a82db3f89de`, assembly site
   `crates/tauri-app/src/state.rs`, `build_system_prompt()`), whose four
-  static sources and 100,000-character cap this decision adapts for Intention
-  Relay instead of consuming unchanged.
+  static sources this decision adapts for Intention Relay instead of consuming
+  unchanged; its size cap is not carried over.
 - [`legacy-baseline/02-capability-catalog.md`](../legacy-baseline/02-capability-catalog.md)
   and [`legacy-baseline/04-agent-behavior.md`](../legacy-baseline/04-agent-behavior.md):
   the recorded user-visible legacy behavior of assembling a system prompt from

@@ -36,7 +36,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
 | Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Projection and event atomicity. |
 | Runtime tests | Prove actor lifecycle, cancellation, queue, stream ordering. | Queued turn starts after terminal run. |
-| Tool/policy tests | Prove workspace, hook order, Plan restrictions, VFR/Headroom behavior. | Path escape rejected, VFR then Headroom ordering. |
+| Tool/policy tests | Prove workspace addressing, hook order, Plan restrictions, VFR/Headroom behavior. | Relative addressing from the root, VFR then Headroom ordering. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
 | Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session event observed by both clients. |
 | Outcome tests | Prove end-to-end behavior against acceptance scenarios. | Restart marks run interrupted and UI receives it. |
@@ -159,7 +159,19 @@ M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `int
 
 ## Completed M4 run-stream protocol evidence
 
-M4's dedicated run-stream contract is proven by `m4_run_stream_contracts`, covering validated run subscription/replay/live/snapshot/resync wire DTOs, all closed resync reasons, additive JSON compatibility, and retained M3 session behavior. `run_stream_contract` uses a real scripted asynchronous local peer to prove correlated initial replay followed by uncorrelated daemon frames, duplicate/stale tolerance, gap recovery from the last valid cursor, wrong-scope rejection, fail-closed unavailable history, historical reasoning without snapshot double application, and daemon-authoritative status-only snapshot updates. `transport_integration` proves daemon-frame sender/receiver roles without widening existing M3 correlated response roles.
+M4's run-stream behavior is delivered over the JSON-RPC 2.0 local protocol
+(ADR 0045): a `run.subscribe` request returns the initial authoritative replay
+as its ordinary response result, and later live, snapshot, and resync frames
+arrive as `run.frame` notifications. `m4_run_stream_contracts` covers validated
+run subscription/replay/live/snapshot/resync payloads, all closed resync
+reasons, additive JSON compatibility, and retained M3 session behavior.
+`run_stream_contract` uses a real scripted asynchronous local peer to prove
+initial replay followed by uncorrelated notifications, duplicate/stale
+tolerance, gap recovery from the last valid cursor, wrong-scope rejection,
+fail-closed unavailable history, historical reasoning without snapshot double
+application, and daemon-authoritative status-only snapshot updates.
+`transport_integration` proves the JSON-RPC request/response and notification
+exchange on the real local endpoint.
 
 `m4_streaming_foundation` adds daemon-host outcome evidence using injected
 scripted/blocking drivers and a real asynchronous local transport. It proves a
@@ -167,7 +179,7 @@ host-accepted `SendUserTurn` invokes the driver once, exposes an initial
 authoritative replay followed by durable live state and `Completed` on one
 persistent connection, and permits a new connection plus a repeated correlated
 replay request to receive the current snapshot. Its blocked-driver scenario
-proves host `StopRun` reaches task-owned `Cancelled` without late facts. The
+proves host `run.stop` reaches task-owned `Cancelled` without late facts. The
 real host's deterministic first-append gate proves the durable `Cancelling`
 race after initial `Starting` observation is terminalized exactly once by that
 registered task at cursor zero, with no provider call or fact. A real-host
@@ -178,7 +190,7 @@ promotion fixture proves the commit observer schedules the original persisted
 queued `RunId` once with its durable context and ignores duplicate admission.
 A durable blocked-host restart fixture first aborts and joins all first-host
 connection/execution tasks and drops all first-facade clones, then serializes actual replay, transport
-replay/error frames, events, snapshots, and safe errors from a recognizable
+replay/error responses, events, snapshots, and safe errors from a recognizable
 fake-credential configuration; the credential is absent, the old run becomes
 `Interrupted` before replay, and neither it nor a recovery-promoted `Starting`
 run resumes provider execution. Queue capacity and exact writer-deadline
@@ -189,15 +201,15 @@ or real credential.
 
 M5 `execute` inherits the invoking process environment without name-based or
 pattern-based filtering. This is intentional: the agent is trusted-local and
-WorkspaceRoot scopes filesystem resolution and child CWD, not environment
+WorkspaceRoot anchors filesystem addressing and child CWD, not environment
 visibility or process privileges. Environment values remain excluded from
 durable lifecycle evidence, logs, protocol DTOs, and published projections.
 
 M5 fixes the active tool surface at six executable tools: `read`, `write`,
 `edit`, `execute`, `glob`, and `grep`; remaining registry slots are reserved.
-Workspace symlink handling is proven fail-closed, while TOCTOU between
-validation and use remains an explicit residual risk rather than a sandbox
-guarantee.
+WorkspaceRoot is an addressing anchor, not a containment boundary: relative
+paths join the root, `execute` starts there, pathless `glob`/`grep` search from
+there, and absolute paths and `..` are addressed as given (ADR 0047).
 
 ## Result-oriented acceptance scenarios
 
@@ -207,7 +219,7 @@ guarantee.
 2. Use `execute` for an investigation command and verify Plan policy audit.
 3. Approve the exact plan revision.
 4. Verify approval and fresh Build-run binding are durable and ordered.
-5. Verify the same `SessionId`, a new `RunId`, pinned plan digest, and retained conversation context.
+5. Verify the same `SessionId`, a new `RunId`, pinned plan revision, and retained conversation context.
 6. Verify Build Autopilot performs configured actions without per-action confirmation.
 7. Verify Plan project `write/edit` remains hard-denied.
 
@@ -228,12 +240,12 @@ The following scenarios must become executable before the corresponding capabili
 4. Send a user turn through the other.
 5. Verify both receive the same ordered snapshot/events.
 
-### B. Workspace containment
+### B. Workspace addressing
 
 1. Create a session with a temporary workspace root.
 2. Change process CWD to a different directory.
-3. Invoke a filesystem tool with relative and escaping paths.
-4. Verify normal access resolves from the session root and escapes fail with typed policy errors.
+3. Invoke a filesystem tool with relative paths, and a `glob`/`grep` without an explicit path.
+4. Verify relative access resolves from the session root, `execute` observes it as CWD, and the pathless search starts at the root; absolute and parent paths are addressed as given, not contained (ADR 0047).
 
 ### C. Durable run interruption
 
@@ -341,7 +353,7 @@ contract, architecture, fault/recovery, compatibility, redaction, and outcome
 evidence for the Foundation rules it consumes. At minimum, later packages must
 cover:
 
-- execution-kind/version/payload mismatch rejection before external work;
+- typed contract/version mismatch rejection before external work;
 - M3/M4 byte/meaning preservation and no synthetic future state;
 - user-versus-daemon/verifier conflict precedence where relevant;
 - atomic admission/transition rollback at every persistence stage;
@@ -349,8 +361,8 @@ cover:
   publication;
 - crash/cancel behavior before start versus after a potentially uncertain start;
 - no provider/tool/process/kernel/MCP/child/bridge resumption after restart;
-- intrinsic-bound versus capacity-unavailability behavior without hidden
-  Mandate product quotas; and
+- limit behavior only where a recorded precedent names the failure mode it
+  prevents, with no hidden Mandate product quotas; and
 - recognizable fake-secret absence from future records, logs, errors, protocol,
   and diagnostics.
 
@@ -360,20 +372,22 @@ corresponding runtime behavior exists today. See the
 
 ## Execution-meaning compatibility evidence
 
-Before implementation, canonical execution-meaning work requires golden
-bytes/digests, kind/tag/version mismatch fixtures, M3/M4 byte-preservation,
-no-current-state-reconstruction, no-external-work-on-incompatibility,
-negotiation/resync, no-resume, driver-contract, redaction and cross-platform
-outcome evidence. The detailed portfolio is owned by [Run execution meaning and
-historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+The binary canonical codec, execution-meaning envelope, tag registry, and
+digest/identity layer were removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md);
+no golden bytes, digests, kind/tag mismatch fixtures, or decoder retention
+schedule remain. Historical-compatibility work that survives the removal (M3/M4
+byte preservation, no current-state reconstruction, and no resume after an
+incompatible record) is owned by [Run execution meaning and historical
+compatibility](14-run-execution-meaning-and-historical-compatibility.md) and
+carries typed serde JSON evidence.
 
 ## Tool-registry and Mandate-loop evidence
 
 Before implementation, future tool-loop work requires fixed-slot and owner
-goldens, Reserved/non-bypass fixtures, canonical registry/descriptor selection,
+fixtures, Reserved/non-bypass fixtures, typed registry/descriptor selection,
 ordinary-versus-Mandate WorkspaceRoot outcomes, direct-Mandate/no-confirmation
 admission, group atomicity/concurrency/order, fragment/result integrity,
-before-start/started/known/unknown recovery, negotiated replay, historical M4
+before-start/started/known/unknown recovery, typed protocol replay, historical M4
 tool-call compatibility, no-current-state reconstruction, and fake-secret
 absence. These
 are future obligations, not claims that a runtime or test target exists; the
@@ -386,53 +400,53 @@ Before implementation, future scheduler work requires durable-reason versus
 observation/candidate/admission fixtures; deterministic ordering; unavailable
 reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
 races; transaction fault injection; recovery-before-scheduling; no-resume;
-ordinary queue and M4 preservation; no-current-state reconstruction; negotiated
-replay; and fake-secret/resource absence. These are future obligations, not
+ordinary queue and M4 preservation; no-current-state reconstruction; typed
+protocol replay; and fake-secret/resource absence. These are future obligations, not
 current tests or targets. The detailed portfolio is owned by [Mandate scheduler
 and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
 
 ## Mandate child graph and verifier evidence
 
-Before implementation, future child/verifier work requires canonical
-edge/delegation/authority/baseline/evidence/verdict/mutation goldens;
+Before implementation, future child/verifier work requires typed
+edge/delegation/authority/baseline/evidence/verdict/mutation fixtures;
 idempotent child creation and graph-integrity fixtures; direct-edge-only control
 and non-scheduling messages; terminalization/cascade and child-local uncertainty
 matrices; authority revision/revocation/target-set/stale-baseline/operation
 fixtures; user-precedence races; atomic fault injection; recovery/no-resume;
-negotiated replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
+typed protocol replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate child graph and delegated verifier
 authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
 
 ## Mandate MCP capability evidence
 
-Before implementation, future MCP work requires canonical source/discovery/
-capability/selection/invocation goldens; closed schema-normalization negatives;
+Before implementation, future MCP work requires typed source/discovery/
+capability/selection/invocation fixtures; closed schema-normalization negatives;
 fixed-slot/no-bypass and server-non-authority fixtures; idempotency, selection
 freeze, schema-drift, and no-current-state reconstruction cases; transaction
 fault injection; HTTP/local-stdio cancellation/recovery/no-resume; private
-resource redaction; scheduler/child/verifier isolation; negotiated replay; and
+resource redaction; scheduler/child/verifier isolation; typed protocol replay; and
 M3/M4 plus retained bounded-MCP preservation. These are future obligations, not
 current tests or targets. The detailed portfolio is owned by [Mandate MCP
 capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
 
 ## Mandate Gateway/RLM bridge evidence
 
-Before implementation, future bridge work requires canonical bridge-selection
-goldens; grant scope/expiry and no-bypass fixtures; operation idempotency and
+Before implementation, future bridge work requires typed bridge-selection
+fixtures; grant scope/expiry and no-bypass fixtures; operation idempotency and
 fault injection; cancellation/crash/late-result/no-resume matrices; child,
-verifier, and MCP isolation; negotiated replay/resync and zero-effect reconnect;
-M3/M4 plus retained-RLM preservation; limit classification; and fake-secret/raw
+verifier, and MCP isolation; typed protocol replay/resync and zero-effect reconnect;
+M3/M4 plus retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
 
 ## Run-scoped IPython kernel evidence
 
-Before implementation, future kernel work requires canonical selection/checkpoint
-goldens; run-scoped lazy epoch/no-sharing fixtures; required/optional restore and
+Before implementation, future kernel work requires typed selection/checkpoint
+fixtures; run-scoped lazy epoch/no-sharing fixtures; required/optional restore and
 no-current-state reconstruction; cell/host-request/checkpoint fault injection;
 cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and
-stale-grant/task tests; child/verifier/MCP isolation; negotiated replay/resync;
+stale-grant/task tests; child/verifier/MCP isolation; typed protocol replay/resync;
 historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
 Python/Jupyter/resource absence. These are future obligations, not current tests
 or targets. The detailed portfolio is owned by [Run-scoped IPython kernel
@@ -442,7 +456,7 @@ lifecycle](20-ipython-kernel-lifecycle.md).
 
 Before implementation, future context work requires canonical Goal scope and
 applicability, Skill selection/disclosure, source-manifest/projection, memory,
-and compaction golden/negative fixtures; admission/model-step fault injection;
+and compaction fixtures and negative cases; admission/model-step fault injection;
 no-current-state reconstruction; audience/redaction and non-authority outcomes;
 recovery/no-resume and replay/resync; child/verifier/MCP/bridge/kernel isolation;
 M3/M4 preservation; and fake-secret/raw-source/private-reference absence. These
@@ -451,25 +465,25 @@ owned by [Goals, Skills, context, memory, and compaction](21-goals-skills-contex
 
 ## Provider evolution, profiles, and reasoning evidence
 
-Before implementation, future provider work requires IRCR canonical descriptor/
-profile/catalog/selection/capability/driver-contract goldens; M3/M4 preservation;
+Before implementation, future provider work requires typed descriptor/
+profile/catalog/selection/capability/driver-contract fixtures; M3/M4 preservation;
 alias normalization and no model-name routing; capability/driver preflight before
 outbound work; Responses `store: false`; normalized reasoning and context-owner
 selection; catalog activation/recovery fault injection; no-resume/retry matrices;
-negotiated replay; redaction; and Linux/Windows outcomes. These are future
+typed protocol replay; redaction; and Linux/Windows outcomes. These are future
 obligations, not current tests or targets. The detailed portfolio is owned by
 [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
 
 ## Session branching evidence
 
-Before implementation, architecture 23 requires canonical v1/v2 golden and
-negative fixtures; boundary/context/anchor tests; transaction fault injection;
-additive migration byte preservation; negotiation and bounded tree-page tests;
+Before implementation, architecture 23 requires typed v1/v2 fixtures and
+negative cases; boundary/context/anchor tests; transaction fault injection;
+additive migration byte preservation; protocol and bounded tree-page tests;
 authority/no-resume/no-current-state-reconstruction matrices; redaction; and
 Linux/Windows fork/regeneration outcomes. These are future obligations only.
 ## Activity, UI, and adapter evidence
 
 Before implementation, architecture 24 requires activity/message/journal/
-notification/acknowledgement canonical and negative fixtures; transaction and
-sequence isolation; negotiated replay/resync; redaction; no-resume; Tauri/TUI/REPL
+notification/acknowledgement fixtures and negative cases; transaction and
+sequence isolation; typed protocol replay/resync; redaction; no-resume; Tauri/TUI/REPL
 parity; and Linux/Windows outcome evidence. These are future obligations only.

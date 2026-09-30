@@ -38,7 +38,9 @@ recorded ordinary semantics.
 Architecture 09 owns TOML parsing, schema validation, configuration discovery,
 redaction, and startup-only application. Architecture 22 owns future provider
 kinds, profiles, catalogs, selections, and driver compatibility. Architecture
-14 owns canonical framing, digests, and decode classes. Architecture 13 owns
+14 owns run-execution meaning and historical compatibility; its canonical codec
+was removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Architecture 13 owns
 Mandate lifecycle and fresh admission. Architecture 15 owns the tool loop.
 Architecture 24 owns activity/UI projections and adapter behavior.
 
@@ -85,7 +87,7 @@ Credential rotation was the activated direction (reverted by ADR 0044) that
 replaced private credential material without altering frozen meaning:
 
 - rotation replaces only the opaque private material in composition state and
-  never changes a recorded selection, digest, canonical bytes, endpoint,
+  never changes a recorded selection, endpoint,
   capability subset, or execution meaning;
 - a rotation that would change frozen meaning rejects before replacement with
   `credential_rotation_frozen_meaning_mismatch`;
@@ -113,7 +115,7 @@ ignore declared driver options. Facades opened without a file-backed source
 `credential_rotation_source_unavailable` behavior. ADR 0044 removed this
 composition path; no credential handling beyond the M3/M4 startup boundary
 exists now, and no credential, file content, or source path may appear in a
-DTO, error, log, digest, snapshot, projection, or durable surface.
+DTO, error, log, snapshot, projection, or durable surface.
 
 ## Provider health checks
 
@@ -125,7 +127,7 @@ ADR 0044) that produced typed operational readiness evidence:
 - health results are non-authorizing live evidence, never authority, meaning,
   or a fallback selector;
 - unavailability retains the exact reason and creates no `RunId`,
-  reservation, retry counter, or quota; restoration only permits
+  retry counter, or quota; restoration only permits
   architecture-16 reevaluation;
 - health checks never perform provider/model selection, routing, pricing,
   discovery, or credential testing beyond the declared contract;
@@ -157,8 +159,8 @@ provider/model capabilities as typed non-authorizing records:
 Pricing and budget policy was the activated product direction (reverted by
 ADR 0044):
 
-- it is product/budget policy, never a Mandate admission ceiling, quota,
-  reservation, or entitlement;
+- it is product/budget policy, never a Mandate admission ceiling, quota, or
+  entitlement;
 - it cannot gate direct Mandate admission, tool admission, scheduler
   eligibility, or capacity outcomes;
 - numeric values were classified Intrinsic/Capacity/Product as recorded by the
@@ -199,8 +201,8 @@ documentation-only directions awaiting a new activating specification:
 - typed configuration edits reconstruct a credential-free candidate document
   server-side and restore the composition's retained private credential into
   it inside the private loading boundary, so the candidate validates and
-  commits without the credential ever crossing a wire, DTO, error, log,
-  digest, or durable surface;
+  commits without the credential ever crossing a wire, DTO, error, log, or
+  durable surface;
 - edits affect fresh runs only and never expose credentials, private endpoint
   material, SDK objects, or raw provider payloads on durable/public surfaces.
 
@@ -217,7 +219,7 @@ this control plane:
 - validate an edit before it commits and reject an invalid, inconsistent, or
   over-bound edit with a typed failure, leaving the running daemon on its
   recorded profile revision;
-- show the profile revision identity and canonical digest, and preview the
+- show the profile revision identity, and preview the
   effective instruction projection for a chosen session, policy, and mode
   without admitting a run, creating a reason or selection, or writing durable
   instruction state;

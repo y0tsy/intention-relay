@@ -15,7 +15,7 @@
 **Approved future architecture, documentation-only.** This document is the
 normative owner for the future Mandate aggregate, lifecycle, triggers,
 fresh-run admission, uncertainty, and recovery boundary. It does not authorize
-production code, a crate, a migration, a wire capability, or a scheduler.
+production code, a crate, a migration, a wire protocol, or a scheduler.
 
 It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4
 Sessions, Runs, queue tickets, provider selection, replay, tool denial, and
@@ -80,7 +80,6 @@ MandateRevisionDto
   goal_context_references
   continuation_configuration
   stop_conditions
-  canonical_revision_digest
 
 MandateTriggerReasonDto
   reason_id
@@ -99,8 +98,9 @@ MandateRunDispositionDto
   external_effect_reference_when_unknown
 ```
 
-All records are credential-free, typed, immutable at their selected revision,
-and represented through the repository's later canonical record/version policy.
+All records are credential-free typed serde JSON records, immutable at their
+selected revision, and represented through the repository's typed JSON record
+policy ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)).
 They contain no raw prompt transcript, provider resource, live kernel
 namespace, process handle, MCP connection, bridge grant, credential, or
 unfinished external operation. A new revision changes only future fresh-run
@@ -185,7 +185,7 @@ lifecycle authority; architecture 17 owns their limited direct-parent effects.
 “FIFO” is not a lifecycle rule. Eligible reasons use the closed total order:
 explicit-user priority, `first_observed_at`, canonical `MandateId` order, then
 canonical `ReasonId` order. Readiness and wakeups only cause reevaluation; they
-never create a reason, `RunId`, lease, reservation, retry counter, or dispatch.
+never create a reason, `RunId`, lease, retry counter, or dispatch.
 
 
 ## Trigger reasons and eligibility
@@ -193,7 +193,7 @@ never create a reason, `RunId`, lease, reservation, retry counter, or dispatch.
 `MandateTriggerReason` is durable causal evidence, not an M3 queued turn, a
 retry counter, a queue ticket, or a promise of immediate execution.
 
-Each reason records a typed idempotency identity and semantic digest, source
+Each reason records a typed idempotency identity, source
 kind, captured `triggering_revision`, first/last observation timestamps,
 coalesced count, and complete typed provenance. Equal delivery returns its
 existing binding; changed reuse fails before admission. A revision after capture
@@ -208,7 +208,7 @@ one catch-up reason, never a fabricated burst.
 
 Eligible selection is total: explicit user start/continuation reasons first,
 then ascending `first_observed_at`, `MandateId`, and `ReasonId`. This ordering
-is deterministic but does not reserve capacity or guarantee execution.
+is deterministic but does not claim capacity or guarantee execution.
 
 ### Autonomous continuation
 
@@ -250,8 +250,8 @@ One transaction atomically commits:
 - a new `RunId`;
 - selected reason consumption or hold;
 - selected Mandate revision and safe frozen context;
-- `MandateSelectionV1` and closed execution-kind/version/payload/digest
-  envelope;
+- `MandateSelectionV1` with its closed execution-kind/version/payload fields,
+  without envelope framing;
 - Mandate and Run projections, events, snapshots, aggregate sequence/version,
   and idempotency evidence.
 
@@ -261,9 +261,10 @@ an independent Mandate-scoped durable reread.
 
 A Mandate selection includes only credential-free references to the Mandate,
 revision, reason, service-session/activity context where later defined, verified
-checkpoints, and applicable frozen context. Exact canonical fields, tags,
-digests, provider/registry/Skill selections, MCP initial-selection semantics,
-and verifier payloads belong to later execution-meaning contracts. Missing,
+checkpoints, and applicable frozen context. Exact typed JSON fields,
+provider/registry/Skill selections, MCP initial-selection semantics,
+and verifier payloads belong to later Mandate-domain contracts
+([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)). Missing,
 corrupt, unsupported, or mismatched
 meaning blocks dependent work before any effect and never falls back to current
 TOML, registry, model name, provider, ancestry, or live resources.
@@ -272,13 +273,13 @@ TOML, registry, model name, provider, ancestry, or live resources.
 
 Every semantic mutation validates expected Mandate sequence/version and, where
 relevant, expected revision and lifecycle. Equal operation identity plus equal
-semantic digest returns the committed result. Changed reuse fails before a
+typed request content returns the committed result. Changed reuse fails before a
 mutation, another trigger consumption, or another RunId.
 
 | Transaction | Atomic durable result |
 | --- | --- |
 | Create Mandate | identity, initial revision, Draft projection/event/snapshot, operation binding |
-| Create revision | immutable revision/digest, permitted active-revision update, event/snapshot/version |
+| Create revision | immutable revision, permitted active-revision update, event/snapshot/version |
 | User lifecycle transition | expected-state validation, lifecycle projection/event/snapshot, idempotency |
 | Trigger capture/coalescing | reason/provenance, idempotency, eligibility projection, sequence |
 | Fresh admission | selected reason, new RunId, frozen selection/meaning, Working projection and all evidence |
@@ -309,9 +310,9 @@ MandateCapacityOutcomeDto
   observed_at
 ```
 
-`ProductCeiling` is a product counter, reservation, or quota and is forbidden
+`ProductCeiling` is a product counter, cap, or quota and is forbidden
 for new Mandate admission. `IntrinsicBound` is a correctness boundary of the
-canonical representation, identifier, schema, ordering, framing, or atomic
+typed JSON representation, identifier, schema, ordering, framing, or atomic
 commit; it remains mandatory and rejects without truncation.
 `CapacityAvailability` is temporary finite runtime, storage, provider,
 registry, process, kernel, or scheduler availability; it never becomes a quota
@@ -321,16 +322,19 @@ An intrinsic bound rejects invalid representation, schema, identifier, ordering,
 framing, or atomic-commit input without truncation. Actual finite storage,
 provider, registry, process, kernel, or scheduler availability produces a typed
 capacity-unavailable outcome. It preserves pending reason and history, creates
-no retry counter or reservation, and may later make the same reason eligible
+no retry counter or quota, and may later make the same reason eligible
 for fresh admission. An `Unavailable` outcome atomically preserves already
 committed history, the applicable pending trigger, and its projections without
 dropping, truncating, or inventing work. A later durable readiness/capacity
 observation or explicit user lifecycle action may make that trigger eligible
-for a fresh run only. Historical fixed limits and quota records remain readable
-compatibility data and cannot synthesize a Mandate restriction.
+for a fresh run only. The precedent-based limit policy is recorded in
+[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md): every numeric value needs a real precedent, no quota or cap
+machinery is carried forward, and no historical limit record is read as a
+Mandate restriction.
 
 No product quota, count, calendar cap, lifetime cap, output cap, concurrency
-reservation, or escalation threshold is introduced for Mandate admission here.
+cap, or escalation threshold is introduced for Mandate admission here
+([ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)).
 Numeric limits owned by protocol, provider, tool, child, or scheduler packages
 remain separately classified. This document does not resolve direct descriptor
 admission or WorkspaceRoot policy.
@@ -351,7 +355,7 @@ ExternalAttemptEvidenceDto
   attempt_reference
   phase
   durable_fact_references
-  safe_effect_digest
+  safe_effect_reference
 ```
 
 Future external attempt evidence uses the Foundation phases:
@@ -395,18 +399,20 @@ safe disposition/uncertainty references. Snapshots accelerate query/recovery;
 they are not alternate authority. Events remain immutable and corrections are
 new events/projections.
 
-A future separately negotiated Mandate protocol family provides typed commands,
-queries, correlated initial replay/resync/error, then Mandate-local event batches
-and authoritative snapshot frames. Unnegotiated clients fail closed rather than
-receive a partial ordinary Session snapshot. M3 session replay and M4 run
-streaming remain unchanged, separately ordered, and linked only by typed IDs.
+Future Mandate projections are exposed through typed JSON-RPC 2.0 methods over
+the local socket ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed commands and queries, correlated results,
+then Mandate-local event batches and authoritative snapshot frames. There is no
+protocol capability or family gate; an unsupported method or version returns a
+typed JSON-RPC error rather than a partial ordinary Session snapshot. M3 session
+replay and M4 run streaming remain unchanged, separately ordered, and linked
+only by typed IDs.
 
 Exact SQL tables, migrations, event variants, wire tags, pages, retention,
 crate activation, and protocol implementation are deliberately deferred.
 
 ## Compatibility, dependencies, and non-goals
 
-M3/M4 bytes, IDs, UUIDs, digests, cursors, events, snapshots, queue tickets,
+M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, queue tickets,
 provider selection, tool-call denial, replay, and recovery remain unchanged.
 No historical record gains synthetic Mandate, verifier, Skill, MCP, child,
 activity, profile, policy, or execution-kind state. Legacy queued turns never
@@ -442,7 +448,7 @@ A later implementation specification must define fixtures for:
 - before-start/started/known/unknown crash and cancellation matrix;
 - exact reconciliation and no-repeat recovery across every external owner;
 - capacity preservation versus intrinsic rejection and forbidden product quota;
-- negotiated Mandate replay/resync and unnegotiated-peer rejection;
+- Mandate replay/resync and unsupported-peer rejection;
 - M3/M4 byte/meaning preservation and no-current-state reconstruction;
 - fake-secret absence from future persistence, protocol, error, log, diagnostic,
   and adapter projections; and

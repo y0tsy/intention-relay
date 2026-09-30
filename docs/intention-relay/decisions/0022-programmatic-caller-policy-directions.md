@@ -9,6 +9,11 @@ implementation: the model is bound to
 and is implemented only through a separately accepted activating specification
 at the start of that milestone.
 
+Amended 2026-09-30 by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)
+as recorded below: the corridor, reservation, and fixed run/calendar-limit
+clauses are superseded and removed. The remaining programmatic-caller policy
+and admission direction stands, bound to Milestone 5+ as before.
+
 ## Decision
 
 The programmatic-caller policy and admission model from
@@ -21,20 +26,19 @@ package:
   before `ToolCallStarted`;
 - durable policy identity/scope/narrowing (`Project`/`Goal`/`Session`) with
   intersection of effect selectors and exact tool/MCP selectors,
-  most-restrictive-wins, child-narrowing-only, and fork shared calendar
-  counters;
+  most-restrictive-wins, and child-narrowing-only;
 - closed admission decisions (`Prohibited`, `DirectLocalRead`,
-  `ExactConfirmationRequired`, `BoundedConfirmationRequired`) with the
-  `InteractiveLocalReadBaselineV1` (256/16), exact confirmation bound to one
-  `ToolCallId`, and bounded `ProgrammaticAuthorizationCorridorDto`;
+  `ExactConfirmationRequired`, `BoundedConfirmationRequired`) with exact
+  confirmation bound to one `ToolCallId`; the numeric baseline and the bounded
+  corridor are removed by
+  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md);
 - policy lifecycle (`Active`/`Suspended`/`Revoked`/`Archived`) with live
   tightening, drafts, and no-reactivation-after-revoke;
-- run and calendar limits with atomic reservations, idempotent equal-replay,
-  release-on-known-pre-effect, permanent-on-start, and
-  `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery;
-- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v4` (the
-  single live record; the historical v3 record is removed by ADR 0038) with
-  `Disabled` only for historical M4, and 22 closed `ErrorDto` safe failures.
+- `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery for admitted
+  effects; the run, calendar, and reservation limit machinery is removed by
+  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md);
+- `ProgrammaticCallerPolicySelectionV1` with `Disabled` only for historical
+  M4, and closed `ErrorDto` safe failures for the remaining directions.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after
 a later activating specification, and is bound to Milestone 5+ in the roadmap.
@@ -61,20 +65,15 @@ without code evidence.
    second registry, remote identity, or authority surviving an active run.
 3. Effective policy is the most-restrictive intersection of effect selectors
    and exact tool/MCP selectors; children and harness classes may only narrow.
-4. `execute` never receives `DirectLocalRead` or bounded-corridor admission in
-   this first scope; `fetch_url` and `mcp` never receive direct admission.
-5. A corridor belongs to one active root tree, expires on terminalization or
-   policy revocation, and is never a lasting policy revision.
-6. Reservations are created atomically before `ToolCallStarted` or not at all;
-   on start they become permanent consumption; recovery never recreates a
-   reservation by rerunning an action.
-7. Historical M4 and earlier selections retain `Disabled` policy selection and
+4. `execute` never receives `DirectLocalRead` admission in this first scope;
+   `fetch_url` and `mcp` never receive direct admission.
+5. Historical M4 and earlier selections retain `Disabled` policy selection and
    are never rewritten or given synthetic policy state.
 
 ## Failure semantics
 
-- Limit, snapshot, revision, origin, corridor, counter, reservation, and draft
-  failures are known typed pre-effect rejections.
+- Snapshot, revision, origin, and draft failures are known typed pre-effect
+  rejections.
 - A started effect without durable terminal proof remains `ExternalEffectUnknown`
   and is never retried.
 - Live suspension/revocation imposes stricter present-time denial but never
@@ -83,7 +82,11 @@ without code evidence.
 ## Compatibility and supersession
 
 This decision supersedes the absence of a disposition for the programmatic-caller
-policy in the reconciliation registers. For new Mandate work, retained RLM
+policy in the reconciliation registers. The corridor, reservation, and
+fixed-limit clauses of the decision are superseded by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md), which fixes
+limits only by recorded precedent; the remaining direction stands. For new
+Mandate work, retained RLM
 run-rooted activity identity, root-origin, direct-pair queue, and fixed
 observation limits remain historical-only where they conflict, consistent with
 architectures 17 and 24. The closed M4 baseline, M3/M4 bytes, and existing
@@ -92,9 +95,9 @@ authorized by this decision.
 
 ## Security and residual risk
 
-The policy remains trusted-local. Provenance, corridors, snapshots, and
-failures are bounded and credential-free; redaction stays central and every
-activating specification must pass the fake-secret regression suite.
+The policy remains trusted-local. Provenance, snapshots, and failures are
+bounded and credential-free; redaction stays central and every activating
+specification must pass the fake-secret regression suite.
 
 ## Affected documents
 

@@ -9,12 +9,18 @@ It does not activate implementation: each direction is bound to Milestone 5+
 and is implemented only through a separately accepted activating specification
 at the start of that milestone.
 
+Amended 2026-09-30 by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md): item 5, the
+activity numeric-limit classification, is superseded. The other four directions
+stand.
+
 ## Decision
 
 The following items, recorded as `Defer` in the
 [deferred/excluded register](../reconciliation/deferred-excluded-register.md)
 (EXC-008, EXC-009, EXC-010, EXC-011, and EXC-015), are adopted as accepted
-future directions for execution in Milestone 5+:
+future directions for execution in Milestone 5+, except item 5, which is
+superseded as recorded below:
 
 **Kernel output projection (owner: architecture 20):**
 1. **Rich MIME/raw kernel output** — a future bounded, credential-free kernel
@@ -45,10 +51,10 @@ future directions for execution in Milestone 5+:
    Harness schedule/time semantics remain owned by architecture 26.
 
 **Activity numeric limit classification (owner: architecture 24):**
-5. **Activity numeric product ceilings** — the future classification of
-   activity/notification numeric values as intrinsic bounds, capacity
-   availability, or ordinary product policy at M5+ activation, never Mandate
-   quotas or child-graph limits.
+5. **Activity numeric product ceilings** — superseded by
+   [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md): a numeric
+   activity bound is introduced only with a recorded precedent, never by a
+   classification exercise and never as a Mandate quota or child-graph limit.
 
 Each direction:
 
@@ -94,14 +100,14 @@ implemented without code evidence.
 8. Calendar/interval/time-zone/DST semantics are typed and never a Mandate
    admission quota; harness schedule/time semantics remain owned by
    architecture 26.
-9. Activity numeric values require intrinsic/capacity/ordinary classification
-   at activation and never become Mandate quotas or child-graph limits.
+9. A numeric activity value requires a recorded precedent before it exists and
+   never becomes a Mandate quota or child-graph limit.
 
 ## Failure semantics
 
 - Each direction fails closed before effect when its future contract is
-  unsupported, unnegotiated, or over-limit; no partial projection, partial
-  deletion, or partial classification is delivered.
+  unsupported or inconsistent; no partial projection or partial deletion is
+  delivered.
 - Recovery never resumes, retries, reattaches, or reruns work under any of
   the five directions.
 - Retention/deletion that cannot be applied atomically and safely fails
@@ -114,7 +120,9 @@ deferred/excluded register (EXC-008, EXC-009, EXC-010, EXC-011, and EXC-015)
 and the corresponding deferral wording in architectures 03, 04, 16, 20, and
 24 and in the non-goals of ADR 0021 and ADR 0030 ("process supervision, and
 deletion/GC remain excluded pending separate future decisions"), and records
-them as accepted future directions bound to Milestone 5+.
+them as accepted future directions bound to Milestone 5+. Item 5 is superseded
+by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); the other
+four directions stand.
 The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged.
 Activation remains deferred: no code changes are authorized by this decision.
 

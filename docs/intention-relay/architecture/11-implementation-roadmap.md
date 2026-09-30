@@ -195,27 +195,27 @@ are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-har
 
 - `intention-transport`, `intention-client`, `intention-daemon`, composition wiring, and `intention-tui` proof sufficient for an in-memory health/session fixture;
 - cross-platform local IPC using Unix domain sockets and Windows named pipes, with logical endpoint identifiers under per-user runtime/app-config locations;
-- private length-prefixed UTF-8 JSON framing with a 1 MiB maximum frame payload, one synchronous correlated request per connection, and bounded per-connection serving;
+- private length-prefixed UTF-8 JSON framing with a 1 MiB maximum frame payload, one synchronous correlated request per connection, and bounded per-connection serving; **that wire was later replaced by JSON-RPC 2.0 over NDJSON with `MAX_MESSAGE_BYTES` ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)), which is the current protocol**;
 - Unix `0700` endpoint-parent and `0600` listener-socket policy, plus a cross-platform `fs4` advisory startup lock;
-- first-connect, lock/recheck, daemon-process launch, capability/version-validated `Ready` health, typed errors, and snapshot-tail/resync subscription wiring with optional run scope;
+- first-connect, lock/recheck, daemon-process launch, version-validated `Ready` health, typed errors, and snapshot-tail/resync subscription wiring with optional run scope;
 - explicit M2 deferral of idle shutdown, daemon stop, upgrade coordination, durable sessions/events/snapshots, and model/provider execution.
 
 ### Tests first
 
 - one-daemon startup-race test;
 - protocol mismatch, hello, correlation, and health-readiness tests;
-- endpoint permission/path and 1 MiB frame-bound integration fixtures, including
-  a Windows named-pipe bind, hello, framed request/response, and cleanup fixture;
+- endpoint permission/path and 1 MiB message-bound integration fixtures, including
+  a Windows named-pipe bind, hello, JSON-RPC request/response, and cleanup fixture;
 - client stateful recovery plus snapshot/tail/resync and optional-run-scope contract tests over new one-shot IPC connections;
 - TUI proof-adapter contract test using production `intention-client` only and a dev-only fixture daemon host;
 - Tier C coverage fixtures and feature-profile checks.
 
 ### Acceptance outcomes
 
-- two Rust clients connect to one daemon, complete negotiated health checks, and observe the same typed in-memory health/session fixture;
+- two Rust clients connect to one daemon, complete version-checked health checks, and observe the same typed in-memory health/session fixture;
 - an unavailable daemon produces a typed error rather than a hang, while bootstrap rechecks under the startup lock before launching one process;
 - a reconnect recovery handle obtains a consistent snapshot/event position or an explicit resync instruction through a new one-shot connection; duplicate or stale events do not mutate the reducer;
-- local endpoints and frames remain private and bounded; Unix parent/socket modes enforce the documented `0700`/`0600` policy, while required Windows CI exercises the named-pipe fixture;
+- local endpoints and messages remain private and bounded; Unix parent/socket modes enforce the documented `0700`/`0600` policy, while required Windows CI exercises the named-pipe fixture;
 - the TUI proof reaches daemon state exclusively through the shared client;
 - Tier C crates meet 85% line coverage and all relevant feature profiles pass.
 
@@ -225,10 +225,15 @@ M2 uses Unix domain sockets on Unix and Windows named pipes on Windows. It keeps
 the length-prefixed UTF-8 JSON codec private to `intention-transport`, limits
 payloads to 1 MiB, and serves one request per connection synchronously. A slow
 client can block only its dedicated connection thread; subscription buffering,
-streaming, deadlines, and eviction remain later hardening work.
+streaming, deadlines, and eviction remain later hardening work. That M2 wire was
+replaced by JSON-RPC 2.0 over NDJSON with exact protocol version 2.0 and the
+`MAX_MESSAGE_BYTES` liveness cap
+([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)); the socket,
+permissions, and bounded serving remain.
 
-The protocol now provides health/readiness, hello capability negotiation,
-correlated envelopes, snapshot-and-tail or resync subscription results, and an
+The protocol now provides health/readiness, the `hello` version handshake, typed
+JSON-RPC requests and responses, subscription methods, notifications,
+snapshot-and-tail or resync subscription results, and an
 optional run scope. The composition facade is intentionally in-memory and
 non-durable: M3 owns durable storage/recovery and M4 owns model/provider runs.
 Idle shutdown, explicit stop, and daemon upgrades are deferred. Detailed
@@ -360,14 +365,14 @@ the production model-tool loop decision is recorded in
 ### Deliver
 
 - typed core tool registry and first read/search/write/edit/execute contracts as appropriate;
-- mandatory `WorkspaceRoot` policy;
+- mandatory `WorkspaceRoot` policy, later reduced to an addressing anchor with root-relative joins, `execute` CWD, and default search scope by [ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md);
 - typed hook dispatcher and deterministic ordering;
 - tool lifecycle persistence/events;
 - daemon-owned invocation path consumed by the model-tool loop.
 
 ### Tests first
 
-- relative/absolute/traversal/symlink workspace tests;
+- workspace path tests, rewritten to the join/cwd/search-scope semantics by [ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md);
 - execute CWD test;
 - hook order/rejection tests;
 - tool event consistency tests;
@@ -376,7 +381,7 @@ the production model-tool loop decision is recorded in
 
 ### Acceptance outcomes
 
-- file tools cannot use process CWD fallback or access outside the allowed root;
+- file tools cannot use process CWD fallback; absolute and parent paths are addressed as given, and the root is not a containment boundary ([ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md));
 - `execute` observes `workspace_root` as CWD;
 - hook rejection prevents base tool execution and produces typed durable evidence;
 - a provider-emitted tool call is durably recorded, executed through the real registry under `WorkspaceRoot`, and the exchange continues to `Completed`; a real-binary daemon-host E2E scenario exercises this path, and restart replay never re-executes tools;
@@ -433,26 +438,28 @@ activating slices, all approved together as one package
 slice may ship in a half-ready state, and later slices consume only contracts
 activated by earlier slices in this order:
 
-1. **Contracts and versions** — the versioned protocol/schema/
-   execution-meaning/DTO contract ledger for the full post-M5 stack: local
-   protocol and schema version advancement; `run-execution-meaning-v4`
-   field tables (`ProgrammaticCallerPolicySelectionV1`, `GoalRunSelectionV1`,
-   `AgentActivitySelectionV1`, `ContinualHarnessSelectionV1`); the negotiated
-   capability families (`provider_profiles_v1`, `session_fork_v1`,
-   `normalized_reasoning_stream_v1`, `agent_activity_v1`,
-   `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`);
-   SQLite as one live storage schema created directly on open (no migration
-   chain; ADR 0038); canonical tags
-   and digests under the existing `typed-tlv-v1`/SHA-256 policy; and crate
+1. **Contracts and versions** — the typed serde JSON contract and version
+   foundation for the full post-M5 stack: the JSON-RPC 2.0 local protocol with
+   exact protocol version 2.0 and its method/notification table, and removed
+   capability plane
+   ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)); explicit DTO
+   schema versions with exact-equality comparison; SQLite as one live storage
+   schema created directly on open (no migration chain; ADR 0038); and crate
    ownership, feature-profile, and coverage-tier declarations for every
-   activated family. The activating contract ledger is [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md).
+   activated family. The former contract ledger, `run-execution-meaning-v4`
+   field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and digests
+   were deleted by
+   [ADR 0046](../decisions/0046-typed-serde-json-contracts.md): no ledger, tag
+   registry, canonical digest, or identity record remains, and every future
+   contract family is typed serde JSON with RFC 8785 canonicalization only when
+   a first real consumer appears.
 2. **Control plane** — the ADR 0020 cluster and provider session selection
    (architectures 25/29/22): controlled live reload; credential rotation;
    provider health checks; model discovery; pricing policy; provider profile
    UI and raw-TOML/configuration editing; arbitrary authentication headers;
-   session defaults and per-turn/fork overrides; unavailable-queue promotion
-   and reconciliation; `provider_profiles_v1`; pending-removal and degraded
-   recovery; and the provider reasoning/catalog surface. **Reverted by
+   session defaults and per-turn/fork overrides; the provider profiles protocol;
+   pending-removal and degraded recovery; and the provider reasoning/catalog
+   surface. **Reverted by
    [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md):
    [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is Superseded,
    the slice's code, DTOs, test targets, goldens, and control-plane tables are
@@ -468,10 +475,10 @@ activated by earlier slices in this order:
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
    execution classes; the 15 closed `harness_*` safe failures; the two closed
-   root origins; corridors and reservations; the Goal tree and Verification
+   root origins; the Goal tree and Verification
    Mandates; and Build-mode autonomous continuation. The slice also activates
-   the contract records its ledger reservations name: the tool-descriptor,
-   tool-registry, and model-tool-loop revisions (ADR 0025, architecture 15),
+   the tool-descriptor, tool-registry, and model-tool-loop contracts (ADR 0025,
+   architecture 15),
    the bridge-invocation and MCP-method-catalog selections (ADR 0027,
    architectures 19/18), and the harness-side accepted directions of
    [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md)
@@ -492,16 +499,17 @@ activated by earlier slices in this order:
    closed instruction source kinds and scopes, the deployment instruction
    profile adapted from the legacy Antibusy static prompt set, user-editable
    fragments at user, project, and session scope, workspace `AGENTS.md` project
-   instructions read through the `WorkspaceRoot` boundary, and the reserved
+   instructions read through the `WorkspaceRoot` anchor, and the reserved
    `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable
-   profile revisions with canonical digests; canonical assembly and the
+   profile revisions with typed identity; deterministic assembly and the
    effective instruction projection, frozen at admission, delivered through the
    existing `system_context` channel, materialized into fork, plan, and handoff
-   records, and recorded as safe usage provenance; intrinsic bounds, closed
-   safe failures, channel closure, and digest-only observability; and the
+   records, and recorded as safe usage provenance; closed
+   safe failures, channel closure, and safe observability (byte-level
+   canonicalization is settled at activation under ADR 0046); and the
    control-plane editing and preview surface that Milestone 6 consumes. Its
-   activating specification declares the instruction contract families under
-   the Slice 1 ledger policy and changes no earlier slice.
+   activating specification declares the instruction contract families as typed
+   serde JSON contracts (ADR 0046) and changes no earlier slice.
 
 Each direction from ADR 0020-0034 remains bound to its slice; every
 retrospective change to M0-M5 code required by these directions is activated
@@ -513,10 +521,10 @@ nothing.
 
 ### Tests first
 
-- slice 1: DTO round-trip and golden digest fixtures; version-negotiation
-  fixtures (exact current-version equality, incompatible major, unnegotiated
-  capability fail-closed); current-schema creation fixtures; canonical-tag
-  and digest goldens;
+- slice 1: JSON-RPC 2.0 conformance fixtures (envelope shape, 1:1 method
+  coverage of the command and query variants, notifications, and error codes),
+  exact protocol-version equality with a typed `-32001` mismatch error, typed
+  serde JSON DTO round trips, and current-schema creation fixtures;
 - slice 2: **reverted by
   [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); a
   new activating specification is required to re-introduce the control
@@ -524,7 +532,7 @@ nothing.
   atomic commit or fail-closed and no partial snapshot; rotation redaction and
   no-frozen-meaning-change; health/discovery non-authority with no
   RunId/reason/selection, no model-name routing, and no fallback; pricing
-  non-ceiling classification; promotion/reconciliation limits; catalog
+  non-ceiling classification; catalog
   acceptance and recovery; control-plane safe-projection with no raw TOML,
   credentials, or resources crossing public or durable boundaries) are
   historical: the Slice 2 test targets and their goldens no longer exist, and
@@ -535,18 +543,17 @@ nothing.
   The current-schema tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`
   remain;
 - slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
-  conclusion bounds; class resolution; corridor admission and reservation
+  conclusion bounds; class resolution; programmatic-caller admission
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
   cancellation cascade and restart `Interrupted`;
 - slice 4: fork boundary/snapshot/rate-limit; activity journal/notification
   bounds and urgent dedup; reasoning history and paged delivery; replay/
   resync; adapter parity;
-- slice 5: deterministic canonical assembly, ordering, separators, and digest
-  stability; profile revision immutability for every edit operation with typed
-  validation failures; intrinsic-bound rejection for the total projection, one
-  fragment, the fragment count, and workspace instructions; an absent
-  `AGENTS.md` contributing nothing and an unreadable, boundary-escaping,
-  non-text, or oversized one failing closed; projection freeze, reuse across
+- slice 5: deterministic assembly, ordering, and separator stability; profile
+  revision immutability for every edit operation with typed
+  validation failures; an absent
+  `AGENTS.md` contributing nothing and an unreadable, non-text, or oversized
+  one failing closed; projection freeze, reuse across
   steps, and verbatim fork and handoff inheritance with no current-state
   re-derivation; channel closure against Skill, memory, tool, repository, and
   provider material; credential-free, activity-free, and raw-payload-free
@@ -571,20 +578,26 @@ nothing.
   [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)) were
   non-authorizing: they create no RunId, reason, lifecycle transition,
   scheduler candidate, tool permission, child edge, verifier authority, MCP
-  capability, bridge grant, kernel epoch, context projection, branch, or
-  reconciliation result; their recorded non-authority fixtures were removed
+  capability, bridge grant, kernel epoch, context projection, or branch;
+  their recorded non-authority fixtures were removed
   with the revert, and a re-introduction must restore them;
 - applicable crates meet their declared coverage tiers without excluding
   policy or boundary logic; every activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
-  together. Slice 1 (ADR 0036) is complete; Slice 2 (ADR 0037) was reverted by
+  together. Slice 1's `typed-tlv-v1` contract ledger was deleted by
+  [ADR 0046](../decisions/0046-typed-serde-json-contracts.md) and its record
+  [ADR 0036](../decisions/0036-m5plus-slice1-contract-ledger.md) is Superseded,
+  and its wire is
+  JSON-RPC 2.0
+  ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)); Slice 2
+  (ADR 0037) was reverted by
   [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) and
   requires a new activating specification to re-introduce it; slices 3-5
   remain;
 - the fifth slice's contracts are declared by its activating specification and
-  prove that instruction text is advisory-only, bounded, digest-bound, and
+  prove that instruction text is advisory-only, typed, and
   materialized for frozen context, with no untrusted material entering the
   instruction channel and no authority created (ADR 0043);
 - the ordinary request-side tool advertisement (ADR 0039) is complete:
@@ -618,9 +631,9 @@ nothing.
 
 - all five slices are complete in order; every slice is fully ready before the
   next slice begins shipping;
-- the contract ledger declares every post-M5 protocol, schema, DTO,
-  execution-meaning, configuration, migration, compatibility, and error
-  contract with an owner and evidence anchor;
+- every delivered post-M5 contract is typed serde JSON with an owner and
+  evidence anchor; no contract ledger, tag registry, canonical digest, or
+  execution-meaning record exists (ADR 0046);
 - the dependency graph and milestone wording identify M5+ as the hard
   prerequisite of M6-M9;
 - no M6-M9 boundary behavior is implemented; no second runtime, registry,
@@ -774,7 +787,8 @@ delivered milestone on both tracks.
   ownership of the architecture index and its owner paragraphs
   (`architecture/README.md`);
 - closure of the parked contract-enforcement card: decode-time version and
-  validation enforcement for the 31 pre-Slice-2 DTOs (architecture 02);
+  validation enforcement for the public DTOs that declare invariants beyond
+  their field types (architecture 02);
 - closure of the open implementation decisions of architecture 03: idle
   shutdown, explicit stop, daemon-upgrade coordination, and stale-listener
   recovery;
@@ -829,9 +843,9 @@ coverage tiers, fixtures, and outcome evidence.
   recovery, compatibility, and evidence contracts (architecture 13);
 - the external-attempt phase and evidence taxonomy and the unknown-effect pause
   with no retry, resume, reattachment, or rerun (architecture 13);
-- the nested `run-execution-meaning-v4` payloads for the `Mandate` and
-  `VerifierMandate` kinds with canonical digests, decoder outcomes, and
-  historical-compatibility classes (architecture 14);
+- the nested Mandate and `VerifierMandate` typed serde JSON contract families
+  with explicit decoder outcomes and historical-compatibility classes
+  (architecture 14, ADR 0046);
 - durable reread-candidate coordination over existing Mandate reasons, typed
   readiness/capacity evidence, deterministic selection, retained-reason
   unavailability, lifecycle-owned atomic fresh-admission handoff, and
@@ -847,7 +861,7 @@ coverage tiers, fixtures, and outcome evidence.
 - admission-transaction, conflict, capacity, and legacy-ticket separation
   fixtures;
 - attempt-phase and unknown-effect matrix fixtures;
-- canonical payload and digest goldens plus invalid vectors for both Mandate
+- typed contract fixtures plus invalid vectors for both Mandate
   kinds;
 - reread, readiness, deterministic-selection, atomic-handoff, and
   recovery-before-scheduling fixtures;
@@ -860,7 +874,7 @@ coverage tiers, fixtures, and outcome evidence.
   with a fresh `RunId`, and never resumes earlier work;
 - an unknown external effect pauses the Mandate and produces no retry, resume,
   or rerun;
-- identical admitted inputs produce identical canonical payloads and digests;
+- identical admitted inputs produce identical frozen typed payloads;
 - no ordinary M3/M4 run, queue ticket, or history changes meaning.
 
 ### Exit criteria
@@ -885,19 +899,18 @@ outcome evidence.
 
 ### Deliver
 
-- the fixed fourteen-slot registry, canonical descriptor and registry
+- the fixed fourteen-slot registry, typed descriptor and registry
   revisions, frozen direct tool selection, and execution-kind-scoped
   `WorkspaceRoot` (architecture 15, decision 0007);
 - the Mandate model-tool loop: sequential steps, one ordered group per
-  tool-calling step, the 16-call bound with `provider_tool_group_invalid`, the
-  512-KiB/4-MiB bounds, durable `ToolCall`/`ToolResult` evidence, no-retry and
-  no-resume recovery, and `RunToolHistoryPageDto` replay negotiation with
-  `model_tool_loop_required` (architectures 15, ADR 0025);
+  tool-calling step, durable `ToolCall`/`ToolResult` evidence, no-retry and
+  no-resume recovery, and `RunToolHistoryPageDto` replay delivery
+  (architectures 15, ADR 0025 as amended by ADR 0048);
 - durable immutable child edges, delegation snapshots, direct-edge controls and
   messages, graph terminalization, child-local uncertainty, separately issued
   verifier authority, immutable target sets and baselines, conflict precedence,
   and exact reconciliation (architecture 17, decision 0009);
-- bridge attachment and negotiation, the ephemeral daemon-issued grant,
+- bridge attachment and typed handshake, the ephemeral daemon-issued grant,
   immutable bridge-contract selection, durable operation correlation, the
   one-path ingress into registry admission and tool-loop facts, safe replay,
   cancellation propagation, recovery, and the closed `bridge_*` failures
@@ -910,15 +923,15 @@ outcome evidence.
 
 ### Tests first
 
-- registry slot, descriptor-revision, and registry-revision goldens;
-- loop step/group/bound fixtures plus the `provider_tool_group_invalid` shape
+- registry slot, descriptor-revision, and registry-revision fixtures;
+- loop step/group fixtures plus the ordered-group shape
   matrix and effect-evidence fault injection;
 - child-edge, delegation, direct-control, verifier-authority, target-mutation,
   and conflict-precedence fixtures;
 - bridge grant, operation correlation, replay, cancellation, slow-peer, and
   no-bypass fixtures;
 - supervision-topology fixtures;
-- M3/M4 tool denial, ordinary containment, and retained RLM preservation
+- M3/M4 tool denial, ordinary workspace addressing, and retained RLM preservation
   fixtures.
 
 ### Acceptance outcomes
@@ -949,13 +962,12 @@ decisions 0010, 0012, and 0013, the project script library of
 [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md),
 the MCP and kernel detail of decision 0027, the rich MIME/raw kernel output
 projection direction of ADR 0034, and the architecture 22 provider work that
-remains not activated after the Slice 2 revert: the canonical `responses`
+remains not activated after the Slice 2 revert: the `responses`
 driver, `SafeHeader` live wire injection, and the user-kind parser. It begins only
 after its approved implementation specification declares crates,
 DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
-outcome evidence; that activating change also adds the kernel contract families
-to the live ledger (ADR 0036 table and its `TagRegistry::LEDGER` parity, next
-free 0x06xx values).
+outcome evidence; that activating change also declares the kernel contract
+families as typed serde JSON contracts (ADR 0046).
 
 ### Deliver
 
@@ -968,7 +980,7 @@ free 0x06xx values).
   no-resume semantics (architecture 20, decisions 0012/0027);
 - the project script library (`.ir/scripts`): agent-authored modules persisted
   as ordinary project files through the frozen tool descriptors, an exact
-  fail-closed import surface, bounded script-import evidence published as run
+  import surface, bounded script-import evidence published as run
   facts, and no executable payload in checkpoint payload or metadata
   (decision 0042);
 - rich MIME/raw kernel output projection, bounded and credential-free, never
@@ -987,8 +999,8 @@ free 0x06xx values).
 
 - MCP discovery, selection, invocation, disposal, and safe-projection fixtures;
 - kernel epoch, cell, checkpoint, restore, cancellation, and recovery fixtures;
-- `.ir/scripts` import-surface fixtures (missing library, boundary,
-  symbolic-link and outside-path escape), reuse by reading the file in a fresh
+- `.ir/scripts` import-surface fixtures (missing library, unaddressable
+  library path, and kernel-side scope cases), reuse by reading the file in a fresh
   epoch, and bounded script-import evidence without source text or absolute
   paths;
 - kernel output projection fixtures without raw frames, MIME payloads, binary
@@ -1005,7 +1017,7 @@ free 0x06xx values).
   reconciliation authority beyond its own contract;
 - the kernel imports exactly the referenced library directory, a fresh run
   reuses a module only by reading the file, and checkpoint payload and metadata
-  carry no script source and at most the canonical library digest;
+  carry no script source;
 - an unrepresentable import-evidence list fails before publication with
   `kernel_script_library_unavailable` and is never truncated or stringified;
 - no M3/M4 or retained IPython/RLM/provider/context history changes meaning.
@@ -1014,7 +1026,7 @@ free 0x06xx values).
 
 - the activating specification's contracts, tests, coverage, and evidence are
   recorded and pass `make quick`, `make verify`, and Linux/Windows CI, and the
-  ledger parity for the kernel families is wired in the same change;
+  kernel families' typed serde JSON contracts are declared in the same change;
 - no second runtime, registry, scheduler, persistence authority, or sandbox is
   introduced, and no module, capability, or context record gains authority; and
 - the reconciliation registers carry the milestone's activation rows (EVD-069).
@@ -1177,7 +1189,7 @@ feature profile, quality-policy target, or implementation milestone.
 - direct Mandate admission and execution-kind-scoped WorkspaceRoot policy,
   resolving CON-001/002 only for future Mandate execution;
 - model-step/tool-group loop, effect evidence, no-retry/no-resume recovery, and
-  negotiated future replay boundary;
+  typed protocol future replay boundary;
 - reconciliation ownership, compatibility, contradiction, and evidence updates.
 
 ### Exit criteria
@@ -1203,7 +1215,7 @@ milestone.
 - durable reread-based candidate coordination over existing Mandate reasons;
 - typed readiness/capacity evidence, deterministic selection, retained-reason
   unavailability, and lifecycle-owned atomic fresh-admission handoff;
-- recovery-before-scheduling, no-resume, and future negotiated replay boundary;
+- recovery-before-scheduling, no-resume, and a future typed protocol replay boundary;
 - reconciliation ownership, compatibility, contradiction, and evidence updates.
 
 ### Exit criteria
@@ -1232,7 +1244,7 @@ milestone.
 - separately issued verifier authority, immutable target sets/baselines,
   evidence/verdict, atomic target mutation, conflict precedence, and exact
   reconciliation;
-- execution-meaning nested-selection ownership and negotiated future replay
+- execution-meaning nested-selection ownership and typed protocol future replay
   boundary; and
 - reconciliation ownership, compatibility, contradiction, and evidence updates.
 
@@ -1262,7 +1274,7 @@ implementation milestone.
   fixed `mcp` ToolId;
 - dynamic run-local capability acquisition, schema normalization, private
   resources, idempotency, safe projection, disposal, and no-resume recovery;
-- non-authority, execution-meaning, and negotiated replay boundaries; and
+- non-authority, execution-meaning, and typed protocol replay boundaries; and
 - reconciliation ownership, compatibility, contradiction, and evidence updates.
 
 ### Exit criteria
@@ -1287,7 +1299,7 @@ migration, feature profile, quality-policy target, or implementation milestone.
 
 ### Deliver
 
-- typed bridge attachment and negotiation, an ephemeral daemon-issued grant,
+- typed bridge attachment and handshake, an ephemeral daemon-issued grant,
   immutable bridge-contract selection, and durable operation correlation;
 - one-path ingress into fixed registry admission/tool-loop facts, safe replay,
   cancellation propagation, uncertainty, recovery, and no-resume boundaries;
@@ -1388,7 +1400,7 @@ implementation milestone.
 - immutable provider and model-capability selections, driver compatibility, and
   readiness/non-authority rules;
 - normalized textual reasoning, local-history-first Responses semantics, safe
-  negotiated delivery, recovery, and no-resume boundaries; and
+  typed protocol delivery, recovery, and no-resume boundaries; and
 - reconciliation ownership, compatibility, contradiction, dependency, and
   evidence updates.
 
@@ -1418,7 +1430,7 @@ feature profile, quality-policy target, or implementation milestone.
 
 - independent ordinary child Sessions, deterministic tree lineage, closed fork
   boundaries, immutable base snapshots, and non-destructive regeneration;
-- atomic lineage/idempotency/audit, archive presentation, bounded negotiated
+- atomic lineage/idempotency/audit, archive presentation, bounded typed protocol
   tree projections, no-current-state reconstruction, and no-resume boundaries;
 - explicit separation from Mandate child/verifier authority, provider selection,
   context sourcing, and machine-state rollback; and
@@ -1481,8 +1493,8 @@ feature profile, quality-policy target, or implementation milestone.
 - schedule/time rules, two-layer dossiers, verified checkpoints, and safe
   conclusions bounded at 512 KiB;
 - read-and-delegate execution classes (`Light`/`Medium`/`Heavy`) with `sub_agent`
-  admitted only through a user-confirmed typed corridor under architecture 27;
-- code-owned bounds classified as intrinsic/capacity/product, never Mandate
+  admitted only through a user-confirmed typed admission under architecture 27;
+- limits only with a recorded precedent, never Mandate
   quotas; and
 - cancellation cascade, restart `Interrupted`, no-resume recovery, and
   post-commit reread publication.
@@ -1512,13 +1524,11 @@ milestone.
 - two closed root origins (`InteractiveUser`, `ContinualHarness`) with no third
   root and immutable `ProgrammaticCallerProvenanceDto` audit records;
 - durable policy identity/scope/narrowing with most-restrictive-wins
-  intersection, child-narrowing-only, and fork shared calendar counters;
-- closed admission decisions with the `InteractiveLocalReadBaselineV1` (256/16),
-  exact confirmation, and bounded corridors;
+  intersection and child-narrowing-only;
+- closed admission decisions with exact confirmation;
 - policy lifecycle with live tightening, drafts, and no-reactivation-after-revoke;
-- run and calendar limits with atomic reservations and
-  `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
-- `ProgrammaticCallerPolicySelectionV1` in `run-execution-meaning-v4` with
+- `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery; and
+- the programmatic-caller policy selection record with
   `Disabled` only for historical M4.
 
 ### Exit criteria
@@ -1574,13 +1584,10 @@ profile, quality-policy target, or implementation milestone.
 ### Deliver
 
 - session default selection and per-turn/fork overrides;
-- unavailable-queue promotion (8 per terminal transition) and reconciliation
-  (32 per page);
 - profile-keyed usage aggregation;
-- `provider_profiles_v1` public protocol and readiness projection;
-- startup-only application with pending-removal (30-minute lifetime) and
-  degraded read-only recovery; and
-- held recovery-promoted run admission (`AdmitRecoveredRunCommandDto`).
+- the provider profiles protocol and readiness projection;
+- startup-only application with pending-removal and
+  degraded read-only recovery.
 
 ### Exit criteria
 
@@ -1594,9 +1601,10 @@ profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package extending architecture 15.** It records the
 base-tool initial contracts, the effect-profile mapping, the fragment-stream
-contract, the terminal outcome taxonomy, the 16-call group bound, the
-512-KiB/4-MiB bounds, and tool-history replay negotiation, adopted by
-[decision 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md).
+contract, the terminal outcome taxonomy, and tool-history replay delivery,
+adopted by
+[decision 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md)
+as amended by [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md).
 It activates no crate, schema, migration, protocol implementation, feature
 profile, quality-policy target, or implementation milestone.
 
@@ -1607,14 +1615,11 @@ profile, quality-policy target, or implementation milestone.
 - the effect-profile flag mapping table;
 - `ToolOutputDeltaRecorded`/`ToolCallResultRecorded` fragment stream and
   `tool_result_stream_invalid`;
-- the 16-call group maximum and `provider_tool_group_invalid`;
-- 512 KiB per fact / 4 MiB per group and `tool_output_limit_exceeded`;
-- the closed terminal outcome taxonomy; and
-- `RunToolHistoryPageDto`/`RunToolHistoryCompletedDto` replay with
-  `model_tool_loop_required`, including the combined publication-gate order
-  when the same subscription also negotiates the normalized reasoning stream;
-- the descriptor `model_schema_availability` field, the closed
-  `provider_tool_group_invalid` shape matrix, the no-numeric-step-limit
+- the closed terminal outcome taxonomy;
+- `RunToolHistoryPageDto`/`RunToolHistoryCompletedDto` replay delivery,
+  including the combined publication-gate order
+  when the same subscription also delivers the normalized reasoning stream;
+- the descriptor `model_schema_availability` field, the no-numeric-step-limit
   statement, and the typed-reference alternatives for non-path tools.
 
 ### Exit criteria
@@ -1624,8 +1629,8 @@ profile, quality-policy target, or implementation milestone.
 - M3/M4 bytes, `tool_execution_unavailable`, replay, and recovery remain
   unchanged;
 - the Slice 3 activation delivers the tool-descriptor, tool-registry, and
-  model-tool-loop contract records and tags reserved for it (ADR 0025), and the
-  Mandate tool-loop implementation is delivered by Milestone 11; and
+  model-tool-loop contracts reserved for it (ADR 0025 as amended by ADR 0048),
+  and the Mandate tool-loop implementation is delivered by Milestone 11; and
 - activation remains excluded pending a later M5+ specification.
 
 ## Post-M5 session-branching detail package
@@ -1687,7 +1692,7 @@ profile, quality-policy target, or implementation milestone.
 - the RLM tree bounds never become Mandate admission quotas or child-graph
   limits; M3/M4 bytes remain unchanged;
 - the Slice 3 activation delivers the bridge-invocation and MCP-method-catalog
-  contract records reserved for it, while the child and bridge implementation
+  contracts reserved for it, while the child and bridge implementation
   is delivered by Milestone 11 and the MCP and kernel implementation by
   Milestone 12; and
 - activation remains excluded pending a later M5+ specification.
@@ -1711,7 +1716,7 @@ profile, quality-policy target, or implementation milestone.
 - `normalized_reasoning_stream_v1` paged delivery (256 facts / 512 KiB);
 - the closed dialect catalog and thinking activation fields;
 - catalog limits (256-char IDs, 128 profiles, 32 kinds, 512 KiB candidate, 30
-  minutes, 8 promotions, 32 reconciliation), tombstones, and audit taxonomy;
+  minutes), tombstones, and audit taxonomy;
 - the taxonomy value `model-capability-taxonomy-v1`, the
   `reasoning_input_contract` field name (superseding the concept2
   `reasoning_history_transfer`), and the descriptor-owned field-path/
@@ -1932,17 +1937,18 @@ implementation, feature profile, quality-policy target, or production behavior.
 - the closed instruction source kinds and scopes: the deployment instruction
   profile adapted from the legacy Antibusy static prompt set, user-editable
   fragments at user, project, and session scope, workspace `AGENTS.md` project
-  instructions read through the `WorkspaceRoot` boundary, and the reserved
+  instructions read through the `WorkspaceRoot` anchor, and the reserved
   `Mode` and `Vfr` contributions of architectures 07 and 06;
-- immutable profile revisions with canonical digests under exactly one live
-  configuration format version, with no migration and no second format;
-- canonical assembly and the immutable effective instruction projection, frozen
+- immutable profile revisions with typed identity under exactly one live
+  configuration format version, with no migration and no second format
+  (byte-level canonicalization is settled at activation under ADR 0046);
+- deterministic assembly and the immutable effective instruction projection, frozen
   at admission, delivered through the existing `system_context` channel,
   materialized into fork, plan, and handoff records, and recorded as safe usage
   provenance;
-- intrinsic bounds, the closed `instruction_*` safe failures, channel closure
+- the closed `instruction_*` safe failures, channel closure
   against Skill, memory, tool, repository, and provider material, and
-  digest-only observability;
+  safe observability;
 - the control-plane editing and preview surface of architecture 25, consumed by
   the primary UI in Milestone 6; and
 - the delivery mapping: the fifth Milestone 5+ slice activates the mechanism,
@@ -1954,13 +1960,13 @@ implementation, feature profile, quality-policy target, or production behavior.
 
 - the fifth slice's activating specification declares exact crates,
   DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
-  outcome evidence, and wires the instruction contract families into the live
-  ledger;
+  outcome evidence, and declares the instruction contract families as typed
+  serde JSON contracts;
 - instruction text is advisory-only: no instruction source grants authority, no
   untrusted material enters the instruction channel, and M3/M4 bytes and
   meanings remain unchanged;
 - profile revisions and materialized projections are immutable,
-  deterministically digested, and never re-derived from current configuration,
+  deterministically assembled, and never re-derived from current configuration,
   current project files, or current session state; and
 - the reconciliation registers carry the package's topic, slice, evidence,
   contradiction, compatibility, deferral, and ownership rows.
