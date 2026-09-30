@@ -9,7 +9,7 @@
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCallChunk, ChatCompletionMessageToolCalls,
-    ChatCompletionStreamOptions, ChatCompletionTools, CompletionUsage, ReasoningEffort,
+    ChatCompletionStreamOptions, ChatCompletionTools, CompletionUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +20,6 @@ pub struct WireRequest {
     pub messages: Vec<WireMessage>,
     pub stream: bool,
     pub stream_options: ChatCompletionStreamOptions,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ChatCompletionTools>,
 }

@@ -6,7 +6,7 @@
 use intention_model::{
     AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
-    ModelToolDefinitionDto, ProviderErrorDto, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
+    ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_types::{CorrelationIdDto, RunId, ToolCallId};
 
@@ -242,9 +242,10 @@ fn capabilities_tool_usage_events_and_errors_cover_safe_wire_variants() {
     assert!(
         serde_json::from_str::<ModelEventDto>(r#"{"kind":"text_delta","content":""}"#).is_err()
     );
-    assert!(
+    assert_eq!(
         serde_json::from_str::<ModelEventDto>(r#"{"kind":"reasoning_delta","content":""}"#)
-            .is_err()
+            .expect("textless reasoning delta decodes as presence"),
+        ModelEventDto::reasoning_presence()
     );
 
     let correlation = CorrelationIdDto::new();
@@ -530,6 +531,26 @@ fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
 }
 
 #[test]
+fn reasoning_presence_marks_a_textless_provider_channel() {
+    let presence = ModelEventDto::reasoning_presence();
+    assert_eq!(
+        presence,
+        ModelEventDto::ReasoningDelta {
+            content: String::new(),
+        }
+    );
+    assert!(ModelEventDto::reasoning_delta("").is_err());
+
+    let decoded: ModelEventDto = serde_json::from_str(r#"{"kind":"reasoning_delta","content":""}"#)
+        .expect("textless reasoning delta decodes as presence");
+    assert_eq!(decoded, presence);
+    let decoded: ModelEventDto =
+        serde_json::from_str(&serde_json::to_string(&presence).expect("presence serializes"))
+            .expect("presence deserializes");
+    assert_eq!(decoded, presence);
+}
+
+#[test]
 fn assistant_reasoning_round_trips_and_rejects_invalid_wire_values() {
     let call_id = ToolCallId::new();
     for text in ["considering context", ""] {
@@ -623,35 +644,6 @@ fn model_request_assistant_reasoning_round_trips_and_survives_rebuilds() {
         ))
         .is_err()
     );
-}
-
-#[test]
-fn reasoning_presence_marks_a_textless_provider_channel() {
-    let presence = ModelEventDto::reasoning_presence(ReasoningFragmentCategoryDto::Detail);
-    assert_eq!(
-        presence,
-        ModelEventDto::ReasoningDelta {
-            category: ReasoningFragmentCategoryDto::Detail,
-            content: String::new(),
-        }
-    );
-    assert!(ModelEventDto::reasoning_delta("").is_err());
-    assert!(
-        ModelEventDto::reasoning_delta_categorized(ReasoningFragmentCategoryDto::Primary, "")
-            .is_err()
-    );
-
-    let decoded: ModelEventDto =
-        serde_json::from_str(r#"{"kind":"reasoning_delta","category":"primary","content":""}"#)
-            .expect("textless reasoning delta decodes as presence");
-    assert_eq!(
-        decoded,
-        ModelEventDto::reasoning_presence(ReasoningFragmentCategoryDto::Primary)
-    );
-    let decoded: ModelEventDto =
-        serde_json::from_str(&serde_json::to_string(&presence).expect("presence serializes"))
-            .expect("presence deserializes");
-    assert_eq!(decoded, presence);
 }
 
 #[test]

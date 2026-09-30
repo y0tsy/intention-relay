@@ -12,10 +12,6 @@ use intention_types::{
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 pub mod canonical;
-pub mod context_projection;
-pub mod provider_catalog;
-pub mod provider_selection;
-pub mod reasoning_history;
 pub mod run_execution_meaning;
 
 mod model_facts;
@@ -24,30 +20,6 @@ pub use model_facts::{
     ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto, ModelRunFactKindDto,
     ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto, RunFailureDto, RunReplayDto,
     RunSnapshotDto, ToolResultOutcomeDto,
-};
-// The DtoResult reasoning-output bound helper lives in `model_facts`; this
-// alias is the single live reasoning-output bound and the name the durable
-// append authority calls.
-pub use model_facts::validate_reasoning_output_bound as validate_reasoning_fact_output_bound;
-
-pub use context_projection::{
-    ContextSourceEntryV1, ContextSourceManifestV1, ModelContextProjectionV1,
-    context_source_manifest_digest, model_context_projection_digest,
-};
-pub use provider_catalog::{
-    CredentialTransportMode, ProviderCatalogLimits, ProviderDriverContractRevisionDto,
-    ProviderKindDescriptorRevisionV1, ProviderKindTombstoneDto, ProviderProfileRevisionV1,
-    ProviderProfileTombstoneDto, provider_profile_revision_digest, validate_endpoint,
-    validate_provider_kind_id, validate_provider_kind_removal,
-    validate_provider_kind_revision_immutability, validate_safe_header_name,
-};
-pub use provider_selection::{
-    ContextPreservationCapability, ModelCapabilitySelectionV1, ModelCapabilitySetV1,
-    ModelInputCapability, ProviderSelectionV1, ReasoningCapability, StructuredOutputCapability,
-};
-pub use reasoning_history::{
-    ReasoningDeltaCategory, ReasoningHistoryBound, ReasoningHistoryManifestDto,
-    reasoning_history_manifest_digest,
 };
 
 /// The agent policy active for a run.
@@ -590,32 +562,12 @@ impl SessionProjectionDto {
     }
 }
 
-/// Deserializes one current optional wire field that must be present.
-///
-/// The wire shape carries the key, and `null` means "no value". Serde treats a
-/// bare `Option` field as absent-tolerant, so this helper keeps the field
-/// required: a `deserialize_with` field is never defaulted, and a missing key
-/// is a decode error.
-fn deserialize_required_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer)
-}
-
 /// A command requesting that the daemon accept a new user turn.
-///
-/// The per-turn provider override fields are optional current wire fields:
-/// the wire shape carries both keys, a `null` value means "no override", and a
-/// document that omits a key is a decode error. The three-argument
-/// [`Self::new`] constructor keeps producing override-free commands.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SendUserTurnCommandDto {
     session_id: SessionId,
     turn_id: TurnId,
     content: String,
-    profile_override: Option<String>,
-    expected_profile_revision: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
@@ -628,28 +580,10 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
             session_id: SessionId,
             turn_id: TurnId,
             content: String,
-            #[serde(deserialize_with = "deserialize_required_optional_string")]
-            profile_override: Option<String>,
-            #[serde(deserialize_with = "deserialize_required_optional_string")]
-            expected_profile_revision: Option<String>,
         }
 
         let raw = RawSendUserTurnCommandDto::deserialize(deserializer)?;
-        let command =
-            Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)?;
-        match raw.profile_override {
-            Some(profile) => command
-                .with_profile_override(profile, raw.expected_profile_revision)
-                .map_err(de::Error::custom),
-            None if raw.expected_profile_revision.is_some() => {
-                // An expected revision without an override is invalid; the
-                // blank override drives the shared validation path.
-                command
-                    .with_profile_override("", raw.expected_profile_revision)
-                    .map_err(de::Error::custom)
-            }
-            None => Ok(command),
-        }
+        Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)
     }
 }
 
@@ -675,57 +609,8 @@ impl SendUserTurnCommandDto {
                 session_id,
                 turn_id,
                 content,
-                profile_override: None,
-                expected_profile_revision: None,
             })
         }
-    }
-
-    /// Binds one per-turn provider profile override to this command.
-    ///
-    /// The override names the profile that must resolve for this turn's run.
-    /// `expected_profile_revision`, when supplied, must match the resolved
-    /// profile revision before the turn is committed. Both values are
-    /// bounded to 63 characters and must be credential-free.
-    ///
-    /// # Errors
-    ///
-    /// Returns `provider_profile_override_invalid` for an over-long, blank,
-    /// or control-bearing override value, or when an expected profile
-    /// revision is supplied without an override, and
-    /// `credentials_forbidden` for a credential-shaped value.
-    pub fn with_profile_override(
-        mut self,
-        profile_id: impl Into<String>,
-        expected_profile_revision: Option<String>,
-    ) -> DtoResult<Self> {
-        let profile_override = profile_id.into();
-        if expected_profile_revision.is_some() && profile_override.is_empty() {
-            return Err(ErrorDto::validation(
-                "provider_profile_override_invalid",
-                "an expected profile revision requires a profile override",
-            ));
-        }
-        for value in [Some(&profile_override), expected_profile_revision.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            if value.trim().is_empty() || value.len() > 63 || value.chars().any(char::is_control) {
-                return Err(ErrorDto::validation(
-                    "provider_profile_override_invalid",
-                    "provider profile override values are invalid",
-                ));
-            }
-            if crate::canonical::contains_credential_shape(value) {
-                return Err(ErrorDto::validation(
-                    "credentials_forbidden",
-                    "credentials are forbidden",
-                ));
-            }
-        }
-        self.profile_override = Some(profile_override);
-        self.expected_profile_revision = expected_profile_revision;
-        Ok(self)
     }
 
     /// Returns the target session identity.
@@ -744,18 +629,6 @@ impl SendUserTurnCommandDto {
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
-    }
-
-    /// Returns the per-turn provider profile override, if one was bound.
-    #[must_use]
-    pub fn profile_override(&self) -> Option<&str> {
-        self.profile_override.as_deref()
-    }
-
-    /// Returns the expected resolved profile revision of the override, if any.
-    #[must_use]
-    pub fn expected_profile_revision(&self) -> Option<&str> {
-        self.expected_profile_revision.as_deref()
     }
 }
 

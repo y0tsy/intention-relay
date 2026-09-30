@@ -12,7 +12,7 @@ use async_openai::{
     error::OpenAIError,
     types::chat::{
         ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionStreamOptions,
-        ChatCompletionTool, ChatCompletionTools, FunctionCall, FunctionObject, ReasoningEffort,
+        ChatCompletionTool, ChatCompletionTools, FunctionCall, FunctionObject,
     },
 };
 use futures_util::{
@@ -22,10 +22,9 @@ use futures_util::{
 };
 use intention_config::{ProviderKindDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_model::{
-    AuthenticationHeaderPolicyV1, CredentialTransportMode, FinishReasonDto,
-    ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto, ModelEventStream,
-    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ProviderErrorDto,
-    ReasoningEffortLevel, ReasoningFragmentCategoryDto, ToolCallDto, UsageDto,
+    FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelDriver, ModelEventDto,
+    ModelEventStream, ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto,
+    ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use intention_types::{DtoResult, ErrorDto, ToolCallId};
 
@@ -33,89 +32,10 @@ mod wire;
 
 use wire::{WireChunk, WireDelta, WireMessage, WireRequest};
 
-/// Additive descriptor-driven driver options; the default is unchanged.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct GenericChatDriverOptions {
-    header_policy: Option<AuthenticationHeaderPolicyV1>,
-    reasoning_effort: Option<ReasoningEffortLevel>,
-}
-
-impl GenericChatDriverOptions {
-    /// Creates default driver options.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns the declared header policy (names only, never values).
-    #[must_use]
-    pub const fn header_policy(&self) -> Option<&AuthenticationHeaderPolicyV1> {
-        self.header_policy.as_ref()
-    }
-
-    /// Returns the declared reasoning effort applied to requests.
-    #[must_use]
-    pub const fn reasoning_effort(&self) -> Option<ReasoningEffortLevel> {
-        self.reasoning_effort
-    }
-
-    /// Declares the descriptor header policy (names only, never values).
-    ///
-    /// The policy is validated by construction and stored privately; it is
-    /// never logged, serialized, or made durable.
-    #[must_use]
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "Moving the validated policy into the option requires a drop that const fn cannot evaluate."
-    )]
-    pub fn with_header_policy(mut self, policy: AuthenticationHeaderPolicyV1) -> Self {
-        self.header_policy = Some(policy);
-        self
-    }
-
-    /// Declares the closed reasoning effort request field.
-    #[must_use]
-    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffortLevel) -> Self {
-        self.reasoning_effort = Some(effort);
-        self
-    }
-
-    /// Validates that every declared option is applicable to this adapter.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the header policy selects the
-    /// safe-header transport or the maximum reasoning effort is declared (the
-    /// pinned SDK effort set has no max).
-    pub fn build(self) -> DtoResult<Self> {
-        if self.header_policy.as_ref().is_some_and(|policy| {
-            policy.selected_transport() == CredentialTransportMode::SafeHeader
-        }) {
-            return Err(ErrorDto::validation(
-                "unsupported_safe_header_transport",
-                "the generic chat adapter does not yet support safe-header credential transport",
-            ));
-        }
-        if self.reasoning_effort == Some(ReasoningEffortLevel::Max) {
-            return Err(ErrorDto::validation(
-                "unsupported_reasoning_effort",
-                "the generic chat adapter cannot express the maximum reasoning effort",
-            ));
-        }
-        Ok(self)
-    }
-}
-
 /// Generic Chat Completions driver with private SDK client state.
-///
-/// The SDK client is held behind a read/write lock so credential rotation can
-/// rebuild it without replacing the driver instance: every in-flight stream
-/// keeps the client clone it captured at start, and later executions clone
-/// the rotated client.
 pub struct GenericChatDriver {
     resolved: ResolvedConfigDto,
-    client: std::sync::RwLock<Client<OpenAIConfig>>,
-    options: GenericChatDriverOptions,
+    client: Client<OpenAIConfig>,
     outbound_calls_for_test: u32,
 }
 
@@ -139,100 +59,29 @@ impl GenericChatDriver {
         material.into_parts_for_provider(Self::with_credential)
     }
 
-    /// Creates the driver from opaque startup-only provider material and
-    /// validated descriptor-driven options.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the material selects a different provider kind.
-    pub fn from_startup_material_with_options(
-        material: StartupProviderMaterial,
-        options: GenericChatDriverOptions,
-    ) -> DtoResult<Self> {
-        material.into_parts_for_provider(move |resolved, credential| {
-            Self::with_credential_and_options(resolved, credential, options)
-        })
-    }
-
     fn with_credential(resolved: ResolvedConfigDto, credential: String) -> DtoResult<Self> {
-        Self::with_credential_and_options(resolved, credential, GenericChatDriverOptions::default())
-    }
-
-    fn with_credential_and_options(
-        resolved: ResolvedConfigDto,
-        credential: String,
-        options: GenericChatDriverOptions,
-    ) -> DtoResult<Self> {
         if resolved.provider().kind() != ProviderKindDto::GenericChatCompletionApi {
             return Err(ErrorDto::validation(
                 "invalid_generic_chat_provider_config",
                 "generic chat driver requires generic chat provider configuration",
             ));
         }
-        let client = Self::configured_client(&resolved, credential)?;
-        Ok(Self {
-            resolved,
-            client: std::sync::RwLock::new(client),
-            options,
-            outbound_calls_for_test: 0,
-        })
-    }
-
-    /// Builds the private SDK client for one resolved configuration and
-    /// credential value.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the resolved provider carries no
-    /// endpoint.
-    fn configured_client(
-        resolved: &ResolvedConfigDto,
-        credential: String,
-    ) -> DtoResult<Client<OpenAIConfig>> {
         let endpoint = resolved.provider().endpoint().ok_or_else(|| {
             ErrorDto::validation(
                 "missing_generic_chat_endpoint",
                 "generic chat provider requires a configured endpoint",
             )
         })?;
-        Ok(Client::with_config(
+        let client = Client::with_config(
             OpenAIConfig::new()
                 .with_api_base(endpoint)
                 .with_api_key(credential),
-        ))
-    }
-
-    /// Replaces the driver's private SDK client with one built from fresh
-    /// private credential material.
-    ///
-    /// The rebuild is composition-owned: the supplied credential must arrive
-    /// through a private channel and is never logged, serialized, or made
-    /// durable. The resolved provider endpoint is unchanged, so the safe
-    /// composition is untouched. The previous client is replaced only after
-    /// the replacement client is configured; concurrent executions keep the
-    /// client they captured before this call.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the resolved provider carries no
-    /// endpoint.
-    pub fn rotate_credential(&self, credential: String) -> DtoResult<()> {
-        let client = Self::configured_client(&self.resolved, credential)?;
-        let mut guard = self
-            .client
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = client;
-        drop(guard);
-        Ok(())
-    }
-
-    /// Clones the current private SDK client for one execution attempt.
-    fn current_client(&self) -> Client<OpenAIConfig> {
-        self.client
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        );
+        Ok(Self {
+            resolved,
+            client,
+            outbound_calls_for_test: 0,
+        })
     }
 
     /// Returns the non-network preflight validation result.
@@ -251,8 +100,8 @@ impl GenericChatDriver {
     /// Returns a safe policy or translation error before outbound work.
     pub fn prepare_request(&mut self, request: &ModelRequestDto) -> DtoResult<()> {
         self.preflight(request)?;
-        let _native_request = translate_request(request, &self.options)?;
-        let _client = self.current_client();
+        let _native_request = translate_request(request)?;
+        let _client = &self.client;
         self.outbound_calls_for_test = self.outbound_calls_for_test.saturating_add(1);
         Ok(())
     }
@@ -261,12 +110,6 @@ impl GenericChatDriver {
     #[must_use]
     pub const fn prepared_request_count(&self) -> u32 {
         self.outbound_calls_for_test
-    }
-
-    /// Returns the driver's validated declared options.
-    #[must_use]
-    pub const fn options(&self) -> &GenericChatDriverOptions {
-        &self.options
     }
 
     /// Maps a text delta fixture into the canonical stream contract.
@@ -340,7 +183,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 Err(non_retryable_error("generic_chat_request_rejected"))
             }));
         }
-        let native_request = match translate_request(&request, &self.options) {
+        let native_request = match translate_request(&request) {
             Ok(request) => request,
             Err(_) => {
                 return Box::pin(stream::once(async {
@@ -348,7 +191,7 @@ impl ModelExecutionDriver for GenericChatDriver {
                 }));
             }
         };
-        let client = self.current_client();
+        let client = self.client.clone();
         Box::pin(
             stream::once(async move {
                 client
@@ -524,28 +367,29 @@ where
 
     /// Normalizes one reasoning fragment of a provider delta.
     ///
-    /// An empty value only marks that the provider carried the reasoning
-    /// channel; providers repeat that empty value on nearly every chunk, so it
-    /// is reported at most once per stream. The fragment stays a transient
-    /// reasoning fact: it is never appended to assistant text, never becomes
-    /// message content, and never enters an error payload. An empty value is
-    /// exactly what the normalized reasoning-delta constructor rejects, which
-    /// is why this adapter has no reasoning failure class of its own: no
-    /// provider value reaches it as a failure.
+    /// An empty value marks that the provider carried the reasoning channel
+    /// with no text. Providers repeat that empty value on nearly every chunk,
+    /// so it becomes at most one textless presence event per stream and
+    /// creates no fact; the continuation request must still send the channel
+    /// back beside the assistant tool calls, because a provider in thinking
+    /// mode rejects a request whose assistant message omits it (ADR 0041). A
+    /// non-empty fragment stays a transient reasoning fact: it is never
+    /// appended to assistant text, never becomes message content, and never
+    /// enters an error payload. An empty value is exactly what the normalized
+    /// reasoning-delta constructor rejects, which is why this adapter has no
+    /// reasoning failure class of its own: no provider value reaches it as a
+    /// failure.
     fn accept_reasoning(&mut self, reasoning: String) {
-        match ModelEventDto::reasoning_delta_categorized(
-            ReasoningFragmentCategoryDto::Primary,
-            reasoning,
-        ) {
-            Ok(event) => self.pending.push_back(Ok(event)),
-            Err(_) => {
-                if !self.reasoning_presence_reported {
-                    self.reasoning_presence_reported = true;
-                    self.pending.push_back(Ok(ModelEventDto::reasoning_presence(
-                        ReasoningFragmentCategoryDto::Primary,
-                    )));
-                }
+        if reasoning.is_empty() {
+            if !self.reasoning_presence_reported {
+                self.reasoning_presence_reported = true;
+                self.pending
+                    .push_back(Ok(ModelEventDto::reasoning_presence()));
             }
+            return;
+        }
+        if let Ok(event) = ModelEventDto::reasoning_delta(reasoning) {
+            self.pending.push_back(Ok(event));
         }
     }
 
@@ -712,15 +556,12 @@ fn non_retryable_error(code: &'static str) -> ProviderErrorDto {
 ///
 /// # Errors
 ///
-/// Returns a validation error for an undecodable tool-parameter schema, a
-/// malformed tool-role message, or an unexpressible reasoning effort.
+/// Returns a validation error for an undecodable tool-parameter schema or a
+/// malformed tool-role message.
 ///
 /// The BYOT request path has no SDK builder left to fail on, so the former
 /// `build` failure branch is gone rather than reproduced.
-fn translate_request(
-    request: &ModelRequestDto,
-    options: &GenericChatDriverOptions,
-) -> DtoResult<WireRequest> {
+fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
     let attachments = reasoning_attachments(request);
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
@@ -753,10 +594,6 @@ fn translate_request(
             include_usage: Some(true),
             include_obfuscation: None,
         },
-        reasoning_effort: options
-            .reasoning_effort
-            .map(map_reasoning_effort)
-            .transpose()?,
         tools,
     })
 }
@@ -794,27 +631,6 @@ where
             "generic chat tool parameters could not be decoded",
         )
     })
-}
-
-/// Maps the closed effort level onto the pinned SDK effort set.
-///
-/// # Errors
-///
-/// Returns a validation error for the maximum effort, which the pinned SDK
-/// effort set cannot express.
-fn map_reasoning_effort(effort: ReasoningEffortLevel) -> DtoResult<ReasoningEffort> {
-    match effort {
-        ReasoningEffortLevel::None => Ok(ReasoningEffort::None),
-        ReasoningEffortLevel::Minimal => Ok(ReasoningEffort::Minimal),
-        ReasoningEffortLevel::Low => Ok(ReasoningEffort::Low),
-        ReasoningEffortLevel::Medium => Ok(ReasoningEffort::Medium),
-        ReasoningEffortLevel::High => Ok(ReasoningEffort::High),
-        ReasoningEffortLevel::Xhigh => Ok(ReasoningEffort::Xhigh),
-        ReasoningEffortLevel::Max => Err(ErrorDto::validation(
-            "unsupported_reasoning_effort",
-            "the generic chat adapter cannot express the maximum reasoning effort",
-        )),
-    }
 }
 
 fn translate_message(
@@ -916,11 +732,8 @@ mod tests {
         )
         .expect("request is valid");
 
-        let wire = serde_json::to_value(
-            translate_request(&request, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -964,11 +777,8 @@ mod tests {
             None,
         )
         .expect("request is valid");
-        let wire = serde_json::to_value(
-            translate_request(&follow_up, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&follow_up).expect("request translates"))
+            .expect("request serializes");
         let assistant = &wire["messages"][1];
         assert!(assistant.get("content").is_none());
         assert_eq!(
@@ -1010,11 +820,8 @@ mod tests {
         ])
         .expect("tools are valid");
 
-        let wire = serde_json::to_value(
-            translate_request(&request, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -1062,11 +869,8 @@ mod tests {
         )
         .expect("request is valid");
 
-        let wire = serde_json::to_value(
-            translate_request(&request, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
         assert_eq!(
             wire,
             serde_json::json!({
@@ -1089,11 +893,8 @@ mod tests {
 
         // Without an attachment the assistant message carries no reasoning key.
         let wire = serde_json::to_value(
-            translate_request(
-                &assistant_tool_request(&first, &second),
-                &GenericChatDriverOptions::default(),
-            )
-            .expect("request translates"),
+            translate_request(&assistant_tool_request(&first, &second))
+                .expect("request translates"),
         )
         .expect("request serializes");
         assert!(wire["messages"][0].get("reasoning_content").is_none());
@@ -1109,11 +910,8 @@ mod tests {
                 .expect("attachment is valid"),
             ])
             .expect("attachment is accepted");
-        let wire = serde_json::to_value(
-            translate_request(&attached, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&attached).expect("request translates"))
+            .expect("request serializes");
         assert_eq!(
             wire["messages"][0]["reasoning_content"],
             "weighing the options"
@@ -1128,11 +926,8 @@ mod tests {
                     .expect("presence attachment is valid"),
             ])
             .expect("attachment is accepted");
-        let wire = serde_json::to_value(
-            translate_request(&presence, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&presence).expect("request translates"))
+            .expect("request serializes");
         assert_eq!(wire["messages"][0]["reasoning_content"], "");
 
         // An attachment for an unrelated call never leaks onto this message.
@@ -1142,11 +937,8 @@ mod tests {
                     .expect("attachment is valid"),
             ])
             .expect("attachment is accepted");
-        let wire = serde_json::to_value(
-            translate_request(&unrelated, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
+        let wire = serde_json::to_value(translate_request(&unrelated).expect("request translates"))
+            .expect("request serializes");
         assert!(wire["messages"][0].get("reasoning_content").is_none());
         assert!(
             wire["messages"][0]["tool_calls"][0]
@@ -1475,7 +1267,8 @@ mod tests {
     #[test]
     fn empty_reasoning_values_mark_presence_at_most_once() {
         // The provider repeats an empty reasoning value on nearly every chunk;
-        // it stays a single presence fact instead of one event per chunk.
+        // it stays a single textless presence event instead of one event per
+        // chunk, and it creates no reasoning fact.
         let mut state = GenericStreamState::new(stream::empty(), ModelCancellationSignal::new());
         for _ in 0..3 {
             state.accept_chunk(chunk(vec![choice(None, Some(""), None, None)], None));
@@ -1486,9 +1279,7 @@ mod tests {
         );
         assert_eq!(
             state.pending.pop_front(),
-            Some(Ok(ModelEventDto::reasoning_presence(
-                ReasoningFragmentCategoryDto::Primary
-            )))
+            Some(Ok(ModelEventDto::reasoning_presence()))
         );
         assert_eq!(state.pending.pop_front(), None);
         assert!(
@@ -1564,11 +1355,11 @@ mod tests {
             Some(Ok(ModelEventDto::reasoning_delta("planning the call")
                 .expect("reasoning fragment is valid")))
         );
+        // The interleaved empty value repeats the channel without text; it
+        // stays one presence marker before the call it belongs to.
         assert_eq!(
             state.pending.pop_front(),
-            Some(Ok(ModelEventDto::reasoning_presence(
-                ReasoningFragmentCategoryDto::Primary
-            )))
+            Some(Ok(ModelEventDto::reasoning_presence()))
         );
         assert!(matches!(
             state.pending.pop_front(),
@@ -1710,84 +1501,6 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_options_reject_before_any_request_and_never_disclose_policy() {
-        let bearer = AuthenticationHeaderPolicyV1::new(
-            Vec::new(),
-            intention_model::CredentialTransportMode::Bearer,
-        )
-        .expect("bearer policy is valid");
-        let options = GenericChatDriverOptions::new()
-            .with_header_policy(bearer)
-            .with_reasoning_effort(ReasoningEffortLevel::High)
-            .build()
-            .expect("descriptor options build");
-        assert!(!format!("{options:?}").contains("X-Custom-Auth"));
-
-        let safe_header = AuthenticationHeaderPolicyV1::new(
-            vec!["X-Custom-Auth".to_owned()],
-            intention_model::CredentialTransportMode::SafeHeader,
-        )
-        .expect("safe-header policy is valid");
-        assert_eq!(
-            GenericChatDriverOptions::new()
-                .with_header_policy(safe_header)
-                .build()
-                .expect_err("safe-header transport is rejected before any request")
-                .code(),
-            "unsupported_safe_header_transport"
-        );
-
-        let material = startup_material();
-        let driver = GenericChatDriver::from_startup_material_with_options(material, options)
-            .expect("driver builds with validated options");
-        let debug = format!("{driver:?}");
-        assert!(!debug.contains("fixture-credential-not-real-12345"));
-        assert!(!debug.contains("X-Custom-Auth"));
-        assert!(!debug.contains("reasoning"));
-        assert_eq!(driver.prepared_request_count(), 0);
-    }
-
-    #[test]
-    fn unapplicable_effort_declarations_reject_before_any_request() {
-        assert_eq!(
-            GenericChatDriverOptions::new()
-                .with_reasoning_effort(ReasoningEffortLevel::Max)
-                .build()
-                .expect_err("maximum effort is rejected")
-                .code(),
-            "unsupported_reasoning_effort"
-        );
-    }
-
-    #[test]
-    fn declared_reasoning_effort_is_applied_to_the_native_request() {
-        let options = GenericChatDriverOptions::new()
-            .with_reasoning_effort(ReasoningEffortLevel::Low)
-            .build()
-            .expect("descriptor options build");
-        let request = ModelRequestDto::new(
-            RunId::new(),
-            "fixture",
-            vec![ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid")],
-            None,
-            None,
-        )
-        .expect("request is valid");
-        let wire = serde_json::to_value(
-            translate_request(&request, &options).expect("request translates"),
-        )
-        .expect("request serializes");
-        assert_eq!(wire["reasoning_effort"], "low");
-
-        let default_wire = serde_json::to_value(
-            translate_request(&request, &GenericChatDriverOptions::default())
-                .expect("request translates"),
-        )
-        .expect("request serializes");
-        assert!(default_wire.get("reasoning_effort").is_none());
-    }
-
-    #[test]
     fn unlisted_wire_finish_reasons_degrade_to_unknown_instead_of_aborting() {
         // A gateway may answer with a reason this adapter does not know (for
         // example `stop_sequence`, `max_tokens`, or a vendor-specific value).
@@ -1853,21 +1566,5 @@ mod tests {
 
     fn decode_chunk(raw: &str) -> WireChunk {
         serde_json::from_str(raw).expect("fixture chunk decodes through the private wire type")
-    }
-
-    fn startup_material() -> StartupProviderMaterial {
-        ResolvedConfigDto::parse_startup_material(intention_config::RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"fixture-credential-not-real-12345\"",
-            intention_config::ConfigSourceDto::Explicit(
-                intention_config::ConfigPathDto::parse(
-                    std::env::temp_dir()
-                        .join("intention-relay-generic-chat-options.toml")
-                        .to_string_lossy()
-                        .into_owned(),
-                )
-                .expect("fixture path is absolute"),
-            ),
-        ))
-        .expect("generic chat config resolves")
     }
 }

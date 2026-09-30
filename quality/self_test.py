@@ -526,7 +526,7 @@ def test_executable_test_target_policy(root: Path) -> None:
             expected_output="future crate intention-types has duplicate test targets",
         )
     with modified(policy):
-        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
+        replace_once(policy, 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]', 'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]')
         run(
             [sys.executable, "quality/check_architecture.py"],
             cwd=root,
@@ -540,7 +540,7 @@ def test_m3_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application", "m5_catalog_runtime", "m5_control_plane_runtime", "m5_session_selection"]',
+            'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["m3_application"]',
             'name = "intention-application"\nresponsibility = "Commands, queries, use cases, and transaction orchestration."\ntest_target = "use-case and architecture tests"\ntest_targets = ["contracts"]',
         )
         run(
@@ -592,7 +592,7 @@ def test_m4_active_test_target_policy(root: Path) -> None:
     with modified(policy):
         replace_once(
             policy,
-            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports", "m6_reasoning_surface"]',
+            'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = ["model_contracts", "m4_execution_contracts", "m4_reexports"]',
             'name = "intention-model"\nresponsibility = "Provider-neutral model DTOs and driver contract."\ntest_target = "model contract and stream tests"\ntest_targets = []',
         )
 

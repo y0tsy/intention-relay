@@ -589,12 +589,6 @@ fn streams_ordered_facts_splits_utf8_content_and_completes_in_two_stages() {
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta(content).expect("text is valid")),
         Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
-        Ok(ModelEventDto::reasoning_delta_categorized(
-            intention_model::ReasoningFragmentCategoryDto::Detail,
-            "detail",
-        )
-        .expect("detail reasoning is valid")),
-        Ok(ModelEventDto::reasoning_summary_delta("summary").expect("summary is valid")),
         Ok(ModelEventDto::usage(
             UsageDto::reported(1, 2, 3).expect("usage is valid"),
         )),
@@ -611,7 +605,7 @@ fn streams_ordered_facts_splits_utf8_content_and_completes_in_two_stages() {
     assert_eq!(
         outcome,
         ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(8)
+            cursor: RunEventCursorDto::new(6)
         }
     );
     let appends = repository.appends.borrow();

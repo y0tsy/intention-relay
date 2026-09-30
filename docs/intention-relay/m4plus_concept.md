@@ -6421,12 +6421,14 @@ exact enabled compatible `default` entry, otherwise failing closed.
 optimistic: it takes a session, enabled profile ID, expected session projection
 revision, and operation ID. It changes only future intent and, when the durable
 default changed, publishes the typed `SessionProviderProfileChanged` event to
-the validating session-event boundary. Slice 2 keeps no durable copy of that
-event and writes no durable session-event snapshot for it, because the
-control-plane event family has no durable append seam yet; durable delivery is
-parked as a declared future slice anchored as the durable
-`SessionProviderProfileChanged` append layer. The command cannot alter active
-or queued work. A request for the existing profile is a successful
+the validating session-event boundary. Slice 2 kept no durable copy of that
+event and wrote no durable session-event snapshot for it, because the
+control-plane event family has no durable append seam yet;
+[ADR 0044](decisions/0044-revert-of-m5plus-slice2-control-plane.md) has since
+reverted the Slice 2 activation and removed the command and event DTO, so
+durable delivery remains parked as a declared future slice anchored as the
+durable `SessionProviderProfileChanged` append layer. The command cannot alter
+active or queued work. A request for the existing profile is a successful
 `changed = false` no-op with no new event. A session may retain an unavailable
 profile ID only after later catalog disable/removal; an explicit command cannot
 select a disabled or absent profile.

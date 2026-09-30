@@ -17,8 +17,7 @@ use intention_domain::{
 use intention_model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
     ModelDriver, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto,
-    ReasoningFragmentCategoryDto, ToolCallDto,
+    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto,
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
@@ -1087,11 +1086,6 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::reasoning_delta("think ").expect("reasoning is valid")),
-            Ok(ModelEventDto::reasoning_delta_categorized(
-                ReasoningFragmentCategoryDto::Detail,
-                "deeper",
-            )
-            .expect("reasoning is valid")),
             Ok(ModelEventDto::tool_call(first.clone())),
         ],
         vec![
@@ -1122,11 +1116,11 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     assert_eq!(
         outcome,
         ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(10)
+            cursor: RunEventCursorDto::new(9)
         }
     );
 
-    let first_reasoning = AssistantReasoningDto::new(vec![first.call_id()], "think deeper")
+    let first_reasoning = AssistantReasoningDto::new(vec![first.call_id()], "think ")
         .expect("fixture reasoning is valid");
     let second_reasoning = AssistantReasoningDto::new(vec![second.call_id()], "second round")
         .expect("fixture reasoning is valid");
@@ -1146,16 +1140,10 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let appends = repository.appends.borrow();
     assert!(matches!(
         appends[1].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }]
-            if *category == intention_domain::ReasoningDeltaCategory::Primary && content == "think "
+        [ModelRunFactInputDto::ReasoningDeltaRecorded { content }] if content == "think "
     ));
     assert!(matches!(
-        appends[2].facts(),
-        [ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }]
-            if *category == intention_domain::ReasoningDeltaCategory::Detail && content == "deeper"
-    ));
-    assert!(matches!(
-        appends[5].facts(),
+        appends[4].facts(),
         [ModelRunFactInputDto::ReasoningDeltaRecorded { content, .. }]
             if content == "second round"
     ));
@@ -1171,9 +1159,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
             Ok(ModelEventDto::started()),
-            Ok(ModelEventDto::reasoning_presence(
-                ReasoningFragmentCategoryDto::Primary,
-            )),
+            Ok(ModelEventDto::reasoning_presence()),
             Ok(ModelEventDto::tool_call(call.clone())),
         ],
         vec![

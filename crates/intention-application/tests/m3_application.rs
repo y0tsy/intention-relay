@@ -8,8 +8,9 @@ use std::fs;
 
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
-    InvokeLocalToolInputDto, ScheduleModelRunDto, SendUserTurnWorkflowInputDto,
-    ToolResultPublicationInputDto, ToolResultPublicationPort,
+    InvokeLocalToolInputDto, ModelRunDispatchPort, ScheduleModelRunDto,
+    SendUserTurnWorkflowInputDto, ToolResultPublicationInputDto, ToolResultPublicationPort,
+    WorkspaceBoundaryPort,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -17,25 +18,27 @@ use intention_config::{
 use intention_domain::{
     CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, ModelRunProjectionDto,
     RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto,
-    RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto,
-    SessionProjectionDto, WorkspaceRootDto,
+    RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStartedEventDto, RunStatusDto,
+    SendUserTurnCommandDto, SessionProjectionDto, WorkspaceRootDto,
 };
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
 };
-use intention_protocol::ProtocolAcceptedResultDto;
+use intention_protocol::{ProtocolAcceptedResultDto, SendUserTurnOutcomeDto};
 use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
+    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
+    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
     ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_tools::{ReadInput, ToolInput};
 use intention_types::ToolCallId;
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
+    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
+    TurnId, WorkspaceId,
 };
 use intention_workspace::WorkspaceRoot;
 
@@ -250,6 +253,7 @@ struct FakeRepository {
     transitioned: RefCell<Option<CommittedChangeDto>>,
     loaded_snapshot: RefCell<Option<SessionProjectionDto>>,
     loaded_replay: RefCell<Option<RunReplayDto>>,
+    starting_context: RefCell<Option<StartingRunModelContextDto>>,
     tool_events: RefCell<Vec<intention_domain::ToolLifecycleEventDto>>,
     result_evidence: RefCell<Vec<Option<ToolResultEvidenceDto>>>,
     tool_error: RefCell<Option<ErrorDto>>,
@@ -268,6 +272,7 @@ impl FakeRepository {
             transitioned: RefCell::new(None),
             loaded_snapshot: RefCell::new(None),
             loaded_replay: RefCell::new(None),
+            starting_context: RefCell::new(None),
             tool_events: RefCell::new(Vec::new()),
             result_evidence: RefCell::new(Vec::new()),
             tool_error: RefCell::new(None),
@@ -363,6 +368,19 @@ impl StorageRepositoryDto for FakeRepository {
     ) -> DtoResult<RunReplayDto> {
         self.loaded_replay.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
+        })
+    }
+
+    fn load_starting_run_model_context(
+        &self,
+        _session_id: SessionId,
+        _run_id: RunId,
+    ) -> DtoResult<StartingRunModelContextDto> {
+        self.starting_context.borrow().clone().ok_or_else(|| {
+            ErrorDto::unavailable(
+                "run_model_context_unavailable",
+                "the durable run model context is unavailable",
+            )
         })
     }
 
@@ -2772,5 +2790,422 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     drop(evidence);
     assert!(publisher.publications.borrow().is_empty());
 
+    let _ = fs::remove_dir_all(root);
+}
+
+#[derive(Default)]
+struct RecordingDispatchPort {
+    inputs: RefCell<Vec<ScheduleModelRunDto>>,
+    failure: RefCell<Option<ErrorDto>>,
+}
+
+impl ModelRunDispatchPort for RecordingDispatchPort {
+    fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()> {
+        self.inputs.borrow_mut().push(input);
+        self.failure.borrow_mut().take().map_or(Ok(()), Err)
+    }
+}
+
+struct RejectingWorkspaceBoundary;
+
+impl WorkspaceBoundaryPort for RejectingWorkspaceBoundary {
+    fn resolve(&self, _: &WorkspaceRoot) -> DtoResult<()> {
+        Err(ErrorDto::unavailable(
+            "workspace_boundary_unavailable",
+            "workspace boundary refused the invocation",
+        ))
+    }
+}
+
+fn send_command(session_id: SessionId, turn_id: TurnId) -> SendUserTurnCommandDto {
+    SendUserTurnCommandDto::new(session_id, turn_id, "latest").expect("fixture command is valid")
+}
+
+const fn starting_run(
+    session_id: SessionId,
+    run_id: RunId,
+    turn_id: TurnId,
+    config: &ConfigSnapshotDto,
+) -> RunProjectionDto {
+    RunProjectionDto::new(
+        session_id,
+        run_id,
+        turn_id,
+        RunStatusDto::Starting,
+        config.revision_id(),
+    )
+}
+
+fn starting_context(
+    session_id: SessionId,
+    run_id: RunId,
+    config: &ConfigSnapshotDto,
+) -> StartingRunModelContextDto {
+    StartingRunModelContextDto::new(
+        session_id,
+        run_id,
+        config.clone(),
+        vec![
+            ModelContextMessageDto::new(ModelContextRoleDto::User, "first")
+                .expect("context message is valid"),
+            ModelContextMessageDto::new(ModelContextRoleDto::Assistant, "answer")
+                .expect("context message is valid"),
+            ModelContextMessageDto::new(ModelContextRoleDto::User, "latest")
+                .expect("context message is valid"),
+        ],
+    )
+    .expect("fixture context is valid")
+}
+
+fn started_change(
+    session_id: SessionId,
+    run: RunProjectionDto,
+    position: u64,
+) -> CommittedChangeDto {
+    let state = projection(session_id, Some(run), Vec::new(), position);
+    let run_started = EventEnvelopeDto::new(
+        EventMetadataDto::new(
+            SchemaVersionDto::new(1, 0),
+            EventId::new(),
+            session_id,
+            Some(run.run_id()),
+            Some(run.turn_id()),
+            SessionEventSequenceDto::new(position),
+            fixture_time(),
+        ),
+        DomainEventDto::RunStarted(RunStartedEventDto::new(
+            session_id,
+            run.run_id(),
+            run.turn_id(),
+            run.config_revision_id(),
+            fixture_time(),
+        )),
+    );
+    CommittedChangeDto::new(
+        state.clone(),
+        state.at_sequence(),
+        vec![run_started],
+        Some(AcceptedTurnOutcomeDto::Started(run)),
+    )
+    .expect("fixture started change is valid")
+}
+
+#[test]
+fn send_user_turn_and_schedule_rejects_acceptance_without_a_turn_outcome() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Ok(change(
+        projection(session_id, None, Vec::new(), 3),
+        None,
+    )));
+    let dispatch = RecordingDispatchPort::default();
+    let error = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, TurnId::new()),
+            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
+            &dispatch,
+        )
+        .expect_err("acceptance without durable outcome evidence is malformed");
+    assert_eq!(error.code(), "missing_accepted_turn_outcome");
+    assert!(dispatch.inputs.borrow().is_empty());
+}
+
+#[test]
+fn send_user_turn_and_schedule_propagates_admission_failures() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::validation(
+        "turn_admission_denied",
+        "the durable session refused the turn",
+    )));
+    let dispatch = RecordingDispatchPort::default();
+    let error = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, TurnId::new()),
+            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
+            &dispatch,
+        )
+        .expect_err("admission failure is propagated");
+    assert_eq!(error.code(), "turn_admission_denied");
+    assert_eq!(repository.accepted_inputs.borrow().len(), 1);
+    assert!(dispatch.inputs.borrow().is_empty());
+}
+
+#[test]
+fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Ok(change(
+        projection(session_id, None, Vec::new(), 3),
+        Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(4))),
+    )));
+    let dispatch = RecordingDispatchPort::default();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, TurnId::new()),
+            SendUserTurnWorkflowInputDto::new(RunId::new(), snapshot(), fixture_time()),
+            &dispatch,
+        )
+        .expect("queued acceptance is returned unchanged");
+    assert!(matches!(
+        accepted,
+        ProtocolAcceptedResultDto::SendUserTurn(value)
+            if value.outcome()
+                == SendUserTurnOutcomeDto::Queued { queue_position: QueuePositionDto::new(4) }
+    ));
+    assert_eq!(repository.accepted_inputs.borrow().len(), 1);
+    assert!(dispatch.inputs.borrow().is_empty());
+}
+
+#[test]
+fn send_user_turn_and_schedule_dispatches_the_committed_starting_run() {
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let run = starting_run(session_id, run_id, turn_id, &config);
+    let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+    *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
+    let dispatch = RecordingDispatchPort::default();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, turn_id),
+            SendUserTurnWorkflowInputDto::new(run_id, config.clone(), fixture_time()),
+            &dispatch,
+        )
+        .expect("started acceptance is returned unchanged");
+    assert!(matches!(
+        accepted,
+        ProtocolAcceptedResultDto::SendUserTurn(value)
+            if value.outcome()
+                == SendUserTurnOutcomeDto::Started {
+                    run_id,
+                    config_revision_id: config.revision_id(),
+                }
+    ));
+    let inputs = dispatch.inputs.borrow();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].session_id(), session_id);
+    assert_eq!(inputs[0].run_id(), run_id);
+    assert_eq!(inputs[0].safe_config(), &config);
+    let request = inputs[0].request();
+    assert_eq!(request.run_id(), run_id);
+    assert_eq!(request.model(), "fixture");
+    assert_eq!(
+        request.messages(),
+        [
+            ModelMessageDto::new(ModelRoleDto::User, "first").expect("message is valid"),
+            ModelMessageDto::new(ModelRoleDto::Assistant, "answer").expect("message is valid"),
+            ModelMessageDto::new(ModelRoleDto::User, "latest").expect("message is valid"),
+        ]
+        .as_slice()
+    );
+    assert!(!request.tools().is_empty());
+}
+
+#[test]
+fn send_user_turn_and_schedule_requires_the_started_run_event_in_the_commit() {
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let run = starting_run(session_id, run_id, turn_id, &config);
+    let repository = FakeRepository::with_accepted(Ok(change(
+        projection(session_id, Some(run), Vec::new(), 3),
+        Some(AcceptedTurnOutcomeDto::Started(run)),
+    )));
+    let dispatch = RecordingDispatchPort::default();
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, turn_id),
+            SendUserTurnWorkflowInputDto::new(run_id, config.clone(), fixture_time()),
+            &dispatch,
+        )
+        .expect("uncommitted run evidence preserves the acceptance");
+    assert!(matches!(
+        accepted,
+        ProtocolAcceptedResultDto::SendUserTurn(value)
+            if value.outcome()
+                == SendUserTurnOutcomeDto::Started {
+                    run_id,
+                    config_revision_id: config.revision_id(),
+                }
+    ));
+    assert!(dispatch.inputs.borrow().is_empty());
+}
+
+#[test]
+fn send_user_turn_and_schedule_preserves_acceptance_when_context_is_unusable() {
+    for mismatched in [false, true] {
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+        let run_id = RunId::new();
+        let config = snapshot();
+        let run = starting_run(session_id, run_id, turn_id, &config);
+        let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+        if mismatched {
+            *repository.starting_context.borrow_mut() =
+                Some(starting_context(SessionId::new(), RunId::new(), &config));
+        }
+        let dispatch = RecordingDispatchPort::default();
+        let accepted = ApplicationService::new(&repository)
+            .send_user_turn_and_schedule(
+                send_command(session_id, turn_id),
+                SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
+                &dispatch,
+            )
+            .expect("post-commit context failure preserves the acceptance");
+        assert!(matches!(
+            accepted,
+            ProtocolAcceptedResultDto::SendUserTurn(_)
+        ));
+        assert!(dispatch.inputs.borrow().is_empty());
+    }
+}
+
+#[test]
+fn send_user_turn_and_schedule_preserves_acceptance_when_dispatch_fails() {
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let run = starting_run(session_id, run_id, turn_id, &config);
+    let repository = FakeRepository::with_accepted(Ok(started_change(session_id, run, 2)));
+    *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
+    let dispatch = RecordingDispatchPort::default();
+    *dispatch.failure.borrow_mut() = Some(ErrorDto::unavailable(
+        "dispatch_unavailable",
+        "the daemon refused the scheduled run",
+    ));
+    let accepted = ApplicationService::new(&repository)
+        .send_user_turn_and_schedule(
+            send_command(session_id, turn_id),
+            SendUserTurnWorkflowInputDto::new(run_id, config, fixture_time()),
+            &dispatch,
+        )
+        .expect("post-commit dispatch failure preserves the acceptance");
+    assert!(matches!(
+        accepted,
+        ProtocolAcceptedResultDto::SendUserTurn(_)
+    ));
+    assert_eq!(dispatch.inputs.borrow().len(), 1);
+}
+
+#[test]
+fn schedule_starting_run_maps_durable_context_into_the_dispatch_dto() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository.starting_context.borrow_mut() = Some(starting_context(session_id, run_id, &config));
+    let scheduled = ApplicationService::new(&repository)
+        .schedule_starting_run(session_id, run_id)
+        .expect("durable starting context schedules");
+    assert_eq!(scheduled.session_id(), session_id);
+    assert_eq!(scheduled.run_id(), run_id);
+    assert_eq!(scheduled.safe_config(), &config);
+    let request = scheduled.request();
+    assert_eq!(request.run_id(), run_id);
+    assert_eq!(request.model(), "fixture");
+    assert_eq!(request.messages().len(), 3);
+    assert!(!request.tools().is_empty());
+}
+
+#[test]
+fn schedule_starting_run_propagates_context_load_errors() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let error = ApplicationService::new(&repository)
+        .schedule_starting_run(SessionId::new(), RunId::new())
+        .expect_err("missing durable context is propagated");
+    assert_eq!(error.code(), "run_model_context_unavailable");
+}
+
+#[test]
+fn create_session_propagates_repository_errors() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let command = CreateSessionCommandDto::new(
+        ProjectId::new(),
+        SessionId::new(),
+        WorkspaceId::new(),
+        workspace_root(),
+        RunModeDto::Build,
+    );
+    let error = ApplicationService::new(&repository)
+        .create_session(CreateSessionWorkflowInputDto::new(command, fixture_time()))
+        .expect_err("repository failure is propagated");
+    assert_eq!(error.code(), "fixture_missing_result");
+}
+
+#[test]
+fn workspace_boundary_failure_is_durably_rejected_before_execution() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let error = ApplicationService::new(&repository)
+        .with_workspace_boundary(RejectingWorkspaceBoundary)
+        .invoke_local_tool(invoke_read_input("missing"))
+        .expect_err("workspace boundary failure is propagated");
+    assert_eq!(error.code(), "workspace_boundary_unavailable");
+    let events = repository.tool_events.borrow();
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[1].status(),
+        &intention_domain::ToolLifecycleStatusDto::Rejected
+    );
+    assert_eq!(events[1].detail(), "workspace_boundary_unavailable");
+}
+
+#[test]
+fn terminal_append_failure_propagates_from_the_tool_error_path() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository.append_failures.borrow_mut() = vec![3];
+    let error = ApplicationService::new(&repository)
+        .invoke_local_tool(invoke_read_input("missing"))
+        .expect_err("terminal append failure replaces the tool error");
+    assert_eq!(error.code(), "append_unavailable");
+    assert_eq!(repository.tool_events.borrow().len(), 2);
+}
+
+#[test]
+fn pre_execution_rejection_append_failure_propagates() {
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    *repository.append_failures.borrow_mut() = vec![2];
+    let mut hooks = Registry::new();
+    hooks
+        .register(Box::new(PhaseOutcomeHook {
+            phase: Phase::BeforeToolExecution,
+            id: "rejection-append-failure",
+            outcome: HookOutcome::Reject(ErrorDto::validation(
+                "execution_blocked",
+                "blocked before execution",
+            )),
+        }))
+        .expect("hook registers");
+    let error = ApplicationService::with_hooks(&repository, hooks)
+        .invoke_local_tool(invoke_read_input("missing"))
+        .expect_err("rejection append failure is propagated");
+    assert_eq!(error.code(), "append_unavailable");
+    assert_eq!(repository.tool_events.borrow().len(), 1);
+}
+
+#[test]
+fn lifecycle_evidence_escapes_json_control_characters_in_tool_text() {
+    let root = std::env::temp_dir().join(format!("intention-app-escape-{}", SessionId::new()));
+    fs::create_dir_all(&root).expect("root");
+    fs::write(root.join("control.txt"), "\u{8}\t\u{c}\r").expect("fixture file");
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
+    let result = ApplicationService::new(&repository)
+        .invoke_local_tool(invoke_read_input_in_workspace(
+            &hello_workspace(&root),
+            "control.txt",
+        ))
+        .expect("control characters are readable text");
+    assert!(matches!(result, intention_tools::ToolResult::Read(_)));
+    let evidence = repository.result_evidence.borrow();
+    let completed = evidence
+        .last()
+        .expect("terminal evidence exists")
+        .as_ref()
+        .expect("terminal evidence carries the result document");
+    assert_eq!(
+        completed.content(),
+        "{\"result\":\"read\",\"value\":{\"text\":\"\\b\\t\\f\\r\",\"truncated\":false}}"
+    );
+    drop(evidence);
     let _ = fs::remove_dir_all(root);
 }

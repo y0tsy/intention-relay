@@ -751,16 +751,6 @@ impl ModelRequestDto {
     }
 }
 
-/// The closed category of one normalized reasoning fragment.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningFragmentCategoryDto {
-    /// The main textual reasoning representation.
-    Primary,
-    /// A separate detailed reasoning representation.
-    Detail,
-}
-
 /// A provider-neutral normalized stream fact.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -769,13 +759,8 @@ pub enum ModelEventDto {
     Started,
     /// A non-empty text content delta arrived.
     TextDelta { content: String },
-    /// A reasoning delta arrived; empty content marks channel presence only.
-    ReasoningDelta {
-        category: ReasoningFragmentCategoryDto,
-        content: String,
-    },
-    /// A non-empty reasoning summary delta arrived.
-    ReasoningSummaryDelta { content: String },
+    /// A non-empty reasoning delta arrived.
+    ReasoningDelta { content: String },
     /// A complete provider-normalized tool call arrived.
     ToolCall { call: ToolCallDto },
     /// Final usage became available.
@@ -793,25 +778,11 @@ impl<'de> Deserialize<'de> for ModelEventDto {
         #[serde(tag = "kind", rename_all = "snake_case")]
         enum RawModelEventDto {
             Started,
-            TextDelta {
-                content: String,
-            },
-            ReasoningDelta {
-                category: ReasoningFragmentCategoryDto,
-                content: String,
-            },
-            ReasoningSummaryDelta {
-                content: String,
-            },
-            ToolCall {
-                call: ToolCallDto,
-            },
-            Usage {
-                usage: UsageDto,
-            },
-            Finished {
-                reason: FinishReasonDto,
-            },
+            TextDelta { content: String },
+            ReasoningDelta { content: String },
+            ToolCall { call: ToolCallDto },
+            Usage { usage: UsageDto },
+            Finished { reason: FinishReasonDto },
         }
 
         match RawModelEventDto::deserialize(deserializer)? {
@@ -819,15 +790,12 @@ impl<'de> Deserialize<'de> for ModelEventDto {
             RawModelEventDto::TextDelta { content } => {
                 Self::text_delta(content).map_err(de::Error::custom)
             }
-            RawModelEventDto::ReasoningDelta { category, content } => {
+            RawModelEventDto::ReasoningDelta { content } => {
                 if content.is_empty() {
-                    Ok(Self::reasoning_presence(category))
+                    Ok(Self::reasoning_presence())
                 } else {
-                    Self::reasoning_delta_categorized(category, content).map_err(de::Error::custom)
+                    Self::reasoning_delta(content).map_err(de::Error::custom)
                 }
-            }
-            RawModelEventDto::ReasoningSummaryDelta { content } => {
-                Self::reasoning_summary_delta(content).map_err(de::Error::custom)
             }
             RawModelEventDto::ToolCall { call } => Ok(Self::tool_call(call)),
             RawModelEventDto::Usage { usage } => Ok(Self::usage(usage)),
@@ -860,24 +828,12 @@ impl ModelEventDto {
         }
     }
 
-    /// Creates a non-empty reasoning delta categorized as primary.
+    /// Creates a non-empty reasoning delta.
     ///
     /// # Errors
     ///
     /// Returns a validation error when the delta is empty.
     pub fn reasoning_delta(content: impl Into<String>) -> DtoResult<Self> {
-        Self::reasoning_delta_categorized(ReasoningFragmentCategoryDto::Primary, content)
-    }
-
-    /// Creates a non-empty categorized reasoning delta.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the delta is empty.
-    pub fn reasoning_delta_categorized(
-        category: ReasoningFragmentCategoryDto,
-        content: impl Into<String>,
-    ) -> DtoResult<Self> {
         let content = content.into();
         if content.is_empty() {
             Err(ErrorDto::validation(
@@ -885,34 +841,22 @@ impl ModelEventDto {
                 "model reasoning delta must not be empty",
             ))
         } else {
-            Ok(Self::ReasoningDelta { category, content })
+            Ok(Self::ReasoningDelta { content })
         }
     }
 
-    /// Creates the reasoning-channel presence marker for a provider response that
-    /// carried the reasoning channel with no textual content.
+    /// Creates the textless reasoning-channel presence marker.
+    ///
+    /// A provider can carry the reasoning channel with no textual content, and
+    /// that presence alone must round-trip into the continuation request: the
+    /// assistant tool-call message keeps the channel beside its tool calls even
+    /// when the channel held no text (ADR 0041). The marker never becomes a
+    /// durable reasoning fact and never reaches assistant content; the
+    /// non-empty constructor stays the only source of reasoning text.
     #[must_use]
-    pub const fn reasoning_presence(category: ReasoningFragmentCategoryDto) -> Self {
+    pub const fn reasoning_presence() -> Self {
         Self::ReasoningDelta {
-            category,
             content: String::new(),
-        }
-    }
-
-    /// Creates a non-empty reasoning summary delta.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the delta is empty.
-    pub fn reasoning_summary_delta(content: impl Into<String>) -> DtoResult<Self> {
-        let content = content.into();
-        if content.is_empty() {
-            Err(ErrorDto::validation(
-                "invalid_model_reasoning_summary_delta",
-                "model reasoning summary delta must not be empty",
-            ))
-        } else {
-            Ok(Self::ReasoningSummaryDelta { content })
         }
     }
 
@@ -933,143 +877,6 @@ impl ModelEventDto {
     pub const fn finished(reason: FinishReasonDto) -> Self {
         Self::Finished { reason }
     }
-}
-
-/// The closed provider-neutral reasoning effort levels.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffortLevel {
-    /// Reasoning is explicitly disabled.
-    None,
-    /// Minimal reasoning effort.
-    Minimal,
-    /// Low reasoning effort.
-    Low,
-    /// Balanced reasoning effort.
-    Medium,
-    /// High reasoning effort.
-    High,
-    /// Extra-high reasoning effort.
-    Xhigh,
-    /// Maximum reasoning effort.
-    Max,
-}
-
-/// The closed credential transport modes (names only, never values).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialTransportMode {
-    /// Authorization through the standard bearer scheme.
-    Bearer,
-    /// Authorization through one descriptor-selected safe header name.
-    SafeHeader,
-}
-
-/// Maximum characters of one safe header name.
-const MAX_SAFE_HEADER_NAME_CHARS: usize = 128;
-
-/// A descriptor-declared header policy carrying names only, never credential values.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct AuthenticationHeaderPolicyV1 {
-    allowed_header_names: Vec<String>,
-    selected_transport: CredentialTransportMode,
-}
-
-impl<'de> Deserialize<'de> for AuthenticationHeaderPolicyV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawAuthenticationHeaderPolicyV1 {
-            allowed_header_names: Vec<String>,
-            selected_transport: CredentialTransportMode,
-        }
-        let raw = RawAuthenticationHeaderPolicyV1::deserialize(deserializer)?;
-        Self::new(raw.allowed_header_names, raw.selected_transport).map_err(de::Error::custom)
-    }
-}
-
-impl AuthenticationHeaderPolicyV1 {
-    /// Creates a validated header policy (names only, never values).
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when a header name is not a non-empty HTTP
-    /// token of at most 128 characters, names are duplicated, or the selected
-    /// transport and the allowed header names are inconsistent.
-    pub fn new(
-        allowed_header_names: Vec<String>,
-        selected_transport: CredentialTransportMode,
-    ) -> DtoResult<Self> {
-        if !valid_header_names(&allowed_header_names) {
-            return Err(ErrorDto::validation(
-                "invalid_safe_header_name",
-                "header policy names must be unique HTTP tokens of at most 128 characters",
-            ));
-        }
-        let transport_is_consistent = match selected_transport {
-            CredentialTransportMode::Bearer => allowed_header_names.is_empty(),
-            CredentialTransportMode::SafeHeader => !allowed_header_names.is_empty(),
-        };
-        if !transport_is_consistent {
-            return Err(ErrorDto::validation(
-                "invalid_credential_transport",
-                "bearer transport rejects header names and safe-header transport requires at least one",
-            ));
-        }
-        Ok(Self {
-            allowed_header_names,
-            selected_transport,
-        })
-    }
-
-    /// Returns the allowed header names (names only, never values).
-    #[must_use]
-    pub fn allowed_header_names(&self) -> &[String] {
-        &self.allowed_header_names
-    }
-
-    /// Returns the selected credential transport mode.
-    #[must_use]
-    pub const fn selected_transport(&self) -> CredentialTransportMode {
-        self.selected_transport
-    }
-}
-
-/// Whether every declared header name is a unique non-empty HTTP token of at
-/// most [`MAX_SAFE_HEADER_NAME_CHARS`] characters.
-fn valid_header_names(names: &[String]) -> bool {
-    let mut seen = std::collections::HashSet::with_capacity(names.len());
-    names.iter().all(|name| {
-        !name.is_empty()
-            && name.len() <= MAX_SAFE_HEADER_NAME_CHARS
-            && name.bytes().all(is_http_token_byte)
-            && seen.insert(name.clone())
-    })
-}
-
-/// Whether `byte` is one HTTP token character (`tchar`).
-const fn is_http_token_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'!' | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-        )
 }
 
 /// Validates normalized model-stream ordering without owning runtime delivery.
@@ -1113,7 +920,6 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. }
                 if self.started && !self.terminal =>
             {
@@ -1124,7 +930,6 @@ impl ModelStreamLifecycleDto {
             }
             ModelEventDto::TextDelta { .. }
             | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ReasoningSummaryDelta { .. }
             | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
         }
     }

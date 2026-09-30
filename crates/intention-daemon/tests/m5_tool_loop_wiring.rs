@@ -132,14 +132,6 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
-    facade
-        .seed_fixture_catalog_for_test_support(
-            "seed-1",
-            "openrouter",
-            "fixture",
-            "https://api.example.invalid/v1",
-        )
-        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 

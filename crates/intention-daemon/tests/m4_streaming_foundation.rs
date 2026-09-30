@@ -231,14 +231,6 @@ fn fixture_facade(
         driver,
     )
     .expect("fixture facade opens");
-    facade
-        .seed_fixture_catalog_for_test_support(
-            "seed-1",
-            "openrouter",
-            "fixture",
-            "https://api.example.invalid/v1",
-        )
-        .expect("fixture catalog seeds");
     (directory, facade, snapshot)
 }
 
@@ -866,14 +858,6 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         first_driver.clone(),
     )
     .expect("first durable host facade opens");
-    first_facade
-        .seed_fixture_catalog_for_test_support(
-            "seed-1",
-            "openrouter",
-            "fixture",
-            "https://api.example.invalid/v1",
-        )
-        .expect("fixture catalog seeds");
     let session_id = SessionId::new();
     assert!(matches!(
         first_facade.command(ProtocolCommandDto::CreateSession(

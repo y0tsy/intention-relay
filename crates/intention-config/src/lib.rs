@@ -6,8 +6,6 @@
 //! configuration persistence, daemon reload, and per-run application remain
 //! deferred to M3 and M4.
 
-pub mod control_plane;
-
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
@@ -219,13 +217,6 @@ pub enum ProviderKindDto {
 }
 
 impl ProviderKindDto {
-    /// Every typed provider kind, in stable id order.
-    ///
-    /// The array is the single id-to-kind mapping authority: both this
-    /// crate's TOML deserialization and the composition's catalog id
-    /// resolution consume [`Self::from_id`] instead of re-listing the ids.
-    pub const ALL: [Self; 2] = [Self::Openrouter, Self::GenericChatCompletionApi];
-
     /// Returns the stable TOML and projection representation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -233,12 +224,6 @@ impl ProviderKindDto {
             Self::Openrouter => "openrouter",
             Self::GenericChatCompletionApi => "generic-chat-completion-api",
         }
-    }
-
-    /// Resolves the stable provider kind id, or `None` when it names no kind.
-    #[must_use]
-    pub fn from_id(kind_id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.as_str() == kind_id)
     }
 }
 
@@ -298,24 +283,6 @@ impl ProviderSelectionDto {
                 "invalid_provider_endpoint",
                 "provider endpoint must not be empty when configured",
             ));
-        }
-        if let Some(configured_endpoint) = endpoint.as_deref() {
-            // One endpoint policy across boundaries (PR24-055): HTTPS is
-            // required except for literal-loopback HTTP endpoints.
-            intention_domain::provider_catalog::validate_endpoint(configured_endpoint.trim())
-                .map_err(|error| {
-                    if error == intention_domain::canonical::CanonicalError::CredentialsForbidden {
-                        ErrorDto::validation(
-                            "credentials_forbidden",
-                            "provider endpoint must not carry credential material",
-                        )
-                    } else {
-                        ErrorDto::validation(
-                            "invalid_provider_endpoint",
-                            "provider endpoint must be HTTPS except for literal-loopback HTTP",
-                        )
-                    }
-                })?;
         }
         Ok(Self {
             kind,
@@ -786,9 +753,11 @@ impl<'de> Deserialize<'de> for ProviderKindDto {
         D: serde::Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        // One id-to-kind owner: the typed kind resolves its own id set,
-        // so this boundary cannot drift from the composition's dispatch.
-        Self::from_id(&value).ok_or_else(|| serde::de::Error::custom("unsupported provider kind"))
+        match value.as_str() {
+            "openrouter" => Ok(Self::Openrouter),
+            "generic-chat-completion-api" => Ok(Self::GenericChatCompletionApi),
+            _ => Err(serde::de::Error::custom("unsupported provider kind")),
+        }
     }
 }
 
@@ -926,25 +895,6 @@ credential = \"{credential}\"
     }
 
     #[test]
-    fn provider_kind_ids_resolve_through_the_single_mapping_owner() {
-        // The id-to-kind mapping has one owner (`ProviderKindDto`), which
-        // both this boundary's deserialization and the composition's catalog
-        // dispatch consume.
-        assert_eq!(ProviderKindDto::ALL.len(), 2);
-        for kind in ProviderKindDto::ALL {
-            assert_eq!(ProviderKindDto::from_id(kind.as_str()), Some(kind));
-        }
-        assert_eq!(ProviderKindDto::from_id("gemini"), None);
-        assert_eq!(ProviderKindDto::from_id(""), None);
-        let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("gemini", "fixture-model", CREDENTIAL, None),
-            explicit_source(),
-        ))
-        .expect_err("an unregistered kind id is rejected through the owner");
-        assert_eq!(unknown.code(), "invalid_config_schema");
-    }
-
-    #[test]
     fn configuration_validation_rejects_all_boundary_failures_safely() {
         let fixtures = [
             (
@@ -1041,62 +991,6 @@ credential = \"{credential}\"
             ProviderKindDto::GenericChatCompletionApi
         );
         assert_eq!(resolved.provider().model(), "example-chat-model");
-    }
-
-    #[test]
-    fn provider_endpoint_policy_requires_https_except_literal_loopback() {
-        // HTTPS is always valid; plaintext HTTP is tolerated only for literal
-        // loopback endpoints (PR24-055).
-        for endpoint in [
-            Some("https://api.example.com/v1"),
-            Some("http://127.0.0.1:18080/v1"),
-            Some("http://localhost:18080/v1"),
-            Some("http://[::1]:18080/v1"),
-        ] {
-            ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-                v1(
-                    "generic-chat-completion-api",
-                    "fixture",
-                    CREDENTIAL,
-                    endpoint,
-                ),
-                explicit_source(),
-            ))
-            .expect("endpoint satisfies the HTTPS-or-literal-loopback policy");
-        }
-        for endpoint in [
-            Some("http://api.example.com/v1"),
-            Some("http://127.0.0.1.evil.example.com/v1"),
-            Some("http://localhost.evil.example.com/v1"),
-            // An HTTPS endpoint without an authority has no host to reach
-            // The domain validator rejects it and the config layer
-            // reports the same typed code.
-            Some("https:///v1"),
-            Some("https://:8080/v1"),
-            // A non-empty authority whose host is malformed names no
-            // reachable host either. The backslash is doubled because the
-            // fixture embeds the value in a TOML basic string.
-            Some("https://]/v1"),
-            Some("https://[::1]]/v1"),
-            Some("https://exa\\\\mple.com/v1"),
-            // An unbracketed authority with a non-numeric port and a
-            // host carrying a non-breaking space (U+00A0) name no reachable
-            // host; the config layer reports the domain validator's verdict.
-            Some("https://api.example.com:notaport/v1"),
-            Some("https://exa\u{a0}mple.com/v1"),
-        ] {
-            let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-                v1(
-                    "generic-chat-completion-api",
-                    "fixture",
-                    CREDENTIAL,
-                    endpoint,
-                ),
-                explicit_source(),
-            ))
-            .expect_err("an endpoint that violates the authority or loopback policy is rejected");
-            assert_eq!(error.code(), "invalid_provider_endpoint");
-        }
     }
 
     #[test]

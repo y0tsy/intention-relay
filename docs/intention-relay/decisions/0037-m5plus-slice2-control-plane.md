@@ -2,11 +2,7 @@
 
 ## Status
 
-Accepted as the Slice 2 activating specification required by
-[ADR 0035](0035-m5plus-complete-foundation-activation.md). It activates Slice 2
-(Control plane) of ADR 0035 and is subordinate to ADR 0035: ADR 0035 remains the
-activation home and slice-sequence authority, and this record activates only the
-control-plane slice, not slices 3-4, M6, M7, M8, or M9.
+Superseded by [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md).
 
 ## Scope and supersession
 

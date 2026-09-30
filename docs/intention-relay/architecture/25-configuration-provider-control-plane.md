@@ -9,18 +9,20 @@
 - Detail decision: [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (raw-TOML editing and configuration editing).
 - Reconciliation topics: `CFG-001..010`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (controlled live reload, credential rotation, health checks, discovery, pricing, raw-TOML/configuration editing).
+- Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the cluster is again an accepted direction awaiting a new activating specification.
 
-**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
-owner for the configuration and provider control-plane cluster: controlled
-configuration live reload, credential rotation, provider health checks,
-provider/model discovery, pricing and budget policy, and the configuration
-control-plane surface. Slice 2 activates reload, rotation, health checks,
-discovery, pricing, and raw-TOML/configuration editing as specified below. It
-does not authorize a reload watcher, keychain or secret store, health-service
-topology, discovery client, pricing engine, profile picker/editor
-presentation, or production configuration behavior beyond the activated Slice 2
-contracts.
+**Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This
+document is the sole detailed owner for the configuration and provider
+control-plane cluster: controlled configuration live reload, credential
+rotation, provider health checks, provider/model discovery, pricing and budget
+policy, and the configuration control-plane surface. The Slice 2 activation
+delivered reload, rotation, health checks, discovery, pricing, and
+raw-TOML/configuration editing as specified below; that delivery was reverted,
+so none of those surfaces exists in the tree and a new activating specification
+is required to re-introduce them. The document does not authorize a reload
+watcher, keychain or secret store, health-service topology, discovery client,
+pricing engine, profile picker/editor presentation, or production
+configuration behavior.
 
 The authoritative package review of 2026-08-30 confirmed that the
 [`m4plus_concept.md`](../m4plus_concept.md) research directions are otherwise
@@ -50,11 +52,12 @@ scheduler, persistence authority, or sandbox.
 
 ## Controlled configuration live reload
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
 M3/M4 apply TOML only at daemon startup; existing runs retain their recorded
-immutable snapshot/revision. Controlled live reload is the activated direction
-that applies a validated TOML change to a running daemon:
+immutable snapshot/revision. Controlled live reload was the activated direction
+(reverted by ADR 0044) that applied a validated TOML change to a running
+daemon:
 
 - reload is an explicit command, contract, transaction, and outcome test: the
   daemon re-parses and validates a candidate snapshot against the current
@@ -64,21 +67,22 @@ that applies a validated TOML change to a running daemon:
   watcher, polling, or auto-restart, and no automatic re-application;
 - an edit that cannot be applied atomically fails closed and leaves the
   running daemon on its recorded snapshot;
-- a reload candidate that changes catalog-affecting configuration is rejected
-  with `catalog_change_requires_restart` in Slice 2; the advertised recovery is
-  real: the next daemon restart re-derives the active catalog from the startup
-  document through the catalog prepare and accept path, so restarting applies
-  the change;
+- a reload candidate that changed catalog-affecting configuration was rejected
+  with `catalog_change_requires_restart` in the reverted Slice 2 activation;
+  the recorded recovery was that the next daemon restart re-derived the active
+  catalog from the startup document through the catalog prepare and accept
+  path, so restarting applied the change;
 - existing persisted runs, admitted runs, and recorded snapshots are never
   mutated, re-selected, or rewritten by a reload;
-- the reload command is the only activation path for a running daemon.
+- the reload command was the only activation path for a running daemon; with
+  the revert, daemon restart is again the only configuration activation path.
 
 ## Credential rotation
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
-Credential rotation is the activated direction that replaces private
-credential material without altering frozen meaning:
+Credential rotation was the activated direction (reverted by ADR 0044) that
+replaced private credential material without altering frozen meaning:
 
 - rotation replaces only the opaque private material in composition state and
   never changes a recorded selection, digest, canonical bytes, endpoint,
@@ -94,28 +98,29 @@ credential material without altering frozen meaning:
 - credentials remain non-serde, non-`Debug`, and absent from durable/public
   surfaces under the architecture 09 redaction law.
 
-In Slice 2 the daemon's own configuration file is the configured private
-credential source. The composition captures the startup credential inside its
-private loading boundary at open and retains it in a non-serde, non-`Debug`
-in-memory slot; a rotation command re-reads the file through the same private
-loading boundary, replaces the composition's private material only when the
-frozen-meaning checks pass, and rebuilds the executing provider driver's
-private client. The rebuild keeps the driver options that the composition's
-provider-option seam applied at construction (PR24-057): rotation replaces
-only the private SDK client, and it preflights the active profile's declared
-options through the seam, so rotation can never silently drop or ignore
-declared driver options. Facades opened without a file-backed source
-(test-support hosts) have no configured source and keep the fail-closed
-`credential_rotation_source_unavailable` behavior. No credential, file
-content, or source path appears in a DTO, error, log, digest, snapshot,
-projection, or durable surface at any point.
+In the reverted Slice 2 activation the daemon's own configuration file was the
+configured private credential source. The composition captured the startup
+credential inside its private loading boundary at open and retained it in a
+non-serde, non-`Debug` in-memory slot; a rotation command re-read the file
+through the same private loading boundary, replaced the composition's private
+material only when the frozen-meaning checks passed, and rebuilt the executing
+provider driver's private client. The rebuild kept the driver options that the
+composition's provider-option seam applied at construction (PR24-057): rotation
+replaced only the private SDK client, and it preflighted the active profile's
+declared options through the seam, so rotation could never silently drop or
+ignore declared driver options. Facades opened without a file-backed source
+(test-support hosts) had no configured source and kept the fail-closed
+`credential_rotation_source_unavailable` behavior. ADR 0044 removed this
+composition path; no credential handling beyond the M3/M4 startup boundary
+exists now, and no credential, file content, or source path may appear in a
+DTO, error, log, digest, snapshot, projection, or durable surface.
 
 ## Provider health checks
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
-A provider health-check service is the activated direction that produces typed
-operational readiness evidence:
+A provider health-check service was the activated direction (reverted by
+ADR 0044) that produced typed operational readiness evidence:
 
 - health results are non-authorizing live evidence, never authority, meaning,
   or a fallback selector;
@@ -124,17 +129,18 @@ operational readiness evidence:
   architecture-16 reevaluation;
 - health checks never perform provider/model selection, routing, pricing,
   discovery, or credential testing beyond the declared contract;
-- health evidence carries the provider identity (`provider_id`) and reports no
-  profile revision while the catalog is not wired into the health path:
-  `provider_profile_revision_id` is absent, and no synthesized
-  `health-profile-<hex>` identity is fabricated.
+- the removed health-evidence DTO carried the provider identity (`provider_id`)
+  and reported no profile revision while the catalog was not wired into the
+  health path: `provider_profile_revision_id` stayed absent, and no synthesized
+  `health-profile-<hex>` identity was fabricated; ADR 0044 removed the DTO with
+  the rest of the Slice 2 surface.
 
 ## Provider and model discovery
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
-Discovery is the activated direction for enumerating provider/model
-capabilities as typed non-authorizing records:
+Discovery was the activated direction (reverted by ADR 0044) for enumerating
+provider/model capabilities as typed non-authorizing records:
 
 - discovery results never select a provider kind, endpoint, driver,
   capability, profile, or execution kind; model identifiers never route
@@ -146,16 +152,18 @@ capabilities as typed non-authorizing records:
 
 ## Pricing and budget policy
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
-Pricing and budget policy is the activated product direction:
+Pricing and budget policy was the activated product direction (reverted by
+ADR 0044):
 
 - it is product/budget policy, never a Mandate admission ceiling, quota,
   reservation, or entitlement;
 - it cannot gate direct Mandate admission, tool admission, scheduler
   eligibility, or capacity outcomes;
-- numeric values are classified Intrinsic/Capacity/Product as recorded by the
-  Slice 2 activating specification; pricing is never an admission ceiling.
+- numeric values were classified Intrinsic/Capacity/Product as recorded by the
+  superseded Slice 2 activating specification; pricing is never an admission
+  ceiling.
 
 ## Profile UI and configuration control plane
 
@@ -171,11 +179,12 @@ presentation direction:
 
 ## Raw-TOML editing and configuration editing
 
-**Activated for M5+ Slice 2 by ADR 0037.**
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
 
-Raw-TOML editing and a validated configuration-editing surface are activated
-directions under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md),
-executed in M5+ Slice 2:
+Raw-TOML editing and a validated configuration-editing surface are accepted
+directions under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md).
+They were executed in M5+ Slice 2 and reverted by ADR 0044; they are again
+documentation-only directions awaiting a new activating specification:
 
 - a safe, validated raw-TOML editing surface over the shared typed client
   produces a new candidate snapshot through the same atomic reload contract;
@@ -231,7 +240,9 @@ specification.
 - M3/M4 provider kinds, retries, model facts, cursors, snapshots, replay,
   recovery, and `ToolCallRecorded -> tool_execution_unavailable` retain their
   recorded ordinary semantics.
-- All directions affect fresh runs only, activated under Milestone 5+.
+- All directions affect fresh runs only; they were activated under Milestone 5+
+  and then reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md),
+  so they await a new activating specification.
 
 ## Dependencies and non-goals
 
@@ -240,18 +251,21 @@ This document depends on architectures 09, 14, 16, 22, and 24 plus decisions
 or secret store, standalone health-service topology, standalone discovery
 client, pricing engine, profile picker/editor implementation, OS
 notifications, remote transport, multi-user access, sandbox/container
-isolation, or production activation beyond the activated Slice 2 contracts.
-The reload, rotation, health, discovery, pricing, and raw-TOML/typed editing
-surface is served through the daemon facade with typed commands and queries.
+isolation, or production activation beyond the accepted directions.
+In the reverted Slice 2 activation the reload, rotation, health, discovery,
+pricing, and raw-TOML/typed editing surface was served through the daemon
+facade with typed commands and queries; ADR 0044 removed that serving surface
+and no replacement exists now.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 `make verify`, and Linux/Windows CI.
-[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
-activating specification: it declares the exact test targets, the single
-current-schema storage policy, and the per-direction evidence anchors. Required
-evidence includes:
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) was the Slice 2
+activating specification; it is superseded by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) and its
+declared test targets no longer exist. The per-direction evidence obligations
+return to the accepted direction and a re-introduction must restore them:
 
 - reload transaction fault injection: atomic commit or fail-closed, no
   partial snapshot, no mutation of existing runs;

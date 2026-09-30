@@ -8,17 +8,20 @@
 - Decision record: [`0024`](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 - Reconciliation topics: `PSS-001..008`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
-- Status: activated for M5+ Slice 2 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) (session defaults, per-turn/fork overrides, unavailable-queue promotion/reconciliation, profile-keyed usage, `provider_profiles_v1` serving, pending-removal accept/reject/expiry, degraded recovery, held recovered-run admission).
+- Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the layer is again an accepted direction awaiting a new activating specification.
 
-**Activated for M5+ Slice 2 by ADR 0037.** This document is the sole detailed
-owner for the provider session-selection and profiles protocol layer: session
-default selection, per-turn and fork overrides, unavailable-queue promotion
-and reconciliation, profile-keyed usage, `provider_profiles_v1` public
-protocol and presentation, and held recovery-promoted run admission. It does
-not authorize a `responses` SDK/driver, user-kind parser, catalog database,
-profile picker/editor presentation, credential entry/keychain, health test,
-discovery, pricing, telemetry, live reload, or production behavior beyond the
-activated Slice 2 contracts.
+**Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This
+document is the sole detailed owner for the provider session-selection and
+profiles protocol layer: session default selection, per-turn and fork
+overrides, unavailable-queue promotion and reconciliation, profile-keyed usage,
+`provider_profiles_v1` public protocol and presentation, and held
+recovery-promoted run admission. The Slice 2 activation delivered that layer
+and was reverted, so no session-selection, catalog-serving, or held-run surface
+exists in the tree and a new activating specification is required to
+re-introduce it. The document does not authorize a `responses` SDK/driver,
+user-kind parser, catalog database, profile picker/editor presentation,
+credential entry/keychain, health test, discovery, pricing, telemetry, live
+reload, or production behavior.
 
 It applies to future fresh runs only. M3/M4 bytes, queue tickets, sessions,
 runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
@@ -47,32 +50,37 @@ scheduler, persistence authority, catalog, or sandbox.
 
 ## Session selection, runs, queues, and usage
 
-A session copies the global `ProviderProfileId` as a durable future default;
-catalog changes never cascade. `SetSessionProviderProfileCommandDto` is
-user-initiated, idempotent, and optimistic: it takes the session, an enabled
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.** The
+following records the direction as it was activated and then reverted; none of
+these surfaces exists in the tree.
+
+A session copied the global `ProviderProfileId` as a durable future default;
+catalog changes never cascade. `SetSessionProviderProfileCommandDto` was
+user-initiated, idempotent, and optimistic: it took the session, an enabled
 profile ID, the expected session projection revision, and an operation ID;
-it changes only future intent and, when the durable default changed, publishes
+it changed only future intent and, when the durable default changed, published
 the typed `SessionProviderProfileChanged` event to the validating session-event
-boundary. Slice 2 keeps no durable copy of that event and writes no durable
-session-event snapshot for it: the control-plane event family has no durable
-append seam yet, so the committed event is validated at the boundary and
-recorded nowhere. Durable delivery is parked as a declared future slice,
-reserved to Milestone 6 in the roadmap's
+boundary. The reverted Slice 2 kept no durable copy of that event and wrote no
+durable session-event snapshot for it: the control-plane event family had no
+durable append seam, so the committed event was validated at the boundary and
+recorded nowhere. ADR 0044 removed the event DTO with the rest of the layer, so
+no session-default change exists to produce it. Durable delivery is again
+declared future work, reserved to Milestone 6 in the roadmap's
 [reserved declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declarations-carried-by-m6-m9)
 and anchored as the durable
 `SessionProviderProfileChanged` append layer. An
-existing-profile request is a successful `changed = false` no-op that
-publishes no event.
-`GetSessionProviderProfileQueryDto` returns the durable intent, the current safe
-resolved entry/revision or a closed unavailability reason, the session
-projection revision, and the global default; availability is a daemon-computed
-read projection and never mass-rewrites sessions or queues.
+existing-profile request was a successful `changed = false` no-op that
+published no event.
+`GetSessionProviderProfileQueryDto` returned the durable intent, the current
+safe resolved entry/revision or a closed unavailability reason, the session
+projection revision, and the global default; availability was a daemon-computed
+read projection and never mass-rewrote sessions or queues.
 
-`SendUserTurn`, `ForkSession`, and `StartForkRun` accept an optional safe profile
-ID and an optional expected profile revision; a per-turn or fork override
-changes only that run; a mismatch rejects before commit; a registry failure
-returns `provider_profile_runtime_unavailable`. Every accepted turn persists
-one `ResolvedRunProviderSelectionDto`:
+`SendUserTurn`, `ForkSession`, and `StartForkRun` accepted an optional safe
+profile ID and an optional expected profile revision; a per-turn or fork
+override changed only that run; a mismatch rejected before commit; a registry
+failure returned `provider_profile_runtime_unavailable`. Every accepted turn
+persisted one `ResolvedRunProviderSelectionDto`:
 
 ```text
 ResolvedRunProviderSelectionDto
@@ -96,108 +104,116 @@ ResolvedRunProviderSelectionDto
 One profile per run, no fallback chain. Promotion of an unavailable exact
 selection: the original `RunId`, `Starting -> Failed` with
 `provider_configuration_unavailable`, a closed detail, and promotion
-provenance, with no provider call. Unavailable promotion FIFO proceeds only
-through **8** unavailable selections per terminal transition; exhaustion writes
+provenance, with no provider call. Unavailable promotion FIFO proceeded only
+through **8** unavailable selections per terminal transition; exhaustion wrote
 a typed queue-reconciliation-needed marker. `ReconcileUnavailableQueueCommandDto`
-(user-only, idempotent) handles at most **32** currently unavailable immutable
-selections per page; the request carries no page cursor, because the durable
-reconciliation marker is the single paging authority and its cursor is what the
-acceptance reports. It terminalizes only those, may promote the first
-available item, and never reroutes to a current default or new revision. Usage
-is keyed by exact profile identity and revision; aggregated by profile into one
-bounded entry per `(revision, model)` identity and separately by
+(user-only, idempotent) handled at most **32** currently unavailable immutable
+selections per page; the request carried no page cursor, because the durable
+reconciliation marker was the single paging authority and its cursor is what
+the acceptance reported. It terminalized only those, might promote the first
+available item, and never rerouted to a current default or new revision. Usage
+was keyed by exact profile identity and revision; aggregated by profile into
+one bounded entry per `(revision, model)` identity and separately by
 revision/model; no price, currency, or estimated cost; different profiles
-sharing all safe fields remain independent clients, selection identities, and
+sharing all safe fields remained independent clients, selection identities, and
 usage groups.
 
-The fork override fields exist on the fork DTOs (`ForkSessionCommandDto` and
-`StartForkRunCommandDto`) and the resolution service is implemented in Slice 2,
-but the fork wire commands themselves remain Slice 4: no fork wire command is
-activated by Slice 2.
+The fork override fields existed on the fork DTOs (`ForkSessionCommandDto` and
+`StartForkRunCommandDto`) and the resolution service was implemented in the
+reverted Slice 2; ADR 0044 removed both. The fork wire commands remain Slice 4
+and were never activated by Slice 2.
 
 ## Public protocol and presentation
 
-`provider_profiles_v1` is one additive negotiated capability for paginated
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
+`provider_profiles_v1` was one additive negotiated capability for paginated
 catalog reads, catalog status, session default query/command, safe per-turn and
 fork overrides, resolved-selection projections, pending-removal accept/reject,
-and explicit admission of a held recovered run. It does not imply live reload,
+and explicit admission of a held recovered run. It did not imply live reload,
 configuration editing, profile testing, credential entry, or model discovery.
-Configuration editing is activated for M5+ Slice 2 by
+Configuration editing was activated for M5+ Slice 2 by
 [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) through the
 atomic reload contract of [architecture 25](25-configuration-provider-control-plane.md);
-it is not part of `provider_profiles_v1`.
+it was not part of `provider_profiles_v1`, and ADR 0044 removed both surfaces.
+The daemon no longer advertises or serves `provider_profiles_v1`.
 
-A catalog list is bounded, paginated by an opaque token, sorted by stable
-`ProfileId`, carries the active `CatalogRevisionId`, and returns `has_more`; a
-catalog change invalidates the token with a typed conflict/resync. An entry
-includes profile/catalog revisions, display name, enabled state, kind ID, kind
+A catalog list was bounded, paginated by an opaque token, sorted by stable
+`ProfileId`, carried the active `CatalogRevisionId`, and returned `has_more`; a
+catalog change invalidated the token with a typed conflict/resync. An entry
+included profile/catalog revisions, display name, enabled state, kind ID, kind
 descriptor revision, exact model, normalized endpoint where applicable,
 effective policy, capability subset, credential transport mode and safe header
 name where applicable, `credential_configured`, deterministic driver-declared
-capabilities, and local readiness. The closed readiness projection is `ready`,
+capabilities, and local readiness. The closed readiness projection was `ready`,
 `disabled`, or `unavailable` (never claiming network or credential health).
-`GetProviderCatalogStatusQueryDto` returns the closed activation state
+`GetProviderCatalogStatusQueryDto` returned the closed activation state
 `preparing`, `active`, `pending_removal`, or `activation_recovery_required`;
 the applicable closed degraded reason; active/candidate safe revisions; the
 default; safe validation/removal impact; and the negotiated capability state.
 
-Adapters may only read safe state, set session defaults, supply user-originated
-overrides, accept/reject pending removal, and admit a held recovered run; they
-never write TOML, create/edit/enable/disable profiles or kinds, enter
-credentials, or receive configuration paths.
+Adapters could only read safe state, set session defaults, supply
+user-originated overrides, accept/reject pending removal, and admit a held
+recovered run; they never wrote TOML, created/edited/enabled/disabled profiles
+or kinds, entered credentials, or received configuration paths.
 
 ## Startup-only application and degraded recovery
 
-Profiles v1 are startup-only; there is no watcher, polling, auto-restart, or
-restart protocol command. Startup auto-accepts additions, new user-kind
+**Reverted by ADR 0044; the Slice 2 activation of ADR 0037 is withdrawn.**
+Profiles v1 were startup-only; there was no watcher, polling, auto-restart, or
+restart protocol command. Startup auto-accepted additions, new user-kind
 additions, execution edits, enable/disable, and display changes; an existing
-user kind never accepts an edited composition under an old ID. A
-semantic-equal catalog writes no new revision but reconstructs the private
-registry; credential-only changes are invisible durable state (a deferred
+user kind never accepted an edited composition under an old ID. A
+semantic-equal catalog wrote no new revision but reconstructed the private
+registry; credential-only changes were invisible durable state (a deferred
 credential-rotation limitation). An omitted profile or unreferenced kind
-becomes a process-local pending-removal candidate (not auto-tombstoned); a
-profile pointing to an omitted kind is invalid. Degraded mode is admin/read
+became a process-local pending-removal candidate (not auto-tombstoned); a
+profile pointing to an omitted kind was invalid. Degraded mode was admin/read
 only.
 
-`AcceptProviderCatalogRemovalCommandDto` (idempotent) takes a candidate handle,
-expected active/candidate revisions, and an operation ID; it atomically accepts
-removals, creates tombstones, records ordered audit, and activates the registry.
-`RejectProviderCatalogCandidateCommandDto` drops the
-private candidate and pending status, records `ProviderCatalogCandidateRejected`,
-and leaves degraded read-only with `removal_candidate_rejected`. At most one
-candidate exists; its lifetime is **30 minutes** from
-`ProviderCatalogRemovalPending`; expiry produces `ProviderCatalogCandidateExpired`
-and degraded read-only with `removal_candidate_expired`.
+`AcceptProviderCatalogRemovalCommandDto` (idempotent) took a candidate handle,
+expected active/candidate revisions, and an operation ID; it atomically
+accepted removals, created tombstones, recorded ordered audit, and activated
+the registry. `RejectProviderCatalogCandidateCommandDto` dropped the
+private candidate and pending status, recorded
+`ProviderCatalogCandidateRejected`, and left degraded read-only with
+`removal_candidate_rejected`. At most one candidate existed; its lifetime was
+**30 minutes** from `ProviderCatalogRemovalPending`; expiry produced
+`ProviderCatalogCandidateExpired` and degraded read-only with
+`removal_candidate_expired`.
 
-Startup opens storage first, interrupts unfinished runs before any read
-response, then prepares and activates the catalog. A degraded daemon serves
-health, safe catalog status/validation, and session/run/tree reads; all
-provider state changes, admission, promotion, and default changes are rejected
-with `execution_not_ready`; the only exceptions are accept/reject of the one
-pending candidate. A crash after acceptance produces
-`ProviderCatalogActivationRecoveryRequired` before reconstruction and
-`ProviderCatalogRecoveryCompleted` only after the exact accepted catalog is
-active; a mismatch stays `activation_recovery_required`. The closed degraded
-reasons are `removal_candidate_pending`, `removal_candidate_rejected`,
-`removal_candidate_expired`, and `activation_recovery_required`.
+In the reverted activation, startup opened storage first, interrupted unfinished
+runs before any read response, then prepared and activated the catalog. A
+degraded daemon served health, safe catalog status/validation, and
+session/run/tree reads; all provider state changes, admission, promotion, and
+default changes were rejected with `execution_not_ready`; the only exceptions
+were accept/reject of the one pending candidate. A crash after acceptance
+produced `ProviderCatalogActivationRecoveryRequired` before reconstruction and
+`ProviderCatalogRecoveryCompleted` only after the exact accepted catalog was
+active; a mismatch stayed `activation_recovery_required`. The closed degraded
+reasons were `removal_candidate_pending`, `removal_candidate_rejected`,
+`removal_candidate_expired`, and `activation_recovery_required`. ADR 0044
+removed this startup path, the readiness gate, and every catalog table.
 
-A recovery-promoted `Starting` run is never auto-scheduled; it is held as a
-durable active run. The user issues the idempotent `AdmitRecoveredRunCommandDto`
-(exact session/run identities and an operation ID), which verifies the complete
+A recovery-promoted `Starting` run was never auto-scheduled; it was held as a
+durable active run. The user issued the idempotent `AdmitRecoveredRunCommandDto`
+(exact session/run identities and an operation ID), which verified the complete
 immutable selection, the enabled exact registry entry, driver compatibility,
-and active catalog readiness before scheduling; a repeat cannot schedule a
-second task; failed verification returns a closed safe error and the run stays
-held; the ordinary stop path terminalizes
-`Starting -> Cancelling -> Cancelled` without provider/tool/external work.
+and active catalog readiness before scheduling; a repeat could not schedule a
+second task; failed verification returned a closed safe error and the run
+stayed held; the ordinary stop path terminalized
+`Starting -> Cancelling -> Cancelled` without provider/tool/external work. With
+the revert, no recovery-promoted held run exists and the ordinary recovery path
+is again the only one.
 
 ## Compatibility and historical preservation
 
 - M3/M4 bytes, queue tickets, sessions, runs, events, snapshots, replay, and
   recovery remain authoritative and unchanged; no historical selection gains a
   synthetic profile/catalog/session-default state.
-- A per-turn or fork override affects only that run; existing persisted runs
+- A per-turn or fork override affected only its run; existing persisted runs
   retain their recorded immutable selection.
-- All directions affect fresh runs only, activated under Milestone 5+.
+- The directions affect fresh runs only; they were activated under Milestone 5+
+  and then reverted by ADR 0044.
 
 ## Dependencies and non-goals
 
@@ -208,22 +224,24 @@ presentation, credential entry/keychain, telemetry, multimodal or structured
 output, plugin drivers, or remote continuation; the catalog database, the
 single current storage schema (logical version 1),
 credential rotation, health checks, discovery, pricing, controlled
-live reload, and typed header policy are activated by Slice 2
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)); the typed
-server-side-parser and preservation-control contracts were removed as
-unconsumed by the unconsumed-surface audit (2026-09), so no parser-configuration surface is activated.
-UI, Cargo,
-Makefile/CI, or production activation beyond the activated Slice 2 contracts
+live reload, and typed header policy were activated by Slice 2
+([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) and were removed
+by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the
+typed server-side-parser and preservation-control contracts were removed as
+unconsumed by the unconsumed-surface audit (2026-09), so no parser-configuration
+surface is activated. UI, Cargo,
+Makefile/CI, or production activation beyond the accepted directions
 remain outside this document.
 
 A later activating specification must declare exact crates, dependencies, test
 targets, coverage tiers, feature profiles, storage/wire schema, retention, and
 bounds, then pass `make quick`, `make docs-check`, `make architecture`,
 `make verify`, and Linux/Windows CI.
-[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is the Slice 2
-activating specification: it declares the exact test targets, the single
-current-schema storage policy, and the per-direction evidence anchors. Required
-evidence includes:
+[ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) was the Slice 2
+activating specification; it is superseded by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) and its
+declared test targets no longer exist. The per-direction evidence obligations
+return to the accepted direction and a re-introduction must restore them:
 
 - session default/override command and query fixtures with idempotency, a
   `changed = false` no-op that publishes no event, and one validated boundary

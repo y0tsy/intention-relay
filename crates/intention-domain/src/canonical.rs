@@ -61,34 +61,6 @@ pub enum CanonicalError {
     OverLimit,
     DigestMismatch,
     InvalidDigest,
-    /// A provider kind identifier violates the closed kind policy.
-    InvalidProviderKind,
-    /// An endpoint violates the closed endpoint policy.
-    InvalidEndpoint,
-    /// A provider profile, kind descriptor, or capability record is invalid.
-    ProviderProfileRevisionInvalid,
-    /// A context source manifest violates its closed bounds.
-    ContextSourceManifestInvalid,
-    /// A model context projection record is semantically invalid.
-    ModelContextProjectionInvalid,
-    /// A model context projection exceeds its aggregate byte bound.
-    ModelContextProjectionTooLarge,
-    /// A credential-shaped value reached a field that must never carry secrets.
-    CredentialsForbidden,
-    /// A provider kind revision changes immutable kind identity or closed parts.
-    ProviderKindImmutableMismatch,
-    /// A provider kind still has dependent profiles and cannot be removed.
-    ProviderKindHasDependents,
-    /// Required reasoning history material is missing or corrupt.
-    ReasoningHistoryUnavailable,
-    /// Required reasoning history is incompatible with the transfer policy.
-    ReasoningHistoryIncompatible,
-    /// Reasoning history exceeds its aggregate or entry bound.
-    ReasoningHistoryTooLarge,
-    /// A reasoning fragment would exceed the fixed per-run output bound.
-    ReasoningOutputLimitExceeded,
-    /// A provider reasoning stream value violates the closed stream rules.
-    ProviderReasoningStreamInvalid,
 }
 
 impl CanonicalError {
@@ -114,20 +86,6 @@ impl CanonicalError {
             Self::OverLimit => "over_limit",
             Self::DigestMismatch => "digest_mismatch",
             Self::InvalidDigest => "invalid_digest",
-            Self::InvalidProviderKind => "invalid_provider_kind",
-            Self::InvalidEndpoint => "invalid_endpoint",
-            Self::ProviderProfileRevisionInvalid => "provider_profile_revision_invalid",
-            Self::ContextSourceManifestInvalid => "context_source_manifest_invalid",
-            Self::ModelContextProjectionInvalid => "model_context_projection_invalid",
-            Self::ModelContextProjectionTooLarge => "model_context_projection_too_large",
-            Self::CredentialsForbidden => "credentials_forbidden",
-            Self::ProviderKindImmutableMismatch => "provider_kind_immutable_mismatch",
-            Self::ProviderKindHasDependents => "provider_kind_has_dependents",
-            Self::ReasoningHistoryUnavailable => "reasoning_history_unavailable",
-            Self::ReasoningHistoryIncompatible => "reasoning_history_incompatible",
-            Self::ReasoningHistoryTooLarge => "reasoning_history_too_large",
-            Self::ReasoningOutputLimitExceeded => "reasoning_output_limit_exceeded",
-            Self::ProviderReasoningStreamInvalid => "provider_reasoning_stream_invalid",
         }
     }
 }
@@ -164,28 +122,6 @@ impl Digest256 {
     #[must_use]
     pub fn sha256(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
-    }
-
-    /// Parses exactly sixty-four lowercase hex digits into a digest.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CanonicalError::InvalidDigest` when `value` is not exactly
-    /// sixty-four lowercase hex digits.
-    pub fn from_str_hex(value: &str) -> Result<Self, CanonicalError> {
-        if value.len() != 64
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        {
-            return Err(CanonicalError::InvalidDigest);
-        }
-        let mut bytes = [0; 32];
-        for (index, byte) in bytes.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-                .map_err(|_| CanonicalError::InvalidDigest)?;
-        }
-        Ok(Self(bytes))
     }
 
     /// Returns the thirty-two raw digest bytes.
@@ -898,36 +834,6 @@ pub fn decode_optional_utf8(bytes: &[u8]) -> Result<Option<String>, CanonicalErr
     }
 }
 
-/// Whether `value` carries a credential-shaped token that must never enter a
-/// canonical record, digest, or durable identity.
-///
-/// This is the secret-value role of the shared credential-shape policy; every
-/// boundary delegates to the same role functions so verdicts cannot diverge
-/// (PR24-035).
-#[must_use]
-pub fn contains_credential_shape(value: &str) -> bool {
-    secret_value_credential_shaped(value)
-}
-
-/// Whether a secret-style value carries a credential pattern.
-///
-/// Secret-value role: `sk-` prefixes, `Bearer ` tokens, and the
-/// `api_key`/`apikey`/`secret`/`password`/`token=`/`key=`/`auth=` value
-/// patterns. Case-insensitive.
-#[must_use]
-pub fn secret_value_credential_shaped(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("sk-")
-        || lower.starts_with("bearer ")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower.contains("secret")
-        || lower.contains("password")
-        || lower.contains("token=")
-        || lower.contains("key=")
-        || lower.contains("auth=")
-}
-
 /// Whether an identifier-like field value is credential-shaped.
 ///
 /// Identifier role: any control character anywhere, or a trimmed,
@@ -943,35 +849,6 @@ pub fn credential_shaped_identifier(value: &str) -> bool {
             || lower.contains("sk-")
             || bearer_token_shape(&lower)
     }
-}
-
-/// Whether a configuration key name is credential-shaped.
-///
-/// Key-name role: the secret-value patterns or one of the reserved
-/// credential key names (`token`, `bearer`, `auth`, `authorization`,
-/// `access_token`, `auth_token`). Case-insensitive.
-#[must_use]
-pub fn credential_shaped_key_name(key: &str) -> bool {
-    secret_value_credential_shaped(key)
-        || matches!(
-            key.to_ascii_lowercase().as_str(),
-            "token" | "bearer" | "auth" | "authorization" | "access_token" | "auth_token"
-        )
-}
-
-/// Whether raw configuration text carries a credential shape.
-///
-/// Raw-content role: unlike the identifier role, the line breaks and tabs
-/// that are legitimate inside TOML text are ignored; only credential
-/// substrings and bearer tokens are detected, so multi-line configuration
-/// content is not rejected for its formatting alone.
-#[must_use]
-pub fn credential_shaped_raw_content(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower.contains("key")
-        || lower.contains("token")
-        || lower.contains("sk-")
-        || bearer_token_shape(&lower)
 }
 
 /// Whether `value` (already lowercased) carries a Bearer-token shape: the
@@ -1009,6 +886,8 @@ pub fn contains_control_or_nul(value: &str) -> bool {
 pub enum TagStatus {
     /// The tag has a production codec in this PR.
     Wired,
+    /// The tag is reserved for Slice 2 with no production codec yet.
+    ReservedForSlice2,
     /// The tag is reserved for Slice 3 with no production codec yet.
     ReservedForSlice3,
     /// The tag is reserved for Slice 4 with no production codec yet.
@@ -1093,32 +972,32 @@ impl TagRegistry {
         LedgerTag {
             name: "model-capability-taxonomy-v1",
             value: 0x0206,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "provider-profile-revision-v1",
             value: 0x0207,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "provider-selection-v1",
             value: 0x0208,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "reasoning-history-manifest-v1",
             value: 0x0209,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "context-source-manifest-v1",
             value: 0x020A,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "model-context-projection-v1",
             value: 0x020B,
-            status: TagStatus::Wired,
+            status: TagStatus::ReservedForSlice2,
         },
         LedgerTag {
             name: "tool-descriptor-revision",

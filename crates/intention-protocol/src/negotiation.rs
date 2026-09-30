@@ -115,21 +115,6 @@ pub fn require_gateway_tool_loop(negotiated: &ProtocolNegotiationResultDto) -> D
     }
 }
 
-/// Requires the negotiated `provider_profiles_v1` capability before any
-/// control-plane command or query may take effect.
-///
-/// The normalized reasoning stream gate is already covered by
-/// [`require_capability`], which maps `normalized_reasoning_stream_v1` to the
-/// `normalized_reasoning_stream_required` code.
-///
-/// # Errors
-///
-/// Returns a validation error with code
-/// `provider_profiles_capability_required` when the capability is absent.
-pub fn require_provider_profiles(capabilities: &[ProtocolCapabilityDto]) -> DtoResult<()> {
-    require_capability(capabilities, ProtocolCapabilityDto::ProviderProfilesV1)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -412,80 +397,6 @@ mod tests {
             .expect_err("missing model tool loop fails closed")
             .code(),
             "model_tool_loop_required"
-        );
-    }
-
-    #[test]
-    fn provider_profiles_gate_accepts_only_negotiated_peers() {
-        // Negotiated by both peers: the gate passes.
-        assert!(require_provider_profiles(&[ProtocolCapabilityDto::ProviderProfilesV1]).is_ok());
-
-        // Absent on the local peer: the gate fails closed before effect.
-        assert_eq!(
-            require_provider_profiles(&[])
-                .expect_err("missing provider profiles fails closed")
-                .code(),
-            "provider_profiles_capability_required"
-        );
-
-        // Absent on the remote peer: the intersection is empty.
-        let negotiated = intersect_capabilities(
-            &[ProtocolCapabilityDto::ProviderProfilesV1],
-            &[ProtocolCapabilityDto::SessionSubscriptions],
-        )
-        .expect("no duplicates");
-        assert!(
-            !negotiated.contains(&ProtocolCapabilityDto::ProviderProfilesV1),
-            "a capability absent on the remote peer must not be negotiated"
-        );
-
-        // Absent on the local peer: the intersection is empty.
-        let negotiated = intersect_capabilities(
-            &[ProtocolCapabilityDto::SessionSubscriptions],
-            &[ProtocolCapabilityDto::ProviderProfilesV1],
-        )
-        .expect("no duplicates");
-        assert!(
-            !negotiated.contains(&ProtocolCapabilityDto::ProviderProfilesV1),
-            "a capability absent on the local peer must not be negotiated"
-        );
-
-        // A duplicate declaration is rejected with the stable code.
-        assert_eq!(
-            intersect_capabilities(
-                &[
-                    ProtocolCapabilityDto::ProviderProfilesV1,
-                    ProtocolCapabilityDto::ProviderProfilesV1,
-                ],
-                &[ProtocolCapabilityDto::ProviderProfilesV1],
-            )
-            .expect_err("duplicate capability is rejected")
-            .code(),
-            "duplicate_protocol_capability"
-        );
-
-        // Only the exact current protocol version passes negotiation
-        // equality; a differing minor is rejected like a differing major.
-        assert_eq!(
-            ProtocolVersionDto::new(1, 1),
-            crate::CURRENT_PROTOCOL_VERSION
-        );
-        assert_ne!(
-            ProtocolVersionDto::new(1, 2),
-            crate::CURRENT_PROTOCOL_VERSION
-        );
-        assert_ne!(
-            ProtocolVersionDto::new(2, 0),
-            crate::CURRENT_PROTOCOL_VERSION
-        );
-
-        // A control-plane command must be rejected before effect when the
-        // capability is absent, via the same gate the daemon applies.
-        assert_eq!(
-            require_provider_profiles(&[ProtocolCapabilityDto::SessionSubscriptions])
-                .expect_err("control-plane command without the capability fails closed")
-                .code(),
-            "provider_profiles_capability_required"
         );
     }
 }

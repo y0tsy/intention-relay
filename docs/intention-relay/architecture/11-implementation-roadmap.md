@@ -452,15 +452,18 @@ activated by earlier slices in this order:
    UI and raw-TOML/configuration editing; arbitrary authentication headers;
    session defaults and per-turn/fork overrides; unavailable-queue promotion
    and reconciliation; `provider_profiles_v1`; pending-removal and degraded
-   recovery; and the provider reasoning/catalog surface. **Activated by
-   [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md); Slice 2 is
-   complete. The unconsumed-surface audit (2026-09) removed the unconsumed typed preservation-control,
-   server-side-parser, Responses reasoning-mode, reasoning-usage, and
-   model-capability-envelope contracts, the protocol-only reasoning/header/
-   parser duplicates, the eight producer-less control-plane event DTOs, and
-   the `provider_profile_tombstoned` wire code; the typed header policy and
-   `SessionProviderProfileChangedEventDto` remain, and the latter's durable
-   delivery is a reserved declaration below.**
+   recovery; and the provider reasoning/catalog surface. **Reverted by
+   [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md):
+   [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) is Superseded,
+   the slice's code, DTOs, test targets, goldens, and control-plane tables are
+   removed, and a new activating specification is required to re-introduce
+   it.** The unconsumed-surface audit (2026-09) removed the unconsumed typed
+   preservation-control, server-side-parser, Responses reasoning-mode,
+   reasoning-usage, and model-capability-envelope contracts, the protocol-only
+   reasoning/header/parser duplicates, the eight producer-less control-plane
+   event DTOs, and the `provider_profile_tombstoned` wire code; that removal is
+   not reverted, and the reverted Slice 2 record no longer keeps the typed
+   header policy or `SessionProviderProfileChangedEventDto`.
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
    and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/
    0030/0031/0033): durable harness rules and triggers; dossiers/checkpoints;
@@ -514,25 +517,23 @@ nothing.
   fixtures (exact current-version equality, incompatible major, unnegotiated
   capability fail-closed); current-schema creation fixtures; canonical-tag
   and digest goldens;
-- slice 2: reload transaction fault injection (atomic commit or fail-closed,
-  no partial snapshot, no mutation of existing runs); rotation redaction and
-  no-frozen-meaning-change; health/discovery non-authority (no RunId/reason/
-  selection created, no model-name routing, no fallback); pricing non-ceiling
-  classification; promotion/reconciliation limits; catalog acceptance and
-  recovery; control-plane safe-projection (no raw TOML, credentials, or
-  resources cross public or durable boundaries);
-  **implemented (ADR 0037); evidence anchors:**
-  `crates/intention-domain/tests/m5_control_plane_canonical.rs`,
-  `crates/intention-domain/tests/m5_control_plane_rejections.rs`,
-  `crates/intention-domain/tests/m5_session_selection_overrides.rs`,
-  `crates/intention-protocol/tests/control_plane_contracts.rs`,
-  `crates/intention-config/tests/m5_control_plane_config.rs`,
-  `crates/intention-application/tests/m5_catalog_runtime.rs`,
-  `crates/intention-application/tests/m5_control_plane_runtime.rs`,
-  `crates/intention-client/tests/control_plane_client.rs`,
-  `crates/intention-client/tests/session_selection_client.rs`,
-  `crates/intention-model/tests/m6_reasoning_surface.rs`, and the
-  current-schema tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`;
+- slice 2: **reverted by
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); a
+  new activating specification is required to re-introduce the control
+  plane.** The recorded test anchors (reload transaction fault injection with
+  atomic commit or fail-closed and no partial snapshot; rotation redaction and
+  no-frozen-meaning-change; health/discovery non-authority with no
+  RunId/reason/selection, no model-name routing, and no fallback; pricing
+  non-ceiling classification; promotion/reconciliation limits; catalog
+  acceptance and recovery; control-plane safe-projection with no raw TOML,
+  credentials, or resources crossing public or durable boundaries) are
+  historical: the Slice 2 test targets and their goldens no longer exist, and
+  their former names (`m5_control_plane_*`, `control_plane_*`,
+  `m5_session_selection*`, `m5_catalog_runtime`, `m5_control_plane_config`,
+  `m6_reasoning_surface`) are recorded by
+  [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) as superseded.
+  The current-schema tests in `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`
+  remain;
 - slice 3: harness rule/trigger/coalescing/catch-up; dossier/checkpoint/
   conclusion bounds; class resolution; corridor admission and reservation
   atomicity; Goal tree/DAG/lifecycle; verifier authority and gate fixtures;
@@ -566,19 +567,22 @@ nothing.
   created directly on open (the schema-3-to-4 migration chain and preservation
   fixtures are removed by ADR 0038; current-schema tests in
   `crates/intention-storage-sqlite/tests/sqlite_contracts.rs`);
-- health, discovery, and pricing create no RunId, reason, lifecycle
-  transition, scheduler candidate, tool permission, child edge, verifier
-  authority, MCP capability, bridge grant, kernel epoch, context projection,
-  branch, or reconciliation result (non-authority fixtures in
-  `crates/intention-application/tests/m5_control_plane_runtime.rs` and
-  `crates/intention-client/tests/control_plane_client.rs`);
+- the Slice 2 health, discovery, and pricing surfaces (reverted by
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)) were
+  non-authorizing: they create no RunId, reason, lifecycle transition,
+  scheduler candidate, tool permission, child edge, verifier authority, MCP
+  capability, bridge grant, kernel epoch, context projection, branch, or
+  reconciliation result; their recorded non-authority fixtures were removed
+  with the revert, and a re-introduction must restore them;
 - applicable crates meet their declared coverage tiers without excluding
   policy or boundary logic; every activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
-  together. Slice 1 (ADR 0036) and Slice 2 (ADR 0037) are complete; slices
-  3-5 remain;
+  together. Slice 1 (ADR 0036) is complete; Slice 2 (ADR 0037) was reverted by
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) and
+  requires a new activating specification to re-introduce it; slices 3-5
+  remain;
 - the fifth slice's contracts are declared by its activating specification and
   prove that instruction text is advisory-only, bounded, digest-bound, and
   materialized for frozen context, with no untrusted material entering the
@@ -637,22 +641,28 @@ The unconsumed-surface audit (2026-09) (2026-09) keeps exactly one audited surfa
 records the deleted groups so no M6-M9 slice claims them:
 
 - **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed
-  by Milestone 6.** `SessionProviderProfileChangedEventDto` is produced by the
-  committed session-default change and validated at the session-event boundary,
-  but Slice 2 keeps no durable copy and writes no durable session-event
-  snapshot; the durable append/delivery layer is reserved to the first M6-M9
-  milestone that consumes session state and reconnect delivery. Anchors:
+  by Milestone 6.** The control-plane event family was activated for Slice 2
+  only as a boundary-validated session-event publication with no durable copy;
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md)
+  reverted Slice 2 and removed the event DTO, so no session-default change
+  exists to produce it. The durable append/delivery layer remains reserved to
+  the first M6-M9 milestone that consumes session state and reconnect delivery.
+  Anchors:
   [`m4plus_concept.md`](../m4plus_concept.md) (session selection, runs, queues,
   and usage),
   [architecture 29](29-provider-session-and-profiles-protocol.md) (session
   selection, runs, queues, and usage).
-  Until Milestone 6 lands the layer, the event stays boundary-validated with
-  no durable copy.
+  Until Milestone 6 lands the layer, and until a new activating specification
+  re-introduces a session-default change, no control-plane event is produced or
+  validated.
 - **Deleted groups — no M6-M9 slice claims them.** The protocol reasoning/
   header/parser duplicates, the eight producer-less control-plane event DTOs,
   the six unconsumed model types, and the `provider_profile_tombstoned` wire
-  code were deleted by the unconsumed-surface audit (2026-09); the durable `configuration_audit.audit_kind` rows remain the owner of
-  catalog audit evidence.
+  code were deleted by the unconsumed-surface audit (2026-09); the revert of
+  Slice 2 ([ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md))
+  also removed the `configuration_audit` table with the rest of the
+  control-plane schema, so no durable catalog audit evidence exists until a new
+  activating specification re-introduces it.
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -939,8 +949,8 @@ decisions 0010, 0012, and 0013, the project script library of
 [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md),
 the MCP and kernel detail of decision 0027, the rich MIME/raw kernel output
 projection direction of ADR 0034, and the architecture 22 provider work that
-remains not activated after Slice 2: the canonical `responses` driver,
-`SafeHeader` live wire injection, and the user-kind parser. It begins only
+remains not activated after the Slice 2 revert: the canonical `responses`
+driver, `SafeHeader` live wire injection, and the user-kind parser. It begins only
 after its approved implementation specification declares crates,
 DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
 outcome evidence; that activating change also adds the kernel contract families
@@ -1027,8 +1037,10 @@ The v1 implementation phase is ready to claim architectural completion only when
 Post-M4 package status uses separate terms: architecture documents are
 `Documentation-approved`, implementation remains not authorized, and evidence
 is `Planned` unless an exact artifact and observed result is cited. The immutable
-`m4plus_concept.md` is research provenance and is not edited or used as an
-implementation acceptance target.
+`m4plus_concept.md` is research provenance and is not used as an implementation
+acceptance target; apart from the Slice 2 revert annotation recorded by
+[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), its
+research content is not edited.
 
 The ordinary M5-M9 delivery track remains the historical delivery sequence.
 Its Plan/Build policy wording is superseded by ADR 0017/0018 for the accepted
@@ -1847,12 +1859,14 @@ profile, quality-policy target, or implementation milestone.
 - autonomous harness goal mode and work/requeue after client disconnection
   (architectures 26/28/18);
 - consolidated RLM packaging (architectures 17/24); and
-- the delivery mapping of the thirteen directions: the control-plane items are
-  activated by Slice 2 (ADR 0037), the harness items (autonomous harness goal
-  mode and work/requeue after client disconnection) by the Slice 3 harness
-  activation, export and cross-workspace clone/rebind by the Slice 4
-  UI-foundation activation, and the RLM-packaging boundary by the same slice's
-  package boundary.
+- the delivery mapping of the thirteen directions: the control-plane items were
+  activated by Slice 2 (ADR 0037) and were reverted by
+  [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so
+  they are again accepted directions awaiting a new activating specification;
+  the harness items (autonomous harness goal mode and work/requeue after client
+  disconnection) by the Slice 3 harness activation, export and cross-workspace
+  clone/rebind by the Slice 4 UI-foundation activation, and the RLM-packaging
+  boundary by the same slice's package boundary.
 
 ### Exit criteria
 
