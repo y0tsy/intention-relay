@@ -492,23 +492,17 @@ fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
 }
 
 #[test]
-fn glob_matches_fail_closed_on_symlinks_and_stay_deterministic() {
+fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     let dir = fixture_dir("glob-determinism");
     std::fs::create_dir(dir.path().join("real")).unwrap();
     std::fs::write(dir.path().join("target.txt"), "x").unwrap();
     std::fs::write(dir.path().join("real/deep.txt"), "x").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
-        symlink(dir.path().join("target.txt"), dir.path().join("alias.txt")).unwrap();
-        symlink(dir.path().join("real"), dir.path().join("linked-dir")).unwrap();
-    }
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
     let service = ToolService::new(workspace);
-    for pattern in ["*.txt", "**/*.txt", "{target,alias}.txt"] {
+    for pattern in ["*.txt", "**/*.txt", "real/*.txt", "{target,deep}*"] {
         let result = service
             .dispatch_with_cancellation(
                 ToolCallId::new(),
@@ -522,14 +516,6 @@ fn glob_matches_fail_closed_on_symlinks_and_stay_deterministic() {
             unreachable!("non-glob result")
         };
         assert!(!result.truncated, "unexpected truncation for: {pattern}");
-        for path in &result.paths {
-            let value = path.as_str();
-            assert_ne!(value, "alias.txt", "symlink alias reported for: {pattern}");
-            assert!(
-                !value.contains("linked-dir"),
-                "symlinked directory traversed for: {pattern}"
-            );
-        }
         // The reported subset is sorted and duplicate-free on every replay.
         let mut sorted = result.paths.clone();
         sorted.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -570,7 +556,7 @@ fn bounded_sources_report_truncation_only_past_the_output_bound() {
 }
 
 #[test]
-fn grep_does_not_follow_symlinks_or_search_directories() {
+fn grep_file_scope_rejects_directories_and_follows_file_links() {
     let dir = fixture_dir("search-links");
     std::fs::write(dir.path().join("target.txt"), "needle").unwrap();
     std::fs::create_dir(dir.path().join("folder")).unwrap();
@@ -581,76 +567,44 @@ fn grep_does_not_follow_symlinks_or_search_directories() {
     )
     .unwrap();
     let service = ToolService::new(workspace);
-    for path in ["folder", "link.txt"] {
-        #[cfg(windows)]
-        if path == "link.txt" {
-            continue;
-        }
-        let error = service
+    // A directory is not a valid explicit file scope.
+    let error = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("needle").unwrap(),
+                path: Some(WorkspaceRelativePathDto::parse("folder").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("folder").unwrap(),
+                }),
+            }),
+            CancellationSignal::new(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "tool_search_failed");
+    // An explicitly addressed file link is followed like any other path.
+    #[cfg(unix)]
+    {
+        let result = service
             .dispatch_with_cancellation(
                 ToolCallId::new(),
                 ToolInput::Grep(GrepInput {
                     pattern: BoundedText::new("needle").unwrap(),
-                    path: Some(WorkspaceRelativePathDto::parse(path).unwrap()),
+                    path: Some(WorkspaceRelativePathDto::parse("link.txt").unwrap()),
                     scope: Some(GrepScope::File {
-                        path: WorkspaceRelativePathDto::parse(path).unwrap(),
+                        path: WorkspaceRelativePathDto::parse("link.txt").unwrap(),
                     }),
                 }),
                 CancellationSignal::new(),
             )
-            .unwrap_err();
-        assert!(matches!(
-            error.code(),
-            "tool_search_failed" | "workspace_path_symlink"
-        ));
+            .unwrap();
+        let ToolResult::Grep(result) = result else {
+            unreachable!("non-grep result")
+        };
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].path.as_str(), "link.txt");
+        assert!(!result.truncated);
     }
-}
-
-#[test]
-#[cfg(unix)]
-fn write_through_dangling_final_symlink_is_rejected_without_outside_effects() {
-    use std::os::unix::fs::symlink;
-
-    let root_dir = fixture_dir("dangling-write");
-    let outside_dir = tempfile::Builder::new()
-        .prefix("intention-tools-dangling-outside-")
-        .tempdir()
-        .expect("outside temporary directory");
-    let escape_target = outside_dir.path().join("escape.txt");
-    symlink(&escape_target, root_dir.path().join("dangling")).expect("dangling symlink");
-
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    let service = ToolService::new(workspace);
-
-    let error = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Write(WriteInput {
-                path: WorkspaceRelativePathDto::parse("dangling").expect("path"),
-                content: BoundedText::new("must not escape").expect("content"),
-                expected_content: None,
-            }),
-            CancellationSignal::new(),
-        )
-        .expect_err("dangling final symlink must fail closed");
-    assert_eq!(error.code(), "workspace_path_symlink");
-
-    // No file may be created at the link target outside the workspace, and
-    // the write must not replace the in-workspace link itself.
-    assert!(
-        std::fs::symlink_metadata(&escape_target).is_err(),
-        "write escaped through dangling final symlink"
-    );
-    assert!(
-        std::fs::symlink_metadata(root_dir.path().join("dangling"))
-            .expect("link metadata")
-            .file_type()
-            .is_symlink(),
-        "in-workspace link was modified by rejected write"
-    );
 }
 
 #[test]
@@ -821,7 +775,7 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
             CancellationSignal::new(),
         )
         .expect_err("write failure");
-    assert_eq!(write_error.code(), "workspace_parent_unavailable");
+    assert_eq!(write_error.code(), "tool_write_failed");
 
     let edit_missing = service
         .dispatch_with_cancellation(
@@ -1092,7 +1046,7 @@ fn glob_empty_and_grep_read_failure_are_typed() {
             CancellationSignal::new(),
         )
         .unwrap_err();
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_search_failed");
 }
 
 #[test]
@@ -1687,7 +1641,7 @@ fn exact_typed_errors_cover_search_edit_and_spawn_failures() {
             CancellationSignal::new(),
         )
         .unwrap_err();
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_search_failed");
     let error = service
         .dispatch_with_cancellation(
             ToolCallId::new(),

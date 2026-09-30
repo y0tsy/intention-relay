@@ -921,7 +921,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
             ModelRunFactInputDto::ToolResultRecorded {
                 outcome: ToolResultOutcomeDto::Failed { failure },
                 ..
-            } if failure.code() == "workspace_path_unavailable"
+            } if failure.code() == "tool_read_failed"
         )),
         "the missing-file tool result is a durable typed failure"
     );
@@ -929,7 +929,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         facts.iter().any(|fact| matches!(
             fact.input(),
             ModelRunFactInputDto::Failed { failure }
-                if failure.code() == "workspace_path_unavailable"
+                if failure.code() == "tool_read_failed"
         )),
         "the run terminalizes with the durable tool failure"
     );

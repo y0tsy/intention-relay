@@ -70,7 +70,7 @@ fn invocation_constructor_and_context_path_metadata_are_checked() {
             }),
         })
         .unwrap_err();
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_read_failed");
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn metadata_builders_and_projection_cover_all_result_shapes() {
             }),
         })
         .unwrap_err();
-    assert_eq!(envelope.code(), "workspace_path_unavailable");
+    assert_eq!(envelope.code(), "tool_search_failed");
 
     let bare = ToolResult::Edit(intention_tools::WriteResult { bytes: 4 });
     assert_eq!(bare.tool_id().as_str(), "edit");

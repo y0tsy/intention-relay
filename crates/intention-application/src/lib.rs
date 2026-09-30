@@ -1661,8 +1661,8 @@ mod tests {
     #[test]
     fn failure_documents_carry_the_terminal_discriminator_and_code() {
         assert_eq!(
-            canonical_failure_document("failed", "workspace_path_unavailable"),
-            "{\"result\":\"failed\",\"value\":{\"code\":\"workspace_path_unavailable\"}}"
+            canonical_failure_document("failed", "tool_read_failed"),
+            "{\"result\":\"failed\",\"value\":{\"code\":\"tool_read_failed\"}}"
         );
         assert_eq!(
             terminal_error_tag(&ErrorDto::validation("tool_cancelled", "x")),

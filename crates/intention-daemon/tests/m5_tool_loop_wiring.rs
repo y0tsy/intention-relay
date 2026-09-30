@@ -408,12 +408,12 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
         ModelRunFactInputDto::ToolResultRecorded {
             call_id,
             outcome: ToolResultOutcomeDto::Failed { failure },
-        } if *call_id == call.call_id() && failure.code() == "workspace_path_unavailable"
+        } if *call_id == call.call_id() && failure.code() == "tool_read_failed"
     ));
     assert!(matches!(
         facts[3].input(),
         ModelRunFactInputDto::Failed { failure }
-            if failure.code() == "workspace_path_unavailable"
+            if failure.code() == "tool_read_failed"
     ));
     let replay = facade
         .load_current_run_replay_for_daemon(session_id, run_id)

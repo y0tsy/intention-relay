@@ -8,7 +8,7 @@
 )]
 
 use intention_domain::WorkspaceRootDto;
-use intention_types::{ErrorDetailDto, WorkspaceRelativePathDto};
+use intention_types::WorkspaceRelativePathDto;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 struct TempDir(std::path::PathBuf);
@@ -30,28 +30,11 @@ impl TempDir {
     }
 }
 
-/// Creates a file symbolic link with the platform-native API.
-fn symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-    }
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_file(target, link)
-    }
-}
-
-/// Creates a directory symbolic link with the platform-native API.
-fn symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(target, link)
-    }
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(target, link)
-    }
+fn resolve(root: &std::path::Path) -> intention_workspace::WorkspaceRoot {
+    intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace")
 }
 
 struct CwdGuard(std::path::PathBuf);
@@ -79,146 +62,97 @@ fn cwd_guard() -> MutexGuard<'static, ()> {
 }
 
 #[test]
-fn relative_resolution_does_not_depend_on_process_cwd() {
+fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
     let root = TempDir::new("contract");
     std::fs::write(root.path().join("file.txt"), "ok").expect("file");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
+    let workspace = resolve(root.path());
     let path = WorkspaceRelativePathDto::parse("file.txt").expect("path");
     let _guard = cwd_guard();
     let _cwd = CwdGuard::change_to(&std::env::temp_dir());
-    assert!(workspace.resolve_path(&path).is_ok());
-}
-
-#[test]
-fn missing_path_is_safe_and_cwd_changes_do_not_escape_root() {
-    let root = std::env::temp_dir().join(format!("intention-workspace-m5-{}", std::process::id()));
-    std::fs::create_dir_all(&root).expect("root");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy()).expect("dto"),
-    )
-    .expect("workspace");
-    let missing = WorkspaceRelativePathDto::parse("missing.txt").expect("path");
-    let error = workspace.resolve_path(&missing).expect_err("missing path");
-    assert_eq!(error.code(), "workspace_path_unavailable");
-    assert!(matches!(
-        error.detail(),
-        Some(ErrorDetailDto::MissingWorkspacePath { path }) if path == &missing
-    ));
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn traversal_and_absolute_outside_paths_are_rejected() {
-    let root = std::env::temp_dir().join(format!(
-        "intention-workspace-contract-boundary-{}",
-        std::process::id()
-    ));
-    let outside = std::env::temp_dir().join(format!(
-        "intention-workspace-contract-outside-file-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("root");
-    std::fs::write(&outside, "outside").expect("outside file");
-    assert!(WorkspaceRelativePathDto::parse("../outside-file").is_err());
-    assert!(WorkspaceRelativePathDto::parse(outside.to_string_lossy()).is_err());
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_file(outside);
-}
-
-#[test]
-fn execute_cwd_is_explicit_workspace_root() {
-    let root = std::env::temp_dir().join(format!(
-        "intention-workspace-contract-cwd-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("temporary workspace");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    assert_eq!(workspace.execute_cwd(), workspace.canonical_path());
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn symlink_to_outside_is_rejected() {
-    let root = std::env::temp_dir().join(format!(
-        "intention-workspace-contract-link-{}",
-        std::process::id()
-    ));
-    let outside = std::env::temp_dir().join(format!(
-        "intention-workspace-contract-outside-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&outside);
-    std::fs::create_dir_all(&root).expect("root");
-    std::fs::create_dir_all(&outside).expect("outside");
-    symlink_dir(&outside, &root.join("link")).expect("symlink");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    let path = WorkspaceRelativePathDto::parse("link").expect("path");
-    assert!(workspace.resolve_path(&path).is_err());
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(outside);
-}
-
-#[test]
-fn sibling_prefix_and_dangling_final_symlink_fail_closed() {
-    let root = TempDir::new("boundary");
-    let sibling = root.path().with_file_name(format!(
-        "{}-other",
-        root.path().file_name().unwrap().to_string_lossy()
-    ));
-    std::fs::create_dir_all(&sibling).expect("sibling");
-    std::fs::write(sibling.join("file.txt"), "x").expect("sibling file");
-    symlink_file(&root.path().join("missing"), &root.path().join("dangling"))
-        .expect("dangling symlink");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
-    assert!(std::fs::canonicalize(sibling.join("file.txt")).is_ok());
-    let dangling = WorkspaceRelativePathDto::parse("dangling").expect("path");
     assert_eq!(
-        workspace
-            .resolve_path(&dangling)
-            .expect_err("dangling")
-            .code(),
-        "workspace_path_symlink"
-    );
-    assert_eq!(
-        workspace
-            .resolve_new_file_path(&dangling)
-            .expect_err("dangling final symlink")
-            .code(),
-        "workspace_path_symlink"
+        workspace.resolve_path(&path),
+        workspace.root().join("file.txt")
     );
 }
 
 #[test]
-fn unavailable_path_errors_do_not_disclose_the_absolute_root() {
-    let root = TempDir::new("safe-errors");
-    let workspace = intention_workspace::WorkspaceRoot::resolve(
-        &WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned()).expect("root"),
-    )
-    .expect("workspace");
+fn missing_paths_are_addressed_as_joined_paths() {
+    let root = TempDir::new("missing");
+    let workspace = resolve(root.path());
     let missing = WorkspaceRelativePathDto::parse("missing/leaf.txt").expect("path");
-    let path_error = workspace.resolve_path(&missing).expect_err("missing path");
-    let new_file_error = workspace
-        .resolve_new_file_path(&missing)
-        .expect_err("missing parent");
-    // Safe missing-path outcome: the rendered error carries only the logical
-    // relative path and fixed safe text, never the absolute workspace root.
-    let root_text = root.path().to_string_lossy().into_owned();
-    for error in [path_error, new_file_error] {
-        assert!(!format!("{error:?}").contains(&root_text));
-    }
+    assert_eq!(
+        workspace.resolve_path(&missing),
+        workspace.root().join("missing/leaf.txt")
+    );
+    assert_eq!(
+        workspace.resolve_new_file_path(&missing),
+        workspace.root().join("missing/leaf.txt")
+    );
+}
+
+#[test]
+fn new_file_resolution_shares_the_join_rule() {
+    let root = TempDir::new("new-file");
+    let workspace = resolve(root.path());
+    let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
+    assert_eq!(
+        workspace.resolve_new_file_path(&path),
+        workspace.root().join("new.txt")
+    );
+}
+
+#[test]
+fn unnormalized_and_absolute_input_never_reaches_the_anchor() {
+    let root = TempDir::new("input-validation");
+    let workspace = resolve(root.path());
+    // The DTO owns input validation; the anchor sees only normalized relative
+    // paths. Absolute paths and `..` are not contained anywhere below.
+    assert!(WorkspaceRelativePathDto::parse("../outside-file").is_err());
+    let absolute = std::env::temp_dir().join("intention-workspace-contract-outside-file");
+    assert!(WorkspaceRelativePathDto::parse(absolute.to_string_lossy().into_owned()).is_err());
+    // The join rule the anchor exposes adds nothing and strips nothing: an
+    // absolute path stays absolute.
+    assert_eq!(workspace.root().join(&absolute), absolute);
+}
+
+#[test]
+fn execute_cwd_is_the_declared_root() {
+    let root = TempDir::new("cwd");
+    let workspace = resolve(root.path());
+    assert_eq!(workspace.execute_cwd(), workspace.root());
+    assert_eq!(
+        workspace.execute_cwd(),
+        std::fs::canonicalize(root.path()).expect("canonical root")
+    );
+}
+
+#[test]
+fn execute_cwd_does_not_depend_on_process_cwd() {
+    let root = TempDir::new("cwd-independent");
+    let other = TempDir::new("cwd-other");
+    let workspace = resolve(root.path());
+    let _guard = cwd_guard();
+    let _cwd = CwdGuard::change_to(other.path());
+    assert_eq!(workspace.execute_cwd(), workspace.root());
+}
+
+#[test]
+fn unavailable_and_non_directory_roots_fail_safely() {
+    let missing = std::env::temp_dir().join(format!(
+        "intention-workspace-missing-{}",
+        std::process::id()
+    ));
+    let missing_dto =
+        WorkspaceRootDto::parse(missing.to_string_lossy().into_owned()).expect("root");
+    let error =
+        intention_workspace::WorkspaceRoot::resolve(&missing_dto).expect_err("missing root");
+    assert_eq!(error.code(), "workspace_root_unavailable");
+
+    let file =
+        std::env::temp_dir().join(format!("intention-workspace-file-{}", std::process::id()));
+    std::fs::write(&file, "not a directory").expect("file root");
+    let file_dto = WorkspaceRootDto::parse(file.to_string_lossy().into_owned()).expect("root");
+    let error = intention_workspace::WorkspaceRoot::resolve(&file_dto).expect_err("file root");
+    assert_eq!(error.code(), "workspace_root_not_directory");
+    let _ = std::fs::remove_file(file);
 }

@@ -26,7 +26,7 @@ fn fixture() -> TempDir {
 
 #[cfg(unix)]
 #[test]
-fn rejects_read_write_edit_symlinks() {
+fn read_write_edit_follow_symlink_paths() {
     use intention_tools::{EditInput, ReadInput, WriteInput};
     use std::os::unix::fs::symlink;
     let dir = fixture();
@@ -34,43 +34,46 @@ fn rejects_read_write_edit_symlinks() {
     std::fs::write(&target, "old").unwrap_or_else(|_| unreachable!("seed"));
     symlink(&target, dir.path().join("link")).unwrap_or_else(|_| unreachable!("link"));
     let s = service(&dir);
+    // A symbolic link is ordinary filesystem material: an explicitly
+    // addressed link is followed like any other path.
     let read = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Read(ReadInput { path: path("link") }),
         CancellationSignal::new(),
     );
-    assert!(read.is_err());
+    assert!(
+        matches!(read, Ok(ToolResult::Read(value)) if value.text.as_str() == "old"),
+        "read follows the addressed link"
+    );
     let write = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Write(WriteInput {
             path: path("link"),
-            content: text("x"),
+            content: text("written"),
             expected_content: None,
         }),
         CancellationSignal::new(),
     );
-    assert_eq!(
-        write.as_ref().err().map(|e| e.code()),
-        Some("workspace_path_symlink")
-    );
+    assert!(write.is_ok(), "write follows the addressed link");
     let edit = s.dispatch_with_cancellation(
         ToolCallId::new(),
         ToolInput::Edit(EditInput {
             path: path("link"),
-            old: text("old"),
-            new: text("new"),
+            old: text("written"),
+            new: text("edited"),
             expected_content: None,
         }),
         CancellationSignal::new(),
     );
+    assert!(edit.is_ok(), "edit follows the addressed link");
     assert_eq!(
-        edit.as_ref().err().map(|e| e.code()),
-        Some("workspace_path_symlink")
+        std::fs::read_to_string(&target).unwrap_or_else(|_| unreachable!("target readable")),
+        "edited"
     );
 }
 
 #[test]
-fn direct_grep_rejects_missing_and_directory() {
+fn direct_grep_rejects_missing_and_directory_paths() {
     let dir = fixture();
     let s = service(&dir);
     for name in ["missing", "ok.txt"] {
@@ -87,17 +90,15 @@ fn direct_grep_rejects_missing_and_directory() {
             }),
             CancellationSignal::new(),
         );
-        let expected = if name == "missing" {
-            "workspace_path_unavailable"
-        } else {
-            "tool_search_failed"
-        };
-        assert_eq!(result.as_ref().err().map(|e| e.code()), Some(expected));
+        assert_eq!(
+            result.as_ref().err().map(|e| e.code()),
+            Some("tool_search_failed")
+        );
     }
 }
 
 #[test]
-fn glob_filters_symlink_and_invalid_pattern() {
+fn glob_accepts_patterns_and_rejects_traversal() {
     let dir = fixture();
     std::fs::write(dir.path().join("ok.txt"), "x").unwrap_or_else(|_| unreachable!("seed"));
     let s = service(&dir);

@@ -82,7 +82,7 @@ fn grep_scopes_cover_file_directory_workspace_and_missing_scope() {
             CancellationSignal::new(),
         )
         .unwrap_err();
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_search_failed");
 }
 
 #[test]

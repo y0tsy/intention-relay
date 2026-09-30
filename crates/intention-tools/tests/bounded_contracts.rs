@@ -285,8 +285,8 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
         CancellationSignal::new(),
     );
     assert!(
-        matches!(missing, Err(error) if error.code() == "workspace_path_unavailable"),
-        "a missing pattern-only target fails closed at workspace resolution"
+        matches!(missing, Err(error) if error.code() == "tool_search_failed"),
+        "a missing pattern-only target fails with a typed search failure"
     );
 
     let no_path = service.dispatch_with_cancellation(

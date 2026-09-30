@@ -1,176 +1,80 @@
-//! WorkspaceRoot resolution and fail-closed filesystem policy.
+//! WorkspaceRoot addressing anchor.
 //!
-//! This crate is the mandatory workspace hook boundary owner: the
-//! application applies [`WorkspaceRoot`] between the
-//! `BeforeWorkspaceResolution` and `AfterWorkspaceResolution` hook phases,
-//! and every relative path resolves from the authorized root fail-closed,
-//! independent of the process CWD. Hook phase contexts may identify the
-//! workspace only through safe identity — the daemon-owned
-//! `intention_types::WorkspaceId` — never through this crate's canonical
-//! root path, and resolution errors never disclose it. This crate owns no
-//! persistence and no publication; it only resolves and validates.
+//! This crate owns the workspace hook boundary: the application applies
+//! [`WorkspaceRoot`] between the `BeforeWorkspaceResolution` and
+//! `AfterWorkspaceResolution` hook phases. The root is an addressing anchor: a
+//! relative path addresses the root joined with that path, child processes
+//! start in the root, and a pathless search addresses the root. It is not a
+//! security boundary — absolute paths and `..` are not contained, and symbolic
+//! links are ordinary filesystem material (ADR 0047). Hook phase contexts may
+//! identify the workspace only through safe identity — the daemon-owned
+//! `intention_types::WorkspaceId` — never through this crate's root path. This
+//! crate owns no persistence and no publication.
 
 use std::path::{Path, PathBuf};
 
 use intention_domain::WorkspaceRootDto;
-use intention_types::{DtoResult, ErrorDetailDto, ErrorDto, WorkspaceRelativePathDto};
+use intention_types::{DtoResult, ErrorDto, WorkspaceRelativePathDto};
 
-/// An authorized, canonical workspace root.
+/// A workspace root used as an addressing anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceRoot {
-    canonical: PathBuf,
+    root: PathBuf,
 }
 
 impl WorkspaceRoot {
     /// Resolves the declared root without consulting process CWD.
     ///
+    /// The root is canonicalized once at construction so it stays a stable
+    /// absolute anchor even if the process CWD changes later; that is an
+    /// addressing guarantee, not a containment check.
+    ///
     /// # Errors
     ///
     /// Returns a safe validation error when the root is unavailable or is not a directory.
     pub fn resolve(dto: &WorkspaceRootDto) -> DtoResult<Self> {
-        let canonical = std::fs::canonicalize(Path::new(dto.as_str())).map_err(|_| {
+        let root = std::fs::canonicalize(Path::new(dto.as_str())).map_err(|_| {
             ErrorDto::validation(
                 "workspace_root_unavailable",
                 "workspace root is unavailable",
             )
         })?;
-        if !canonical.is_dir() {
+        if !root.is_dir() {
             return Err(ErrorDto::validation(
                 "workspace_root_not_directory",
                 "workspace root is not a directory",
             ));
         }
-        Ok(Self { canonical })
+        Ok(Self { root })
     }
 
-    /// Resolves a logical relative path and verifies canonical containment.
+    /// Addresses a logical relative path under the root.
     ///
-    /// # Errors
-    ///
-    /// Returns a safe validation error when the path is unavailable or outside the root.
-    pub fn resolve_path(&self, path: &WorkspaceRelativePathDto) -> DtoResult<PathBuf> {
-        let candidate = self.canonical.join(path.as_str());
-        if contains_symlink_component(&candidate, &self.canonical) {
-            return Err(ErrorDto::validation(
-                "workspace_path_symlink",
-                "workspace path contains a symbolic link",
-            ));
-        }
-        let canonical = std::fs::canonicalize(&candidate).map_err(|_| {
-            unavailable_path_error(
-                "workspace_path_unavailable",
-                "workspace path is unavailable",
-                path,
-            )
-        })?;
-        // `starts_with` is component-aware, unlike string-prefix checks. Keep
-        // the root itself valid, but reject siblings such as `root-other`.
-        // This is deliberately fail-closed: only canonical paths inside the
-        // authorized root are returned.
-        if canonical == self.canonical || canonical.starts_with(&self.canonical) {
-            Ok(canonical)
-        } else {
-            Err(ErrorDto::validation(
-                "workspace_path_outside_root",
-                "workspace path is outside the workspace root",
-            ))
-        }
+    /// This is exactly `root.join(path)`: the path is addressed as given, not
+    /// canonicalized and not contained (ADR 0047).
+    #[must_use]
+    pub fn resolve_path(&self, path: &WorkspaceRelativePathDto) -> PathBuf {
+        self.root.join(path.as_str())
     }
 
-    /// Resolves the parent of a new file, preserving the final missing component.
-    /// Every existing component is canonicalized, so symlink traversal fails closed.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe validation error when the parent is missing or outside the workspace.
-    pub fn resolve_new_file_path(&self, path: &WorkspaceRelativePathDto) -> DtoResult<PathBuf> {
-        let logical = Path::new(path.as_str());
-        let candidate = self.canonical.join(logical);
-        if contains_symlink_component(&candidate, &self.canonical) {
-            return Err(ErrorDto::validation(
-                "workspace_path_symlink",
-                "workspace path contains a symbolic link",
-            ));
-        }
-        let file_name = logical.file_name().ok_or_else(|| {
-            unavailable_path_error(
-                "workspace_path_unavailable",
-                "workspace path is unavailable",
-                path,
-            )
-        })?;
-        let parent = logical.parent().unwrap_or_else(|| Path::new("."));
-        let parent = self.canonical.join(parent);
-        let canonical_parent = std::fs::canonicalize(parent).map_err(|_| {
-            unavailable_path_error(
-                "workspace_parent_unavailable",
-                "workspace parent is unavailable",
-                path,
-            )
-        })?;
-        if canonical_parent != self.canonical && !canonical_parent.starts_with(&self.canonical) {
-            return Err(ErrorDto::validation(
-                "workspace_path_outside_root",
-                "workspace path is outside the workspace root",
-            ));
-        }
-        Ok(canonical_parent.join(file_name))
+    /// Addresses a new file under the root with the same join rule as
+    /// [`Self::resolve_path`].
+    #[must_use]
+    pub fn resolve_new_file_path(&self, path: &WorkspaceRelativePathDto) -> PathBuf {
+        self.root.join(path.as_str())
     }
 
     /// Prepares an execute working directory, explicitly independent of CWD.
     #[must_use]
     pub fn execute_cwd(&self) -> &Path {
-        &self.canonical
+        &self.root
     }
 
-    /// Returns the canonical root for adapters that need an observation.
+    /// Returns the root anchor for adapters that need an observation.
     #[must_use]
-    pub fn canonical_path(&self) -> &Path {
-        &self.canonical
+    pub fn root(&self) -> &Path {
+        &self.root
     }
-}
-
-fn contains_symlink_component(path: &Path, root: &Path) -> bool {
-    let relative = match path.strip_prefix(root) {
-        Ok(relative) => relative,
-        Err(_) => return true,
-    };
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => return true,
-            Ok(_) => {}
-            Err(_) => {
-                // An absent final component is valid for new-file resolution;
-                // existing components are canonicalized below. A dangling
-                // symlink, however, is detectable by metadata on the link
-                // itself and must fail closed.
-                return false;
-            }
-        }
-    }
-    false
-}
-
-/// Builds the safe missing-path error with its detail, falling back to a plain
-/// validation error if the detailed form cannot be constructed. The fallback
-/// is unreachable at the current call sites (the constants are always valid)
-/// but keeps the boundary fail-closed against future error-DTO changes.
-fn unavailable_path_error(
-    code: &'static str,
-    message: &'static str,
-    path: &WorkspaceRelativePathDto,
-) -> ErrorDto {
-    ErrorDto::with_detail(
-        code,
-        intention_types::ErrorCategoryDto::Validation,
-        message,
-        intention_types::ErrorRetryDto::Manual,
-        None,
-        ErrorDetailDto::MissingWorkspacePath { path: path.clone() },
-    )
-    .unwrap_or_else(|_| ErrorDto::validation(code, message))
 }
 
 #[cfg(test)]
@@ -197,66 +101,88 @@ mod tests {
         root
     }
 
-    /// Creates a file symbolic link with the platform-native API.
-    fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(target, link)
-        }
-        #[cfg(windows)]
-        {
-            std::os::windows::fs::symlink_file(target, link)
-        }
+    fn workspace(root: &Path) -> WorkspaceRoot {
+        WorkspaceRoot::resolve(
+            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("workspace root"),
+        )
+        .expect("workspace resolves")
     }
 
-    /// Creates a directory symbolic link with the platform-native API.
-    fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(target, link)
-        }
-        #[cfg(windows)]
-        {
-            std::os::windows::fs::symlink_dir(target, link)
-        }
-    }
     #[test]
-    fn resolves_relative_file_and_is_cwd_independent() {
+    fn addresses_relative_paths_by_joining_the_root() {
         let root = temp_root();
         fs::write(root.join("file.txt"), "x").expect("write temporary file");
-        let dto =
-            WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("workspace root");
-        let ws = WorkspaceRoot::resolve(&dto).expect("workspace");
-        let p = WorkspaceRelativePathDto::parse("file.txt").expect("path");
+        let ws = workspace(&root);
         assert_eq!(
-            ws.resolve_path(&p).expect("resolved path"),
-            fs::canonicalize(root.join("file.txt")).expect("canonical file")
+            ws.resolve_path(&WorkspaceRelativePathDto::parse("file.txt").expect("path")),
+            ws.root().join("file.txt")
+        );
+        assert_eq!(
+            ws.resolve_new_file_path(
+                &WorkspaceRelativePathDto::parse("dir/new.txt").expect("path")
+            ),
+            ws.root().join("dir").join("new.txt")
         );
         let _ = fs::remove_dir_all(root);
     }
+
     #[test]
-    fn rejects_missing_and_outside_paths() {
+    fn missing_paths_are_addressed_as_joined_paths() {
         let root = temp_root();
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let missing = WorkspaceRelativePathDto::parse("missing").expect("path");
-        let error = ws.resolve_path(&missing).expect_err("missing path");
-        assert_eq!(error.code(), "workspace_path_unavailable");
-        assert!(matches!(
-            error.detail(),
-            Some(ErrorDetailDto::MissingWorkspacePath { path }) if path == &missing
-        ));
-        let outside = std::env::temp_dir().join("outside-intention");
-        fs::write(&outside, "x").expect("outside file");
-        let link = root.join("link");
-        symlink_file(&outside, &link).expect("symlink");
-        assert!(
-            ws.resolve_path(&WorkspaceRelativePathDto::parse("link").expect("link path"))
-                .is_err()
+        let ws = workspace(&root);
+        let missing = WorkspaceRelativePathDto::parse("missing/leaf.txt").expect("path");
+        assert_eq!(
+            ws.resolve_path(&missing),
+            ws.root().join("missing/leaf.txt")
         );
-        let _ = fs::remove_file(outside);
+        assert_eq!(
+            ws.resolve_new_file_path(&missing),
+            ws.root().join("missing/leaf.txt")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unnormalized_or_absolute_input_is_rejected_by_the_dto() {
+        // WorkspaceRelativePathDto owns input validation before addressing; the
+        // anchor itself only joins (ADR 0047).
+        let root = temp_root();
+        let ws = workspace(&root);
+        assert_eq!(
+            WorkspaceRelativePathDto::parse("../sibling.txt")
+                .expect_err("parent input is not a logical relative path")
+                .code(),
+            "invalid_workspace_relative_path"
+        );
+        let absolute = std::env::temp_dir().join("intention-workspace-outside.txt");
+        assert_eq!(
+            WorkspaceRelativePathDto::parse(absolute.to_string_lossy().into_owned())
+                .expect_err("absolute input is not a logical relative path")
+                .code(),
+            "invalid_workspace_relative_path"
+        );
+        // An absolute path joined to the anchor stays absolute: the join
+        // contains nothing.
+        assert_eq!(ws.root().join(&absolute), absolute);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn root_is_a_stable_anchor_when_process_cwd_changes() {
+        let root = temp_root();
+        let other = temp_root();
+        let ws = workspace(&root);
+        assert_eq!(ws.root(), fs::canonicalize(&root).expect("canonical root"));
+        assert_eq!(ws.execute_cwd(), ws.root());
+        let original = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&other).expect("change cwd");
+        assert_eq!(
+            ws.resolve_path(&WorkspaceRelativePathDto::parse("file.txt").expect("path")),
+            ws.root().join("file.txt")
+        );
+        assert_eq!(ws.execute_cwd(), ws.root());
+        std::env::set_current_dir(original).expect("restore cwd");
+        let _ = fs::remove_dir_all(other);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -286,196 +212,5 @@ mod tests {
             "workspace_root_not_directory"
         );
         let _ = fs::remove_file(file);
-    }
-
-    #[test]
-    fn rejects_invalid_new_file_paths_and_outside_parents() {
-        let root = temp_root();
-        assert_eq!(
-            WorkspaceRelativePathDto::parse(".")
-                .expect_err("invalid path")
-                .code(),
-            "invalid_workspace_relative_path"
-        );
-
-        let outside =
-            std::env::temp_dir().join(format!("intention-workspace-parent-{}", std::process::id()));
-        fs::create_dir_all(&outside).expect("outside parent");
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        symlink_dir(&outside, &root.join("outside")).expect("symlink");
-        let path = WorkspaceRelativePathDto::parse("outside/new.txt").expect("path");
-        // The parent is a symbolic link, so resolution must reject it
-        // before it can be followed out of the root.
-        assert_eq!(
-            ws.resolve_new_file_path(&path)
-                .expect_err("outside parent")
-                .code(),
-            "workspace_path_symlink"
-        );
-        let _ = fs::remove_dir_all(&outside);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn resolves_new_file_when_parent_exists() {
-        let root = temp_root();
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
-        assert_eq!(
-            ws.resolve_new_file_path(&path).expect("new file"),
-            ws.canonical_path().join("new.txt")
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rejects_new_file_with_missing_parent() {
-        let root = temp_root();
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let error = ws
-            .resolve_new_file_path(
-                &WorkspaceRelativePathDto::parse("missing/new.txt").expect("path"),
-            )
-            .expect_err("missing parent");
-        assert_eq!(error.code(), "workspace_parent_unavailable");
-        assert!(matches!(
-            error.detail(),
-            Some(ErrorDetailDto::MissingWorkspacePath { path }) if path == &WorkspaceRelativePathDto::parse("missing/new.txt").expect("path")
-        ));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn execute_cwd_is_the_canonical_root() {
-        let root = temp_root();
-        let dto = WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root");
-        let ws = WorkspaceRoot::resolve(&dto).expect("workspace");
-        assert_eq!(ws.execute_cwd(), ws.canonical_path());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn execute_cwd_does_not_depend_on_changed_process_cwd() {
-        let root = temp_root();
-        let other = temp_root();
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let original = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(&other).expect("change cwd");
-        assert_eq!(ws.execute_cwd(), ws.canonical_path());
-        std::env::set_current_dir(original).expect("restore cwd");
-        let _ = fs::remove_dir_all(other);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rejects_symlink_paths_including_in_root_links() {
-        let root = temp_root();
-        fs::write(root.join("target.txt"), "x").expect("target");
-        let outside = temp_root();
-        fs::write(outside.join("secret.txt"), "secret").expect("outside target");
-        symlink_file(&root.join("target.txt"), &root.join("inside-link")).expect("link");
-        symlink_file(&outside.join("secret.txt"), &root.join("escape-link")).expect("escape link");
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        assert_eq!(
-            ws.resolve_path(&WorkspaceRelativePathDto::parse("inside-link").expect("path"))
-                .expect_err("symlink path must be rejected")
-                .code(),
-            "workspace_path_symlink"
-        );
-        assert_eq!(
-            ws.resolve_path(&WorkspaceRelativePathDto::parse("escape-link").expect("path"))
-                .expect_err("escape link")
-                .code(),
-            "workspace_path_symlink"
-        );
-        let _ = fs::remove_dir_all(outside);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rejects_symlink_to_directory_outside_root() {
-        let root = temp_root();
-        let outside = std::env::temp_dir().join(format!(
-            "intention-workspace-outside-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&outside).expect("outside directory");
-        symlink_dir(&outside, &root.join("external")).expect("symlink");
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        assert_eq!(
-            ws.resolve_path(&WorkspaceRelativePathDto::parse("external").expect("path"))
-                .expect_err("outside symlink must be rejected")
-                .code(),
-            "workspace_path_symlink"
-        );
-        let _ = fs::remove_dir_all(&outside);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rejects_sibling_prefix_and_dangling_final_symlink() {
-        let root = temp_root();
-        let sibling = root.with_file_name(format!(
-            "{}-other",
-            root.file_name()
-                .expect("temp root has file name")
-                .to_string_lossy()
-        ));
-        fs::create_dir_all(&sibling).expect("sibling");
-        fs::write(sibling.join("file.txt"), "x").expect("sibling file");
-        symlink_file(&root.join("does-not-exist"), &root.join("dangling"))
-            .expect("dangling symlink");
-        let ws = WorkspaceRoot::resolve(
-            &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
-        )
-        .expect("workspace");
-        let sibling_path = WorkspaceRelativePathDto::parse("sibling-placeholder").expect("path");
-        let sibling_candidate = ws
-            .canonical_path()
-            .parent()
-            .expect("resolved root has parent")
-            .join(sibling.file_name().expect("sibling path has file name"))
-            .join("file.txt");
-        assert!(std::fs::canonicalize(sibling_candidate).is_ok());
-        assert_eq!(
-            ws.resolve_path(&sibling_path)
-                .expect_err("missing sibling")
-                .code(),
-            "workspace_path_unavailable"
-        );
-        let dangling = WorkspaceRelativePathDto::parse("dangling").expect("path");
-        assert_eq!(
-            ws.resolve_path(&dangling).expect_err("dangling").code(),
-            "workspace_path_symlink"
-        );
-        // A dangling final symlink must also fail closed for new-file
-        // resolution: the returned path would otherwise be written through
-        // the link to a location outside the authorized root.
-        assert_eq!(
-            ws.resolve_new_file_path(&dangling)
-                .expect_err("dangling final symlink")
-                .code(),
-            "workspace_path_symlink"
-        );
-        let _ = fs::remove_dir_all(sibling);
-        let _ = fs::remove_dir_all(root);
     }
 }

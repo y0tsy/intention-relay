@@ -1757,7 +1757,7 @@ impl ToolService {
 }
 
 fn read_tool(root: &WorkspaceRoot, input: ReadInput) -> DtoResult<ToolResult> {
-    let mut file = std::fs::File::open(root.resolve_path(&input.path)?).map_err(|_| {
+    let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
         intention_types::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
     })?;
     let mut bytes = Vec::new();
@@ -1835,26 +1835,7 @@ fn execute_tool(
 
 fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> {
     let bytes = input.content.as_str().len() as u64;
-    let path = root.resolve_new_file_path(&input.path)?;
-    // Fail closed on any final-component symlink, including dangling links:
-    // `symlink_metadata` inspects the link itself, while `exists` would follow
-    // it and skip this rejection. A missing entry stays writable, and any
-    // other metadata failure is treated conservatively as a conflict.
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(intention_types::ErrorDto::validation(
-                "tool_write_conflict",
-                "workspace file changed before write",
-            ));
-        }
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(intention_types::ErrorDto::validation(
-                "tool_write_conflict",
-                "workspace file changed before write",
-            ));
-        }
-        _ => {}
-    }
+    let path = root.resolve_new_file_path(&input.path);
     if let Some(expected) = input.expected_content.as_ref() {
         // Expected-content equality is checked against a bounded read: a
         // larger file can never equal the bounded expected content and is
@@ -1893,16 +1874,7 @@ fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> 
 }
 
 fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
-    let path = root.resolve_path(&input.path)?;
-    if std::fs::symlink_metadata(&path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(true)
-    {
-        return Err(intention_types::ErrorDto::validation(
-            "tool_edit_conflict",
-            "workspace file changed before edit",
-        ));
-    }
+    let path = root.resolve_path(&input.path);
     // Edit reads the complete target to apply one replacement; the target is
     // therefore size-bounded so a huge file cannot allocate unboundedly
     // (PR24-022).
@@ -1941,15 +1913,6 @@ fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
         ));
     }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
-    if std::fs::symlink_metadata(&path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(true)
-    {
-        return Err(intention_types::ErrorDto::validation(
-            "tool_edit_conflict",
-            "workspace file changed before edit",
-        ));
-    }
     std::fs::write(path, &replacement).map_err(|_| {
         intention_types::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
     })?;
@@ -1960,7 +1923,7 @@ fn edit_tool(root: &WorkspaceRoot, input: EditInput) -> DtoResult<ToolResult> {
 
 fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
     validate_search_pattern(input.pattern.as_str())?;
-    let base = root.canonical_path();
+    let base = root.root();
     let pattern = base
         .join(input.pattern.as_str())
         .to_str()
@@ -1977,12 +1940,6 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
         // the whole search; listing what is safely listable keeps repeated
         // traversals deterministic.
         let Ok(path) = entry else { continue };
-        // Same fail-closed symlink policy as the other file tools: links are
-        // never followed, reported, or resolved into canonical targets, which
-        // also rules out duplicate aliases of one logical file.
-        if contains_symlink_component(base, &path) {
-            continue;
-        }
         let Some(relative) = path.strip_prefix(base).ok().and_then(|p| p.to_str()) else {
             continue;
         };
@@ -2000,31 +1957,6 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
     Ok(ToolResult::Glob(PathsResult { paths, truncated }))
 }
 
-/// Reports whether any component of `path` beneath `root` is a symbolic link.
-///
-/// This mirrors [`intention_workspace`] traversal fail-closed behavior:
-/// unreadable entries are treated as link-bearing so raced-away paths are
-/// excluded rather than leaked through canonicalization.
-fn contains_symlink_component(root: &std::path::Path, path: &std::path::Path) -> bool {
-    let relative = match path.strip_prefix(root) {
-        Ok(relative) => relative,
-        Err(_) => return true,
-    };
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        current.push(component);
-        match std::fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return true;
-                }
-            }
-            Err(_) => return true,
-        }
-    }
-    false
-}
-
 fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
     validate_search_pattern(input.pattern.as_str())?;
     if input.scope.is_some() {
@@ -2034,17 +1966,19 @@ fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
         .path
         .as_ref()
         .map(|path| root.resolve_path(path))
-        .transpose()?
         .ok_or_else(|| {
             intention_types::ErrorDto::validation(
                 "invalid_tool_path",
                 "grep requires a workspace path",
             )
         })?;
-    let metadata = std::fs::symlink_metadata(&path).map_err(|_| {
+    // An explicit file path is addressed as given: `metadata` follows a
+    // symbolic link like any other filesystem path, and only the type
+    // decision happens here.
+    let metadata = std::fs::metadata(&path).map_err(|_| {
         intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !metadata.is_file() {
         return Err(intention_types::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
@@ -2112,14 +2046,17 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
         intention_types::ErrorDto::validation("invalid_tool_path", "grep requires a workspace path")
     })?;
     let (base, single) = match scope {
-        GrepScope::File { path } => (root.resolve_path(&path)?, Some(path)),
-        GrepScope::Directory { path } => (root.resolve_path(&path)?, None),
-        GrepScope::Workspace => (root.canonical_path().to_path_buf(), None),
+        GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
+        GrepScope::Directory { path } => (root.resolve_path(&path), None),
+        GrepScope::Workspace => (root.root().to_path_buf(), None),
     };
-    let metadata = std::fs::symlink_metadata(&base).map_err(|_| {
+    // An explicit scope is addressed as given: `metadata` follows a symbolic
+    // link like any other filesystem path, and only the type decision happens
+    // here.
+    let metadata = std::fs::metadata(&base).map_err(|_| {
         intention_types::ErrorDto::validation("tool_search_failed", "workspace search failed")
     })?;
-    if metadata.file_type().is_symlink() || (single.is_some() && !metadata.is_file()) {
+    if single.is_some() && !metadata.is_file() {
         return Err(intention_types::ErrorDto::validation(
             "tool_search_failed",
             "workspace search failed",
@@ -2127,7 +2064,7 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     }
     let mut files = Vec::new();
     let mut file_scan_truncated = false;
-    if metadata.is_file() && !metadata.file_type().is_symlink() {
+    if metadata.is_file() {
         files.push(base);
     } else if metadata.is_dir() {
         let mut pending = vec![base];
@@ -2142,14 +2079,16 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
                 let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                     continue;
                 };
+                // Symlinked entries are skipped during traversal: a link is
+                // ordinary filesystem material, but descending through one
+                // would follow aliases and could cycle. Only explicitly
+                // addressed links are followed.
                 if metadata.file_type().is_symlink() {
                     continue;
                 }
                 if metadata.is_dir() {
                     pending.push(path);
-                } else if metadata.is_file()
-                    && !contains_symlink_component(root.canonical_path(), &path)
-                {
+                } else if metadata.is_file() {
                     if files.len() >= MAX_GREP_FILES {
                         file_scan_truncated = true;
                         break 'traverse;
@@ -2187,7 +2126,7 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
             truncated = true;
         }
         let logical = single.clone().or_else(|| {
-            path.strip_prefix(root.canonical_path()).ok().and_then(|p| {
+            path.strip_prefix(root.root()).ok().and_then(|p| {
                 WorkspaceRelativePathDto::parse(p.to_string_lossy().replace('\\', "/")).ok()
             })
         });
@@ -2321,15 +2260,6 @@ mod coverage_helpers {
             join_reader(Some(handle)),
             Err("tool_execute_read_failed")
         ));
-    }
-
-    #[test]
-    fn symlink_component_rejects_outside_and_missing_paths() {
-        let root = std::env::temp_dir().join(format!("tools-coverage-{}", std::process::id()));
-        assert!(std::fs::create_dir_all(&root).is_ok());
-        assert!(contains_symlink_component(&root, &root.join("missing")));
-        assert!(contains_symlink_component(&root, &root.join("outside")));
-        assert!(std::fs::remove_dir_all(root).is_ok());
     }
 
     #[test]
