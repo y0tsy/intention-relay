@@ -1,7 +1,7 @@
 # Test audit report: remaining useless tests
 
-Repository: `/home/data/intention-relay`, branch `quality/coverage-and-test-slimming`.
-This audit follows the first slimming pass on this branch (~80 tests deleted or trimmed, 5 obsolete test files removed, all uncommitted) and covers what remains.
+Repository: `intention-relay`, branch `quality/coverage-and-test-slimming`.
+This audit follows the first slimming pass on this branch (~80 tests deleted or trimmed, 5 obsolete test files removed) and covers what remains; both that pass and the executed rows below are carried by the branch's `test(workspace): remove redundant, vacuous, and outdated tests` commit.
 
 **Audit record:** the rows below were reviewed, approved in full, and executed on this branch; see [Execution status](#execution-status) for the outcome and deviations.
 
@@ -107,9 +107,9 @@ No outdated behavior pins in this crate: every asserted cap (`64 KiB`, `128 KiB`
 
 ### Keep-exemplars (do not touch)
 
-- `tests/bounded_contracts.rs:117` grep aggregate cap with a zero-match window; `:291` conflict leaves the file unmutated.
-- `tests/tool_contracts.rs:1476` exact typed error codes; `:523` boundary table; `:1866` independent expected literals per tool; `:1678` schema-vs-serialized cross-check; `:467` sorted, deduplicated glob property.
-- `src/lib.rs:2143` `bounded_lossy` boundary unit test.
+- `tests/bounded_contracts.rs` `directory_grep_caps_scanned_file_content_and_retained_aggregate` grep aggregate cap with a zero-match window; `write_expected_content_conflicts_when_target_is_missing` conflict leaves the file unmutated.
+- `tests/tool_contracts.rs` `exact_typed_errors_cover_search_edit_and_spawn_failures` exact typed error codes; `bounded_sources_report_truncation_only_past_the_output_bound` boundary table; `envelopes_project_redacted_normalized_projections_for_every_concrete_tool` independent expected literals per tool; `model_parameter_schemas_agree_with_serialized_inputs` schema-vs-serialized cross-check; `glob_matches_are_sorted_deduplicated_and_deterministic` sorted, deduplicated glob property.
+- `src/lib.rs` `bounded_lossy_handles_invalid_utf8_at_boundary` boundary unit test.
 
 ## Domain and types: `intention-types`, `intention-domain`
 
@@ -169,8 +169,8 @@ Shorthand: `[A]` = `intention-application/tests/m3_application.rs`; `[AS]` = `in
 
 ### Keep-exemplars (do not touch)
 
-- `[A]:2033` append-failure atomicity matrix; `[A]:2204` terminal ordering + publication probe; `[A]:2385` typed evidence matrix.
-- `[A]:1593` the correct redaction pattern (real secret, exact observations); `[A]:1395` spawn-observed cancellation.
+- `[A]` `selected_append_failures_propagate_from_each_lifecycle_commit_point` append-failure atomicity matrix; `every_terminal_outcome_persists_one_correlated_event_before_publication` terminal ordering + publication probe; `terminal_commits_carry_typed_result_evidence_before_publication` typed evidence matrix.
+- `[A]` `fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata` the correct redaction pattern (real secret, exact observations); `local_tool_records_external_effect_unknown_terminal_status` spawn-observed cancellation.
 - `[R5]:1917` gated sequential tool ordering; `[R5]:2393` retry delay never armed; `[R5]:1153` textless channel; `[R5]:2187` gate-then-append ordering.
 - `intention-runtime/tests/m4_runtime_failure_helpers.rs:181` — sole coverage of `fail_starting_run`.
 
@@ -181,10 +181,10 @@ Shorthand: `[A]` = `intention-application/tests/m3_application.rs`; `[AS]` = `in
 | # | Location | Test | Cat | Evidence | LOC | Action |
 |---|---|---|---|---|---|---|
 | 1 | `src/lib.rs:2021` | `host_stop_without_an_admitted_task_terminalizes_and_cleans_the_registry` | 2 | Covered by `tests/m4_streaming_foundation.rs:971`, which uses deterministic cleanup instead of 20-yield polling | 37 | delete (covering test is `test-support`-gated) |
-| 2 | `src/lib.rs:2059` | `host_stop_signals_the_registered_task_and_executor_owns_cancelled_terminal_state` | 2 | Covered by `tests/m4_streaming_foundation.rs:606`; the residual `tasks.is_empty()` duplicates test 5 below for the same code line | 57 | delete; keep exactly one of tests 2/5 |
+| 2 | `src/lib.rs:2059` | `host_stop_signals_the_registered_task_and_executor_owns_cancelled_terminal_state` | 2 | Covered by `tests/m4_streaming_foundation.rs:606`; the residual `tasks.is_empty()` duplicates test 5 below for the same code line | 57 | delete (covering test is `test-support`-gated); keep exactly one of tests 2/5 |
 | 3 | `src/lib.rs:2264` | `listener_accepts_and_dispatches_one_typed_health_query` | 2 | Sync dispatch is covered through the real consumer at `intention-tui/tests/tui_contract.rs:37`; the only unique target is the `#[cfg(test)]` wrapper `serve_next_connection` (`src/lib.rs:1479-1500`, sole call site `src/lib.rs:2272`); the trailing 1 ms sleep asserts nothing | 30 + 23 helper | delete the test and the wrapper (`#[cfg(test)] use std::thread` becomes unused) |
 | 4 | `src/lib.rs:1728` | `async_host_keeps_m3_requests_and_run_streams_on_one_listener` | 3a | The subscription check at 1832-1835 matches `RunSubscription(_)`, which also matches `Error`/`Resync`, so a failed registration cannot fail the test; turn-over-host plus replay is covered by `m4_streaming_foundation.rs:501` and `facade_e2e.rs:639` | 110 | delete (covering m4 test is `test-support`-gated) |
-| 5 | `src/lib.rs:1920` | `host_executes_starting_run_once_and_publishes_durable_live_batches` | 2 | Covered by `m4_streaming_foundation.rs:501` (`executions() == 1`, live facts, reconnect replay `Completed`) | 63 | delete; keep one of tests 2/5 |
+| 5 | `src/lib.rs:1920` | `host_executes_starting_run_once_and_publishes_durable_live_batches` | 2 | Covered by `m4_streaming_foundation.rs:501` (`executions() == 1`, live facts, reconnect replay `Completed`) | 63 | delete (covering test is `test-support`-gated); keep one of tests 2/5 |
 | 6 | `tests/m4_streaming_foundation.rs:1177` | `daemon_stop_seam_persists_cancelling_without_direct_terminalization` | 2 | Covered by `intention/src/lib.rs:1365` (stop at 1412, `Cancelling` at 1419-1430) and `intention/src/lib.rs:1667` (stop at 1709; 1719) | 19 | delete |
 | 7 | `src/lib.rs:1984` (tail 2012-2018) | `duplicate_or_unknown_admission_never_creates_an_extra_task` | 1 | The trailing block ends with `host.schedule_if_starting(session_id, run_id);` and asserts nothing; the test passes even if extra state is recorded. The first half is the meaningful dedupe pin | 7 | repair: assert the registry stays empty and the run stays `Cancelling`, or drop the tail |
 | 8 | `src/lib.rs:1839` | `one_connection_serves_requests_and_run_frames_together` | 3b | Matches any `RunSubscription(_)`, so the "subscription registered" premise is unverified (a failed registration leaves the connection serving) | 53 | repair: match `RunSubscriptionResponseDto::Replay(_)` |
@@ -257,7 +257,8 @@ The following headline findings were independently re-read and confirmed (not ju
 
 Executed with seven zone workers (one per zone), each restricted to its own focused test targets; the controller ran the full gates afterwards and applied three follow-ups.
 
-- All 82 rows were executed: deletions, trims, repairs, and renames as listed above.
+- All 82 rows were executed: deletions, trims, repairs, and renames, except for the deviations recorded below.
+- Alternative actions taken: four rows whose action column allows an alternative to deletion were taken through that alternative. The wire-stack `bad_tail` block and the `RunLiveBatchDto` `u64::MAX`-plus-empty-facts block were repaired rather than deleted, so the rejections they target actually run (a flat envelope fixture for the tail rule; non-empty facts for the cursor-overflow branch). The domain `m5_tool_results.rs` envelope block and the storage/model provider-kind fixture loops were trimmed (the former renamed to `tool_result_record_round_trips_with_typed_identity`).
 - Controller follow-ups: `tool_coverage_contracts.rs` (left with zero tests) was deleted and removed from `quality/architecture.toml` and the `quality/self_test.py` pin; three residual name/body mismatches were renamed (`logical_paths_cover_all_inputs`, `tool_schema_version_is_current`, `model_projection_and_snapshot_keep_safe_terminal_shapes`).
-- Deviations: tools finding 1 probes the guaranteed-inherited `PATH` instead of setting a fresh marker (edition 2024 makes `set_var` unsafe and the workspace denies `unsafe`); storage finding 5 diverges with `unreachable!` instead of `expect_err` (`DaemonApplicationFacade` has no `Debug`, and `clippy::panic` is denied workspace-wide); daemon rows 2/5 kept row 2 because both bodies assert the registry cleanup.
+- Deviations: tools finding 1 probes the guaranteed-inherited `PATH` instead of setting a fresh marker (edition 2024 makes `set_var` unsafe and the workspace denies `unsafe`); storage finding 5 diverges with `unreachable!` instead of `expect_err` (`DaemonApplicationFacade` has no `Debug`, and `clippy::panic` is denied workspace-wide); hooks finding 5 keeps the two `apply_result` arms as typed defensive errors with their direct tests instead of deleting the arms; daemon rows 2/5 kept row 2 because both bodies assert the registry cleanup.
 - Gates after execution: `make quick` green (484 passed, 2 skipped, formatting and clippy clean); coverage from clean artifacts green (`intention-daemon` 80.33% in the isolated run, workspace aggregate 92.22%, base 80%); `make deps` green after the orphaned `serde_json` dev-dependency was removed from `intention-tui`; `make quality-self-test` green.
