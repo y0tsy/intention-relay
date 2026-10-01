@@ -97,6 +97,7 @@ fn exercises_projection_variants_and_bounded_text_validation() {
     assert!(BoundedText::new("a\0b").is_err());
     let p = ToolResult::Glob(PathsResult {
         paths: vec![path("a")],
+        truncated: false,
     })
     .projection();
     assert!(matches!(p.content, ToolProjectedContent::Paths { .. }));

@@ -11,8 +11,8 @@
 
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
-    BoundedText, CancellationSignal, EditInput, GrepInput, GrepScope, ReadInput, ToolInput,
-    ToolResult, ToolService, WriteInput,
+    BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
+    ReadInput, ToolInput, ToolResult, ToolService, WriteInput,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use serde_json::json;
@@ -34,6 +34,21 @@ fn workspace(root: &TempDir) -> intention_workspace::WorkspaceRoot {
 
 fn relative(path: &str) -> WorkspaceRelativePathDto {
     WorkspaceRelativePathDto::parse(path).expect("relative path")
+}
+
+/// Returns the serialized cost the shared search window charges for one
+/// retained match: its JSON bytes plus the one-byte list separator.
+fn serialized_match_bytes(matched: &GrepMatch) -> usize {
+    serde_json::to_string(matched)
+        .expect("a retained match serializes")
+        .len()
+        + 1
+}
+
+/// Returns the serialized cost the shared search window charges for one
+/// retained path: its JSON string bytes plus the one-byte list separator.
+fn serialized_path_bytes(path: &WorkspaceRelativePathDto) -> usize {
+    path.as_str().len() + 3
 }
 
 #[test]
@@ -174,14 +189,10 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
         unreachable!("grep returns a grep result")
     };
     assert!(grep.truncated);
-    let retained: usize = grep
-        .matches
-        .iter()
-        .map(|matched| matched.fragment.as_str().len())
-        .sum();
+    let retained: usize = grep.matches.iter().map(serialized_match_bytes).sum();
     assert!(
         retained <= 128 * 1024,
-        "the retained fragment aggregate must stay within its bound ({retained})"
+        "the serialized match aggregate must stay within the search window ({retained})"
     );
     assert!(
         grep.matches.len() < 200,
@@ -365,10 +376,12 @@ fn edit_rejects_invalid_utf8_target_before_any_mutation() {
 }
 
 #[test]
-fn single_file_grep_retains_every_match_without_a_count_cap() {
-    // The pattern-only file grep (no scope) reports every match; only dropped
-    // byte windows set the truncation flag.
-    let root_dir = fixture_dir("grep-all-matches");
+fn single_file_grep_truncates_at_the_serialized_search_window() {
+    // C-04: no count cap drops matches, but every retained match is charged
+    // its serialized bytes against the shared search window, so a match set
+    // far beyond the window truncates honestly instead of growing until the
+    // durable fact bound rejects the run.
+    let root_dir = fixture_dir("grep-window");
     let mut haystack = String::new();
     for _ in 0..(10_000 + 1) {
         haystack.push_str("a\n");
@@ -389,15 +402,31 @@ fn single_file_grep_retains_every_match_without_a_count_cap() {
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
-    assert_eq!(grep.matches.len(), 10_001);
-    assert!(!grep.truncated, "no match or fragment was dropped");
+    assert!(
+        grep.truncated,
+        "a match set beyond the serialized window must report truncation"
+    );
+    assert!(
+        grep.matches.len() < 10_001,
+        "the serialized window must clamp the retained match set"
+    );
+    assert!(
+        grep.matches.len() > 1_000,
+        "the window, not a small count cap, bounds the retained match set ({})",
+        grep.matches.len()
+    );
+    let retained: usize = grep.matches.iter().map(serialized_match_bytes).sum();
+    assert!(
+        retained <= 128 * 1024,
+        "the serialized match aggregate must stay within the search window ({retained})"
+    );
 }
 
 #[test]
-fn scoped_directory_grep_retains_every_match_without_a_count_cap() {
-    // The scoped grep path reports every match of a directory entry; only the
-    // retained byte window clamps the result set.
-    let root_dir = fixture_dir("scoped-grep-all-matches");
+fn scoped_directory_grep_truncates_at_the_serialized_search_window() {
+    // The scoped grep path reports every match of a directory entry until the
+    // serialized search window is full; only that window clamps the result set.
+    let root_dir = fixture_dir("scoped-grep-window");
     let haystack = root_dir.path().join("haystack");
     std::fs::create_dir(&haystack).expect("haystack directory");
     let mut content = String::new();
@@ -422,8 +451,72 @@ fn scoped_directory_grep_retains_every_match_without_a_count_cap() {
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
-    assert_eq!(grep.matches.len(), 10_001);
-    assert!(!grep.truncated, "no match or fragment was dropped");
+    assert!(
+        grep.truncated,
+        "a match set beyond the serialized window must report truncation"
+    );
+    assert!(
+        grep.matches.len() < 10_001,
+        "the serialized window must clamp the retained match set"
+    );
+    assert!(
+        grep.matches.len() > 1_000,
+        "the window, not a small count cap, bounds the retained match set ({})",
+        grep.matches.len()
+    );
+    let retained: usize = grep.matches.iter().map(serialized_match_bytes).sum();
+    assert!(
+        retained <= 128 * 1024,
+        "the serialized match aggregate must stay within the search window ({retained})"
+    );
+}
+
+#[test]
+fn glob_truncates_at_the_serialized_search_window() {
+    // C-04: a path list larger than the shared search window is cut at the
+    // first entry that no longer fits, and the result says so.
+    let root_dir = fixture_dir("glob-window");
+    let many = root_dir.path().join("many");
+    std::fs::create_dir(&many).expect("many directory");
+    for index in 0..1_214 {
+        std::fs::write(many.join(format!("{:0>100}", index)), "x").expect("seed path");
+    }
+    let service = ToolService::new(workspace(&root_dir));
+    let result = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new("many/*").expect("pattern"),
+            }),
+            CancellationSignal::new(),
+        )
+        .expect("glob dispatches");
+    let ToolResult::Glob(glob) = result else {
+        unreachable!("glob returns a paths result")
+    };
+    assert!(
+        glob.truncated,
+        "a path list beyond the serialized window must report truncation"
+    );
+    assert!(
+        glob.paths.len() < 1_214,
+        "the serialized window must clamp the retained path list"
+    );
+    assert!(
+        glob.paths.len() > 1_000,
+        "the window, not a small count cap, bounds the retained path list ({})",
+        glob.paths.len()
+    );
+    let retained: usize = glob.paths.iter().map(serialized_path_bytes).sum();
+    assert!(
+        retained <= 128 * 1024,
+        "the serialized path aggregate must stay within the search window ({retained})"
+    );
+    let next_entry = glob.paths[0].as_str().len() + 3;
+    assert!(
+        retained + next_entry > 128 * 1024,
+        "the window must stop at the first entry that no longer fits"
+    );
 }
 
 #[cfg(unix)]

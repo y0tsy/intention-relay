@@ -20,7 +20,7 @@ use intention_protocol::{
     ProtocolDaemonMessageDto, ProtocolHelloDto, ProtocolRequestPayloadDto,
     ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto,
     RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto, decode_request_line,
-    encode_response,
+    encode_response, is_notification_line,
 };
 #[cfg(any(test, feature = "test-support"))]
 use intention_runtime::ModelRunFirstAppendGate;
@@ -28,8 +28,8 @@ use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
 use intention_tools::{
-    EditInput, ExecuteInput, GlobInput, GrepInput, ReadInput, ToolId, ToolInput,
-    ToolProjectedContent, ToolResult, WriteInput,
+    EditInput, ExecuteInput, GlobInput, GrepInput, GrepResult, PathsResult, ReadInput, ToolId,
+    ToolInput, ToolProjectedContent, ToolResult, WriteInput,
 };
 #[cfg(test)]
 use intention_transport::LocalListener;
@@ -745,7 +745,7 @@ impl HostState {
         data.subscribers.entry(key).or_default().push(Subscriber {
             id,
             sender: sender.clone(),
-            close,
+            close: close.clone(),
         });
         drop(data);
         // The subscriber is registered before this second durable read. The
@@ -769,7 +769,28 @@ impl HostState {
             .try_send(run_subscription_response(request_id, response))
             .is_err()
         {
+            // The per-connection queue is full, so the correlated reply cannot
+            // be delivered. The subscriber is removed and the failure is
+            // reported through the same typed error every other registration
+            // failure uses (ADR 0045 invariant 5, C-03).
             self.remove_subscriber(key, id);
+            if sender
+                .try_send(run_subscription_response(
+                    request_id,
+                    RunSubscriptionResponseDto::Error(ErrorDto::unavailable(
+                        "daemon_subscriber_unavailable",
+                        "the daemon subscriber is unavailable",
+                    )),
+                ))
+                .is_err()
+            {
+                // The queue that rejected the reply rejected the typed error
+                // too, so the peer must not be left waiting silently: trip the
+                // per-connection close signal exactly as the slow-subscriber
+                // path does, so the serve loop ends and the peer observes a
+                // closed stream instead of hanging.
+                close.send_replace(true);
+            }
             return None;
         }
         Some(id)
@@ -916,7 +937,9 @@ fn unknown_tool() -> ErrorDto {
 ///
 /// The projection is redacted and workspace-relative by construction, and
 /// `ToolResultOutcomeDto::succeeded` keeps the durable outcome within its own
-/// content bound.
+/// content bound. Search results serialize their own typed result DTO, so the
+/// retained window and its truncation flag stay self-describing and identical
+/// for glob paths and grep matches (C-04).
 fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
     let content = match result.projection().content {
         ToolProjectedContent::Text { text, truncated } => {
@@ -926,16 +949,16 @@ fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> 
                 text.as_str().to_owned()
             }
         }
-        ToolProjectedContent::Paths { paths, .. } => {
-            serde_json::to_string(&paths).map_err(|_| {
+        ToolProjectedContent::Paths { paths, truncated } => {
+            serde_json::to_string(&PathsResult { paths, truncated }).map_err(|_| {
                 ErrorDto::validation(
                     "invalid_tool_result_content",
                     "tool result content could not be normalized",
                 )
             })?
         }
-        ToolProjectedContent::Matches { matches, .. } => {
-            serde_json::to_string(&matches).map_err(|_| {
+        ToolProjectedContent::Matches { matches, truncated } => {
+            serde_json::to_string(&GrepResult { matches, truncated }).map_err(|_| {
                 ErrorDto::validation(
                     "invalid_tool_result_content",
                     "tool result content could not be normalized",
@@ -1048,6 +1071,14 @@ async fn serve_async_connection(
                 let request = match decode_request_line(&line) {
                     Ok(request) => request,
                     Err(failure) => {
+                        if is_notification_line(&line) {
+                            // A request line without an `id` member is a
+                            // JSON-RPC notification, and the server must not
+                            // answer one (W-06). An explicit `"id": null` is a
+                            // request, so it still receives the correlated
+                            // error reply.
+                            continue;
+                        }
                         let (id, error) = failure.into_parts();
                         let reply = ProtocolDaemonMessageDto::Response(
                             JsonRpcResponseDto::error(id, error),
@@ -1852,10 +1883,24 @@ mod tests {
             .receive_line()
             .await
             .expect("current replay arrives");
-        assert!(matches!(
-            decode_response(&line, ProtocolMethodDto::RunSubscribe, 3),
-            Ok(ProtocolResponsePayloadDto::RunSubscription(_))
-        ));
+        // W-13: the repeated replay request must answer with the concrete
+        // correlated `Replay` payload, not merely the right payload variant.
+        let envelope: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
+            JsonRpcResponseDto::parse(&line).expect("the replay reply is a JSON-RPC response");
+        assert_eq!(
+            envelope.id(),
+            Some(3),
+            "the replay reply echoes its request id"
+        );
+        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) =
+            decode_response(&line, ProtocolMethodDto::RunSubscribe, 3)
+                .expect("current replay decodes")
+        else {
+            panic!("a registered run subscription answers with the concrete replay payload")
+        };
+        assert_eq!(replay.snapshot().session_id(), session_id);
+        assert_eq!(replay.snapshot().run_id(), run_id);
+        assert_eq!(replay.tail().after_cursor(), replay.snapshot().cursor());
         server.await.expect("host accepted both connections");
     }
 
@@ -1890,10 +1935,15 @@ mod tests {
             .receive_line()
             .await
             .expect("subscription reply arrives");
-        assert!(matches!(
-            decode_response(&line, ProtocolMethodDto::RunSubscribe, 1),
-            Ok(ProtocolResponsePayloadDto::RunSubscription(_))
-        ));
+        // The correlated reply is the concrete initial replay of this run.
+        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) =
+            decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)
+                .expect("subscription reply decodes")
+        else {
+            panic!("a run subscription answers with the concrete replay payload")
+        };
+        assert_eq!(replay.snapshot().session_id(), session_id);
+        assert_eq!(replay.snapshot().run_id(), run_id);
 
         // The same connection still serves an ordinary request while the
         // subscription is registered.
@@ -2251,6 +2301,79 @@ mod tests {
             )),
         );
         assert!(matches!(frame, ProtocolDaemonMessageDto::Response(_)));
+    }
+
+    #[tokio::test]
+    async fn a_full_subscriber_queue_fails_closed_instead_of_waiting_silently() {
+        // C-03: when the per-connection queue cannot accept the correlated
+        // reply, the registration fails closed: no subscriber is left
+        // registered and the connection is told to end, so the peer never
+        // waits for a reply that cannot arrive (ADR 0045 invariant 5).
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = host_for_test(facade);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let (close, mut closed) = tokio::sync::watch::channel(false);
+        let queued = ProtocolDaemonMessageDto::run_frame(RunStreamFrameDto::Resync(
+            RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap),
+        ));
+        sender
+            .try_send(queued)
+            .expect("the single-slot queue accepts one frame");
+
+        assert!(
+            host.register_subscriber(session_id, run_id, None, sender, close, 7)
+                .is_none(),
+            "a full queue cannot accept the correlated reply"
+        );
+        assert!(closed.changed().await.is_ok());
+        assert!(
+            *closed.borrow(),
+            "the connection must be told to end instead of waiting silently"
+        );
+        assert_eq!(
+            host.data
+                .lock()
+                .expect("host data remains available")
+                .subscribers
+                .get(&(session_id, run_id))
+                .map(Vec::len),
+            Some(0),
+            "the failed registration leaves no subscriber registered"
+        );
+        assert!(matches!(
+            receiver.recv().await,
+            Some(ProtocolDaemonMessageDto::Notification(_))
+        ));
+    }
+
+    #[test]
+    fn normalize_tool_result_reports_search_truncation_in_durable_content() {
+        // C-04: glob and grep durable content carries the same self-describing
+        // truncation flag, so an honest byte-window cut survives persistence.
+        let glob = ToolResult::Glob(PathsResult {
+            paths: vec![
+                intention_types::WorkspaceRelativePathDto::parse("a.txt").expect("fixture path"),
+            ],
+            truncated: true,
+        });
+        let ToolResultOutcomeDto::Succeeded { content } =
+            normalize_tool_result(glob).expect("a glob result normalizes")
+        else {
+            panic!("a glob result succeeds")
+        };
+        assert_eq!(content, "{\"paths\":[\"a.txt\"],\"truncated\":true}");
+
+        let grep = ToolResult::Grep(GrepResult {
+            matches: Vec::new(),
+            truncated: true,
+        });
+        let ToolResultOutcomeDto::Succeeded { content } =
+            normalize_tool_result(grep).expect("a grep result normalizes")
+        else {
+            panic!("a grep result succeeds")
+        };
+        assert_eq!(content, "{\"matches\":[],\"truncated\":true}");
     }
 
     #[tokio::test]

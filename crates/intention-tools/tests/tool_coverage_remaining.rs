@@ -73,7 +73,10 @@ fn logical_paths_cover_all_inputs_and_projections() {
             text: t("x"),
             truncated: false,
         }),
-        ToolResult::Glob(PathsResult { paths: vec![path] }),
+        ToolResult::Glob(PathsResult {
+            paths: vec![path],
+            truncated: false,
+        }),
         ToolResult::Grep(GrepResult {
             matches: vec![],
             truncated: true,

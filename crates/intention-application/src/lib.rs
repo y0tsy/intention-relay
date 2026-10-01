@@ -13,8 +13,9 @@ use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
 };
 use intention_protocol::{
-    CreateSessionAcceptedDto, ProtocolAcceptedResultDto, RemoveQueuedTurnAcceptedDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto, StopRunAcceptedDto,
+    CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedResultDto,
+    RemoveQueuedTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionSnapshotDto, StopRunAcceptedDto,
 };
 use intention_runtime::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, RuntimeService,
@@ -27,7 +28,7 @@ use intention_storage::{
 };
 use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
-use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
+use intention_types::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 
 /// Explicit durable values selected for a create-session workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1019,7 +1020,7 @@ where
     ) -> DtoResult<SessionSnapshotDto> {
         let projection = self.repository.load_session_snapshot(query.session_id())?;
         SessionSnapshotDto::with_projection(
-            SchemaVersionDto::new(1, 0),
+            CURRENT_DTO_SCHEMA_VERSION,
             query.session_id(),
             projection.at_sequence(),
             projection,
@@ -1247,7 +1248,10 @@ fn canonical_tool_result_document(result: &ToolResult) -> String {
                     break;
                 }
             }
-            finish_truncated_array(&mut document, emitted < value.paths.len());
+            finish_truncated_array(
+                &mut document,
+                value.truncated || emitted < value.paths.len(),
+            );
         }
         ToolResult::Grep(value) => {
             document.push_str("{\"result\":\"grep\",\"value\":{\"matches\":[");
@@ -1565,6 +1569,7 @@ mod tests {
         );
         let glob = ToolResult::Glob(intention_tools::PathsResult {
             paths: vec![relative("src/a.rs"), relative("src/b.rs")],
+            truncated: false,
         });
         assert_eq!(
             canonical_tool_result_document(&glob),
@@ -1624,7 +1629,10 @@ mod tests {
         let paths = (0..20_000)
             .map(|index| relative(&format!("dir-{index}/long-file-name-{index}.txt")))
             .collect();
-        let glob = ToolResult::Glob(intention_tools::PathsResult { paths });
+        let glob = ToolResult::Glob(intention_tools::PathsResult {
+            paths,
+            truncated: false,
+        });
         let document = canonical_tool_result_document(&glob);
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
         assert!(document.starts_with("{\"result\":\"glob\",\"value\":{\"paths\":[\""));

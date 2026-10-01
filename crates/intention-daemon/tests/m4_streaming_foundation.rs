@@ -1193,3 +1193,201 @@ fn daemon_stop_seam_persists_cancelling_without_direct_terminalization() {
                 .is_some_and(|run| run.status() == RunStatusDto::Cancelling)
     ));
 }
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn host_answers_socket_level_method_not_found_and_invalid_params_errors() {
+    use intention_protocol::{
+        JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND, JsonRpcRequestDto, JsonRpcResponseDto,
+    };
+    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
+
+    // W-14: the daemon loop answers a bogus method and a wrong-params request
+    // with the spec-mandated codes, correlated by request id.
+    let driver = Arc::new(ScriptedDriver::completed_text());
+    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let endpoint =
+        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-errors-{}", RunId::new()))
+            .expect("fixture endpoint is valid");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
+        listener, facade, 1,
+    ));
+
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("jsonrpc error client connects");
+    let (_remote, mut requests, mut messages) = connection
+        .negotiate(
+            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-error-test")
+                .expect("jsonrpc error hello is valid"),
+        )
+        .await
+        .expect("jsonrpc error client negotiates");
+
+    let health = ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth);
+    for (request_id, method, expected_code, expected_data_code) in [
+        (
+            11_u64,
+            "workspace.bogus",
+            JSONRPC_METHOD_NOT_FOUND,
+            "jsonrpc_method_not_found",
+        ),
+        (
+            12,
+            "turn.send",
+            JSONRPC_INVALID_PARAMS,
+            "jsonrpc_invalid_params",
+        ),
+    ] {
+        requests
+            .send_message(&JsonRpcRequestDto::new(request_id, method, health.clone()))
+            .await
+            .expect("typed error request sends");
+        let line = messages.receive_line().await.expect("error reply arrives");
+        let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
+            JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
+        assert_eq!(
+            response.id(),
+            Some(request_id),
+            "the error reply for {method} echoes its request id"
+        );
+        assert!(
+            response.result_value().is_none(),
+            "the error reply for {method} carries no result"
+        );
+        let error = response
+            .error_value()
+            .expect("an error reply carries the error object");
+        assert_eq!(error.code(), expected_code, "method {method}");
+        assert_eq!(
+            error.to_error().code(),
+            expected_data_code,
+            "method {method}"
+        );
+    }
+    server
+        .await
+        .expect("host serves the rejected jsonrpc peers");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn host_does_not_answer_an_id_less_jsonrpc_notification() {
+    use intention_protocol::{JsonRpcNotificationDto, JsonRpcRequestDto, JsonRpcResponseDto};
+    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
+
+    // W-06: a request line without an id is a JSON-RPC notification, so the
+    // daemon must not answer it. The next line the client reads must be the
+    // reply to the correlated request that follows it.
+    let driver = Arc::new(ScriptedDriver::completed_text());
+    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let endpoint =
+        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-notification-{}", RunId::new()))
+            .expect("fixture endpoint is valid");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
+        listener, facade, 1,
+    ));
+
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("notification client connects");
+    let (_remote, mut requests, mut messages) = connection
+        .negotiate(
+            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-notification-test")
+                .expect("notification hello is valid"),
+        )
+        .await
+        .expect("notification client negotiates");
+
+    requests
+        .send_message(&JsonRpcNotificationDto::new(
+            "workspace.bogus",
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+        ))
+        .await
+        .expect("id-less notification sends");
+    requests
+        .send_message(&JsonRpcRequestDto::new(
+            13_u64,
+            "daemon.health",
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+        ))
+        .await
+        .expect("correlated health request sends");
+    let line = messages.receive_line().await.expect("health reply arrives");
+    let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
+        JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
+    assert_eq!(
+        response.id(),
+        Some(13),
+        "the notification must not be answered, and must not consume the correlated reply"
+    );
+    assert!(matches!(
+        decode_response(&line, ProtocolMethodDto::DaemonHealth, 13),
+        Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
+            if health.readiness() == intention_protocol::DaemonReadinessDto::Ready
+    ));
+    server.await.expect("host serves the notification peer");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn host_answers_an_explicit_null_id_request_with_the_correlated_error() {
+    use intention_protocol::{JSONRPC_INVALID_REQUEST, JsonRpcResponseDto};
+    use intention_transport::{AsyncLocalClientConnection, local_protocol_version};
+
+    // W-06 boundary: an explicit `"id": null` member is a request rather than
+    // a notification, so the daemon answers it with a null-id error reply.
+    let driver = Arc::new(ScriptedDriver::completed_text());
+    let (_directory, facade, _snapshot) = fixture_facade(driver);
+    let endpoint =
+        LocalEndpoint::from_instance_id(format!("m4-host-jsonrpc-null-id-{}", RunId::new()))
+            .expect("fixture endpoint is valid");
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
+    let server = tokio::spawn(intention_daemon::serve_test_async_listener(
+        listener, facade, 1,
+    ));
+
+    let connection = AsyncLocalClientConnection::connect(&endpoint)
+        .await
+        .expect("null-id client connects");
+    let (_remote, mut requests, mut messages) = connection
+        .negotiate(
+            ProtocolHelloDto::new(local_protocol_version(), "m4-jsonrpc-null-id-test")
+                .expect("null-id hello is valid"),
+        )
+        .await
+        .expect("null-id client negotiates");
+
+    requests
+        .send_message(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "method": "daemon.health",
+            "params": {"kind": "query", "data": {"kind": "get_daemon_health"}},
+        }))
+        .await
+        .expect("null-id request sends");
+    let line = messages
+        .receive_line()
+        .await
+        .expect("null-id reply arrives");
+    let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
+        JsonRpcResponseDto::parse(&line).expect("the reply is a JSON-RPC response");
+    assert_eq!(
+        response.id(),
+        None,
+        "an explicit null id is answered with a null id instead of silence"
+    );
+    assert!(response.result_value().is_none());
+    assert_eq!(
+        response
+            .error_value()
+            .expect("a null-id request receives an error object")
+            .code(),
+        JSONRPC_INVALID_REQUEST
+    );
+    server.await.expect("host serves the null-id peer");
+}

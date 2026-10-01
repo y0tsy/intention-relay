@@ -144,10 +144,11 @@ mod spawn_observation_tests {
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(30);
-/// Upper bound on the retained fragment bytes of one grep result. Per-line
-/// fragment caps alone still allow a very large aggregate result; the
-/// aggregate is clamped with the same truncation flag so durable, normalized
-/// content stays bounded (PR24-022).
+/// Upper bound on the serialized bytes of one search result, shared by glob
+/// and grep. Per-line fragments and per-entry path lists alone still allow a
+/// very large aggregate result; every retained entry is charged against this
+/// one window and the cut is reported through the result's own truncation
+/// flag, so durable, normalized content stays bounded (PR24-022, C-04).
 const MAX_GREP_AGGREGATE_BYTES: usize = 128 * 1024;
 /// Upper bound on one edit target or write expected-content source file.
 /// Larger files can be read (truncated) but never edited or equality-checked,
@@ -1438,10 +1439,13 @@ pub struct TextResult {
 pub struct GrepResult {
     pub matches: Vec<GrepMatch>,
     /// Whether a dropped read window, an oversized line, or the retained
-    /// aggregate bound cut bytes; the match count never truncates.
+    /// serialized-match window cut content; the byte window, not a match
+    /// count, bounds the result.
     #[serde(default)]
     pub truncated: bool,
 }
+/// One workspace-relative match; its serialized size is charged against the
+/// shared search-result window.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GrepMatch {
     pub path: WorkspaceRelativePathDto,
@@ -1449,9 +1453,14 @@ pub struct GrepMatch {
     pub column: u64,
     pub fragment: BoundedText,
 }
+/// Workspace-relative path list produced by a glob search.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PathsResult {
+    /// Paths retained inside the shared search-result window.
     pub paths: Vec<WorkspaceRelativePathDto>,
+    /// Whether the byte window cut further matching paths.
+    #[serde(default)]
+    pub truncated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WriteResult {
@@ -1461,16 +1470,17 @@ pub struct WriteResult {
 /// Normalized content shape of one projected concrete tool result.
 ///
 /// The projection keeps the typed payload bounded and workspace-relative: text
-/// stays in [`BoundedText`], grep matches carry the byte-window truncation
-/// flag, path lists are complete, and mutations carry only a byte count.
+/// stays in [`BoundedText`], grep matches and glob path lists carry the
+/// byte-window truncation flag, and mutations carry only a byte count.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolProjectedContent {
     /// Bounded text produced by Read or Execute.
     Text { text: BoundedText, truncated: bool },
-    /// Complete workspace-relative path list produced by Glob.
+    /// Byte-windowed workspace-relative path list produced by Glob.
     Paths {
         paths: Vec<WorkspaceRelativePathDto>,
+        truncated: bool,
     },
     /// Byte-windowed workspace-relative matches produced by Grep.
     Matches {
@@ -1504,6 +1514,7 @@ fn projected_content(result: &ToolResult) -> ToolProjectedContent {
         },
         ToolResult::Glob(value) => ToolProjectedContent::Paths {
             paths: value.paths.clone(),
+            truncated: value.truncated,
         },
         ToolResult::Grep(value) => ToolProjectedContent::Matches {
             truncated: value.truncated,
@@ -1879,7 +1890,26 @@ fn glob_tool(root: &WorkspaceRoot, input: GlobInput) -> DtoResult<ToolResult> {
     }
     paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     paths.dedup();
-    Ok(ToolResult::Glob(PathsResult { paths }))
+    // The window is applied after the deterministic sort and dedup so the
+    // retained set never depends on traversal order. Each retained entry costs
+    // its JSON string bytes plus the one-byte list separator, which keeps the
+    // serialized path list inside the shared search-result window (C-04).
+    let mut retained = Vec::new();
+    let mut retained_bytes = 0usize;
+    let mut truncated = false;
+    for path in paths {
+        let cost = path.as_str().len() + 3;
+        if cost > MAX_GREP_AGGREGATE_BYTES.saturating_sub(retained_bytes) {
+            truncated = true;
+            break;
+        }
+        retained_bytes += cost;
+        retained.push(path);
+    }
+    Ok(ToolResult::Glob(PathsResult {
+        paths: retained,
+        truncated,
+    }))
 }
 
 fn grep_tool(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> {
@@ -1999,10 +2029,11 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
                 let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                     continue;
                 };
-                // Symlinked entries are skipped during traversal: a link is
-                // ordinary filesystem material, but descending through one
-                // would follow aliases and could cycle. Only explicitly
-                // addressed links are followed.
+                // Traversal does not follow symbolic links, for files and
+                // directories alike: a link is ordinary filesystem material,
+                // and descending through one could alias content outside the
+                // addressed scope or cycle. Only a link addressed directly as
+                // the search target is followed.
                 if metadata.file_type().is_symlink() {
                     continue;
                 }
@@ -2079,10 +2110,13 @@ fn grep_scoped(root: &WorkspaceRoot, input: GrepInput) -> DtoResult<ToolResult> 
     Ok(ToolResult::Grep(GrepResult { matches, truncated }))
 }
 
-/// Records one grep match when it fits the aggregate fragment bound.
+/// Records one grep match when its serialized cost fits the aggregate window.
 ///
-/// Per-line fragment caps alone allow a very large aggregate result; the
-/// aggregate retained bytes are clamped with the truncation flag (PR24-022).
+/// Per-line fragment caps alone allow a very large aggregate result; every
+/// retained match is charged its serialized bytes plus the one-byte list
+/// separator, so the serialized list itself stays inside the shared
+/// search-result window and the truncation flag reports the cut (PR24-022,
+/// C-04).
 ///
 /// # Errors
 ///
@@ -2097,17 +2131,27 @@ fn record_grep_match(
     column: u64,
     fragment: String,
 ) -> DtoResult<bool> {
-    if fragment.len() > MAX_GREP_AGGREGATE_BYTES.saturating_sub(*retained_bytes) {
-        *truncated = true;
-        return Ok(false);
-    }
-    *retained_bytes += fragment.len();
-    matches.push(GrepMatch {
+    let matched = GrepMatch {
         path,
         line,
         column,
         fragment: bounded_text(fragment)?,
-    });
+    };
+    let cost = serde_json::to_string(&matched)
+        .map_err(|_| {
+            intention_types::ErrorDto::validation(
+                "invalid_tool_result_content",
+                "tool result content could not be normalized",
+            )
+        })?
+        .len()
+        .saturating_add(1);
+    if cost > MAX_GREP_AGGREGATE_BYTES.saturating_sub(*retained_bytes) {
+        *truncated = true;
+        return Ok(false);
+    }
+    *retained_bytes += cost;
+    matches.push(matched);
     Ok(true)
 }
 

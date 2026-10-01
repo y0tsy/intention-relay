@@ -2208,12 +2208,13 @@ fn envelopes_project_redacted_normalized_projections_for_every_concrete_tool() {
             (ToolProjectedContent::Mutation { bytes }, ToolId::Edit) => {
                 assert_eq!(*bytes, "gamma needle".len() as u64);
             }
-            (ToolProjectedContent::Paths { paths }, ToolId::Glob) => {
+            (ToolProjectedContent::Paths { paths, truncated }, ToolId::Glob) => {
                 let listed = paths
                     .iter()
                     .map(WorkspaceRelativePathDto::as_str)
                     .collect::<Vec<_>>();
                 assert_eq!(listed, vec!["data.txt"]);
+                assert!(!*truncated);
             }
             (ToolProjectedContent::Matches { matches, truncated }, ToolId::Grep) => {
                 assert_eq!(matches.len(), 1);
@@ -2240,11 +2241,16 @@ fn projections_preserve_collections_and_round_trip() {
     let paths = (0..=10_000)
         .map(|index| WorkspaceRelativePathDto::parse(format!("f{index}.txt")).unwrap())
         .collect::<Vec<_>>();
-    let projection = ToolResult::Glob(PathsResult { paths }).projection();
-    let ToolProjectedContent::Paths { paths } = projection.content else {
+    let projection = ToolResult::Glob(PathsResult {
+        paths,
+        truncated: false,
+    })
+    .projection();
+    let ToolProjectedContent::Paths { paths, truncated } = projection.content else {
         unreachable!("glob projection content")
     };
     assert_eq!(paths.len(), 10_001);
+    assert!(!truncated);
 
     let matches = (0..=10_000)
         .map(|index| GrepMatch {
