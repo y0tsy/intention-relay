@@ -1,9 +1,9 @@
 # M4+ Concept: Post-M4 Runtime and Session Evolution
 
 > **Historical concept record.** This document preserves an M4-era research
-> investigation and is not current direction. [ADR 0045](decisions/0045-local-json-rpc-2-0-transport.md) supersedes its TLV/IPC
+> investigation and is not current direction. [ADR 0045](decisions/0045-local-json-rpc-2-0-transport.md) supersedes its length-prefixed JSON local
 > transport with JSON-RPC 2.0 over NDJSON at protocol version 2.0 and no
-> capabilities; [ADR 0046](decisions/0046-typed-serde-json-contracts.md) supersedes its binary canonical codec, tag registry,
+> capabilities; [ADR 0046](decisions/0046-typed-serde-json-contracts.md) supersedes its typed-TLV/SHA-256 canonical-record family, tag registry,
 > digests, and identity records with typed serde JSON (RFC 8785
 > canonicalization only when a first real consumer exists); [ADR 0047](decisions/0047-workspace-root-addressing-anchor.md)
 > supersedes its `WorkspaceRoot` containment framing with a plain addressing

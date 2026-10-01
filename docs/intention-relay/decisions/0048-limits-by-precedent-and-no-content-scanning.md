@@ -55,6 +55,8 @@ their documentation remnants.
    | Storage read bounds (`MAX_TAIL_FACTS`, `MAX_*_BYTES`) | Bound replay and page reads to what the storage can serve safely |
    | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Bound one tool read or one rendered result so a single large file or match set cannot force unbounded allocation or a hang |
    | Durable assistant-content bound (`MAX_ASSISTANT_CONTENT_BYTES`) | Bounds one durable fact and the runtime chunk that emits it; long assistant text is fragmented at this size |
+   | Process timeout window (`EXECUTE_TIMEOUT`, 30 s) | Bounds a child process that stops producing progress or never exits |
+   | Process drain window (`READER_DRAIN_GRACE`, 5 s) | Bounds draining a child's output after the timeout, so the loop cannot hang on a silent pipe |
    | Model progress and retry timeouts | Bound a live provider request that stops producing progress |
 
 4. A future limit returns only with its precedent recorded in an ADR or an
@@ -98,9 +100,10 @@ their documentation remnants.
 
 1. Precedent rule. Every numeric limit has a recorded precedent naming the
    failure mode it prevents; a limit without one is removed.
-2. Closed liveness list. The safeguard classes above are the only numeric
-   safeguards retained; a new safeguard or a changed value requires its
-   recorded reason.
+2. Closed liveness list. The safeguard classes above — transport, socket, storage
+   read, tool read and output, durable content, process timeout and drain, and
+   model progress — are the only numeric safeguards retained; a new safeguard or
+   a changed value requires its recorded reason.
 3. No content scanning. No runtime path scans content for credential-like
    shapes, and no heuristic replaces the removed scanners.
 4. No corridors or periods. No corridor, reservation, calendar counter, or

@@ -20,7 +20,9 @@ documentation statements that describe them.
 
 Out of scope: the typed serde DTOs themselves, the storage schema, the
 configuration format, the local transport framing (ADR 0045), and every
-behavior of the ordinary runtime.
+behavior of the ordinary runtime. The deletion removed the codec and
+tag-descriptor DTO families defined inside `contract_families.rs`; the
+retained domain, protocol, storage, and configuration DTOs are unaffected.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |

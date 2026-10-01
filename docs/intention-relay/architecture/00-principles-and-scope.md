@@ -32,7 +32,7 @@ A session may have one active run only. Additional user turns are durably queued
 
 ### 6. Local trusted workspace
 
-A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, validate containment, and never fall back to process `pwd`. Process execution receives it as CWD. v1 is trusted local execution, not a sandbox.
+A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, reject absolute and parent (`..`) paths at the typed input, and never fall back to process `pwd`. Process execution receives it as CWD. The root is an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local execution, not a sandbox (ADR 0047).
 
 ### 7. Cross-cutting features use typed hooks
 

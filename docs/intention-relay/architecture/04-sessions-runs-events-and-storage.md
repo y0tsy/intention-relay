@@ -27,7 +27,7 @@ erDiagram
 
 ## Core invariants
 
-1. Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root association, while M5 owns filesystem containment enforcement.
+1. Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary (ADR 0047).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and event carries stable typed identity.
 4. Every semantic state-changing repository method commits the current-state projection, append-only event envelope(s), and updated session/run snapshot in one SQLite transaction, or changes nothing.

@@ -86,7 +86,7 @@ flowchart BT
 ## M3 ownership decisions
 
 - `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn, transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot/tail reads, and configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend resource.
-- `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId -> WorkspaceRootDto` association; workspace containment remains M5 policy ownership.
+- `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema, transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary (ADR 0047) — remains M5 policy ownership.
 - `intention-runtime` decides valid state edges and performs the required `Starting -> Cancelling -> Cancelled` cancellation path. The repository, not runtime or callers, atomically chooses the lowest queue ticket after every terminal transition, including recovery. It has no provider, tool, timer, stream, or scheduler dependency in M3.
 - `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected database/snapshot and durable-event inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam. Release production APIs and the daemon binary expose no fixture mode.
 
@@ -158,7 +158,7 @@ remain activation-time projections.
 | Mandate IDs, revisions, lifecycle values, trigger/disposition values | Domain/types | Typed, credential-free values and invariants. |
 | Admission workflows, user/daemon conflict handling, recovery decisions | Application/runtime | DTO-only storage and capability contracts. |
 | Atomic lifecycle/attempt persistence and recovery facts | Storage | No transaction/resource leaks. |
-| Public commands, queries, events, and future negotiated replay | Protocol | No runtime, SDK, storage, or adapter resources. |
+| Public commands, queries, events, and future versioned typed replay | Protocol | No runtime, SDK, storage, or adapter resources. |
 | Registry and one capability invocation path | Tools/gateway | Composition-only concrete assembly. |
 | Scheduler readiness/candidate values | Domain/types | Typed, credential-free operational evidence. |
 | Scheduler reevaluation and admission orchestration | Application/runtime | Lifecycle-owned admission only; no second runtime. |
@@ -202,7 +202,7 @@ resources, or another capability authority.
 Architecture 23 owns future typed conversation-tree, parent, boundary, fork
 operation, snapshot, lineage-audit, and safe branch-projection values. Domain
 owns validation; storage owns atomic lineage persistence; protocol owns a later
-negotiated DTO family; application/runtime owns fork orchestration; adapters own
+typed DTO family; application/runtime owns fork orchestration; adapters own
 presentation only. This activates no crate or dependency edge.
 ## Post-M4 activity and adapter ownership
 

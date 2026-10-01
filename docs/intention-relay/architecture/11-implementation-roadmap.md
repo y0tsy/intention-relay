@@ -650,7 +650,7 @@ nothing.
 
 ## Reserved declarations carried by M6-M9
 
-The unconsumed-surface audit (2026-09) (2026-09) keeps exactly one audited surface for this block and
+The unconsumed-surface audit (2026-09) keeps exactly one audited surface for this block and
 records the deleted groups so no M6-M9 slice claims them:
 
 - **Durable session-event delivery (`SessionProviderProfileChanged`) — claimed

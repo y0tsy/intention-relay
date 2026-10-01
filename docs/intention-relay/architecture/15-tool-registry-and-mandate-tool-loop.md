@@ -187,7 +187,7 @@ The workspace rule is the same for every execution kind:
 | Relative paths | Default base: `workspace_root.join(path)`. |
 | `execute` | Initial CWD; the child process starts in the root. |
 | glob/grep | Default scope root when no path is supplied. |
-| Containment | None. Absolute paths and `..` are accepted, with no symlink parser, containment check, or path-based denial; `WorkspaceRoot` is not a security boundary (ADR 0047). |
+| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0047). |
 
 For Mandate path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to redaction, and observation completeness. It is audit evidence, not authorization, and does not claim complete descendant-process tracking or a security boundary. Non-path tools receive no fictional workspace path. Plan artifacts remain outside `WorkspaceRoot` and require their own typed plan authorization.
 

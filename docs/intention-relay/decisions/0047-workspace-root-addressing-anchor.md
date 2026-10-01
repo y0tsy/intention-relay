@@ -43,9 +43,15 @@ record. The removed failure codes `workspace_path_symlink` and
 4. `glob` and `grep` with no explicit path search from the workspace root.
    The default scope is an addressing convention: it decides what a pathless
    call addresses, not what the process may read.
-5. Absolute paths and `..` are not contained. `root.join("/etc/passwd")`
-   yields the absolute path and `root.join("../x")` yields the
-   parent-relative path; both are used as given. This is deliberate.
+5. The root does not contain. `root.join(relative)` is the whole addressing
+   rule: `root.join("/etc/passwd")` yields the absolute path and
+   `root.join("../x")` yields the parent-relative path, with no containment
+   check at resolution. The typed inputs still reject absolute and parent
+   (`..`) paths before resolution — `WorkspaceRelativePathDto` for tool paths
+   and the search-pattern validator for `glob` and `grep` patterns — but that
+   is an input-shape check, not a boundary. Non-containment is observable
+   through symbolic links: a path inside the root may resolve outside it
+   through a link, and nothing detects that.
 
 ### Removed machinery
 
@@ -66,9 +72,10 @@ record. The removed failure codes `workspace_path_symlink` and
 
 1. Join only. A relative path addresses the root joined with that path; there
    is no second resolution rule and no canonicalized path identity.
-2. No containment claim. Absolute paths and `..` are not contained, and
-   symbolic links are ordinary filesystem material rather than a path-check
-   input.
+2. No containment claim. The root contains nothing: a resolved path may leave
+   it through a symbolic link, and the typed inputs reject absolute and `..`
+   paths as an input-shape rule rather than a boundary. Symbolic links are
+   ordinary filesystem material rather than a path-check input.
 3. No security boundary. The root is a project scope and an addressing
    anchor. The daemon and its child processes run with the user's ordinary OS
    authority; the root neither grants nor removes access to anything. Real
@@ -87,19 +94,25 @@ M3/M4 sessions and runs keep their recorded root values and stored paths.
 Removing the containment checks does not rewrite or reinterpret persisted
 data. Relative addressing and the `execute` working directory behave as the
 current runtime already behaves, so this record simplifies the code and the
-documentation rather than changing relative-path behavior. A caller that
-passes an absolute path or `..` now simply gets that path used as given; the
-removed error codes are deleted rather than replaced, so no new error path
-appears.
+documentation rather than changing relative-path behavior. An absolute path or
+a `..` component is still rejected by the typed input validation
+(`WorkspaceRelativePathDto` and the `glob`/`grep` pattern validator) before it
+reaches the root; the removed error codes are deleted rather than replaced, so
+no new error path appears.
 
 ## Security and failure behavior
 
-This record corrects an over-claim. The lexical checks could not enforce a
-boundary, because symbolic links, absolute paths, and `..` defeat path-string
-inspection, and their presence suggested an isolation guarantee that never
+This record corrects an over-claim. The lexical checks did reject absolute
+paths, `..`, and symlinked path components at check time, but they could not
+enforce a boundary: the check and the filesystem operation that follows it are
+separate, so a check-then-use race defeats them, and a lexical check is not an
+OS boundary. Their presence suggested an isolation guarantee that never
 existed. After this record, the documentation says plainly that the root is
-not a boundary. The daemon still relies on OS permissions, socket
-permissions, and the trusted-local model, none of which change. No code path
+not a boundary, while the typed inputs (`WorkspaceRelativePathDto` and the
+`glob`/`grep` pattern validator) still reject absolute and parent paths as an
+input-shape rule rather than a containment guarantee. The daemon still relies
+on OS permissions, socket permissions, and the trusted-local model, none of
+which change. No code path
 emits `workspace_path_symlink` or `workspace_path_outside_root` after the
 change. Tools and kernel features that need a scope state it as an addressing
 rule and do not present it as containment.

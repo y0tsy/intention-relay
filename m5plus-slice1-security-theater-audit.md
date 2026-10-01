@@ -492,3 +492,29 @@ Spot checks performed by the controller against the current tree (read-only):
   architecture 27 until Slice 3 freezes values.
 - Whether the v4 golden payloads (including five Slice-2-family records) will
   be re-pinned by the next activating specification.
+
+## 11. Disposition (post-audit)
+
+This section records how the cleanup branch resolved the section-7 "decisions
+pending" items. Every `file:line` reference above resolves against the audit
+baseline, `main` @ `4bce50e` (2026-09-30); the line numbers are not maintained
+against later commits.
+
+| Section-7 item | Disposition |
+| --- | --- |
+| `negotiation.rs` gate helpers, the 11-code error table, `ProtocolNegotiationResultDto`, and the two capability-carrying hello goldens | Removed with the capability plane and the negotiation module by [ADR 0045](docs/intention-relay/decisions/0045-local-json-rpc-2-0-transport.md); the constants, the hello DTO, and exact-version equality remain, and an incompatible peer now receives the typed `-32001` error before the connection closes |
+| `provider_profiles_v1` and the six Slice-2 family DTOs in `contract_families.rs` | The advertisement was reverted by [ADR 0044](docs/intention-relay/decisions/0044-revert-of-m5plus-slice2-control-plane.md), the capability plane is removed by [ADR 0045](docs/intention-relay/decisions/0045-local-json-rpc-2-0-transport.md), and `contract_families.rs` with its descriptor DTO families is deleted by [ADR 0046](docs/intention-relay/decisions/0046-typed-serde-json-contracts.md) |
+| ~16 orphan DTOs and the `TryFrom` fork-preview bridges | Deleted with `contract_families.rs` by ADR 0046 (53 orphan DTOs) |
+| Identity-exclusion setters, zero-caller canonical helpers, and the identity/digest surface | Deleted with the binary canonical codec, tag registry, and goldens by ADR 0046 |
+| `FixedActivityLimits` frozen-value validation, `policy_selection_digest`, and the "authenticated input" wording | Removed as speculative contract limits by [ADR 0048](docs/intention-relay/decisions/0048-limits-by-precedent-and-no-content-scanning.md) |
+| The credential detector's `"api-key"` rejection | Removed with the runtime credential-shaped content scanners by ADR 0048, which bans runtime content scanning |
+| Keep-but-reserve: reserved wire families (tool/registry/loop, bridge, fork, activity), the v4 record shapes and goldens, `AgentActivitySelectionV1`, bound validators | The canonical codec, tag registry, goldens, and wire-family descriptors are removed by ADR 0046; the reserved capabilities are removed by ADR 0045; slices 3-5 stay reserved under [ADR 0035](docs/intention-relay/decisions/0035-m5plus-complete-foundation-activation.md) and [ADR 0043](docs/intention-relay/decisions/0043-instruction-sources-and-system-context.md) |
+| Documentation fixes (section 6, items 1-7) | Applied on the cleanup branch together with ADRs 0044-0048 |
+| Cheap functional fix: a typed version-mismatch frame before closing | Delivered by ADR 0045: the daemon returns the typed JSON-RPC `-32001` error carrying the typed `ErrorDto` before the connection closes |
+
+The section-8 keep list is read through the same records: the connection-role
+split and the capability gates are removed by ADR 0045, and the byte-stability
+goldens are removed by ADR 0046. The remaining section-8 items (hello DTO,
+exact-version equality, TOML fail-closed schema version, single SQLite schema,
+structural credential absence, durable storage assertions and resource caps,
+CI housekeeping) still stand.

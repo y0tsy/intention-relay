@@ -70,29 +70,31 @@ M0-M5 behavior.
 
 ## Crate map
 
-All workspace crates live under [crates/](crates/) unless noted. Coverage
-tiers A (95%), B (90%), and C (85%) are enforced by the machine-readable
-policy in [quality/coverage.toml](quality/coverage.toml).
+All workspace crates live under [crates/](crates/) unless noted. Coverage is
+enforced by the machine-readable policy in
+[quality/coverage.toml](quality/coverage.toml) under ADR 0049: a base 80% line
+threshold for every production crate and for the workspace aggregate, plus an
+85% threshold for the designated files the policy names.
 
-### DTO foundations (Tier A, active)
+### DTO foundations
 
 | Crate | Responsibility |
 | --- | --- |
 | [intention-types](crates/intention-types) | Shared, dependency-light DTOs: validated identifiers, schema versions, safe errors, time, pagination, event envelopes, model/tool value DTOs. |
-| [intention-domain](crates/intention-domain) | Domain DTOs and value validation, commands/queries, domain events, run modes, model facts, tool results, canonical codec and run-execution-meaning records. |
-| [intention-protocol](crates/intention-protocol) | Versioned public local-protocol DTOs: handshake/negotiation, command/query wrappers, contract families, negotiated capability DTOs. |
+| [intention-domain](crates/intention-domain) | Domain DTOs and value validation, commands/queries, domain events, run modes, model facts, and tool results. |
+| [intention-protocol](crates/intention-protocol) | Versioned public local-protocol DTOs: typed JSON-RPC 2.0 request/response envelopes over NDJSON, command/query wrappers, and their typed serde payloads (ADR 0045, ADR 0046). |
 | [intention-config](crates/intention-config) | Versioned TOML parsing, migration, validation, path selection, and credential-free public configuration projections. |
 
-### Durable storage and application core (Tier B, active)
+### Durable storage and application core
 
 | Crate | Responsibility |
 | --- | --- |
 | [intention-storage](crates/intention-storage) | DTO-only semantic storage contracts: repository, unit-of-work, snapshots, event log, replay. |
-| [intention-storage-sqlite](crates/intention-storage-sqlite) | SQLite-backed durable implementation (single-version schema 3), selected only by the composition crate. |
+| [intention-storage-sqlite](crates/intention-storage-sqlite) | SQLite-backed durable implementation (single-version schema, logical version 1), selected only by the composition crate. |
 | [intention-runtime](crates/intention-runtime) | Deterministic run lifecycle decisions, model-loop coordination, cancellation, over DTO-only storage. |
 | [intention-application](crates/intention-application) | Workflow orchestration: sessions, turns, scheduling, tool invocation, and publication over durable outcomes. |
 
-### Model drivers (Tier C, active)
+### Model drivers
 
 | Crate | Responsibility |
 | --- | --- |
@@ -100,22 +102,22 @@ policy in [quality/coverage.toml](quality/coverage.toml).
 | [intention-provider-openrouter](crates/intention-provider-openrouter) | OpenRouter driver; `openrouter-rs` stays a private implementation detail. |
 | [intention-provider-generic-chat](crates/intention-provider-generic-chat) | Generic OpenAI-compatible Chat Completions driver; `async-openai` stays private. |
 
-### Tools, workspace, and hooks (Tier B, active)
+### Tools, workspace, and hooks
 
 | Crate | Responsibility |
 | --- | --- |
 | [intention-tools](crates/intention-tools) | Typed, bounded tool contracts and the fixed registry; `read`, `write`, `edit`, `execute`, `glob`, and `grep` are executable; remaining fixed slots are reserved. |
-| [intention-workspace](crates/intention-workspace) | `WorkspaceRoot` resolution and fail-closed filesystem policy (no CWD fallback, symlink containment). |
+| [intention-workspace](crates/intention-workspace) | `WorkspaceRoot` addressing anchor: relative-path resolution, child-process CWD, and default search scope (ADR 0047). |
 | [intention-hooks](crates/intention-hooks) | Typed, deterministic hook registration and dispatch around tool execution. |
 
 ### Transport, client, and daemon (active)
 
 | Crate | Responsibility |
 | --- | --- |
-| [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, bounded length-prefixed JSON framing (1 MiB frames), hello and negotiation. Tier C. |
-| [intention-client](crates/intention-client) | Shared bootstrap, dispatch, subscription, and reconnect client for adapters, with advisory startup lock and daemon launch. Tier C. |
-| [intention](crates/intention) | Composition root and durable `DaemonApplicationFacade`; the only crate that selects SQLite and concrete drivers. Tier C. |
-| [intention-daemon](crates/intention-daemon) | Daemon host library plus the thin `intention-daemon` binary (the only binary in the workspace). Tier C. |
+| [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, NDJSON JSON-RPC 2.0 framing (1 MiB message cap), and the hello handshake with exact protocol-version equality. |
+| [intention-client](crates/intention-client) | Shared bootstrap, dispatch, subscription, and reconnect client for adapters, with advisory startup lock and daemon launch. |
+| [intention](crates/intention) | Composition root and durable `DaemonApplicationFacade`; the only crate that selects SQLite and concrete drivers. |
+| [intention-daemon](crates/intention-daemon) | Daemon host library plus the thin `intention-daemon` binary (the only binary in the workspace). |
 
 ### Adapter slots and reserved crates
 
@@ -232,7 +234,7 @@ quick` while iterating and run `make verify` before acceptance.
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, default-profile tests. |
 | `make check` | Complete non-mutating source gate: format, features, `check-cargo`, lint, tests/doctests, docs, architecture. |
 | `make docs-check` | Rustdoc across feature profiles, then Markdown link/Mermaid/secret-pattern validation. |
-| `make coverage` | Branch-aware coverage for all profiles, enforcing the declared tiers (see [quality/coverage.toml](quality/coverage.toml)). |
+| `make coverage` | Branch-aware coverage for all profiles, enforcing the declared line thresholds (see [quality/coverage.toml](quality/coverage.toml)). |
 | `make verify` | Full acceptance gate: `check` plus coverage, dependency gates, and quality self-tests; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
@@ -279,7 +281,7 @@ is enabled for dependency updates
   immutable closure evidence for each milestone, including CI results and
   coverage.
 - [docs/intention-relay/decisions/README.md](docs/intention-relay/decisions/README.md):
-  accepted architecture decision records (ADR 0001-0043).
+  accepted architecture decision records (ADR 0001-0048).
 - [docs/reference/README.md](docs/reference/README.md): preserved legacy
   research material, not an implementation dependency.
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices

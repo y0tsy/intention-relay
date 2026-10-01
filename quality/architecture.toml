@@ -247,8 +247,8 @@ coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-workspace"
-responsibility = "WorkspaceRoot path policy and process CWD enforcement."
-test_target = "workspace containment tests"
+responsibility = "WorkspaceRoot addressing anchor and process CWD."
+test_target = "workspace addressing and CWD tests"
 test_targets = ["workspace_contract"]
 coverage_tier = "B"
 
