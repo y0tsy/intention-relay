@@ -10,8 +10,15 @@
 //! a payload that fails typed decoding is an invalid-params error, and a
 //! differing local protocol version is answered with an implementation-defined
 //! mismatch error before the daemon closes the connection.
+//!
+//! JSON-RPC 2.0 makes `params` optional, so a parameterless request may omit
+//! it: an absent member decodes as the empty payload the caller supplies,
+//! while an explicit `"params": null` is a present member that fails typed
+//! decoding. A request envelope without an `id` member is a notification, and
+//! a server must not answer one; an explicit `"id": null` is a request, not a
+//! notification.
 
-use intention_types::{ErrorCategoryDto, ErrorDto, ErrorRetryDto};
+use intention_types::ErrorDto;
 use serde::de::{self, IgnoredAny};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -26,18 +33,54 @@ pub const JSONRPC_INVALID_REQUEST: i64 = -32600;
 pub const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 /// Invalid params: the method parameters failed typed decoding.
 pub const JSONRPC_INVALID_PARAMS: i64 = -32602;
-/// Internal error: the daemon could not complete an otherwise valid request.
-pub const JSONRPC_INTERNAL_ERROR: i64 = -32603;
 /// The local protocol versions differ; the daemon answers before it closes.
 pub const JSONRPC_VERSION_MISMATCH: i64 = -32001;
 
 /// A JSON-RPC 2.0 request envelope carrying a typed parameter payload.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct JsonRpcRequestDto<T> {
     jsonrpc: String,
     id: u64,
     method: String,
     params: T,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for JsonRpcRequestDto<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawRequestDto<T> {
+            jsonrpc: String,
+            id: u64,
+            method: String,
+            params: T,
+        }
+
+        let raw = RawRequestDto::<T>::deserialize(deserializer)?;
+        build_request(raw.jsonrpc, raw.id, raw.method, raw.params).map_err(de::Error::custom)
+    }
+}
+
+fn build_request<T>(
+    jsonrpc: String,
+    id: u64,
+    method: String,
+    params: T,
+) -> Result<JsonRpcRequestDto<T>, ErrorDto> {
+    if jsonrpc != JSONRPC_VERSION {
+        return Err(ErrorDto::validation(
+            "invalid_jsonrpc_version",
+            "the JSON-RPC version must be exactly 2.0",
+        ));
+    }
+    Ok(JsonRpcRequestDto {
+        jsonrpc,
+        id,
+        method,
+        params,
+    })
 }
 
 impl<T> JsonRpcRequestDto<T> {
@@ -87,10 +130,58 @@ impl<T: de::DeserializeOwned> JsonRpcRequestDto<T> {
     /// does not decode into `T`.
     pub fn parse(line: &str) -> Result<Self, JsonRpcRequestFailure> {
         let header = JsonRpcRequestHeader::parse(line)?;
-        let request: Self = serde_json::from_str(line)
-            .map_err(|_| JsonRpcRequestFailure::invalid_params(Some(header.id)))?;
-        Ok(request)
+        Self::decode_payload(line, &header)
     }
+
+    /// Parses one request line whose `params` member may be absent.
+    ///
+    /// JSON-RPC 2.0 makes `params` optional, so a parameterless request omits
+    /// it; an absent member decodes as `empty`. An explicit `"params": null`
+    /// is a present member and is decoded, and rejected, like any other value.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::parse`].
+    pub(crate) fn parse_allowing_absent_params(
+        line: &str,
+        empty: T,
+    ) -> Result<Self, JsonRpcRequestFailure> {
+        let header = JsonRpcRequestHeader::parse(line)?;
+        if request_carries_params(line) {
+            return Self::decode_payload(line, &header);
+        }
+        Ok(Self::new(header.id(), header.method(), empty))
+    }
+
+    fn decode_payload(
+        line: &str,
+        header: &JsonRpcRequestHeader,
+    ) -> Result<Self, JsonRpcRequestFailure> {
+        serde_json::from_str(line)
+            .map_err(|_| JsonRpcRequestFailure::invalid_params(Some(header.id())))
+    }
+}
+
+/// Reports whether one request line carries a `params` member.
+///
+/// A member is present when it appears at all, including as an explicit
+/// `null`; only an absent member is a parameterless request.
+fn request_carries_params(line: &str) -> bool {
+    #[derive(Deserialize)]
+    struct RawParamsPresenceDto {
+        #[serde(default, deserialize_with = "member_present")]
+        params: bool,
+    }
+
+    serde_json::from_str::<RawParamsPresenceDto>(line).is_ok_and(|raw| raw.params)
+}
+
+/// Decodes one member presence: `true` for any present value, including `null`.
+fn member_present<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 /// A JSON-RPC 2.0 response envelope; exactly one outcome is present.
@@ -257,6 +348,9 @@ impl<T> JsonRpcNotificationDto<T> {
 impl<T: de::DeserializeOwned> JsonRpcNotificationDto<T> {
     /// Parses one notification line.
     ///
+    /// A notification carries no `id` member at all; an explicit
+    /// `"id": null` is a request, not a notification.
+    ///
     /// # Errors
     ///
     /// Returns a parse error for invalid JSON and an invalid-request error for
@@ -264,20 +358,35 @@ impl<T: de::DeserializeOwned> JsonRpcNotificationDto<T> {
     pub fn parse(line: &str) -> Result<Self, JsonRpcErrorDto> {
         let _: IgnoredAny =
             serde_json::from_str(line).map_err(|_| JsonRpcErrorDto::parse_error())?;
-        #[derive(Deserialize)]
-        struct RawNotificationHeaderDto {
-            jsonrpc: String,
-            #[serde(default)]
-            id: Option<u64>,
-            method: String,
-        }
-        let header: RawNotificationHeaderDto =
-            serde_json::from_str(line).map_err(|_| JsonRpcErrorDto::invalid_request())?;
-        if header.jsonrpc != JSONRPC_VERSION || header.method.is_empty() || header.id.is_some() {
+        if !is_notification_line(line) {
             return Err(JsonRpcErrorDto::invalid_request());
         }
         serde_json::from_str(line).map_err(|_| JsonRpcErrorDto::invalid_request())
     }
+}
+
+/// Reports whether one line is a conformant JSON-RPC 2.0 notification.
+///
+/// A notification is a request envelope whose `id` member is absent, and a
+/// server must not answer one. An explicit `"id": null` is a request rather
+/// than a notification, so it is answered with an error instead of silence.
+#[must_use]
+pub fn is_notification_line(line: &str) -> bool {
+    let _: IgnoredAny = match serde_json::from_str(line) {
+        Ok(ignored) => ignored,
+        Err(_) => return false,
+    };
+    #[derive(Deserialize)]
+    struct RawNotificationHeaderDto {
+        jsonrpc: String,
+        #[serde(default, deserialize_with = "member_present")]
+        id: bool,
+        method: String,
+    }
+
+    serde_json::from_str::<RawNotificationHeaderDto>(line).is_ok_and(|header| {
+        header.jsonrpc == JSONRPC_VERSION && !header.method.is_empty() && !header.id
+    })
 }
 
 /// A JSON-RPC 2.0 error object carrying the stable typed error in `data`.
@@ -327,20 +436,23 @@ impl JsonRpcErrorDto {
     }
 
     /// Creates the method-not-found error for an unknown method name.
+    ///
+    /// The client-supplied name is echoed only as a bounded prefix: a
+    /// conformant reply must always stay small enough to encode, whatever the
+    /// peer sent.
     #[must_use]
     pub fn method_not_found(method: &str) -> Self {
-        let message = format!("the method {method} is not implemented");
-        let data = ErrorDto::new(
-            "jsonrpc_method_not_found",
-            ErrorCategoryDto::Validation,
-            message.clone(),
-            ErrorRetryDto::Manual,
-            None,
+        Self::new(
+            JSONRPC_METHOD_NOT_FOUND,
+            format!(
+                "the method {} is not implemented",
+                bounded_method_name(method)
+            ),
+            Some(ErrorDto::validation(
+                "jsonrpc_method_not_found",
+                "the requested method is not implemented",
+            )),
         )
-        .unwrap_or_else(|_| {
-            ErrorDto::validation("jsonrpc_method_not_found", "the method is not implemented")
-        });
-        Self::new(JSONRPC_METHOD_NOT_FOUND, message, Some(data))
     }
 
     /// Creates the invalid-params error for a payload that failed decoding.
@@ -368,12 +480,6 @@ impl JsonRpcErrorDto {
         self.code
     }
 
-    /// Returns the safe human-readable error message.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
     /// Returns the stable typed error detail when one is present.
     #[must_use]
     pub fn data(&self) -> Option<&ErrorDto> {
@@ -389,6 +495,24 @@ impl JsonRpcErrorDto {
                 "the local daemon returned a JSON-RPC error",
             )
         })
+    }
+}
+
+/// The longest client-supplied method name echoed into a not-found error.
+///
+/// The echo is diagnostic only, and a conformant reply must always fit the
+/// transport message cap, so a longer name is truncated instead of mirrored
+/// in full.
+const MAX_ECHOED_METHOD_NAME_CHARS: usize = 64;
+
+/// Returns one client-supplied method name bounded to the echo length.
+fn bounded_method_name(method: &str) -> String {
+    let mut chars = method.chars();
+    let prefix: String = chars.by_ref().take(MAX_ECHOED_METHOD_NAME_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{prefix}...")
+    } else {
+        prefix
     }
 }
 
@@ -574,6 +698,124 @@ mod tests {
     }
 
     #[test]
+    fn raw_request_decoding_validates_the_jsonrpc_version() {
+        let wrong_version =
+            r#"{"jsonrpc":"1.0","id":9,"method":"fixture.method","params":{"value":1}}"#;
+        let error = serde_json::from_str::<JsonRpcRequestDto<FixtureParams>>(wrong_version)
+            .expect_err("a request envelope with a non-2.0 version is rejected on decode");
+        assert!(
+            error.to_string().contains("invalid_jsonrpc_version"),
+            "the rejection names the version member: {error}"
+        );
+
+        let conformant: JsonRpcRequestDto<FixtureParams> = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":9,"method":"fixture.method","params":{"value":1}}"#,
+        )
+        .expect("a conformant request decodes");
+        assert_eq!(
+            conformant,
+            JsonRpcRequestDto::new(9, "fixture.method", fixture(1))
+        );
+    }
+
+    #[test]
+    fn absent_params_decodes_as_the_empty_payload_while_null_stays_present() {
+        let parameterless = r#"{"jsonrpc":"2.0","id":1,"method":"fixture.method"}"#;
+        assert!(
+            JsonRpcRequestDto::<FixtureParams>::parse(parameterless).is_err(),
+            "the strict parse still requires the member"
+        );
+        let request = JsonRpcRequestDto::<FixtureParams>::parse_allowing_absent_params(
+            parameterless,
+            fixture(7),
+        )
+        .expect("an absent params member decodes as the empty payload");
+        assert_eq!(request.id(), 1);
+        assert_eq!(request.method(), "fixture.method");
+        assert_eq!(request.params(), &fixture(7));
+
+        assert!(
+            JsonRpcRequestDto::<FixtureParams>::parse_allowing_absent_params(
+                r#"{"jsonrpc":"2.0","id":1,"method":"fixture.method","params":null}"#,
+                fixture(7),
+            )
+            .is_err(),
+            "an explicit null member is present and must fail typed decoding"
+        );
+        let present = JsonRpcRequestDto::<FixtureParams>::parse_allowing_absent_params(
+            r#"{"jsonrpc":"2.0","id":1,"method":"fixture.method","params":{"value":3}}"#,
+            fixture(7),
+        )
+        .expect("a present params member decodes");
+        assert_eq!(
+            present.params(),
+            &fixture(3),
+            "a present member is never replaced by the empty payload"
+        );
+    }
+
+    #[test]
+    fn notifications_require_an_absent_id_member() {
+        let notification = r#"{"jsonrpc":"2.0","method":"run.frame","params":{"value":2}}"#;
+        assert!(is_notification_line(notification));
+        let decoded: JsonRpcNotificationDto<FixtureParams> =
+            JsonRpcNotificationDto::parse(notification).expect("a notification parses");
+        assert_eq!(decoded.into_params(), fixture(2));
+
+        let null_id = r#"{"jsonrpc":"2.0","id":null,"method":"run.frame","params":{"value":2}}"#;
+        assert!(
+            !is_notification_line(null_id),
+            "an explicit null id is a request, not a notification"
+        );
+        assert_eq!(
+            JsonRpcNotificationDto::<FixtureParams>::parse(null_id)
+                .expect_err("an explicit null id is rejected")
+                .code(),
+            JSONRPC_INVALID_REQUEST
+        );
+
+        let numbered_id = r#"{"jsonrpc":"2.0","id":3,"method":"run.frame","params":{"value":2}}"#;
+        assert!(!is_notification_line(numbered_id));
+        for not_a_notification in [
+            "{",
+            r#"{"jsonrpc":"1.0","method":"run.frame","params":{"value":2}}"#,
+            r#"{"jsonrpc":"2.0","method":"","params":{"value":2}}"#,
+        ] {
+            assert!(
+                !is_notification_line(not_a_notification),
+                "{not_a_notification} is not a conformant notification"
+            );
+        }
+    }
+
+    #[test]
+    fn method_not_found_bounds_the_echoed_method_name() {
+        let long_name = "m".repeat(MAX_ECHOED_METHOD_NAME_CHARS + 1);
+        let error = JsonRpcErrorDto::method_not_found(&long_name);
+        assert_eq!(error.code(), JSONRPC_METHOD_NOT_FOUND);
+        assert_eq!(
+            error.data().map(ErrorDto::code),
+            Some("jsonrpc_method_not_found")
+        );
+        let wire = serde_json::to_string(&error).expect("the error serializes");
+        assert!(
+            wire.len() < 512,
+            "a not-found reply never mirrors an unbounded method name"
+        );
+        assert!(
+            wire.contains("..."),
+            "the echoed prefix is marked as truncated: {wire}"
+        );
+
+        let short = serde_json::to_string(&JsonRpcErrorDto::method_not_found("fixture.method"))
+            .expect("the error serializes");
+        assert!(
+            short.contains("fixture.method"),
+            "a short method name is echoed in full: {short}"
+        );
+    }
+
+    #[test]
     fn error_helpers_use_standard_codes_and_typed_data() {
         assert_eq!(JsonRpcErrorDto::parse_error().code(), JSONRPC_PARSE_ERROR);
         assert_eq!(
@@ -601,7 +843,7 @@ mod tests {
         );
         let typed = JsonRpcErrorDto::invalid_params().to_error();
         assert_eq!(typed.code(), "jsonrpc_invalid_params");
-        let foreign = JsonRpcErrorDto::new(JSONRPC_INTERNAL_ERROR, "boom", None).to_error();
+        let foreign = JsonRpcErrorDto::new(JSONRPC_METHOD_NOT_FOUND, "boom", None).to_error();
         assert_eq!(foreign.code(), "local_daemon_jsonrpc_error");
     }
 }

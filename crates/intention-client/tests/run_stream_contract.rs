@@ -399,6 +399,123 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
 }
 
 #[tokio::test]
+async fn request_replay_buffers_frames_queued_before_the_correlated_reply() {
+    let endpoint = endpoint();
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("peer accepts");
+        let (_, mut requests, mut messages) = connection
+            .negotiate(hello("scripted-daemon"))
+            .await
+            .expect("peer negotiates");
+        let (initial_id, _) = receive_run_subscription(&mut requests).await;
+        messages
+            .send_message(&encode_response(
+                initial_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
+            ))
+            .await
+            .expect("initial response sends");
+        let (replay_id, replay_request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(
+            replay_request.after_cursor(),
+            Some(RunEventCursorDto::new(0))
+        );
+        // Both frames reach the connection FIFO ahead of the correlated reply.
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
+                RunStreamFrameDto::LiveBatch(
+                    RunLiveBatchDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(0),
+                        vec![fact(1, None)],
+                        RunEventCursorDto::new(1),
+                    )
+                    .expect("contiguous buffered batch validates"),
+                ),
+            ))
+            .await
+            .expect("contiguous frame sends");
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
+                RunStreamFrameDto::LiveBatch(
+                    RunLiveBatchDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(2),
+                        vec![fact(3, None)],
+                        RunEventCursorDto::new(3),
+                    )
+                    .expect("gapped buffered batch validates"),
+                ),
+            ))
+            .await
+            .expect("gapped frame sends");
+        messages
+            .send_message(&encode_response(
+                replay_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
+            ))
+            .await
+            .expect("replay response sends");
+        let (recovery_id, recovery_request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(
+            recovery_request.after_cursor(),
+            Some(RunEventCursorDto::new(1))
+        );
+        messages
+            .send_message(&encode_response(
+                recovery_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
+                    session_id,
+                    run_id,
+                    1,
+                    vec![fact(2, None), fact(3, None)],
+                )),
+            ))
+            .await
+            .expect("recovery replay sends");
+    });
+    let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
+    let mut subscription = client
+        .subscribe(SubscribeRunCommandDto::new(
+            SCHEMA, session_id, run_id, None,
+        ))
+        .await
+        .expect("initial replay arrives");
+    subscription
+        .request_replay()
+        .await
+        .expect("replay applies despite frames queued ahead of the reply");
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(1))
+    );
+    let resync = subscription
+        .receive()
+        .await
+        .expect("buffered frame is delivered")
+        .expect("buffered gap frame reports a resync");
+    assert_eq!(resync.reason(), RunResyncReasonDto::CursorGap);
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(1))
+    );
+    subscription
+        .request_replay()
+        .await
+        .expect("recovery replay applies");
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(3))
+    );
+    server.await.expect("scripted peer completes");
+}
+
+#[tokio::test]
 async fn request_replay_rejects_mismatched_correlation_and_error_reply_without_mutating_state() {
     for is_error_reply in [false, true] {
         let endpoint = endpoint();
@@ -424,7 +541,7 @@ async fn request_replay_rejects_mismatched_correlation_and_error_reply_without_m
                 JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
                     Some(replay_id),
                     JsonRpcErrorDto::from_error(
-                        intention_protocol::jsonrpc::JSONRPC_INTERNAL_ERROR,
+                        intention_protocol::JSONRPC_INVALID_REQUEST,
                         ErrorDto::validation("run_replay_rejected", "fixture replay rejected"),
                     ),
                 )

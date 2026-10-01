@@ -4,7 +4,7 @@
 //! transport implementation access. It retains only reconnect projection state;
 //! daemon authority remains remote.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -29,6 +29,8 @@ use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, SchemaVersionDto, S
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
+/// Bounded wait for one correlated run-stream reply or notification.
+const STREAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Launches a daemon process after bootstrap has acquired the startup lock.
 pub trait DaemonLauncher: Send + Sync {
@@ -118,8 +120,8 @@ impl IntentionClient {
     ///
     /// The client attempts IPC before spawning, retries an already-starting
     /// daemon without spawning, then uses a process-wide advisory lock only when
-    /// the endpoint is unavailable. Readiness requires compatible hello,
-    /// capabilities, a correlated health query, and `Ready` state.
+    /// the endpoint is unavailable. Readiness requires compatible hello, a
+    /// correlated health query, and `Ready` state.
     ///
     /// # Errors
     ///
@@ -297,7 +299,9 @@ impl RunStreamClient {
     ///
     /// # Errors
     ///
-    /// Returns a typed protocol, transport, or scoped-response error.
+    /// Returns a typed protocol, transport, or scoped-response error, or an
+    /// unavailable timeout error when the correlated reply does not arrive
+    /// before the bounded deadline.
     pub async fn subscribe(
         &self,
         subscription: SubscribeRunCommandDto,
@@ -308,7 +312,9 @@ impl RunStreamClient {
         let (_, mut requests, mut messages) = connection.negotiate(self.hello.clone()).await?;
         let request = encode_request(1, ProtocolRequestPayloadDto::RunSubscription(subscription));
         requests.send_message(&request).await?;
-        let line = messages.receive_line().await?;
+        let line = tokio::time::timeout(STREAM_REPLY_TIMEOUT, messages.receive_line())
+            .await
+            .map_err(|_| stream_reply_timeout())??;
         let response = decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)?;
         let initial = match response {
             ProtocolResponsePayloadDto::RunSubscription(response) => response,
@@ -320,6 +326,7 @@ impl RunStreamClient {
             requests,
             messages,
             next_request_id: 2,
+            pending_frames: VecDeque::new(),
             reducer,
         })
     }
@@ -330,19 +337,27 @@ pub struct RunStreamSubscription {
     requests: AsyncRequestSender,
     messages: AsyncMessageReceiver,
     next_request_id: u64,
+    pending_frames: VecDeque<RunStreamFrameDto>,
     reducer: RunSubscriptionReducer,
 }
 
 impl RunStreamSubscription {
     /// Receives and applies one daemon run-frame notification.
     ///
-    /// A returned resync is locally generated for a detected cursor gap. A
-    /// daemon-originated matching resync clears the reducer and returns `None`.
+    /// Frames buffered while an earlier replay reply was pending are applied
+    /// first. A returned resync is locally generated for a detected cursor gap.
+    /// A daemon-originated matching resync clears the reducer and returns
+    /// `None`.
     ///
     /// # Errors
     ///
-    /// Returns a typed framing, protocol, or scope-validation error.
+    /// Returns a typed framing, protocol, or scope-validation error. Live
+    /// frames may be arbitrarily sparse, so this wait is intentionally
+    /// unbounded; only the correlated reply waits carry a deadline.
     pub async fn receive(&mut self) -> DtoResult<Option<RunResyncDto>> {
+        if let Some(frame) = self.pending_frames.pop_front() {
+            return self.reducer.apply_frame(frame);
+        }
         let line = self.messages.receive_line().await?;
         let frame = parse_run_frame_notification(&line)?;
         self.reducer.apply_frame(frame)
@@ -351,10 +366,16 @@ impl RunStreamSubscription {
     /// Sends a new subscription request from the last valid cursor and applies
     /// its immediate replay, resync, or error response.
     ///
+    /// Frames the daemon queued ahead of the correlated reply are buffered and
+    /// applied in arrival order after the reply, so the reply is never mistaken
+    /// for a frame.
+    ///
     /// # Errors
     ///
-    /// Returns a typed transport, protocol, or scoped-response error. The
-    /// current reducer state is retained if the reply is invalid or rejected.
+    /// Returns a typed transport, protocol, or scoped-response error, or an
+    /// unavailable timeout error when the correlated reply does not arrive
+    /// before the bounded deadline. The current reducer state is retained if
+    /// the reply is invalid or rejected.
     pub async fn request_replay(&mut self) -> DtoResult<()> {
         let subscription = SubscribeRunCommandDto::new(
             SCHEMA_VERSION,
@@ -369,14 +390,51 @@ impl RunStreamSubscription {
             ProtocolRequestPayloadDto::RunSubscription(subscription),
         );
         self.requests.send_message(&request).await?;
-        let line = self.messages.receive_line().await?;
-        let response = decode_response(&line, ProtocolMethodDto::RunSubscribe, request_id)?;
+        let response = self.await_replay_response(request_id).await?;
         match response {
             ProtocolResponsePayloadDto::RunSubscription(response) => {
-                self.reducer.apply_initial(response)
+                self.reducer.apply_initial(response)?;
             }
-            _ => Err(invalid_response()),
+            _ => return Err(invalid_response()),
         }
+        self.apply_buffered_frames()
+    }
+
+    /// Reads until the correlated replay reply, buffering interleaved frames.
+    ///
+    /// Only a `run.frame` notification is buffered; any other line, including a
+    /// response with another correlation id, is rejected by `decode_response`.
+    async fn await_replay_response(
+        &mut self,
+        request_id: u64,
+    ) -> DtoResult<ProtocolResponsePayloadDto> {
+        tokio::time::timeout(STREAM_REPLY_TIMEOUT, async {
+            loop {
+                let line = self.messages.receive_line().await?;
+                match parse_run_frame_notification(&line) {
+                    Ok(frame) => self.pending_frames.push_back(frame),
+                    Err(_) => {
+                        return decode_response(&line, ProtocolMethodDto::RunSubscribe, request_id);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| stream_reply_timeout())?
+    }
+
+    /// Applies buffered frames in order, stopping at the first local resync.
+    ///
+    /// A frame that requires a resync is left buffered so the next `receive`
+    /// reports that resync; the reducer keeps its state for both paths.
+    fn apply_buffered_frames(&mut self) -> DtoResult<()> {
+        while let Some(frame) = self.pending_frames.pop_front() {
+            if self.reducer.apply_frame(frame.clone())?.is_some() {
+                self.pending_frames.push_front(frame);
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     /// Returns the state reducer for this fixed run scope.
@@ -721,6 +779,13 @@ fn invalid_response() -> ErrorDto {
     ErrorDto::validation(
         "invalid_local_protocol_response",
         "the local daemon returned an unexpected protocol response",
+    )
+}
+
+fn stream_reply_timeout() -> ErrorDto {
+    ErrorDto::unavailable(
+        "run_stream_reply_timeout",
+        "the local daemon did not answer the run-stream request in time",
     )
 }
 

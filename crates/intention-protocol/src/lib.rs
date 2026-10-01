@@ -53,11 +53,31 @@ pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new
 /// The currently activated public DTO schema version.
 pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
 
+/// Decodes one payload `schema_version` that must equal the current version.
+///
+/// The public DTO schema compares by exact equality, with no same-major
+/// tolerance, so a received payload that declares any other version fails at
+/// the decode boundary with the typed `incompatible_dto_schema_version` error.
+fn current_schema_version<'de, D>(deserializer: D) -> Result<SchemaVersionDto, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let version = SchemaVersionDto::deserialize(deserializer)?;
+    if version == CURRENT_DTO_SCHEMA_VERSION {
+        Ok(version)
+    } else {
+        Err(de::Error::custom(ErrorDto::validation(
+            "incompatible_dto_schema_version",
+            "the DTO schema version must equal the current version",
+        )))
+    }
+}
+
 pub mod jsonrpc;
 pub use jsonrpc::{
-    JSONRPC_INVALID_REQUEST, JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR, JSONRPC_VERSION,
-    JSONRPC_VERSION_MISMATCH, JsonRpcErrorDto, JsonRpcNotificationDto, JsonRpcRequestDto,
-    JsonRpcRequestFailure, JsonRpcResponseDto,
+    JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST, JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR,
+    JSONRPC_VERSION, JSONRPC_VERSION_MISMATCH, JsonRpcErrorDto, JsonRpcNotificationDto,
+    JsonRpcRequestDto, JsonRpcRequestFailure, JsonRpcResponseDto, is_notification_line,
 };
 
 /// A safe metadata handshake exchanged before any protocol command.
@@ -134,6 +154,7 @@ pub enum DaemonReadinessDto {
 /// A versioned, credential-free health projection from the daemon authority.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DaemonHealthDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     protocol_version: ProtocolVersionDto,
     readiness: DaemonReadinessDto,
@@ -176,6 +197,7 @@ impl DaemonHealthDto {
 /// A subscription request scoped to one durable session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscribeSessionCommandDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +279,7 @@ impl SubscribeSessionCommandDto {
 /// A dedicated run-stream subscription request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscribeRunCommandDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     run_id: RunId,
@@ -885,6 +908,7 @@ impl<'de> Deserialize<'de> for SessionSnapshotDto {
     {
         #[derive(Deserialize)]
         struct RawSessionSnapshotDto {
+            #[serde(deserialize_with = "current_schema_version")]
             schema_version: SchemaVersionDto,
             session_id: SessionId,
             at_sequence: SessionEventSequenceDto,
@@ -970,6 +994,7 @@ impl<'de> Deserialize<'de> for SessionEventTailBatchDto {
     {
         #[derive(Deserialize)]
         struct RawSessionEventTailBatchDto {
+            #[serde(deserialize_with = "current_schema_version")]
             schema_version: SchemaVersionDto,
             session_id: SessionId,
             after_sequence: SessionEventSequenceDto,
@@ -1069,6 +1094,7 @@ pub enum SessionResyncReasonDto {
 /// A typed instruction to discard local subscription state and resynchronize.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionResyncDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     reason: SessionResyncReasonDto,
@@ -1255,6 +1281,22 @@ pub enum ProtocolMethodDto {
 }
 
 impl ProtocolMethodDto {
+    /// Every implemented method.
+    ///
+    /// The wire-name table has exactly one source, [`Self::as_str`], and the
+    /// one-to-one coverage of this list is pinned by a wildcard-free
+    /// conformance test, so a method name and a variant can never drift.
+    const ALL: [Self; 8] = [
+        Self::SessionCreate,
+        Self::TurnSend,
+        Self::TurnRemove,
+        Self::RunStop,
+        Self::SessionSubscribe,
+        Self::RunSubscribe,
+        Self::DaemonHealth,
+        Self::SessionSnapshot,
+    ];
+
     /// Returns the wire method name.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -1339,21 +1381,34 @@ impl ProtocolMethodDto {
         }
     }
 
-    fn parse_with_id(method: &str, id: u64) -> Result<Self, JsonRpcRequestFailure> {
-        match method {
-            "session.create" => Ok(Self::SessionCreate),
-            "turn.send" => Ok(Self::TurnSend),
-            "turn.remove" => Ok(Self::TurnRemove),
-            "run.stop" => Ok(Self::RunStop),
-            "session.subscribe" => Ok(Self::SessionSubscribe),
-            "run.subscribe" => Ok(Self::RunSubscribe),
-            "daemon.health" => Ok(Self::DaemonHealth),
-            "session.snapshot" => Ok(Self::SessionSnapshot),
-            _ => Err(JsonRpcRequestFailure::new(
-                Some(id),
-                JsonRpcErrorDto::method_not_found(method),
+    /// Returns the payload a parameterless request of this method carries.
+    ///
+    /// Only `daemon.health` is genuinely parameterless (ADR 0045); every other
+    /// method requires its typed payload, so an absent `params` member stays an
+    /// invalid-params failure.
+    const fn empty_payload(self) -> Option<ProtocolRequestPayloadDto> {
+        match self {
+            Self::DaemonHealth => Some(ProtocolRequestPayloadDto::Query(
+                ProtocolQueryDto::GetDaemonHealth,
             )),
+            Self::SessionCreate
+            | Self::TurnSend
+            | Self::TurnRemove
+            | Self::RunStop
+            | Self::SessionSubscribe
+            | Self::RunSubscribe
+            | Self::SessionSnapshot => None,
         }
+    }
+
+    fn parse_with_id(method: &str, id: u64) -> Result<Self, JsonRpcRequestFailure> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == method)
+            .ok_or_else(|| {
+                JsonRpcRequestFailure::new(Some(id), JsonRpcErrorDto::method_not_found(method))
+            })
     }
 }
 
@@ -1431,6 +1486,10 @@ pub fn encode_request(
 
 /// Parses one wire line into a decoded client request.
 ///
+/// A line whose request envelope omits the `id` member is a notification, not a
+/// request: [`jsonrpc::is_notification_line`] classifies it, and a server must
+/// not answer it.
+///
 /// # Errors
 ///
 /// Returns a parse error for invalid JSON, an invalid-request error for a
@@ -1439,7 +1498,10 @@ pub fn encode_request(
 pub fn decode_request_line(line: &str) -> Result<ProtocolRequestDto, JsonRpcRequestFailure> {
     let header = jsonrpc::JsonRpcRequestHeader::parse(line)?;
     let method = ProtocolMethodDto::parse_with_id(header.method(), header.id())?;
-    let request: JsonRpcRequestDto<ProtocolRequestPayloadDto> = JsonRpcRequestDto::parse(line)?;
+    let request: JsonRpcRequestDto<ProtocolRequestPayloadDto> = match method.empty_payload() {
+        Some(empty) => JsonRpcRequestDto::parse_allowing_absent_params(line, empty)?,
+        None => JsonRpcRequestDto::parse(line)?,
+    };
     if !method.accepts_request(request.params()) {
         return Err(JsonRpcRequestFailure::new(
             Some(request.id()),

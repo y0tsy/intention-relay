@@ -10,15 +10,16 @@ use intention_domain::{
     SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
 };
 use intention_protocol::{
-    CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto,
-    JsonRpcRequestDto, JsonRpcResponseDto, PROTOCOL_HELLO_METHOD, ProtocolAcceptedDto,
-    ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto, ProtocolHelloDto,
-    ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
-    ProtocolResponsePayloadDto, ProtocolVersionDto, RunResyncDto, RunResyncReasonDto,
-    RunStreamFrameDto, SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto,
-    SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
-    decode_hello_request, decode_request_line, decode_response, encode_hello_request,
-    encode_request, encode_response, parse_run_frame_notification,
+    CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
+    JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto, PROTOCOL_HELLO_METHOD,
+    ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
+    ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunResyncDto,
+    RunResyncReasonDto, RunStreamFrameDto, SessionEventTailBatchDto, SessionResyncDto,
+    SessionResyncReasonDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
+    SubscribeSessionCommandDto, decode_hello_request, decode_request_line, decode_response,
+    encode_hello_request, encode_request, encode_response, is_notification_line,
+    parse_run_frame_notification,
 };
 use intention_types::{
     CorrelationIdDto, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
@@ -84,7 +85,9 @@ fn protocol_hello_round_trips_with_the_current_version() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, hello);
-    assert_eq!(decoded.version(), CURRENT_PROTOCOL_VERSION);
+    // Compared against a literal rather than the constant the fixture was
+    // built from, so this assertion can fail: the wire is pinned to 2.0.
+    assert_eq!(decoded.version(), ProtocolVersionDto::new(2, 0));
     assert_eq!(decoded.adapter_name(), "fixture-tui");
     assert!(
         !encoded.contains("capabilit"),
@@ -103,65 +106,141 @@ fn only_the_exact_current_protocol_version_passes_negotiation_equality() {
     // intention-transport integration tests).
 }
 
-#[test]
-fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
+/// Returns the position of one method in the protocol method table.
+///
+/// This match is deliberately wildcard-free: adding a variant to
+/// `ProtocolMethodDto` fails this test to compile until the new method is
+/// named here, which is what makes [`EVERY_METHOD`] provably complete.
+const fn method_position(method: ProtocolMethodDto) -> usize {
+    match method {
+        ProtocolMethodDto::SessionCreate => 0,
+        ProtocolMethodDto::TurnSend => 1,
+        ProtocolMethodDto::TurnRemove => 2,
+        ProtocolMethodDto::RunStop => 3,
+        ProtocolMethodDto::SessionSubscribe => 4,
+        ProtocolMethodDto::RunSubscribe => 5,
+        ProtocolMethodDto::DaemonHealth => 6,
+        ProtocolMethodDto::SessionSnapshot => 7,
+    }
+}
+
+/// Every implemented protocol method, positionally aligned with
+/// [`method_position`]; that wildcard-free match is the completeness proof.
+const EVERY_METHOD: [ProtocolMethodDto; 8] = [
+    ProtocolMethodDto::SessionCreate,
+    ProtocolMethodDto::TurnSend,
+    ProtocolMethodDto::TurnRemove,
+    ProtocolMethodDto::RunStop,
+    ProtocolMethodDto::SessionSubscribe,
+    ProtocolMethodDto::RunSubscribe,
+    ProtocolMethodDto::DaemonHealth,
+    ProtocolMethodDto::SessionSnapshot,
+];
+
+/// Returns the request payload one method carries.
+///
+/// Wildcard-free for the same reason as [`method_position`].
+fn method_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
     let schema = SchemaVersionDto::new(1, 1);
     let session_id = SessionId::new();
     let run_id = intention_types::RunId::new();
-    let payloads = [
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
+    match method {
+        ProtocolMethodDto::SessionCreate => ProtocolRequestPayloadDto::Command(
+            ProtocolCommandDto::CreateSession(intention_domain::CreateSessionCommandDto::new(
                 ProjectId::new(),
                 session_id,
                 WorkspaceId::new(),
                 fixture_workspace_root(),
                 RunModeDto::Build,
-            ),
-        )),
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "hello")
-                .expect("fixture turn is valid"),
-        )),
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(
-            intention_domain::RemoveQueuedTurnCommandDto::new(
-                session_id,
-                intention_types::TurnId::new(),
-            ),
-        )),
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(StopRunCommandDto::new(
-            session_id, run_id,
-        ))),
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
-            SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
-        )),
-        ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-        ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
-            GetSessionSnapshotQueryDto::new(session_id),
-        )),
-        ProtocolRequestPayloadDto::RunSubscription(
+            )),
+        ),
+        ProtocolMethodDto::TurnSend => {
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+                SendUserTurnCommandDto::new(session_id, intention_types::TurnId::new(), "hello")
+                    .expect("fixture turn is valid"),
+            ))
+        }
+        ProtocolMethodDto::TurnRemove => {
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(
+                intention_domain::RemoveQueuedTurnCommandDto::new(
+                    session_id,
+                    intention_types::TurnId::new(),
+                ),
+            ))
+        }
+        ProtocolMethodDto::RunStop => ProtocolRequestPayloadDto::Command(
+            ProtocolCommandDto::StopRun(StopRunCommandDto::new(session_id, run_id)),
+        ),
+        ProtocolMethodDto::SessionSubscribe => {
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
+                SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
+            ))
+        }
+        ProtocolMethodDto::RunSubscribe => ProtocolRequestPayloadDto::RunSubscription(
             intention_protocol::SubscribeRunCommandDto::new(schema, session_id, run_id, None),
         ),
-    ];
+        ProtocolMethodDto::DaemonHealth => {
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth)
+        }
+        ProtocolMethodDto::SessionSnapshot => ProtocolRequestPayloadDto::Query(
+            ProtocolQueryDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
+        ),
+    }
+}
 
-    let mut methods = std::collections::BTreeSet::new();
-    for (index, payload) in payloads.into_iter().enumerate() {
-        let id = index as u64 + 1;
-        let method = ProtocolMethodDto::for_payload(&payload);
-        assert!(
-            method.accepts_request(&payload),
-            "the method must accept its own payload"
+/// Returns a payload the given method must reject as invalid params.
+///
+/// `daemon.health` accepts exactly one payload, so that query is foreign to
+/// every other method; the one method that accepts it gets a stop-run command.
+fn foreign_payload(method: ProtocolMethodDto) -> ProtocolRequestPayloadDto {
+    match method {
+        ProtocolMethodDto::DaemonHealth => {
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(StopRunCommandDto::new(
+                SessionId::new(),
+                intention_types::RunId::new(),
+            )))
+        }
+        _ => ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+    }
+}
+
+#[test]
+fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
+    let mut names = std::collections::BTreeSet::new();
+    for (position, method) in EVERY_METHOD.into_iter().enumerate() {
+        assert_eq!(
+            method_position(method),
+            position,
+            "the enumerated table and the wildcard-free match must agree"
         );
         assert!(
-            methods.insert(method.as_str()),
-            "each request variant owns exactly one method"
+            names.insert(method.as_str()),
+            "{} owns a wire name no other method claims",
+            method.as_str()
         );
         assert!(
             !method.as_str().is_empty(),
             "every method publishes a wire name"
         );
 
+        let payload = method_payload(method);
+        assert!(
+            method.accepts_request(&payload),
+            "{} must accept its own payload",
+            method.as_str()
+        );
+        let id = position as u64 + 1;
         let request = encode_request(id, payload);
-        assert_eq!(request.method(), method.as_str());
+        assert_eq!(
+            request.method(),
+            method.as_str(),
+            "the method owns its wire name"
+        );
+        assert_eq!(
+            ProtocolMethodDto::for_payload(request.params()),
+            method,
+            "each request payload maps back to exactly one method"
+        );
         let line = serde_json::to_string(&request).expect("request serializes");
         assert!(
             line.contains(r#""jsonrpc":"2.0""#),
@@ -170,11 +249,26 @@ fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
         let decoded = decode_request_line(&line).expect("request decodes");
         assert_eq!(decoded.id(), id);
         assert_eq!(decoded.payload(), request.params());
+
+        // The reverse direction: the name table recognizes this wire name
+        // independently of the payload table, because a known name with a
+        // foreign payload fails as invalid params (-32602) and never as an
+        // unknown method (-32601).
+        let mismatched = JsonRpcRequestDto::new(id, method.as_str(), foreign_payload(method));
+        let line = serde_json::to_string(&mismatched).expect("mismatched request serializes");
+        let failure = decode_request_line(&line).expect_err("a foreign payload is rejected");
+        assert_eq!(
+            failure.error().code(),
+            intention_protocol::JSONRPC_INVALID_PARAMS,
+            "{} is a known method, so only its payload pairing may fail",
+            method.as_str()
+        );
+        assert_eq!(failure.id(), Some(id));
     }
     assert_eq!(
-        methods.len(),
+        names.len(),
         8,
-        "the local protocol implements one method per request variant"
+        "the local protocol implements one uniquely named method per variant"
     );
 }
 
@@ -346,7 +440,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let failure = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
         Some(id),
         JsonRpcErrorDto::from_error(
-            intention_protocol::jsonrpc::JSONRPC_INTERNAL_ERROR,
+            intention_protocol::JSONRPC_METHOD_NOT_FOUND,
             ErrorDto::validation("fixture_daemon_error", "fixture daemon failure"),
         ),
     );
@@ -358,7 +452,7 @@ fn jsonrpc_error_responses_map_to_stable_typed_errors() {
     let untyped = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
         Some(id),
         JsonRpcErrorDto::new(
-            intention_protocol::jsonrpc::JSONRPC_INTERNAL_ERROR,
+            intention_protocol::JSONRPC_METHOD_NOT_FOUND,
             "fixture failure",
             None,
         ),
@@ -530,5 +624,177 @@ fn malformed_protocol_payload_fields_and_closed_variants_are_rejected() {
         } else {
             assert!(serde_json::from_str::<ProtocolRequestPayloadDto>(wire).is_err());
         }
+    }
+}
+
+#[test]
+fn parameterless_daemon_health_decodes_without_a_params_member() {
+    // JSON-RPC 2.0 makes `params` optional, and `daemon.health` is the one
+    // genuinely parameterless method (ADR 0045).
+    let line = r#"{"jsonrpc":"2.0","id":1,"method":"daemon.health"}"#;
+    let request = decode_request_line(line).expect("the parameterless form is spec-legal");
+    assert_eq!(request.id(), 1);
+    assert_eq!(
+        request.payload(),
+        &ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth)
+    );
+
+    // A present `params` member is still decoded, so an explicit null fails.
+    let explicit_null =
+        decode_request_line(r#"{"jsonrpc":"2.0","id":1,"method":"daemon.health","params":null}"#)
+            .expect_err("an explicit null params member is not parameterless");
+    assert_eq!(
+        explicit_null.error().code(),
+        intention_protocol::JSONRPC_INVALID_PARAMS
+    );
+
+    // Every other method requires its typed payload.
+    let missing = decode_request_line(r#"{"jsonrpc":"2.0","id":2,"method":"session.snapshot"}"#)
+        .expect_err("a method with a required payload rejects an absent params member");
+    assert_eq!(
+        missing.error().code(),
+        intention_protocol::JSONRPC_INVALID_PARAMS
+    );
+    assert_eq!(missing.id(), Some(2));
+}
+
+#[test]
+fn a_request_without_an_id_member_is_a_notification() {
+    let notification = r#"{"jsonrpc":"2.0","method":"daemon.health"}"#;
+    assert!(
+        is_notification_line(notification),
+        "a request envelope without an id member is a notification"
+    );
+
+    // An explicit null id is a request, not a notification, so a server answers
+    // it instead of staying silent.
+    let null_id = r#"{"jsonrpc":"2.0","id":null,"method":"daemon.health"}"#;
+    assert!(
+        !is_notification_line(null_id),
+        "an explicit null id is a request, not a notification"
+    );
+    let failure = decode_request_line(null_id)
+        .expect_err("the numeric-id profile rejects a null identity with a reply");
+    assert_eq!(
+        failure.error().code(),
+        intention_protocol::JSONRPC_INVALID_REQUEST
+    );
+    assert_eq!(failure.id(), None);
+
+    for not_a_notification in [
+        r#"{"jsonrpc":"1.0","method":"daemon.health"}"#,
+        r#"{"jsonrpc":"2.0","method":""}"#,
+        r#"{"jsonrpc":"2.0","id":7,"method":"daemon.health"}"#,
+        "{",
+    ] {
+        assert!(
+            !is_notification_line(not_a_notification),
+            "{not_a_notification} is not a notification"
+        );
+    }
+}
+
+/// Asserts that one payload DTO rejects a wire value carrying `stale_version`.
+fn assert_schema_version_is_rejected<T: serde::de::DeserializeOwned + std::fmt::Debug>(
+    wire: serde_json::Value,
+    stale_version: &serde_json::Value,
+) {
+    let error = serde_json::from_value::<T>(wire)
+        .expect_err("a non-current payload schema version fails closed");
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible_dto_schema_version"),
+        "the rejection is typed for {stale_version}: {error}"
+    );
+}
+
+#[test]
+fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
+    assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
+    let session_id = SessionId::new();
+    let snapshot = SessionSnapshotDto::with_projection(
+        CURRENT_DTO_SCHEMA_VERSION,
+        session_id,
+        SessionEventSequenceDto::new(0),
+        fixture_projection(session_id, SessionEventSequenceDto::new(0)),
+    )
+    .expect("fixture snapshot is valid");
+    let current = serde_json::to_value(&snapshot).expect("snapshot serializes");
+    assert!(
+        serde_json::from_value::<SessionSnapshotDto>(current.clone()).is_ok(),
+        "the current schema version decodes"
+    );
+
+    // Every payload DTO that carries a schema version shares the exact-equality
+    // gate, not only the snapshot: a stale or future version is always a typed
+    // decode rejection.
+    let health = serde_json::to_value(DaemonHealthDto::new(
+        CURRENT_DTO_SCHEMA_VERSION,
+        CURRENT_PROTOCOL_VERSION,
+        DaemonReadinessDto::Ready,
+    ))
+    .expect("health serializes");
+    let subscription = serde_json::to_value(SubscribeSessionCommandDto::new(
+        CURRENT_DTO_SCHEMA_VERSION,
+        session_id,
+        None,
+        RunModeDto::Build,
+    ))
+    .expect("subscription serializes");
+    let run_subscription = serde_json::to_value(intention_protocol::SubscribeRunCommandDto::new(
+        CURRENT_DTO_SCHEMA_VERSION,
+        session_id,
+        intention_types::RunId::new(),
+        None,
+    ))
+    .expect("run subscription serializes");
+    let tail = serde_json::to_value(
+        SessionEventTailBatchDto::new(
+            CURRENT_DTO_SCHEMA_VERSION,
+            session_id,
+            SessionEventSequenceDto::new(0),
+            Vec::new(),
+        )
+        .expect("empty tail is valid"),
+    )
+    .expect("tail serializes");
+    let resync = serde_json::to_value(SessionResyncDto::new(
+        CURRENT_DTO_SCHEMA_VERSION,
+        session_id,
+        SessionResyncReasonDto::HistoryUnavailable,
+    ))
+    .expect("resync serializes");
+
+    for stale in [
+        serde_json::json!({"major": 1, "minor": 0}),
+        serde_json::json!({"major": 1, "minor": 2}),
+        serde_json::json!({"major": 2, "minor": 1}),
+    ] {
+        let mut wire = current.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<SessionSnapshotDto>(wire, &stale);
+
+        let mut wire = health.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<DaemonHealthDto>(wire, &stale);
+
+        let mut wire = subscription.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<SubscribeSessionCommandDto>(wire, &stale);
+
+        let mut wire = run_subscription.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<intention_protocol::SubscribeRunCommandDto>(
+            wire, &stale,
+        );
+
+        let mut wire = tail.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<SessionEventTailBatchDto>(wire, &stale);
+
+        let mut wire = resync.clone();
+        wire["schema_version"] = stale.clone();
+        assert_schema_version_is_rejected::<SessionResyncDto>(wire, &stale);
     }
 }

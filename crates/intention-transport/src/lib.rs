@@ -34,7 +34,10 @@ const MAX_MESSAGE_BYTES: usize = 1_048_576;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// The upper bound for one synchronous framed read or write.
+/// The client hello request identity; the daemon reply must echo exactly this.
+const HELLO_REQUEST_ID: u64 = 1;
+
+/// The upper bound for one synchronous message read or write.
 ///
 /// A local request/response completes in milliseconds; the bound exists so a
 /// peer that accepts a connection and then stops answering fails with a typed
@@ -212,7 +215,7 @@ impl LocalConnection {
     }
 }
 
-/// A local listener that accepts framed, typed client connections.
+/// A local listener that accepts message-framed, typed client connections.
 pub struct LocalListener {
     listener: LocalSocketListener,
 }
@@ -348,12 +351,13 @@ impl AsyncLocalClientConnection {
         mut self,
         local: ProtocolHelloDto,
     ) -> DtoResult<(ProtocolHelloDto, AsyncRequestSender, AsyncMessageReceiver)> {
-        let request = encode_hello_request(1, local);
+        let request = encode_hello_request(HELLO_REQUEST_ID, local);
         write_async_message(&mut self.stream, &request).await?;
         let mut residual = Vec::new();
         let line = read_async_line(&mut self.stream, &mut residual).await?;
         let response: JsonRpcResponseDto<ProtocolHelloDto> =
             JsonRpcResponseDto::parse(&line).map_err(|error| error.to_error())?;
+        validate_hello_reply_id(&response)?;
         let remote = decode_hello_response(&response)?;
         let (receiver, sender) = self.stream.split();
         Ok((
@@ -492,6 +496,9 @@ impl AsyncMessageSender {
 
 /// Performs the mandatory client/daemon hello exchange.
 ///
+/// The reply must echo the hello request identity, exactly like every other
+/// correlated reply on the connection.
+///
 /// # Errors
 ///
 /// Returns the typed error carried by a version-mismatch response, or a typed
@@ -500,11 +507,12 @@ pub fn negotiate_client(
     connection: &mut LocalConnection,
     local: ProtocolHelloDto,
 ) -> DtoResult<ProtocolHelloDto> {
-    let request = encode_hello_request(1, local);
+    let request = encode_hello_request(HELLO_REQUEST_ID, local);
     connection.send_message(&request)?;
     let line = connection.receive_line()?;
     let response: JsonRpcResponseDto<ProtocolHelloDto> =
         JsonRpcResponseDto::parse(&line).map_err(|error| error.to_error())?;
+    validate_hello_reply_id(&response)?;
     decode_hello_response(&response)
 }
 
@@ -594,20 +602,21 @@ fn write_message<T: serde::Serialize + ?Sized>(
     stream: &mut LocalSocketStream,
     value: &T,
 ) -> DtoResult<()> {
-    let mut payload = encode_message(value)?;
-    payload.push(b'\n');
+    let payload = encode_message(value)?;
     stream
         .write_all(&payload)
         .and_then(|()| stream.flush())
         .map_err(|_| unavailable("local_daemon_connection_unavailable"))
 }
 
+/// Reads the next complete NDJSON line with the blocking transport read.
+///
+/// The framing rules live in [`take_line`] and [`append_chunk`], which this
+/// reader shares with [`read_async_line`]: only the read call differs.
 fn read_line(stream: &mut LocalSocketStream, residual: &mut Vec<u8>) -> DtoResult<String> {
     loop {
-        if let Some(position) = residual.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = residual.drain(..position).collect();
-            residual.drain(..1);
-            return decode_line(line);
+        if let Some(line) = take_line(residual) {
+            return line;
         }
         let mut chunk = [0_u8; 8192];
         let read = stream
@@ -616,10 +625,7 @@ fn read_line(stream: &mut LocalSocketStream, residual: &mut Vec<u8>) -> DtoResul
         if read == 0 {
             return Err(unavailable("local_daemon_connection_unavailable"));
         }
-        residual.extend_from_slice(&chunk[..read]);
-        if residual.len() > MAX_MESSAGE_BYTES {
-            return Err(oversized_message());
-        }
+        append_chunk(residual, &chunk[..read])?;
     }
 }
 
@@ -627,8 +633,7 @@ async fn write_async_message<T: serde::Serialize + Sync + ?Sized>(
     stream: &mut (impl AsyncWrite + Send + Unpin),
     value: &T,
 ) -> DtoResult<()> {
-    let mut payload = encode_message(value)?;
-    payload.push(b'\n');
+    let payload = encode_message(value)?;
     stream
         .write_all(&payload)
         .await
@@ -639,15 +644,17 @@ async fn write_async_message<T: serde::Serialize + Sync + ?Sized>(
         .map_err(|_| unavailable("local_daemon_connection_unavailable"))
 }
 
+/// Reads the next complete NDJSON line with the asynchronous transport read.
+///
+/// This is the asynchronous twin of [`read_line`] and shares its framing
+/// helpers; the two readers must keep exactly the same line semantics.
 async fn read_async_line(
     stream: &mut (impl AsyncRead + Send + Unpin),
     residual: &mut Vec<u8>,
 ) -> DtoResult<String> {
     loop {
-        if let Some(position) = residual.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = residual.drain(..position).collect();
-            residual.drain(..1);
-            return decode_line(line);
+        if let Some(line) = take_line(residual) {
+            return line;
         }
         let mut chunk = [0_u8; 8192];
         let read = stream
@@ -657,15 +664,40 @@ async fn read_async_line(
         if read == 0 {
             return Err(unavailable("local_daemon_connection_unavailable"));
         }
-        residual.extend_from_slice(&chunk[..read]);
-        if residual.len() > MAX_MESSAGE_BYTES {
-            return Err(oversized_message());
-        }
+        append_chunk(residual, &chunk[..read])?;
     }
 }
 
+/// Extracts the next complete message line from the buffered residual bytes.
+///
+/// Returns `None` while no newline has arrived. A line is decoded after a
+/// single trailing carriage return is removed, so CRLF framing carries the
+/// same message as LF framing. A blank line is framing rather than a message
+/// and is skipped, so it is never answered with a parse error.
+fn take_line(residual: &mut Vec<u8>) -> Option<DtoResult<String>> {
+    loop {
+        let position = residual.iter().position(|byte| *byte == b'\n')?;
+        let line: Vec<u8> = residual.drain(..position).collect();
+        residual.drain(..1);
+        if line.is_empty() || line == b"\r" {
+            continue;
+        }
+        return Some(decode_line(line));
+    }
+}
+
+/// Buffers one freshly read chunk and enforces the transport message cap.
+fn append_chunk(residual: &mut Vec<u8>, chunk: &[u8]) -> DtoResult<()> {
+    residual.extend_from_slice(chunk);
+    if residual.len() > MAX_MESSAGE_BYTES {
+        return Err(oversized_message());
+    }
+    Ok(())
+}
+
+/// Encodes one typed message into its bounded, newline-terminated NDJSON line.
 fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>> {
-    let payload = serde_json::to_vec(value).map_err(|_| {
+    let mut payload = serde_json::to_vec(value).map_err(|_| {
         ErrorDto::validation(
             "local_protocol_encode_failed",
             "a typed local protocol message could not be encoded",
@@ -674,25 +706,32 @@ fn encode_message<T: serde::Serialize + ?Sized>(value: &T) -> DtoResult<Vec<u8>>
     if payload.len() > MAX_MESSAGE_BYTES {
         return Err(oversized_message());
     }
+    payload.push(b'\n');
     Ok(payload)
 }
 
-fn decode_line(line: Vec<u8>) -> DtoResult<String> {
+fn decode_line(mut line: Vec<u8>) -> DtoResult<String> {
     if line.len() > MAX_MESSAGE_BYTES {
         return Err(oversized_message());
     }
+    // One trailing carriage return is CRLF framing, not message content. A
+    // `\r` byte is never a UTF-8 continuation byte, so trimming it here is
+    // equivalent to trimming it after decoding.
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
     String::from_utf8(line).map_err(|_| {
         ErrorDto::validation(
-            "invalid_local_protocol_frame",
-            "a local protocol frame was invalid",
+            "invalid_local_protocol_message",
+            "a local protocol message was invalid",
         )
     })
 }
 
 fn oversized_message() -> ErrorDto {
     ErrorDto::validation(
-        "local_protocol_frame_too_large",
-        "a local protocol frame exceeded the configured limit",
+        "local_protocol_message_too_large",
+        "a local protocol message exceeded the configured limit",
     )
 }
 
@@ -707,6 +746,21 @@ async fn timeout_async_connect<T>(
 
 fn unavailable(code: &'static str) -> ErrorDto {
     ErrorDto::unavailable(code, "the local daemon connection is unavailable")
+}
+
+/// Validates that one hello reply echoes the hello request identity.
+///
+/// This mirrors the correlation every ordinary reply is held to: a reply for
+/// another identity is never accepted as the handshake answer.
+fn validate_hello_reply_id(response: &JsonRpcResponseDto<ProtocolHelloDto>) -> DtoResult<()> {
+    if response.id() == Some(HELLO_REQUEST_ID) {
+        Ok(())
+    } else {
+        Err(ErrorDto::validation(
+            "invalid_local_protocol_response",
+            "the local daemon returned an uncorrelated hello reply",
+        ))
+    }
 }
 
 fn endpoint_in_use() -> ErrorDto {
@@ -727,7 +781,7 @@ fn endpoint_in_use() -> ErrorDto {
 /// `interprocess` 2.4.4 named-pipe stream returns an unsupported error from
 /// `set_recv_timeout` and `set_send_timeout`, so on those targets only the
 /// bounded connect wait (`CONNECT_TIMEOUT`) applies and a peer that stops
-/// answering mid-frame cannot be interrupted per call. The limitation is
+/// answering mid-message cannot be interrupted per call. The limitation is
 /// anchored at
 /// `docs/intention-relay/architecture/03-daemon-transport-and-adapters.md`
 /// ("M2 serving and backpressure"); a platform with a real per-call bound
@@ -1201,7 +1255,7 @@ mod tests {
             .expect("raw oversized line writes");
         drop(client);
         let error = server.join().expect("server completes");
-        assert_eq!(error.code(), "local_protocol_frame_too_large");
+        assert_eq!(error.code(), "local_protocol_message_too_large");
     }
 
     #[test]
@@ -1229,7 +1283,7 @@ mod tests {
         for (line, expected_code) in [
             (
                 vec![b'x'; MAX_MESSAGE_BYTES + 1],
-                "local_protocol_frame_too_large",
+                "local_protocol_message_too_large",
             ),
             (b"not json\n".to_vec(), "jsonrpc_parse_error"),
             (b"{}\n".to_vec(), "jsonrpc_invalid_request"),
@@ -1360,6 +1414,205 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn daemon_hello_replies_to_malformed_lines_with_standard_error_codes() {
+        for (line, expected_code, expected_data_code) in [
+            (
+                b"{\n".to_vec(),
+                intention_protocol::JSONRPC_PARSE_ERROR,
+                "jsonrpc_parse_error",
+            ),
+            (
+                b"{}\n".to_vec(),
+                intention_protocol::JSONRPC_INVALID_REQUEST,
+                "jsonrpc_invalid_request",
+            ),
+        ] {
+            let endpoint = endpoint();
+            let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+            let server = tokio::spawn(async move {
+                let connection = listener.accept().await.expect("server accepts");
+                match connection
+                    .negotiate(
+                        ProtocolHelloDto::new(local_protocol_version(), "async-server")
+                            .expect("fixture hello is valid"),
+                    )
+                    .await
+                {
+                    Ok(_) => panic!("a malformed first line never negotiates"),
+                    Err(error) => error,
+                }
+            });
+            let mut client = ConnectOptions::new()
+                .name(
+                    endpoint
+                        .socket_name()
+                        .expect("fixture socket name is valid"),
+                )
+                .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+                .connect_tokio()
+                .await
+                .expect("raw client connects");
+            client
+                .write_all(&line)
+                .await
+                .expect("raw malformed line writes");
+            let mut reply = Vec::new();
+            let mut byte = [0_u8; 1];
+            loop {
+                client.read_exact(&mut byte).await.expect("reply reads");
+                if byte[0] == b'\n' {
+                    break;
+                }
+                reply.push(byte[0]);
+            }
+            let reply = String::from_utf8(reply).expect("reply is UTF-8");
+            let response: JsonRpcResponseDto<ProtocolHelloDto> =
+                JsonRpcResponseDto::parse(&reply).expect("the error reply parses");
+            assert!(response.result_value().is_none());
+            assert_eq!(response.id(), None, "an unparseable line has no identity");
+            let error = response.error_value().expect("an error object is present");
+            assert_eq!(error.code(), expected_code);
+            assert_eq!(
+                error.data().map(intention_types::ErrorDto::code),
+                Some(expected_data_code)
+            );
+            assert_eq!(
+                server.await.expect("server completes").code(),
+                expected_data_code
+            );
+        }
+    }
+
+    #[test]
+    fn client_negotiation_rejects_an_uncorrelated_hello_reply() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let client_endpoint = endpoint;
+        let server = thread::spawn(move || {
+            let mut connection = listener.accept().expect("server accepts");
+            let line = connection.receive_line().expect("server receives hello");
+            let request: JsonRpcRequestDto<ProtocolHelloDto> =
+                JsonRpcRequestDto::parse(&line).expect("hello parses");
+            assert_eq!(request.id(), HELLO_REQUEST_ID);
+            connection
+                .send_message(&encode_hello_response(
+                    request.id() + 1,
+                    ProtocolHelloDto::new(local_protocol_version(), "uncorrelated-daemon")
+                        .expect("fixture hello is valid"),
+                ))
+                .expect("uncorrelated hello reply sends");
+        });
+        let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
+        let error = negotiate_client(
+            &mut client,
+            ProtocolHelloDto::new(local_protocol_version(), "fixture-client")
+                .expect("fixture hello is valid"),
+        )
+        .expect_err("a reply for another identity is never the handshake answer");
+        assert_eq!(error.code(), "invalid_local_protocol_response");
+        server.join().expect("server thread completes");
+    }
+
+    #[tokio::test]
+    async fn async_client_negotiation_rejects_an_uncorrelated_hello_reply() {
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(async move {
+            let mut connection = listener.accept().await.expect("server accepts");
+            let line = read_async_line(&mut connection.stream, &mut Vec::new())
+                .await
+                .expect("scripted server receives hello");
+            let request: JsonRpcRequestDto<ProtocolHelloDto> =
+                JsonRpcRequestDto::parse(&line).expect("scripted hello parses");
+            let reply = encode_hello_response(
+                request.id() + 1,
+                ProtocolHelloDto::new(local_protocol_version(), "uncorrelated-async-daemon")
+                    .expect("fixture hello is valid"),
+            );
+            write_async_message(&mut connection.stream, &reply)
+                .await
+                .expect("uncorrelated async hello reply sends");
+        });
+        let connection = AsyncLocalClientConnection::connect(&endpoint)
+            .await
+            .expect("client connects");
+        let error = match connection
+            .negotiate(
+                ProtocolHelloDto::new(local_protocol_version(), "async-fixture-client")
+                    .expect("fixture hello is valid"),
+            )
+            .await
+        {
+            Ok(_) => panic!("an uncorrelated hello reply is rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "invalid_local_protocol_response");
+        server.await.expect("scripted server completes");
+    }
+
+    #[test]
+    fn receive_line_accepts_crlf_framing_and_skips_blank_lines() {
+        let endpoint = endpoint();
+        let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = thread::spawn(move || {
+            let mut connection = listener.accept().expect("server accepts");
+            connection
+                .receive_line()
+                .expect("the first message line decodes")
+        });
+        let mut client = LocalConnection::connect(&endpoint).expect("client connects");
+        client
+            .stream
+            .write_all(b"\n\r\n{\"jsonrpc\":\"2.0\"}\r\n")
+            .expect("raw CRLF and blank lines write");
+        let line = server.join().expect("server completes");
+        assert_eq!(
+            line, "{\"jsonrpc\":\"2.0\"}",
+            "one trailing carriage return is framing and blank lines are skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn async_negotiation_accepts_crlf_framing_after_blank_lines() {
+        let endpoint = endpoint();
+        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+        let server = tokio::spawn(async move {
+            let connection = listener.accept().await.expect("server accepts");
+            connection
+                .negotiate(
+                    ProtocolHelloDto::new(local_protocol_version(), "crlf-async-server")
+                        .expect("fixture hello is valid"),
+                )
+                .await
+                .expect("a CRLF hello after blank lines negotiates")
+        });
+        let mut client = ConnectOptions::new()
+            .name(
+                endpoint
+                    .socket_name()
+                    .expect("fixture socket name is valid"),
+            )
+            .wait_mode(ConnectWaitMode::Timeout(CONNECT_TIMEOUT))
+            .connect_tokio()
+            .await
+            .expect("raw client connects");
+        let hello = encode_hello_request(
+            HELLO_REQUEST_ID,
+            ProtocolHelloDto::new(local_protocol_version(), "crlf-async-client")
+                .expect("fixture hello is valid"),
+        );
+        let mut framed = b"\n\r\n".to_vec();
+        framed.extend_from_slice(&serde_json::to_vec(&hello).expect("hello serializes"));
+        framed.extend_from_slice(b"\r\n");
+        client
+            .write_all(&framed)
+            .await
+            .expect("raw CRLF hello writes");
+        let (remote, _requests, _messages) = server.await.expect("server completes");
+        assert_eq!(remote.adapter_name(), "crlf-async-client");
+    }
+
+    #[tokio::test]
     async fn async_negotiation_rejects_an_oversized_outbound_hello_before_framing() {
         let endpoint = endpoint();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
@@ -1386,7 +1639,7 @@ mod tests {
             Ok(_) => panic!("oversized outbound hello is rejected"),
             Err(error) => error,
         };
-        assert_eq!(error.code(), "local_protocol_frame_too_large");
+        assert_eq!(error.code(), "local_protocol_message_too_large");
         assert_eq!(
             server.await.expect("server completes").code(),
             "local_daemon_connection_unavailable"

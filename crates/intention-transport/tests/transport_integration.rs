@@ -303,6 +303,45 @@ fn incompatible_protocol_version_answers_with_a_typed_error_before_closing() {
 }
 
 #[test]
+fn a_first_request_that_is_not_hello_is_answered_with_the_invalid_request_code() {
+    let directory = TempDir::new().expect("temporary directory is available");
+    let endpoint = endpoint(&directory);
+    let listener = LocalListener::bind(endpoint.clone()).expect("listener binds");
+    let client_endpoint = endpoint;
+
+    let server = thread::spawn(move || {
+        let mut connection = listener.accept().expect("server accepts client");
+        let error = negotiate_daemon(&mut connection, hello("fixture-daemon"))
+            .expect_err("a first request that is not hello never negotiates");
+        assert_eq!(error.code(), "jsonrpc_hello_required");
+    });
+
+    let mut client = LocalConnection::connect(&client_endpoint).expect("client connects");
+    client
+        .send_message(&JsonRpcRequestDto::new(
+            1,
+            ProtocolMethodDto::DaemonHealth.as_str(),
+            hello("fixture-client"),
+        ))
+        .expect("a non-hello first request sends");
+    let line = client
+        .receive_line()
+        .expect("the daemon answers a non-conformant first request");
+    let response: JsonRpcResponseDto<ProtocolHelloDto> =
+        JsonRpcResponseDto::parse(&line).expect("the error response parses");
+    assert!(response.result_value().is_none());
+    assert_eq!(response.id(), Some(1), "the recovered identity is echoed");
+    let error = response.error_value().expect("an error object is present");
+    assert_eq!(error.code(), intention_protocol::JSONRPC_INVALID_REQUEST);
+    assert_eq!(
+        error.data().map(ErrorDto::code),
+        Some("jsonrpc_hello_required")
+    );
+
+    server.join().expect("server thread completes");
+}
+
+#[test]
 fn unavailable_endpoint_is_a_typed_error() {
     let directory = TempDir::new().expect("temporary directory is available");
     let error = match LocalConnection::connect(&endpoint(&directory)) {

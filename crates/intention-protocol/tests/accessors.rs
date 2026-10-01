@@ -119,13 +119,13 @@ fn jsonrpc_envelope_accessors_preserve_typed_values() {
         ))
     );
     assert!(response.error_value().is_none());
-    let decoded = encode_response(
+    let encoded = encode_response(
         9,
         ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)),
     );
     assert!(matches!(
         decode_response(
-            &serde_json::to_string(&decoded).expect("response serializes"),
+            &serde_json::to_string(&encoded).expect("response serializes"),
             ProtocolMethodDto::DaemonHealth,
             9,
         )
