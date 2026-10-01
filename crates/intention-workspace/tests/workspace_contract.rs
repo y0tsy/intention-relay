@@ -67,12 +67,10 @@ fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
     std::fs::write(root.path().join("file.txt"), "ok").expect("file");
     let workspace = resolve(root.path());
     let path = WorkspaceRelativePathDto::parse("file.txt").expect("path");
+    let expected = std::fs::canonicalize(root.path().join("file.txt")).expect("canonical file");
     let _guard = cwd_guard();
     let _cwd = CwdGuard::change_to(&std::env::temp_dir());
-    assert_eq!(
-        workspace.resolve_path(&path),
-        workspace.root().join("file.txt")
-    );
+    assert_eq!(workspace.resolve_path(&path), expected);
 }
 
 #[test]
@@ -80,14 +78,11 @@ fn missing_paths_are_addressed_as_joined_paths() {
     let root = TempDir::new("missing");
     let workspace = resolve(root.path());
     let missing = WorkspaceRelativePathDto::parse("missing/leaf.txt").expect("path");
-    assert_eq!(
-        workspace.resolve_path(&missing),
-        workspace.root().join("missing/leaf.txt")
-    );
-    assert_eq!(
-        workspace.resolve_new_file_path(&missing),
-        workspace.root().join("missing/leaf.txt")
-    );
+    let expected = std::fs::canonicalize(root.path())
+        .expect("canonical root")
+        .join("missing/leaf.txt");
+    assert_eq!(workspace.resolve_path(&missing), expected);
+    assert_eq!(workspace.resolve_new_file_path(&missing), expected);
 }
 
 #[test]
@@ -95,10 +90,10 @@ fn new_file_resolution_shares_the_join_rule() {
     let root = TempDir::new("new-file");
     let workspace = resolve(root.path());
     let path = WorkspaceRelativePathDto::parse("new.txt").expect("path");
-    assert_eq!(
-        workspace.resolve_new_file_path(&path),
-        workspace.root().join("new.txt")
-    );
+    let expected = std::fs::canonicalize(root.path())
+        .expect("canonical root")
+        .join("new.txt");
+    assert_eq!(workspace.resolve_new_file_path(&path), expected);
 }
 
 #[test]

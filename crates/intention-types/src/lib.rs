@@ -429,6 +429,10 @@ impl WorkspaceRelativePathDto {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ErrorDetailDto {
     /// An authorized logical workspace-relative path was not found.
+    ///
+    /// Reserved vocabulary: no production path produces this variant today;
+    /// the file-oriented tools answer `tool_read_failed` instead. It is kept as
+    /// the reviewed not-found detail shape rather than deleted.
     MissingWorkspacePath {
         /// The logical path relative to the authorized workspace root.
         path: WorkspaceRelativePathDto,

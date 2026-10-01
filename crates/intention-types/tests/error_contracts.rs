@@ -28,6 +28,8 @@ fn versioned_missing_path_fixture_decodes_and_round_trips_safely() {
 
 #[test]
 fn typed_missing_path_detail_round_trips_without_exposing_root_or_secret() {
+    // `MissingWorkspacePath` is reserved vocabulary: no production path
+    // produces it today, so this fixture is the variant's only coverage.
     let path = WorkspaceRelativePathDto::parse("src/missing.rs").expect("fixture path is valid");
     let correlation = CorrelationIdDto::parse("11111111-1111-4111-8111-111111111111")
         .expect("fixture correlation identifier is valid");
