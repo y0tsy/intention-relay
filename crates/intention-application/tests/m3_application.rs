@@ -1425,19 +1425,19 @@ fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata
             },
         ]
     );
-    // Observations stay redacted: hook payloads, error codes, secrets, and
-    // local filesystem details never cross the application boundary.
-    let rendered = format!("{observations:?}");
-    assert!(!rendered.contains("FAKE_SECRET"));
-    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("fail_open_failure"));
-
+    // The durable lifecycle events stay redacted: the tolerated hook error's
+    // code and message detail, and absolute filesystem paths, never cross the
+    // durable boundary even though the failure carried them as input.
     let events = repository.tool_events.borrow();
     assert_eq!(events.len(), 3);
     assert!(matches!(
         events[2].status(),
         intention_domain::ToolLifecycleStatusDto::Completed
     ));
+    let rendered = format!("{events:?}");
+    assert!(!rendered.contains("FAKE_SECRET"));
+    assert!(!rendered.contains(&root.to_string_lossy().to_string()));
+    assert!(!rendered.contains("fail_open_failure"));
     let _ = fs::remove_dir_all(root);
 }
 

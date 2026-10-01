@@ -685,6 +685,14 @@ mod process_failure_tests {
         }
     }
 
+    struct PanicReader;
+
+    impl Read for PanicReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            std::panic::resume_unwind(Box::new("injected reader panic"))
+        }
+    }
+
     #[test]
     fn read_failure_is_classified_as_read_failure() {
         let mut output = Vec::new();
@@ -698,6 +706,16 @@ mod process_failure_tests {
     fn reader_join_failure_is_classified_as_read_failure() {
         let reader = thread::spawn(|| -> Result<(Vec<u8>, bool), &'static str> {
             Err("tool_execute_read_failed")
+        });
+        assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
+    }
+
+    #[test]
+    fn reader_panic_is_classified_as_read_failure() {
+        let reader = thread::spawn(|| {
+            let mut reader = PanicReader;
+            let mut output = Vec::new();
+            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         });
         assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
     }
@@ -1723,11 +1741,9 @@ fn execute_tool(
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
-    // Execute with the caller's environment. WorkspaceRoot scopes filesystem
-    // path resolution and the child CWD, not the process environment.
-    // Preserve the caller environment without requiring every inherited key
-    // and value to be valid Unicode. `vars()` panics on such entries.
-    command.envs(std::env::vars_os());
+    // The child inherits the caller's environment by default. WorkspaceRoot
+    // scopes filesystem path resolution and the child CWD, not the process
+    // environment.
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {

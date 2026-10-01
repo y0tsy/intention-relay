@@ -1217,10 +1217,16 @@ fn execute_formats_success_and_truncates_both_streams() {
                 program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
                 args: if cfg!(windows) {
                     vec![
-                        // `for /L` and `set /P` are built into cmd.exe, so this
+                        // `for /L` and `echo` are built into cmd.exe, so this
                         // fixture does not depend on Python or another tool.
+                        // Each iteration writes one 100-byte line, so 2000
+                        // iterations deterministically exceed the 64 KiB
+                        // output bound without `& exit /b` parsing.
                         BoundedText::new("/C").unwrap(),
-                        BoundedText::new("for /L %i in (1,1,200000) do @<nul set /p =x & exit /b 0").unwrap(),
+                        BoundedText::new(
+                            "for /L %i in (1,1,2000) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
+                        )
+                        .unwrap(),
                     ]
                 } else {
                     let script = "python3 -c 'import sys; sys.stdout.write(\"x\" * 200000); sys.stderr.write(\"y\" * 200000)'";

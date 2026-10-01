@@ -5,9 +5,10 @@
 
 use intention_domain::{RunModeDto, SessionProjectionDto, WorkspaceRootDto};
 use intention_protocol::{
-    CreateSessionAcceptedDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
+    CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedDto,
+    ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveQueuedTurnAcceptedDto,
     SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionEventTailBatchDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto,
+    SessionSubscriptionResponseDto, StopRunAcceptedDto,
 };
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
@@ -92,6 +93,53 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
         serde_json::from_str::<ProtocolAcceptedDto>(&encoded).expect("accepted result decodes")
             == accepted
     );
+}
+
+#[test]
+fn current_protocol_version_is_pinned_to_the_wire_literal() {
+    assert_eq!(
+        CURRENT_PROTOCOL_VERSION,
+        ProtocolVersionDto::new(2, 0),
+        "the wire protocol version is pinned independently of the fixture constant"
+    );
+}
+
+#[test]
+fn accepted_dto_accessors_preserve_typed_identity() {
+    let project_id = ProjectId::new();
+    let workspace_id = WorkspaceId::new();
+    let session_id = SessionId::new();
+    let turn_id = TurnId::new();
+    let run_id = RunId::new();
+    let sequence = SessionEventSequenceDto::new(7);
+
+    let created = CreateSessionAcceptedDto::new(project_id, workspace_id, session_id, sequence);
+    assert_eq!(created.project_id(), project_id);
+    assert_eq!(created.workspace_id(), workspace_id);
+    assert_eq!(created.session_id(), session_id);
+    assert_eq!(created.committed_sequence(), sequence);
+
+    let accepted = SendUserTurnAcceptedDto::new(
+        session_id,
+        turn_id,
+        sequence,
+        SendUserTurnOutcomeDto::Queued {
+            queue_position: QueuePositionDto::new(2),
+        },
+    );
+    assert_eq!(accepted.session_id(), session_id);
+    assert_eq!(accepted.turn_id(), turn_id);
+    assert_eq!(accepted.committed_sequence(), sequence);
+
+    let removed = RemoveQueuedTurnAcceptedDto::new(session_id, turn_id, sequence);
+    assert_eq!(removed.session_id(), session_id);
+    assert_eq!(removed.turn_id(), turn_id);
+    assert_eq!(removed.committed_sequence(), sequence);
+
+    let stopped = StopRunAcceptedDto::new(session_id, run_id, sequence);
+    assert_eq!(stopped.session_id(), session_id);
+    assert_eq!(stopped.run_id(), run_id);
+    assert_eq!(stopped.committed_sequence(), sequence);
 }
 
 #[test]

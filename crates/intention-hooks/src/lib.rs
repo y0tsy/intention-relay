@@ -151,8 +151,14 @@ impl Outcome {
                 *current = Some(result);
                 Ok(())
             }
-            // Dispatch handles rejections and input transforms before result application.
-            Self::Reject(_) | Self::TransformInput(_) => unreachable!(),
+            // Dispatch returns rejections and applies input transforms before
+            // result application; these arms stay typed so the invariant cannot
+            // turn into a panic for a future caller.
+            Self::Reject(error) => Err(error),
+            Self::TransformInput(_) => Err(ErrorDto::validation(
+                "invalid_hook_outcome",
+                "input transformation is only valid before execution",
+            )),
         }
     }
 }
@@ -679,6 +685,28 @@ mod tests {
                 Outcome::TransformResult(result.clone())
             );
         }
+    }
+
+    #[test]
+    fn reject_outcome_in_result_application_is_returned_as_error() {
+        let mut current = None;
+        let error = ErrorDto::validation("blocked", "blocked");
+        assert_eq!(
+            Outcome::Reject(error.clone()).apply_result(&mut current),
+            Err(error)
+        );
+        assert!(current.is_none());
+    }
+
+    #[test]
+    fn input_transform_in_result_application_is_rejected() {
+        let mut current = None;
+        assert!(
+            Outcome::TransformInput(ctx_input())
+                .apply_result(&mut current)
+                .is_err()
+        );
+        assert!(current.is_none());
     }
 
     #[test]

@@ -425,24 +425,48 @@ fn storage_constructors_cover_successful_accessors_and_validation_paths() {
         )
         .is_ok()
     );
-    let finished = intention_domain::ModelRunFactInputDto::Finished {
-        reason: intention_types::FinishReasonDto::Stop,
-    };
-    assert!(
+    assert_eq!(
         AppendModelRunFactsInputDto::new(
             session_id,
             run_id,
             intention_domain::RunEventCursorDto::new(0),
-            vec![
-                finished,
-                intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
-                    .expect("fact is valid")
-            ],
+            Vec::new(),
             None,
             time,
         )
-        .is_err()
+        .expect_err("empty fact batch rejects")
+        .code(),
+        "invalid_run_event_cursor"
     );
+    for terminal in [
+        intention_domain::ModelRunFactInputDto::finished(intention_types::FinishReasonDto::Stop),
+        intention_domain::ModelRunFactInputDto::failed(
+            intention_domain::RunFailureDto::new(
+                "provider_failed",
+                intention_types::ErrorRetryDto::Never,
+                None,
+            )
+            .expect("safe failure is valid"),
+        ),
+    ] {
+        assert_eq!(
+            AppendModelRunFactsInputDto::new(
+                session_id,
+                run_id,
+                intention_domain::RunEventCursorDto::new(0),
+                vec![
+                    terminal,
+                    intention_domain::ModelRunFactInputDto::provider_attempt_started(1)
+                        .expect("fact is valid"),
+                ],
+                None,
+                time,
+            )
+            .expect_err("facts after a terminal model fact reject")
+            .code(),
+            "invalid_run_event_cursor"
+        );
+    }
     let message = ModelContextMessageDto::new(ModelContextRoleDto::Assistant, "done")
         .expect("message is valid");
     assert_eq!(message.content(), "done");
