@@ -111,6 +111,11 @@ def policy_crates(policy: dict[str, object]) -> dict[str, dict[str, object]]:
             fail("future crate names must begin with intention")
         if name in result:
             fail(f"duplicate future crate declaration {name}")
+        unknown = set(crate) - {"name", "responsibility", "test_target", "test_targets"}
+        if "coverage_tier" in unknown:
+            fail(f"future crate {name} must not declare the retired coverage_tier key")
+        if unknown:
+            fail(f"future crate {name} has unknown declaration keys: {sorted(unknown)}")
         for field in ("responsibility", "test_target"):
             if not isinstance(crate.get(field), str) or not crate[field]:
                 fail(f"future crate {name} requires {field}")
@@ -634,10 +639,23 @@ def check_coverage_policy(root: Path, architecture: dict[str, object]) -> list[s
     active = architecture_state["active_production_crates"]
     if state.get("production_crates") != active:
         return ["coverage production crates must equal active production crate list"]
+    if state.get("coverage_crates") != active:
+        return ["coverage crates must equal the active production crate list"]
+    thresholds: dict[str, float] = {}
     for field in ("base_threshold_percent", "designated_threshold_percent"):
         threshold = state.get(field)
         if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
             failures.append(f"coverage policy {field} must be numeric")
+            continue
+        thresholds[field] = float(threshold)
+    if len(thresholds) == 2:
+        base = thresholds["base_threshold_percent"]
+        designated = thresholds["designated_threshold_percent"]
+        if not 0 < base <= designated <= 100:
+            failures.append(
+                "coverage policy thresholds must satisfy "
+                "0 < base_threshold_percent <= designated_threshold_percent <= 100"
+            )
     return failures
 
 def main() -> None:

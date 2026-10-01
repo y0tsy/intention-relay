@@ -659,6 +659,34 @@ def test_m5_exact_active_crate_policy(root: Path) -> None:
         )
 
 
+def test_future_crate_declaration_keys_are_exact(root: Path) -> None:
+    policy = root / "quality/architecture.toml"
+    with modified(policy):
+        replace_once(
+            policy,
+            'name = "intention-hooks"\nresponsibility = "Typed hook phases, ordering, contexts, and dispatch."',
+            'name = "intention-hooks"\ncoverage_tier = "A"\nresponsibility = "Typed hook phases, ordering, contexts, and dispatch."',
+        )
+        run(
+            architecture_check_command(policy),
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-hooks must not declare the retired coverage_tier key",
+        )
+    with modified(policy):
+        replace_once(
+            policy,
+            'test_target = "hook ordering and rejection tests"',
+            'test_target = "hook ordering and rejection tests"\nowner = "intention-hooks"',
+        )
+        run(
+            architecture_check_command(policy),
+            cwd=root,
+            expect_success=False,
+            expected_output="intention-hooks has unknown declaration keys: ['owner']",
+        )
+
+
 def test_configured_quality_harness_partition_policy(root: Path) -> None:
     policy = root / "quality/architecture.toml"
     with modified(policy):
@@ -978,7 +1006,7 @@ def test_coverage_failures(root: Path) -> None:
             [sys.executable, "quality/check_coverage.py", "--policy", str(policy), "--report", str(report), "--crate", "intention-types"],
             cwd=root,
             expect_success=False,
-            expected_output="intention-types line coverage 79.00% is below required base threshold 80.00%",
+            expected_output="intention-types line coverage 79.000% is below required base threshold 80.000%",
         )
         report.write_text(
             coverage_report(root, [("crates/intention-types/src/lib.rs", 100, 80)]),
@@ -1050,6 +1078,49 @@ def test_coverage_policy_requires_numeric_thresholds_and_rejects_tier_tables(roo
             )
 
 
+def test_coverage_crates_must_equal_active_production_crates(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    with modified(policy):
+        # Drop a crate from the runner's list only: the enforced
+        # production_crates list still matches the architecture policy.
+        replace_once(policy, '  "intention-hooks",\n]', "]")
+        run(
+            architecture_check_command(),
+            cwd=root,
+            expect_success=False,
+            expected_output="coverage crates must equal the active production crate list",
+        )
+
+
+def test_coverage_policy_threshold_ordering(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    invalid_policies = [
+        ("base-at-zero", "base_threshold_percent = 80.0", "base_threshold_percent = 0.0"),
+        (
+            "designated-below-base",
+            "designated_threshold_percent = 85.0",
+            "designated_threshold_percent = 75.0",
+        ),
+        (
+            "designated-above-hundred",
+            "designated_threshold_percent = 85.0",
+            "designated_threshold_percent = 105.0",
+        ),
+    ]
+    for _name, old, new in invalid_policies:
+        with modified(policy):
+            replace_once(policy, old, new)
+            run(
+                architecture_check_command(),
+                cwd=root,
+                expect_success=False,
+                expected_output=(
+                    "coverage policy thresholds must satisfy "
+                    "0 < base_threshold_percent <= designated_threshold_percent <= 100"
+                ),
+            )
+
+
 def test_coverage_designated_file_semantics(root: Path) -> None:
     policy = root / "quality/coverage.toml"
     report = root / "quality/fixtures/coverage-low.json"
@@ -1079,6 +1150,25 @@ def test_coverage_designated_file_semantics(root: Path) -> None:
         foreign.write_text("pub const FOREIGN_FIXTURE: u8 = 1;\n", encoding="utf-8")
         unreported.write_text("pub const UNREPORTED_FIXTURE: u8 = 1;\n", encoding="utf-8")
         outside_source.write_text("pub const OUTSIDE_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        # Zero designated rows is a true no-op: a low-coverage fixture that
+        # would fail the designated bar passes while the crate stays above the
+        # base threshold.
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/designated_fixture.rs", 10, 0),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=True,
+            expected_output="intention-types line coverage 90.91% satisfies base threshold 80.00%",
+        )
         report.write_text(
             coverage_report(
                 root,
@@ -1197,6 +1287,90 @@ def test_coverage_designated_file_semantics(root: Path) -> None:
         for _name, invalid, expected_output in invalid_cases:
             policy.write_text(baseline.split("\n[[designated_files]]", 1)[0] + invalid, encoding="utf-8")
             run(check, cwd=root, expect_success=False, expected_output=expected_output)
+        # A designated file with no reportable lines fails instead of passing
+        # the bar vacuously.
+        policy.write_text(baseline, encoding="utf-8")
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/designated_fixture.rs", 0, 0),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=False,
+            expected_output=(
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "has no reportable source lines"
+            ),
+        )
+
+
+def test_coverage_designated_file_aggregate_semantics(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/coverage-low.json"
+    designated = root / "crates/intention-types/src/designated_fixture.rs"
+    check = [
+        sys.executable,
+        "quality/check_coverage.py",
+        "--policy",
+        str(policy),
+        "--report",
+        str(report),
+        "--workspace-aggregate",
+    ]
+    with modified(designated), modified(policy), modified(report):
+        designated.write_text("pub const DESIGNATED_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        policy.write_text(
+            policy.read_text(encoding="utf-8")
+            + '\n[[designated_files]]\n'
+            + 'path = "crates/intention-types/src/designated_fixture.rs"\n'
+            + 'rationale = "Synthetic aggregate designated fixture."\n',
+            encoding="utf-8",
+        )
+        baseline_files = [
+            ("crates/intention-types/src/lib.rs", 100, 100),
+            ("crates/intention-daemon/src/main.rs", 100, 100),
+        ]
+        report.write_text(
+            coverage_report(
+                root,
+                [*baseline_files, ("crates/intention-types/src/designated_fixture.rs", 100, 84)],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=False,
+            expected_outputs=(
+                "excluding crates/intention-daemon/src/main.rs from intention-daemon denominator",
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "line coverage 84.00% is below designated threshold 85.00%",
+            ),
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [*baseline_files, ("crates/intention-types/src/designated_fixture.rs", 100, 85)],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            check,
+            cwd=root,
+            expect_success=True,
+            expected_outputs=(
+                "workspace aggregate line coverage 92.500% (185/200) satisfies base threshold 80.00%",
+                "designated file crates/intention-types/src/designated_fixture.rs "
+                "line coverage 85.00% satisfies designated threshold 85.00%",
+            ),
+        )
 
 
 def test_coverage_exclusion_semantics(root: Path) -> None:
@@ -1308,6 +1482,80 @@ enabled = true
             cwd=root,
             expect_success=False,
             expected_output="intention-types' has no reportable non-excluded source lines",
+        )
+
+
+def test_coverage_designated_exclusion_overlap_semantics(root: Path) -> None:
+    policy = root / "quality/coverage.toml"
+    report = root / "quality/fixtures/coverage-low.json"
+    overlap = root / "crates/intention-types/src/overlap_fixture.rs"
+    command = [
+        sys.executable,
+        "quality/check_coverage.py",
+        "--policy",
+        str(policy),
+        "--report",
+        str(report),
+        "--crate",
+        "intention-types",
+    ]
+    with modified(overlap), modified(policy), modified(report):
+        overlap.write_text("pub const OVERLAP_FIXTURE: u8 = 1;\n", encoding="utf-8")
+        # One path is both excluded and designated: the exclusion subtracts it
+        # from the crate denominator, and the designated bar still applies to
+        # it, so an exclusion cannot exempt a designated file.
+        policy.write_text(
+            policy.read_text(encoding="utf-8")
+            + '\n[[exclusions]]\n'
+            + 'path = "crates/intention-types/src/overlap_fixture.rs"\n'
+            + 'rationale = "Synthetic overlap fixture."\n'
+            + 'owner = "intention-types"\n'
+            + 'equivalent_test_evidence = "quality/self_test.py:test_coverage_designated_exclusion_overlap_semantics"\n'
+            + "enabled = true\n"
+            + '\n[[designated_files]]\n'
+            + 'path = "crates/intention-types/src/overlap_fixture.rs"\n'
+            + 'rationale = "Synthetic overlap fixture."\n',
+            encoding="utf-8",
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/overlap_fixture.rs", 100, 80),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            command,
+            cwd=root,
+            expect_success=False,
+            expected_outputs=(
+                "excluding crates/intention-types/src/overlap_fixture.rs from intention-types denominator",
+                "designated file crates/intention-types/src/overlap_fixture.rs "
+                "line coverage 80.00% is below designated threshold 85.00%",
+            ),
+        )
+        report.write_text(
+            coverage_report(
+                root,
+                [
+                    ("crates/intention-types/src/lib.rs", 100, 100),
+                    ("crates/intention-types/src/overlap_fixture.rs", 100, 85),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        run(
+            command,
+            cwd=root,
+            expect_success=True,
+            expected_outputs=(
+                "excluding crates/intention-types/src/overlap_fixture.rs from intention-types denominator",
+                "designated file crates/intention-types/src/overlap_fixture.rs "
+                "line coverage 85.00% satisfies designated threshold 85.00%",
+            ),
         )
 
 
@@ -1977,6 +2225,27 @@ def test_adr_0044_to_0048_records_exist_and_are_indexed(root: Path) -> None:
             raise RuntimeError(f"decisions/README.md must index ADR {number}")
 
 
+def test_adr_0049_base_coverage_threshold_record_exists_and_is_indexed(root: Path) -> None:
+    adr = root / "docs/intention-relay/decisions/0049-base-coverage-threshold.md"
+    if not adr.is_file():
+        raise RuntimeError("ADR 0049 must exist as the base coverage threshold record")
+    readme = root / "docs/intention-relay/decisions/README.md"
+    if "[0049](0049-base-coverage-threshold.md)" not in readme.read_text(encoding="utf-8"):
+        raise RuntimeError("decisions/README.md must index ADR 0049")
+    text = adr.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    statements = [
+        "threshold of 80% for every production crate and for the workspace aggregate",
+        "Every production crate must reach 80% line coverage",
+        "The workspace aggregate must reach 80% line coverage",
+        "designated-files list",
+        "must reach 85% line coverage",
+    ]
+    for statement in statements:
+        if statement not in normalized:
+            raise RuntimeError(f"ADR 0049 must keep the policy statement: {statement!r}")
+
+
 def test_every_adr_number_is_referenced_by_the_roadmap(root: Path) -> None:
     decisions = root / "docs/intention-relay/decisions/README.md"
     roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
@@ -2354,6 +2623,7 @@ def main() -> None:
         test_m5_activation_policy,
         test_m5_skeleton_drift_policy,
         test_m5_exact_active_crate_policy,
+        test_future_crate_declaration_keys_are_exact,
         test_configured_quality_harness_partition_policy,
         test_m4_sdk_ownership_and_public_contract_boundaries,
         test_m3_daemon_test_dependency_policy,
@@ -2375,8 +2645,12 @@ def main() -> None:
         test_error_detail_and_correlation_validation,
         test_coverage_failures,
         test_coverage_policy_requires_numeric_thresholds_and_rejects_tier_tables,
+        test_coverage_crates_must_equal_active_production_crates,
+        test_coverage_policy_threshold_ordering,
         test_coverage_designated_file_semantics,
+        test_coverage_designated_file_aggregate_semantics,
         test_coverage_exclusion_semantics,
+        test_coverage_designated_exclusion_overlap_semantics,
         test_coverage_runner_policy_and_profile_names,
         test_coverage_target_narrowing_requires_exact_inventory,
         test_metrics_manifest_start_clears_stale_events,
@@ -2392,6 +2666,7 @@ def main() -> None:
         test_supply_chain_policy_failures,
         test_secret_fixture,
         test_adr_0037_slice2_ledger_exists_and_is_indexed,
+        test_adr_0038_no_compatibility_record_exists_and_is_indexed,
         test_adr_0039_tool_advertisement_record_exists_and_is_indexed,
         test_adr_0040_live_provider_e2e_record_exists_and_is_indexed,
         test_adr_0041_same_run_reasoning_round_trip_record_exists_and_is_indexed,
@@ -2404,6 +2679,7 @@ def main() -> None:
         test_real_api_e2e_target_is_opt_in_only,
         test_real_api_e2e_budget_matches_workflow_timeouts,
         test_adr_0044_to_0048_records_exist_and_are_indexed,
+        test_adr_0049_base_coverage_threshold_record_exists_and_is_indexed,
     ]
     standalone_tests = [
         test_unused_dependency,

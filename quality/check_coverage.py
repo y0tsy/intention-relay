@@ -123,12 +123,16 @@ def production_files(
     production_crates: set[str],
     source_roots: dict[str, Path],
 ) -> list[dict[str, object]]:
+    crate_names = set(source_roots)
     return [
         item
         for item in files
         if isinstance(item.get("filename"), str)
         and any(
-            is_under(coverage_path(root, item["filename"]), source_roots.get(crate, root / "__missing__"))
+            is_under(
+                coverage_path(root, item["filename"], crate_names),
+                source_roots.get(crate, root / "__missing__"),
+            )
             for crate in production_crates
         )
     ]
@@ -142,22 +146,33 @@ def is_under(path: Path, parent: Path) -> bool:
     return True
 
 
-def coverage_path(root: Path, filename: str) -> Path:
+def coverage_path(root: Path, filename: str, crate_names: set[str]) -> Path:
+    """Map a coverage report filename to its path under the workspace root.
+
+    llvm-cov emits workspace-relative paths and absolute paths whose tail
+    mirrors the workspace layout. Re-root only when a ``crates`` path
+    component is immediately followed by a known workspace crate directory,
+    so an unrelated path that merely contains ``crates/`` is not mistaken for
+    a workspace source.
+    """
     normalized = filename.replace("\\", "/")
-    marker = "/crates/"
-    if marker in normalized:
-        return (root / "crates" / normalized.split(marker, 1)[1]).resolve()
+    parts = normalized.split("/")
+    for index in range(len(parts) - 1):
+        if parts[index] == "crates" and parts[index + 1] in crate_names:
+            return (root / "crates" / Path(*parts[index + 1 :])).resolve()
     path = Path(filename)
     return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
-def report_path_index(root: Path, files: list[dict[str, object]]) -> dict[Path, list[dict[str, object]]]:
+def report_path_index(
+    root: Path, files: list[dict[str, object]], crate_names: set[str]
+) -> dict[Path, list[dict[str, object]]]:
     """Group coverage report entries by their resolved workspace path."""
     index: dict[Path, list[dict[str, object]]] = {}
     for item in files:
         filename = item.get("filename")
         if isinstance(filename, str):
-            path = coverage_path(root, filename)
+            path = coverage_path(root, filename, crate_names)
             index.setdefault(path, []).append(item)
     return index
 
@@ -171,7 +186,7 @@ def enabled_exclusion_paths(
 ) -> set[Path]:
     if not isinstance(exclusions, list):
         fail("exclusions must be a list")
-    report_paths = report_path_index(root, files)
+    report_paths = report_path_index(root, files, set(source_roots))
 
     excluded: set[Path] = set()
     for exclusion in exclusions:
@@ -232,10 +247,16 @@ def check_designated_files(
     files: list[dict[str, object]],
     threshold: float,
 ) -> None:
-    """Enforce the higher per-file threshold on declared designated files."""
+    """Enforce the higher per-file threshold on declared designated files.
+
+    Exclusions subtract a path's lines from the crate and aggregate
+    denominators; they never waive a per-file bar. When a path is both
+    excluded and designated, the designated threshold still applies
+    (designated wins), so an exclusion cannot exempt a designated file.
+    """
     if not isinstance(designated, list):
         fail("designated_files must be a list")
-    report_paths = report_path_index(root, files)
+    report_paths = report_path_index(root, files, set(source_roots))
     seen: set[Path] = set()
     for entry in designated:
         if not isinstance(entry, dict):
@@ -291,10 +312,20 @@ def main() -> None:
     arguments = parser.parse_args()
 
     root = arguments.root.resolve()
-    with arguments.policy.open("rb") as policy_file:
-        policy = tomllib.load(policy_file)
-    with arguments.report.open(encoding="utf-8") as report_file:
-        report = json.load(report_file)
+    try:
+        with arguments.policy.open("rb") as policy_file:
+            policy = tomllib.load(policy_file)
+    except OSError as error:
+        fail(f"coverage policy is not readable: {arguments.policy}: {error}")
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        fail(f"coverage policy is not valid TOML: {arguments.policy}: {error}")
+    try:
+        with arguments.report.open(encoding="utf-8") as report_file:
+            report = json.load(report_file)
+    except OSError as error:
+        fail(f"coverage report is not readable: {arguments.report}: {error}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        fail(f"coverage report is not valid JSON: {arguments.report}: {error}")
 
     policy_state = policy.get("policy")
     if not isinstance(policy_state, dict):
@@ -323,6 +354,7 @@ def main() -> None:
         source_roots = metadata_source_roots(arguments.metadata, root)
     else:
         source_roots = package_source_roots(root)
+    crate_names = set(source_roots)
     files = report_files(report)
     require_branch_metrics(files)
     if arguments.workspace_aggregate:
@@ -334,7 +366,11 @@ def main() -> None:
             fail("workspace aggregate report contains no production source files")
         excluded_paths = enabled_exclusion_paths(root, exclusions, production_set, source_roots, files)
         covered, count = line_totals(
-            [item for item in aggregate_files if coverage_path(root, item["filename"]) not in excluded_paths]
+            [
+                item
+                for item in aggregate_files
+                if coverage_path(root, item["filename"], crate_names) not in excluded_paths
+            ]
         )
         if count == 0:
             fail("workspace aggregate has no reportable non-excluded source lines")
@@ -358,6 +394,10 @@ def main() -> None:
         if arguments.crate is not None
         else exclusions
     )
+    # Exclusions subtract their paths from the crate and aggregate
+    # denominators only. They never waive a designated-file bar: a path that
+    # is both excluded and designated is still checked against the designated
+    # threshold (designated wins), so an exclusion cannot exempt it.
     excluded_paths = enabled_exclusion_paths(root, report_exclusions, production_set, source_roots, files)
     check_designated_files(root, designated, arguments.crate, production_set, source_roots, files, designated_threshold)
 
@@ -369,8 +409,8 @@ def main() -> None:
             item
             for item in files
             if isinstance(item.get("filename"), str)
-            and is_under(coverage_path(root, item["filename"]), source_root)
-            and coverage_path(root, item["filename"]) not in excluded_paths
+            and is_under(coverage_path(root, item["filename"], crate_names), source_root)
+            and coverage_path(root, item["filename"], crate_names) not in excluded_paths
         ]
         covered, count = line_totals(crate_files)
         if count == 0:
@@ -378,16 +418,13 @@ def main() -> None:
         observed = 100.0 * covered / count
         if observed < base_threshold:
             fail(
-                f"{crate} line coverage {observed:.2f}% is below required base threshold "
-                f"{base_threshold:.2f}%"
+                f"{crate} line coverage {observed:.3f}% is below required base threshold "
+                f"{base_threshold:.3f}%"
             )
         print(
             f"coverage-check: {crate} line coverage {observed:.2f}% "
             f"satisfies base threshold {base_threshold:.2f}%"
         )
-
-    if not production_crates:
-        print("coverage-check: M0 has no production crate coverage thresholds")
 
 
 if __name__ == "__main__":
