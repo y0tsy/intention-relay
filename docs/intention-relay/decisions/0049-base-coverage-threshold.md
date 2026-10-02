@@ -85,7 +85,9 @@ or grandfather clause beyond the designated-files mechanism and the reviewable e
 
 The change is a policy simplification, not a behavior change: no protocol, DTO, storage, configuration, or wire format
 changes, and no production code is rewritten to satisfy it. The policy file and checker move to the base and designated
-thresholds in the same change.
+thresholds in the same change. Under the repository's no-backward-compatibility rule ([ADR
+0038](0038-no-backward-compatibility-and-legacy-removal.md)), the tiers are deleted rather than preserved as a
+deprecated alternative; historical milestone records that mention them stay as history.
 
 ## Security and failure behavior
 

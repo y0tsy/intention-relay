@@ -108,17 +108,31 @@ completed, a repository-wide symbol search showed zero remaining references to t
 package tests plus `make quick` passed; `make verify`, `docs-check`, `check_architecture.py`, and the final validation
 matrix ran after each wave.
 
-| Wave | System | Removed |
-| --- | --- | --- |
-| 1 | Legacy M4 selection bridge chain (0x020C) | Domain `legacy_bridge` module, protocol 0x020C family and its error codes, storage legacy-binding table and codecs, application `LegacyM4Bridge`, composition `SnapshotBindingSource`, `DEFAULT_PROFILE_ID`, and the `COMPOSITION_*` constants |
-| 2 | Domain current records | `RunExecutionMeaningV3Record` codec and golden, the M1/M2 workspace-identity option (now required `WorkspaceId`), the historical-M4 reasoning default (`category` mandatory), and the legacy wire-compat tests |
-| 3 | Protocol exact version | `ProtocolVersionDto::ensure_compatible_with`, `SchemaVersionDto::ensure_compatible_with`, `ProtocolAcceptedDto::new`, `SessionSnapshotDto::new`, the 1.0 wire fixtures and `tests/protocol_fixtures.rs`, `error-v1-legacy.json`, `hello-compatible-minor-v1.json`, and `no_migrations_required` |
-| 4 | Storage single schema | `CURRENT_STORAGE_SCHEMA`, the `schema_m3_sql!`/`schema_m4_sql!`/`schema_m4_tool_results_sql!` macros and their `SCHEMA_*_SQL` constants, `MIGRATIONS`, `rusqlite_migration`, the `user_version` read and future-schema check, `TEST_SCHEMA_3_SQL`, `SCHEMA_M5_SQL`, `hydrate_model_run_snapshots`, and the migration and preservation fixtures |
-| 5 | Configuration single TOML shape | `migrate_v0`, `RawV0Config`, `RawV0ModelConfig`, the `model.api_key` credential fallback, `collect_v0_issues`, old-snapshot acceptance, and additive-field defaults |
-| 6 | Reasoning and providers | The `function_call` stream handling (`legacy_tools`, `merge_legacy`, `finish_legacy`, `map_native_finish`), `ReasoningDialectDecoder` and `with_reasoning_dialect`, the dead thinking-activation builders (`with_thinking`, `with_enable_thinking`, `with_think`, `with_think_effort`, `with_thinking_budget`, `with_thinking_token_budget`), and OpenRouter `with_preservation_controls` |
-| 7 | Application/runtime/daemon/composition/client single path | The dead `send_user_turn` variants and `tests/m4_application_scheduling.rs`, the `resolve_for_turn` selection-less fallback, `resolve_for_override`, `invoke_local_tool_once`, the synchronous `StopRun` dispatch arm, the no-tool-port M4 denial branch, `PostCommitPublisher`/`NoopPostCommitPublisher`, and `SessionSubscriptionRecovery` |
-| 8 | Tooling and meta | The bare-result compatibility trio (`dispatch`, `invoke`, `invoke_with_context`), the legacy `exit_code:` rendering and `-1` sentinel, `resolve_path_for_tool`, and the orphan top-level `tests/` tree |
-| 9 | Policy/docs consolidation | The `quality/architecture.toml` target and wording rows, self-test fixtures, reconciliation registers, coverage re-verification, and the final validation matrix |
+| Wave | System | Atomic unit | Removed |
+| --- | --- | --- | --- |
+| Legacy M4 selection bridge chain (0x020C) | ONE atomic change across domain + protocol + storage(-sqlite) + application + composition | Domain `legacy_bridge` module, protocol 0x020C family and its error codes, storage legacy-binding table and codecs, application `LegacyM4Bridge`, composition `SnapshotBindingSource`, `DEFAULT_PROFILE_ID`, and the `COMPOSITION_*` constants |
+| Domain current records | intention-domain only | `RunExecutionMeaningV3Record` codec and golden, the M1/M2 workspace-identity option (now required `WorkspaceId`), the historical-M4 reasoning default (`category` mandatory), and the legacy wire-compat tests |
+| Protocol exact version | intention-protocol + intention-types + call-site updates in transport/client/config | `ProtocolVersionDto::ensure_compatible_with`, `SchemaVersionDto::ensure_compatible_with`, `ProtocolAcceptedDto::new`, `SessionSnapshotDto::new`, the 1.0 wire fixtures and `tests/protocol_fixtures.rs`, `error-v1-legacy.json`, `hello-compatible-minor-v1.json`, and `no_migrations_required` |
+| Storage single schema | intention-storage-sqlite + intention-storage | `CURRENT_STORAGE_SCHEMA`, the `schema_m3_sql!`/`schema_m4_sql!`/`schema_m4_tool_results_sql!` macros and their `SCHEMA_*_SQL` constants, `MIGRATIONS`, `rusqlite_migration`, the `user_version` read and future-schema check, `TEST_SCHEMA_3_SQL`, `SCHEMA_M5_SQL`, `hydrate_model_run_snapshots`, and the migration and preservation fixtures |
+| Configuration single TOML shape | intention-config | `migrate_v0`, `RawV0Config`, `RawV0ModelConfig`, the `model.api_key` credential fallback, `collect_v0_issues`, old-snapshot acceptance, and additive-field defaults |
+| Reasoning and providers | intention-model + provider-generic-chat + provider-openrouter + domain reasoning part | The `function_call` stream handling (`legacy_tools`, `merge_legacy`, `finish_legacy`, `map_native_finish`), `ReasoningDialectDecoder` and `with_reasoning_dialect`, the dead thinking-activation builders (`with_thinking`, `with_enable_thinking`, `with_think`, `with_think_effort`, `with_thinking_budget`, `with_thinking_token_budget`), and OpenRouter `with_preservation_controls` |
+| Application/runtime/daemon/composition/client single path | intention-application + intention-runtime + intention-daemon + intention + intention-client | The dead `send_user_turn` variants and `tests/m4_application_scheduling.rs`, the `resolve_for_turn` selection-less fallback, `resolve_for_override`, `invoke_local_tool_once`, the synchronous `StopRun` dispatch arm, the no-tool-port M4 denial branch, `PostCommitPublisher`/`NoopPostCommitPublisher`, and `SessionSubscriptionRecovery` |
+| Tooling and meta | intention-tools + intention-workspace + tests/ + docs archive | The bare-result compatibility trio (`dispatch`, `invoke`, `invoke_with_context`), the legacy `exit_code:` rendering and `-1` sentinel, `resolve_path_for_tool`, and the orphan top-level `tests/` tree |
+| Policy/docs consolidation | quality/ + docs registers + final validation | The `quality/architecture.toml` target and wording rows, self-test fixtures, reconciliation registers, coverage re-verification, and the final validation matrix |
+
+Post-revert state (2026-09-30): the legacy M4 bridge removal stands, and the tag ledger it edited is itself removed by
+[ADR 0046](0046-typed-serde-json-contracts.md); the whole execution-meaning codec and its goldens are removed by [ADR
+0046](0046-typed-serde-json-contracts.md), not only the V3 record; the capability gates named in Wave 3 are removed by
+[ADR 0045](0045-local-json-rpc-2-0-transport.md), the protocol version is 2.0, and the "keep the 1.1 negotiation gates"
+instruction is void; the single live SQLite schema stays, while the control-plane tables and
+`control_plane::SCHEMA_M5_SQL` were reverted with the M5+ Slice 2 control plane; the single-TOML-shape removal stands,
+while the control-plane candidate machinery in its keep list was reverted; the provider and reasoning single-path
+removals stand, except the Slice 2 reasoning/catalog families, which were reverted; Wave 7's selection-carrying-only
+instruction and its Slice 2 keep list (catalog, queue promotion and reconciliation, held-run admission) are superseded,
+and selection-less turn acceptance is the only live path; the tooling and meta removals stand, with the removed glob
+match cap covered by [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md); and the policy and pin
+consolidation stands under the protocol, codec, root, and limit changes of ADRs 0045 to 0048. The wave rows name the
+removed surfaces at family granularity; the exact per-symbol inventories live in the wave commits.
 
 Retained by design in the same program: the incompatible-major rejection path with its golden
 `hello-incompatible-major-v2.json`; `ensure_run_cursors`, `snapshot_model_runs`, and the direct full-schema create path
@@ -132,11 +146,6 @@ The Slice 2 candidate machinery that Wave 5's keep list named (`parse_candidate`
 `classify_changed_fields`, `reject_catalog_affecting_edits`, and the candidate DTOs) was reverted with the control
 plane; the credential-free `redacted_safe_digest`, the dead `CandidateAcceptanceOutcomeDto` projection, and config's
 private SHA-256 module were removed in the PR 24 repair run because no production surface consumed them (PR24-037/038).
-
-The final validation matrix: `cargo test --workspace`, `cargo nextest --workspace --all-targets --locked
---no-fail-fast`, `cargo clippy --workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all -- --check`, `make
-quick`, `make verify`, `make docs-check`, `check_architecture.py`, plus targeted package tests for every changed crate.
-The quality self-test suite named by the original matrix was removed 2026-10-02 (architecture 12).
 
 The final validation matrix: `cargo test --workspace`, `cargo nextest --workspace --all-targets --locked
 --no-fail-fast`, `cargo clippy --workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all -- --check`, `make

@@ -128,7 +128,8 @@ replay is served through the same typed payloads as before. The live-provider en
 The socket stays the only local IPC surface: no remote endpoint, no authentication layer, and no change to the file
 permissions that restrict the daemon. Malformed, unknown, or over-size messages fail closed with a typed error or a
 bounded transport failure; they never panic, hang, or allocate without bound. The version-mismatch error discloses only
-the two version values and the adapter name; no path, credential, or daemon internals are echoed.
+the two version values and the adapter name; no path, credential, or daemon internals are echoed. Removing the
+capability plane removes the capability-gated branches and the risk that a handshake string is treated as authority.
 
 ## Non-goals
 

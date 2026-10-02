@@ -6,7 +6,9 @@ Accepted 2026-09-26 as a documentation-approved future direction within the retr
 0035](0035-m5plus-complete-foundation-activation.md). It extends [ADR
 0017](0017-build-autopilot-and-plan-focus-continuity.md) by giving the Plan focus instruction one typed owner, respects
 the context boundary of [ADR 0013](0013-goals-skills-context-memory-and-compaction.md) without changing its Skill,
-memory, or projection rules, and amends ADR 0035 by adding a fifth activating slice to the Milestone 5+ sequence.
+memory, or projection rules, and amends ADR 0035 by adding a fifth activating slice to the Milestone 5+ sequence. It
+authorizes no crate, DTO, tag, wire, storage schema, configuration field, UI page, migration, feature profile,
+quality-policy target, or production behavior, and it is not the Slice 5 activating specification.
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 

@@ -6,7 +6,9 @@ Accepted as a documentation-approved future direction that extends [ADR 0012](00
 0027](0027-child-kernel-bridge-mcp-detail-directions.md) without changing them, within the retrospective scope of [ADR
 0035](0035-m5plus-complete-foundation-activation.md).
 
-**Approved future design. Not implemented; activation requires an activating specification.**
+**Approved future design. Not implemented; activation requires an activating specification.** It authorizes no crate,
+dependency, listener, protocol implementation, storage schema, migration, feature profile, quality-policy target, or
+production kernel execution, and it leaves the M5+ Slice 3 and Slice 4 reservations untouched.
 
 Amended 2026-09-30: the canonical digest fields, the bounded import-evidence wording, and the workspace-boundary failure
 clause are superseded by [ADR 0046](0046-typed-serde-json-contracts.md) and [ADR

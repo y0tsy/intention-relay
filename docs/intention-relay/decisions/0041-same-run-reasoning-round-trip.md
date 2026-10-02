@@ -161,9 +161,9 @@ unchanged.
 - Live 400 evidence and acceptance: the opt-in live run through
 `crates/intention-daemon/tests/real_api_e2e.rs` under ADR 0040; the controller records date, commit, provider kind,
 model, and the local run report or the workflow run URL.
-- Reconciliation evidence: EVD-064 (`reconciliation/evidence-register.md`),
-supplemented by EVD-062 because the ADR 0039 continuation now also carries reasoning. Gates: `make quick`, `make
-verify`, `docs-check`, Linux/Windows CI; the ADR 0040 live channel remains manual and non-blocking.
+- Reconciliation evidence: EVD-064 (`reconciliation/evidence-register.md`; `Verified` by the hermetic gates and the
+recorded live runs), supplemented by EVD-062 because the ADR 0039 continuation now also carries reasoning. Gates: `make
+quick`, `make verify`, `docs-check`, Linux/Windows CI; the ADR 0040 live channel remains manual and non-blocking.
 
 Recorded live run (EVD-063/EVD-064): 2026-09-23, local `make e2e-real-api`, commit `0dc2e30`, provider
 `generic-chat-completion-api`, model `deepseek-v4.1-flash`; both ignored live tests passed, so a thinking-mode gateway
