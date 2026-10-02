@@ -1,8 +1,10 @@
 # Tools, Workspace, and Hooks
 
-## Scope
+**Current policy.**
 
-This document specifies typed core tools, `WorkspaceRoot` addressing semantics, tool execution policy, and the hook system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
+This document specifies typed core tools, `WorkspaceRoot` addressing semantics,
+tool execution policy, and the hook system used by WorkspaceRoot, VFR, Headroom,
+and Plan mode.
 
 ## Tool ownership
 
@@ -248,7 +250,7 @@ instruction is not a technical boundary.
 
 ## Quality-gate integration
 
-Tool, WorkspaceRoot, and hook enforcement are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) and are blocking `make verify` inputs. Architecture checks must reject direct process-CWD fallback and VFR/Headroom coupling inside base tools. Line coverage cannot replace the explicit relative-addressing, search-scope, execute-CWD, hook-order, and policy-denial scenarios above. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Tool, WorkspaceRoot, and hook tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold, [ADR 0049](../decisions/0049-base-coverage-threshold.md)). Architecture checks must reject direct process-CWD fallback and VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope, execute-CWD, hook-order, and policy-denial scenarios above.
 
 ## Open decisions
 

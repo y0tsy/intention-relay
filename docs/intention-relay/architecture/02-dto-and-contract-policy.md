@@ -1,8 +1,9 @@
 # DTO and Contract Policy
 
-## Scope
+**Current policy.**
 
-This document makes the DTO-first principle executable. It applies to all crate, process, persistence, provider, tool, hook, and presentation boundaries.
+This document makes the DTO-first principle executable. It applies to all
+crate, process, persistence, provider, tool, hook, and presentation boundaries.
 
 ## Non-negotiable rule
 
@@ -64,7 +65,8 @@ IDs must have a defined generation owner, parse/validation behavior, serializati
 
 ### Envelopes
 
-Transport and persisted events require an envelope with ordering and schema information.
+Persisted events carry `EventEnvelopeDto` with ordering and schema information;
+transport envelopes are JSON-RPC messages (architecture 03).
 
 ```rust
 EventEnvelopeDto {
@@ -112,7 +114,7 @@ The following must not cross a boundary as public inputs or outputs:
 - bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
 - implementation error types that reveal secrets or topology.
 
-Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. A request also advertises tool definitions as validated JSON-object parameter text (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is transient request state with no durable representation (ADR 0039). A request may additionally carry the current round's accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may attach it to the assistant tool-call message of the same-run continuation (ADR 0041), and it is never durable history, message text, or cross-turn transfer. `intention-types` owns the shared safe usage, finish-reason, tool-call, and provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
+Provider SDK request/response/stream types and raw `serde_json::Value` cannot cross a provider boundary. M4 model/provider contracts use validated text context, requested/declared capability DTOs, ordered stream facts, usage, finish reasons, safe provider errors, and typed JSON-object tool-call text. A request advertises tool definitions as validated JSON-object parameter text (`ModelToolDefinitionDto`), never as raw `serde_json::Value`; the advertised set is transient request state with no durable representation (ADR 0039). A request may additionally carry the current round's accepted provider reasoning as transient same-run attachment state with no durable representation: the runtime may attach it to the assistant tool-call message of the same-run continuation (ADR 0041), and it is never durable history, message text, or cross-turn transfer. `intention-types` owns the shared safe usage, finish-reason, tool-call, and provider-error values; `intention-model` re-exports them for source compatibility. Native SDK decoding and JSON values may exist only inside the owning provider implementation before being normalized to those DTOs.
 
 M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-scoped snapshot carries its compatible M3 `RunProjectionDto`, dedicated `RunEventCursorDto`, bounded assistant-turn content, optional normalized usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only contiguous typed facts strictly after a cursor. M4's dedicated wire family keeps this scope separate from M3 session replay: `SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunReplayDto`, `RunResyncDto`, or a safe `ErrorDto`; subsequent `RunLiveBatchDto`, `RunSnapshotFrameDto`, and `RunResyncDto` are uncorrelated `RunStreamFrameDto` values. Live batches are non-empty, run-scoped, positive-cursor contiguous ranges, while snapshot frames are daemon-authoritative status checkpoints. `RunResyncReasonDto` is closed and rejects unknown variants; `run_replay_not_found` remains a safe error rather than a resync.
 
@@ -182,7 +184,7 @@ A live event is emitted only after the storage commit succeeds. The command resu
 
 ## Quality-gate integration
 
-DTO compatibility, validation, redaction, and public-API boundary tests are blocking inputs to `make verify`. Every DTO-owning crate is subject to the base 80% line-coverage threshold and the designated-files mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) before production code is accepted, and contract fixtures run across the required feature profiles. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+DTO compatibility, validation, redaction, and public-API boundary tests are blocking `make verify` inputs. Every DTO-owning crate is subject to the base 80% line-coverage threshold and the designated-files mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), and contract fixtures run across the required feature profiles. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria
 
@@ -193,50 +195,47 @@ See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) fo
 ## Post-M4 execution and compatibility boundary
 
 Future M4+ packages use closed, typed serde JSON families rather than widening
-historical records by implication. The binary canonical codec, execution-meaning
-envelope, tag registry, and digest/identity layer were deleted by ADR 0046:
-there is no `RunExecutionMeaningEnvelopeDto`, no canonical tag or digest, no
-canonical encoding, and no decoder retention schedule. If a future
-execution-kind record is ever needed, it is a typed serde JSON contract declared
-by its own activating specification; kind/version/payload mismatch blocks
-dependent external work, and live availability never silently mutates a
-persisted meaning.
+historical records by implication. If a future execution-kind record is needed,
+it is a typed serde JSON contract declared by its own activating specification;
+kind/version/payload mismatch blocks dependent external work, and live
+availability never silently mutates a persisted meaning.
 
 ### Future DTO families
 
 The Plan/Build Autopilot transition adds versioned typed families for plan
-approval, same-Session Build continuation, and optional implementation
-handoff. Approval binds an exact plan revision; same-Session
-continuation preserves `SessionId` but creates a fresh `RunId`; handoff creates
-an independent Session from a bounded safe snapshot. These DTOs must not carry
-credentials, raw transcripts, provider continuation state, live handles,
-processes, grants, or unfinished effects.
+approval, same-Session Build continuation, and optional implementation handoff.
+Approval binds an exact plan revision; same-Session continuation preserves
+`SessionId` but creates a fresh `RunId`; handoff creates an independent Session
+from a bounded safe snapshot. These DTOs must not carry credentials, raw
+transcripts, provider continuation state, live handles, processes, grants, or
+unfinished effects.
 
 Future Mandate work requires typed IDs and values for Mandate identity/revision,
 trigger reason, disposition, execution meaning, verified checkpoint reference,
 external-attempt phase/evidence, capacity outcome, and explicit verifier
 authority where applicable. These are future contract families, not current M4
-storage or wire fields.
+storage or wire fields. [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
+owns the Mandate lifecycle families and their validation and revision/sequence
+rules.
 
 The future tool-loop families include `ToolRegistryEntryDto`,
 `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, `DirectToolSelectionV1`,
 `ModelStepId`, `ToolGroupId`, model-step/group facts, typed direct-admission
 outcomes, safe workspace-path observations, output fragments, terminal results,
-and `ModelToolExchangeDto`. Architecture 15 owns their semantics; every family
-is typed serde JSON, and any canonicalization requires a first real consumer and
-RFC 8785 (ADR 0046). They cannot
-widen historical M4 tool facts, expose provider-native IDs, raw paths, secrets,
-SDK resources, or recreate stored selection from a current registry.
+and `ModelToolExchangeDto`. They cannot widen historical M4 tool facts, expose
+provider-native IDs, raw paths, secrets, or SDK resources, or recreate stored
+selection from a current registry. [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md)
+owns their semantics.
 
 The future instruction-source families include `InstructionSourceV1`,
 `InstructionProfileRevisionV1`, and `InstructionProjectionV1`
 ([architecture 30](30-instruction-sources-and-system-context.md),
 [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). They
 carry bounded credential-free instruction text with its declared kind, scope,
-order, and audience; they carry no tool, policy, admission,
-provider, or other authority, and no untrusted material may enter them.
-Architecture 30 owns their semantics, and the Slice 5 activating specification
-assigns their typed serde JSON contract versions (ADR 0046).
+order, and audience; they carry no tool, policy, admission, provider, or other
+authority, and no untrusted material may enter them. Architecture 30 owns their
+semantics, and the Slice 5 activating specification assigns their typed serde
+JSON contract versions.
 
 ### Historical compatibility classes
 
@@ -251,23 +250,21 @@ assigns their typed serde JSON contract versions (ADR 0046).
 Historical M3/M4 and ordinary records must not receive synthetic Mandate,
 verifier, Skill, MCP, child, activity, policy, profile, or execution-kind
 fields. The single live storage schema may evolve in place to add tables,
-bridges, or projections but may not rewrite old payload bytes, IDs,
-cursors, snapshots, or event envelopes. Unknown or
-corrupt future meaning blocks dependent work before an effect and must not fall
-back to current TOML, registry, model name, provider, or live resource state.
-
-Mandate lifecycle DTO families, validation and revision/sequence rules are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md). Historical compatibility rules are owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
-
-Registry, direct-admission, WorkspaceRoot, and tool-loop DTO semantics are owned
-by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
+bridges, or projections but may not rewrite old payload bytes, IDs, cursors,
+snapshots, or event envelopes. Unknown or corrupt future meaning blocks
+dependent work before an effect and must not fall back to current TOML,
+registry, model name, provider, or live resource state. [Run execution meaning
+and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
+owns the remaining historical compatibility rules.
 
 Future scheduler families include typed readiness observations, candidate views,
 capacity-unavailable outcomes, and scheduler admission requests. They are closed,
 credential/resource-free DTOs: no SDK health values, handles, task identities,
 opaque timer objects, raw paths, or current-state-derived execution meaning may
 cross a boundary. Unknown scheduler/readiness variants block dependent admission
-and cannot synthesize ordinary queue or Mandate state. Detailed semantics are
-owned by [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+and cannot synthesize ordinary queue or Mandate state. [Mandate scheduler and
+readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
+owns the detailed semantics.
 
 Future child/verifier families include typed child-edge, `ParentMandateId`,
 delegation snapshot, direct-edge control/message, terminal-summary, verifier
@@ -275,18 +272,14 @@ authority/revision, immutable target-set, audit baseline/evidence/verdict,
 target-mutation, and reconciliation values. They are credential-free, closed,
 versioned families that neither widen historical records nor grant authority by
 relationship, prompt, evidence, or current state. Architecture 17 owns their
-semantics; architecture 14 retains historical compatibility ownership.
+semantics.
 
 Future MCP families include typed capability source, discovery, server
 observation, normalized capability revision, accumulated run-local selection,
 model-step selection binding, invocation selection, safe capability/result
 projection, and attempt/recovery values. They are closed, credential-free, and
 cannot expose raw endpoint, command, header, token, frame, server error, SDK,
-socket, or process resource. Architecture 18 owns their semantics; architecture
-14 retains historical compatibility ownership.
-
-See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
-and the compatibility register.
+socket, or process resource. Architecture 18 owns their semantics.
 
 ## Post-M4 kernel DTO boundary
 
@@ -295,9 +288,7 @@ safe output chunk, checkpoint metadata, restoration outcome, and host-request
 references. They are closed, credential-free families: Python/Jupyter objects,
 raw frames, checkpoint payloads, grants, credentials, endpoints, handles,
 process resources, raw tracebacks, and caller-selected application identities
-never cross a public boundary. Architecture 20 owns their semantics; every
-family is typed serde JSON with any canonicalization deferred to a first real
-consumer (ADR 0046).
+never cross a public boundary. Architecture 20 owns their semantics.
 
 ## Post-M4 provider evolution DTO boundary
 
@@ -305,20 +296,18 @@ Future provider DTOs are closed, credential-free kind/descriptor/profile/catalog
 selection/capability/driver-contract and normalized-reasoning families. They
 cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
 payloads, SDK/client resources, remote continuation state, or private endpoint
-input. Architecture 22 owns their semantics; every family is typed serde JSON,
-and no canonical identity record or digest layer exists (ADR 0046).
+input. Architecture 22 owns their semantics.
 
 ## Post-M4 session branching DTO boundary
 
 Future fork DTOs are closed, versioned, credential-free command/query/result,
 lineage, boundary, snapshot, preview, and safe branch-summary families. They
 never carry a client-selected child ID, raw snapshot/event, credential, path,
-resource, provider payload, or authority. Architecture 23 owns their semantics;
-every family is typed serde JSON (ADR 0046).
+resource, provider payload, or authority. Architecture 23 owns their semantics.
+
 ## Post-M4 activity and adapter DTO boundary
 
 Future activity, notification, acknowledgement, snapshot, page, completion, live,
 and resync DTO families are closed, versioned, credential-free safe projections.
 They expose no raw prompt, provider/tool/MCP data, path, credential, grant,
-resource, or implementation value. Architecture 24 owns semantics; every family
-is typed serde JSON (ADR 0046).
+resource, or implementation value. Architecture 24 owns their semantics.

@@ -1,8 +1,11 @@
 # Workspace and Crate Map
 
-## Scope
+**Current policy.**
 
-This document assigns ownership within the Rust workspace and defines allowed dependency directions. It implements the workspace principle in [00 Principles and Scope](00-principles-and-scope.md) and the DTO-first rule in [02 DTO and Contract Policy](02-dto-and-contract-policy.md).
+This document assigns ownership within the Rust workspace and defines allowed
+dependency directions. It implements the workspace principle in
+[00 Principles and Scope](00-principles-and-scope.md) and the DTO-first rule in
+[02 DTO and Contract Policy](02-dto-and-contract-policy.md).
 
 ## Rules
 
@@ -13,12 +16,12 @@ This document assigns ownership within the Rust workspace and defines allowed de
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
 - M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one startup snapshot, storage records it by revision, and each accepted or promoted run retains its immutable revision. TOML is applied only at daemon startup; live reload remains deferred.
 - M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime -> config` edges required to persist and attach canonical snapshots without exposing credentials or filesystem paths.
-- M4 activates Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only `intention` may select either concrete provider.
+- M4 activates `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. The model crate remains provider-neutral and depends only on `intention-types`; provider crates depend only on model/config/types plus their private SDK. `intention-types` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto` shared by model and durable domain facts; `intention-model` retains compatibility re-exports. Only `intention` may select either concrete provider.
 - M4 durable model facts remain domain-owned: domain, storage, and protocol never depend on `intention-model`; SQLite stores typed domain-event envelopes and indexes them by dedicated per-run cursor. `intention-runtime` depends on the provider-neutral `intention-model` contract only for its injected base execution service; it neither selects a concrete provider nor exposes an async runtime resource.
 - M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition facade plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
 - M5 activates the typed tool/workspace/hook path. The composition root (`intention`) owns assembly of the six active tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
-The M1-M5 activation notes above are historical records:
+The M1-M5 activation notes are historical records:
 [ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced the
 coverage-tier classification with the base 80% line-coverage threshold and the
 designated-files mechanism.
@@ -107,30 +110,29 @@ flowchart BT
 - application facade and runtime actor factories;
 - a daemon application facade that `intention-daemon` hosts over transport.
 
-For M5, this is also the ownership boundary for the active six-tool registry,
+For M5, this is the ownership boundary for the active six-tool registry,
 `WorkspaceRoot`, and the typed hook dispatcher. Base tools remain primitive
 implementations; application owns lifecycle/result persistence and publication,
 while hooks transform or reject typed context without committing storage or
 publishing independently.
 
-`intention-daemon` depends on this composition facade, never the reverse. Its M4
-private host may also consume DTO/application/runtime/model contracts to own the
-task registry, cancellation, and streaming transport loop, but it never imports
-or selects concrete provider/storage implementations. This preserves an acyclic
-graph: composition selects concrete implementations, while the binary owns
-process lifecycle and typed connection hosting.
+`intention-daemon` depends on this composition facade, never the reverse. Its
+private host may consume DTO/application/runtime/model contracts to own the task
+registry, cancellation, and streaming transport loop, but it never imports or
+selects concrete provider/storage implementations. Composition selects concrete
+implementations; the binary owns process lifecycle and typed connection hosting.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 
 ## Binaries
 
-Planned binaries should be thin:
+Planned binaries are thin:
 
 - `intention-daemon`: starts a configured daemon host.
 - `intention-tui`: starts a terminal client and invokes shared bootstrap.
 - a future administrative CLI may use `intention-client`, not daemon internals.
 
-`intention-tauri` is a desktop integration crate/binary host. It must not become a second daemon implementation.
+`intention-tauri` is a desktop integration crate/binary host, not a second daemon implementation.
 
 ## Architectural test requirements
 
@@ -145,18 +147,18 @@ The workspace must have tests that fail when these rules are broken:
 7. every planned crate has a stated test target before implementation begins;
 8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
 
-The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The mandatory pinned tooling, coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, lint policy, and Makefile/CI contract are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
 
-This map does not freeze individual module names, file names, Cargo feature syntax, or exact trait method signatures. Those are implementation choices that must preserve these ownership and dependency rules.
+This map does not freeze individual module names, file names, Cargo feature syntax, or exact trait method signatures; those are implementation choices that must preserve these ownership and dependency rules.
 
 ## Post-M4 prospective ownership boundary
 
-This section records future layer ownership only. It neither creates a crate nor
-activates an existing skeleton. `quality/architecture.toml` remains the sole
-machine-readable future-crate placeholder registry; coverage and feature policy
-remain activation-time projections.
+This section records future layer ownership only; it creates no crate, table, or
+dependency edge. `quality/architecture.toml` remains the sole machine-readable
+future-crate placeholder registry, and coverage and feature policy remain
+activation-time projections.
 
 | Concern | Future layer owner | Required boundary |
 | --- | --- | --- |
@@ -180,17 +182,14 @@ remain activation-time projections.
 | Presentation and typed user input | Adapters | No local business authority or bypass. |
 
 Architectures 17, 18, and 20 own future child/verifier, MCP, and kernel
-semantics but activate no crate or dependency edge. Kernel activation must split
-typed contracts, lifecycle orchestration, and private Python/Jupyter translation
-without exposing implementation resources. Skill, provider-profile, and fork
-boundaries remain separate delivery decisions. Any split must preserve this
-acyclic direction, DTO-first contracts, a declared test target, the base 80%
-line-coverage threshold and designated-files mechanism
+semantics. Kernel work must split typed contracts, lifecycle orchestration, and
+private Python/Jupyter translation without exposing implementation resources;
+Skill, provider-profile, and fork boundaries remain separate delivery decisions.
+Any split must preserve this acyclic direction, DTO-first contracts, a declared
+test target, the base 80% line-coverage threshold and designated-files mechanism
 ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), and isolated
-architecture fixtures before production activation.
-
-Architecture 16 creates no scheduler crate or dependency edge. Exact crate
-allocation remains activation-time work.
+architecture fixtures before production activation. Architecture 16 owns no
+scheduler crate; exact crate allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md)
 and the ownership map.
@@ -199,10 +198,10 @@ and the ownership map.
 
 Architecture 22 owns future typed provider/profile/catalog/revision/capability
 values, private provider translation, driver compatibility, and composition-only
-private driver assembly. It activates no crate or dependency edge. A later
-activation must split typed contracts, orchestration, storage, and private SDK or
-decoder translation without exposing credentials, native payloads, SDK/client
-resources, or another capability authority.
+private driver assembly. A later activation must split typed contracts,
+orchestration, storage, and private SDK or decoder translation without exposing
+credentials, native payloads, SDK/client resources, or another capability
+authority.
 
 ## Post-M4 session branching ownership
 
@@ -210,10 +209,10 @@ Architecture 23 owns future typed conversation-tree, parent, boundary, fork
 operation, snapshot, lineage-audit, and safe branch-projection values. Domain
 owns validation; storage owns atomic lineage persistence; protocol owns a later
 typed DTO family; application/runtime owns fork orchestration; adapters own
-presentation only. This activates no crate or dependency edge.
+presentation only.
+
 ## Post-M4 activity and adapter ownership
 
 Architecture 24 owns future typed activity, notification, acknowledgement, and
 safe presentation projection contracts. Domain/storage/protocol/application/runtime
-roles remain DTO-first; adapters consume only `intention-client`. This activates
-no crate, dependency edge, or test target.
+roles remain DTO-first; adapters consume only `intention-client`.
