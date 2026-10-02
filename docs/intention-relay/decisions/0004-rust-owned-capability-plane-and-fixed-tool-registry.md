@@ -6,14 +6,12 @@ Accepted.
 
 ## Decision
 
-All future model, bridge, kernel, child, and MCP capability invocation reaches
-one daemon-owned Rust capability path. Concrete assembly belongs only to the
-composition root. No subsystem may create a second registry, direct primitive
+All future model, bridge, kernel, child, and MCP capability invocation reaches one daemon-owned Rust capability path.
+Concrete assembly belongs only to the composition root. No subsystem may create a second registry, direct primitive
 bypass, persistence authority, daemon, or lifecycle authority.
 
-Registry/descriptor detail, direct Mandate admission, WorkspaceRoot behavior,
-Plan/Build policy, tool-loop facts, and individual slots are deferred to later
-owner packages.
+Registry/descriptor detail, direct Mandate admission, WorkspaceRoot behavior, Plan/Build policy, tool-loop facts, and
+individual slots are deferred to later owner packages.
 
 ## Invariants
 
@@ -22,8 +20,7 @@ owner packages.
 - providers, bridges, Skills, MCP sources, and kernels are not authority;
 - product controls are not OS sandboxing.
 
-Owner: architecture 15. Evidence: activating specification per
-[architecture 12](../architecture/12-quality-gates-and-makefile.md).
+Owner: architecture 15. Evidence: activating specification per [architecture
+12](../architecture/12-quality-gates-and-makefile.md).
 
-Provenance: `m4plus_concept.md`, unified registry, model-tool loop, bridge,
-kernel, Skill, and MCP sections.
+Provenance: `m4plus_concept.md`, unified registry, model-tool loop, bridge, kernel, Skill, and MCP sections.

@@ -2,38 +2,32 @@
 
 ## Status
 
-Accepted as the superseding specification that removes all
-backward-compatibility, legacy, fallback, and migration machinery from the
-project, in accordance with the [AGENTS.md](../../../AGENTS.md) "No backward
-compatibility" policy (main commit `b5fa71e`). It is subordinate to
-[ADR 0035](0035-m5plus-complete-foundation-activation.md), which remains the
-activation home and slice-sequence authority.
+Accepted as the superseding specification that removes all backward-compatibility, legacy, fallback, and migration
+machinery from the project, in accordance with the [AGENTS.md](../../../AGENTS.md) "No backward compatibility" policy
+(main commit `b5fa71e`). It is subordinate to [ADR 0035](0035-m5plus-complete-foundation-activation.md), which remains
+the activation home and slice-sequence authority.
 
-Amended 2026-09-30: the removal program below has fully executed. The Slice 2
-control plane was activated and then reverted (Slice 2 revert), and the
-transport, codec, root, and limit records of ADRs 0045 to 0048 postdate this
-record's wave plan. The single-version policy and every wave removal stand.
+Amended 2026-09-30: the removal program below has fully executed. The Slice 2 control plane was activated and then
+reverted (Slice 2 revert), and the transport, codec, root, and limit records of ADRs 0045 to 0048 postdate this record's
+wave plan. The single-version policy and every wave removal stand.
 
 ## Decision
 
-The single-version policy governs every versioned system in the project, and
-every execution path whose only purpose is compatibility with a version that
-is no longer current is removed.
+The single-version policy governs every versioned system in the project, and every execution path whose only purpose is
+compatibility with a version that is no longer current is removed.
 
 - Backward compatibility is neither required nor in demand. Nothing built or
-  run from this project exists outside the development machine: no deployed
-  users, no externally persisted data, and no third-party consumers.
+run from this project exists outside the development machine: no deployed users, no externally persisted data, and no
+third-party consumers.
 - Outdated execution paths are removed. Compatibility layers, fallback
-  branches, and migration paths are not added to keep old behavior readable,
-  replayable, or upgradeable.
+branches, and migration paths are not added to keep old behavior readable, replayable, or upgradeable.
 - Until every roadmap milestone is complete and fully closed, each versioned
-  system keeps exactly one live version, version 1. Database schemas,
-  protocol versions, wire formats, configuration formats, and storage formats
-  evolve in place within that single version.
+system keeps exactly one live version, version 1. Database schemas, protocol versions, wire formats, configuration
+formats, and storage formats evolve in place within that single version.
 - The existence of databases is not an argument for keeping DB migrations or
-  old-schema compatibility.
+old-schema compatibility.
 - Compatibility fixtures, golden files, and tests that assert behavior of any
-  version other than the current one are not maintained.
+version other than the current one are not maintained.
 
 ### Superseded commitments
 
@@ -55,58 +49,44 @@ is no longer current is removed.
 ### Settled bindings
 
 1. Unknown-additive-field tolerance is retained as current decode behavior
-   (forward compatibility for future additive fields per architecture 02).
-   The assertion formerly in `protocol_fixtures.rs` was re-homed into
-   `contracts.rs`; it is not removed.
+(forward compatibility for future additive fields per architecture 02). The assertion formerly in `protocol_fixtures.rs`
+was re-homed into `contracts.rs`; it is not removed.
 2. The no-tool-port M4 denial is intentionally superseded: the
-   `tool_execution_unavailable` fallback branch in the model-tool-loop
-   executor is removed and the tool executor is mandatory. This is an
-   intentional behavior change under this policy, not an accidental removal.
+`tool_execution_unavailable` fallback branch in the model-tool-loop executor is removed and the tool executor is
+mandatory. This is an intentional behavior change under this policy, not an accidental removal.
 3. `SessionSubscriptionRecovery` is removed (test-only wrapper, no production
-   caller). The one-shot session-subscription surface itself is retained
-   (current, TUI-consumed).
+caller). The one-shot session-subscription surface itself is retained (current, TUI-consumed).
 4. Retained current factories and surfaces: the `reasoning_delta` Primary
-   shorthand constructor, `fail_starting_run` (the preserve-accepted helper),
-   the `compatibility_id` manifest fields (current manifest identity, not
-   version compatibility), and OpenRouter empty reasoning-details handling
-   (`openrouter` `lib.rs:749`).
+shorthand constructor, `fail_starting_run` (the preserve-accepted helper), the `compatibility_id` manifest fields
+(current manifest identity, not version compatibility), and OpenRouter empty reasoning-details handling (`openrouter`
+`lib.rs:749`).
 5. `SnapshotBindingSource` is removed because a catalog-runtime-backed binding
-   source was implemented and tested first; its five call sites in
-   `crates/intention/src/lib.rs` (including its test) switched to the
-   replacement.
+source was implemented and tested first; its five call sites in `crates/intention/src/lib.rs` (including its test)
+switched to the replacement.
 
 ### Out of scope (retained)
 
 - The ordinary runtime that survives the Slice 2 revert and ADRs 0045 to 0048,
-  including the M4 normalized reasoning events of
-  [ADR 0041](0041-same-run-reasoning-round-trip.md). The Slice 2 control plane
-  (catalog controller, private registry, control-plane gate, degraded
-  readiness, unavailable-queue promotion and reconciliation, usage
-  aggregation, held recovered-run admission, session profile selection,
-  provider control-plane services, `provider_profiles_v1` gates, and the
-  protocol 1.1 surface) is reverted; the capability plane is removed by
-  [ADR 0045](0045-local-json-rpc-2-0-transport.md); the canonical codec is
-  removed by [ADR 0046](0046-typed-serde-json-contracts.md); and the
-  speculative contract limits are removed by
-  [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md).
+including the M4 normalized reasoning events of [ADR 0041](0041-same-run-reasoning-round-trip.md). The Slice 2 control
+plane (catalog controller, private registry, control-plane gate, degraded readiness, unavailable-queue promotion and
+reconciliation, usage aggregation, held recovered-run admission, session profile selection, provider control-plane
+services, `provider_profiles_v1` gates, and the protocol 1.1 surface) is reverted; the capability plane is removed by
+[ADR 0045](0045-local-json-rpc-2-0-transport.md); the canonical codec is removed by [ADR
+0046](0046-typed-serde-json-contracts.md); and the speculative contract limits are removed by [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md).
 - Roadmap scope for slices 3 and 4. The slice scope itself is untouched; the
-  reserved ledger tags with their `TagStatus` entries and the reserved
-  contract-family DTOs are removed with the canonical codec by
-  [ADR 0046](0046-typed-serde-json-contracts.md).
+reserved ledger tags with their `TagStatus` entries and the reserved contract-family DTOs are removed with the canonical
+codec by [ADR 0046](0046-typed-serde-json-contracts.md).
 - Approved M1 skeleton crates `intention-headroom`, `intention-plans`,
-  `intention-vfr`, and `intention-tauri` and their policy entries.
+`intention-vfr`, and `intention-tauri` and their policy entries.
 - Current quality tooling (`quality/` checkers, self-tests, run scripts,
-  policy files), Makefile targets, CI workflows, and the empty `outdated.toml`
-  ignore list (a current negative assertion).
+policy files), Makefile targets, CI workflows, and the empty `outdated.toml` ignore list (a current negative assertion).
 - Governance history: `closeout/` milestone evidence and research provenance
-  documents are retained, at most archived with link updates, never deleted
-  outright.
+documents are retained, at most archived with link updates, never deleted outright.
 - Legitimate optional-state fields that are part of the current wire format
-  (for example `ErrorDto` `correlation_id`/`detail`, `SessionProjectionDto`
-  optional `config_revision_id`/`active_run`, `ToolResultRecordedEventDto`
-  `structured_metadata`) and ordinary optional-config defaults for fresh
-  documents (for example a TOML without an optional `[provider.execution]`
-  table).
+(for example `ErrorDto` `correlation_id`/`detail`, `SessionProjectionDto` optional `config_revision_id`/`active_run`,
+`ToolResultRecordedEventDto` `structured_metadata`) and ordinary optional-config defaults for fresh documents (for
+example a TOML without an optional `[provider.execution]` table).
 
 ## Version ledger
 
@@ -122,13 +102,11 @@ is no longer current is removed.
 
 ## Removal program
 
-Waves ran in order, except Waves 1 and 8, which are independent and ran in
-parallel. Each wave is one atomic commit: the code removal, its replacement
-tests, and its documentation/policy updates landed in the same change. Before
-a wave completed, a repository-wide symbol search showed zero remaining
-references to the removed symbols, and the targeted package tests plus
-`make quick` passed; `make verify`, `docs-check`, `check_architecture.py`, and
-the final validation matrix ran after each wave.
+Waves ran in order, except Waves 1 and 8, which are independent and ran in parallel. Each wave is one atomic commit: the
+code removal, its replacement tests, and its documentation/policy updates landed in the same change. Before a wave
+completed, a repository-wide symbol search showed zero remaining references to the removed symbols, and the targeted
+package tests plus `make quick` passed; `make verify`, `docs-check`, `check_architecture.py`, and the final validation
+matrix ran after each wave.
 
 | Wave | System | Removed |
 | --- | --- | --- |
@@ -142,90 +120,66 @@ the final validation matrix ran after each wave.
 | 8 | Tooling and meta | The bare-result compatibility trio (`dispatch`, `invoke`, `invoke_with_context`), the legacy `exit_code:` rendering and `-1` sentinel, `resolve_path_for_tool`, and the orphan top-level `tests/` tree |
 | 9 | Policy/docs consolidation | The `quality/architecture.toml` target and wording rows, self-test fixtures, reconciliation registers, coverage re-verification, and the final validation matrix |
 
-Retained by design in the same program: the incompatible-major rejection path
-with its golden `hello-incompatible-major-v2.json`; `ensure_run_cursors`,
-`snapshot_model_runs`, and the direct full-schema create path in `open()` with
-its regression test; modern `tool_calls` merge/finish,
-`provider_reasoning_stream_invalid`, and `with_reasoning_effort`;
-`stop_run_for_daemon_host`, `terminalize_cancelling_run_for_daemon`, the daemon
-async host path, and the protocol `StopRunCommandDto`;
-`committed_tool_result_evidence` and the `HostCommitObserver` publication path;
-and `dispatch_with_cancellation` / `invoke_enveloped_with_cancellation` with
-the typed `ToolProcessStatus`, to which the coverage call sites migrated.
+Retained by design in the same program: the incompatible-major rejection path with its golden
+`hello-incompatible-major-v2.json`; `ensure_run_cursors`, `snapshot_model_runs`, and the direct full-schema create path
+in `open()` with its regression test; modern `tool_calls` merge/finish, `provider_reasoning_stream_invalid`, and
+`with_reasoning_effort`; `stop_run_for_daemon_host`, `terminalize_cancelling_run_for_daemon`, the daemon async host
+path, and the protocol `StopRunCommandDto`; `committed_tool_result_evidence` and the `HostCommitObserver` publication
+path; and `dispatch_with_cancellation` / `invoke_enveloped_with_cancellation` with the typed `ToolProcessStatus`, to
+which the coverage call sites migrated.
 
-The Slice 2 candidate machinery that Wave 5's keep list named
-(`parse_candidate`, `semantic_equivalence`, `classify_changed_fields`,
-`reject_catalog_affecting_edits`, and the candidate DTOs) was reverted with the
-control plane; the credential-free `redacted_safe_digest`, the dead
-`CandidateAcceptanceOutcomeDto` projection, and config's private SHA-256 module
-were removed in the PR 24 repair run because no production surface consumed
-them (PR24-037/038).
+The Slice 2 candidate machinery that Wave 5's keep list named (`parse_candidate`, `semantic_equivalence`,
+`classify_changed_fields`, `reject_catalog_affecting_edits`, and the candidate DTOs) was reverted with the control
+plane; the credential-free `redacted_safe_digest`, the dead `CandidateAcceptanceOutcomeDto` projection, and config's
+private SHA-256 module were removed in the PR 24 repair run because no production surface consumed them (PR24-037/038).
 
-The final validation matrix: `cargo test --workspace`, `cargo nextest
---workspace --all-targets --locked --no-fail-fast`, `cargo clippy
---workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all --
---check`, `make quick`, `make verify`, `make docs-check`,
-`check_architecture.py`, plus targeted package tests for every changed crate.
-The quality self-test suite named by the original matrix was removed
-2026-10-02 (architecture 12).
+The final validation matrix: `cargo test --workspace`, `cargo nextest --workspace --all-targets --locked
+--no-fail-fast`, `cargo clippy --workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all -- --check`, `make
+quick`, `make verify`, `make docs-check`, `check_architecture.py`, plus targeted package tests for every changed crate.
+The quality self-test suite named by the original matrix was removed 2026-10-02 (architecture 12).
 
-The final validation matrix: `cargo test --workspace`, `cargo nextest
---workspace --all-targets --locked --no-fail-fast`, `cargo clippy
---workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all --
---check`, `make quick`, `make verify`, `make docs-check`,
-`check_architecture.py`, plus targeted package tests for every changed crate.
-The quality self-test suite named by the original matrix was removed
-2026-10-02 (architecture 12).
+The final validation matrix: `cargo test --workspace`, `cargo nextest --workspace --all-targets --locked
+--no-fail-fast`, `cargo clippy --workspace --all-targets --locked -- -Dwarnings`, `cargo fmt --all -- --check`, `make
+quick`, `make verify`, `make docs-check`, `check_architecture.py`, plus targeted package tests for every changed crate.
+The quality self-test suite named by the original matrix was removed 2026-10-02 (architecture 12).
 
 ## Ownership
 
-Semantic canonical records/tags belonged to `intention-domain`; public wire
-and frames to `intention-protocol`; storage to `intention-storage` and
-`intention-storage-sqlite`; registry/typed tool contracts to
-`intention-tools`; provider-private translation to provider crates;
-process/publication to `intention-daemon`; concrete assembly to `intention`;
-adapters to `intention-client`, then TUI/Tauri. No new crate, dependency,
-feature, coverage tier, or exclusion is introduced.
+Semantic canonical records/tags belonged to `intention-domain`; public wire and frames to `intention-protocol`; storage
+to `intention-storage` and `intention-storage-sqlite`; registry/typed tool contracts to `intention-tools`;
+provider-private translation to provider crates; process/publication to `intention-daemon`; concrete assembly to
+`intention`; adapters to `intention-client`, then TUI/Tauri. No new crate, dependency, feature, coverage tier, or
+exclusion is introduced.
 
 ## Evidence
 
-Per wave: the removed path had no production caller or only compatibility
-consumers; the current-path tests still pass; `make quick` and the targeted
-package tests pass; the wave's documentation updates are in the same change;
-and the final validation matrix above passes. Coverage is re-verified with
-`make verify` after the removals, per
-[ADR 0049](0049-base-coverage-threshold.md); documentation checks
-(`docs-check`, `check_architecture.py`) must pass after the same-change
-documentation updates listed per wave.
+Per wave: the removed path had no production caller or only compatibility consumers; the current-path tests still pass;
+`make quick` and the targeted package tests pass; the wave's documentation updates are in the same change; and the final
+validation matrix above passes. Coverage is re-verified with `make verify` after the removals, per [ADR
+0049](0049-base-coverage-threshold.md); documentation checks (`docs-check`, `check_architecture.py`) must pass after the
+same-change documentation updates listed per wave.
 
 ## Non-goals
 
-This record does not implement M6-M9 behavior, does not introduce a second
-runtime, registry, scheduler, persistence authority, or sandbox, and does not
-remove any roadmap reservation, approved skeleton crate, or current Slice 1/2
+This record does not implement M6-M9 behavior, does not introduce a second runtime, registry, scheduler, persistence
+authority, or sandbox, and does not remove any roadmap reservation, approved skeleton crate, or current Slice 1/2
 functionality.
 
 ## Resolution notes
 
 - **Why this policy now governs:** AGENTS.md is the authoritative engineering
-  context and its "No backward compatibility" section (main `b5fa71e`)
-  conflicts with preservation commitments previously recorded in now-deleted
-  decision records and in the architecture documents. Those commitments are
-  superseded here as recorded above.
+context and its "No backward compatibility" section (main `b5fa71e`) conflicts with preservation commitments previously
+recorded in now-deleted decision records and in the architecture documents. Those commitments are superseded here as
+recorded above.
 - **ADR 0035 authority:** ADR 0035 remains the activation home and
-  slice-sequence authority. ADR 0038 changes implementation and documentation
-  obligations without renumbering or reauthorizing slices 1/2 and without
-  reopening closed milestones; closeout evidence stays immutable provenance,
-  and only active indexes/links and command/evidence rows that reference
-  removed test targets may change.
+slice-sequence authority. ADR 0038 changes implementation and documentation obligations without renumbering or
+reauthorizing slices 1/2 and without reopening closed milestones; closeout evidence stays immutable provenance, and only
+active indexes/links and command/evidence rows that reference removed test targets may change.
 - **Physical version interpretation:** the concrete protocol version is 2.0
-  after [ADR 0045](0045-local-json-rpc-2-0-transport.md), which raised the
-  constant with the JSON-RPC wire change; the recorded point, "exact
-  equality" removes minor tolerance, not the version constant itself, stands.
-  The SQLite physical DDL previously labeled "schema 4" is retained as the one
-  current schema (logical version 1); no version marker or migration machinery
-  accompanies it.
+after [ADR 0045](0045-local-json-rpc-2-0-transport.md), which raised the constant with the JSON-RPC wire change; the
+recorded point, "exact equality" removes minor tolerance, not the version constant itself, stands. The SQLite physical
+DDL previously labeled "schema 4" is retained as the one current schema (logical version 1); no version marker or
+migration machinery accompanies it.
 - **Transition of reconciliation/evidence rows:** rows that record removed
-  behavior (migration, preservation, legacy bridge, 1.0 compatibility) are
-  rewritten or retired in the same change as the code removal; rows recording
-  retained current behavior stay.
+behavior (migration, preservation, legacy bridge, 1.0 compatibility) are rewritten or retired in the same change as the
+code removal; rows recording retained current behavior stay.

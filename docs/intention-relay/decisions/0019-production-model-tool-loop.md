@@ -6,135 +6,115 @@ Accepted 2026-08-29.
 
 ## Decision
 
-The daemon executes provider-emitted tool calls through the production
-model-tool loop:
+The daemon executes provider-emitted tool calls through the production model-tool loop:
 
 - The runtime records each provider-emitted tool call as a durable typed
-  `ToolCallRecorded` model fact before any local effect.
+`ToolCallRecorded` model fact before any local effect.
 - The daemon supplies a `ToolExecutionPort` backed by the real typed tool
-  registry. The application builds the typed invocation, runs it under
-  `WorkspaceRoot` with the typed hook pipeline, and persists the bounded,
-  credential-free `ToolResultRecorded` fact before publication.
+registry. The application builds the typed invocation, runs it under `WorkspaceRoot` with the typed hook pipeline, and
+persists the bounded, credential-free `ToolResultRecorded` fact before publication.
 - The provider exchange continues with assistant-tool-call and tool-role
-  `ModelMessageDto` values carrying the recorded results, and the run
-  terminalizes `Completed` on provider finish.
+`ModelMessageDto` values carrying the recorded results, and the run terminalizes `Completed` on provider finish.
 - Tool calls are never re-executed after a daemon restart; recorded facts are
-  replayed to clients, and interrupted work is never automatically resumed.
+replayed to clients, and interrupted work is never automatically resumed.
 - The M4 no-port denial path remains byte-identical: when no tool executor is
-  wired, the runtime records the `ToolCallRecorded` facts and appends the
-  `tool_execution_unavailable` failure exactly as M4 did.
+wired, the runtime records the `ToolCallRecorded` facts and appends the `tool_execution_unavailable` failure exactly as
+M4 did.
 
 ## Rationale
 
-The M4 boundary recorded typed tool-call evidence and then denied execution.
-The typed tool registry, `WorkspaceRoot`, and hook pipeline from M5 provide
-the daemon-owned execution path, so the denial boundary can be superseded for
-newly admitted ordinary runs while every historical M4 fact and the closed M4
-baseline keep their recorded meaning. Persisting before publishing preserves
-the atomic-commit law, and replaying recorded calls without re-executing them
-preserves the no-resume rule.
+The M4 boundary recorded typed tool-call evidence and then denied execution. The typed tool registry, `WorkspaceRoot`,
+and hook pipeline from M5 provide the daemon-owned execution path, so the denial boundary can be superseded for newly
+admitted ordinary runs while every historical M4 fact and the closed M4 baseline keep their recorded meaning. Persisting
+before publishing preserves the atomic-commit law, and replaying recorded calls without re-executing them preserves the
+no-resume rule.
 
 ## Normative invariants
 
 1. Only typed DTOs cross the model, runtime, domain, and storage boundaries;
-   provider SDKs remain private to their provider crates.
+provider SDKs remain private to their provider crates.
 2. Provider adapters never invoke local tools; the daemon-owned runtime and
-   application own invocation, execution, and continuation.
+application own invocation, execution, and continuation.
 3. `ToolCallRecorded` and `ToolResultRecorded` facts commit before the
-   correlated result reaches the publication boundary.
+correlated result reaches the publication boundary.
 4. Tool results are bounded and credential-free: no credentials, absolute
-   workspace roots, or OS error strings enter durable facts or model-context
-   payloads.
+workspace roots, or OS error strings enter durable facts or model-context payloads.
 5. Cancellation suppresses continuation and later stream activity after the
-   durable cancelling commit.
+durable cancelling commit.
 6. A started tool operation without terminal proof is never retried, resumed,
-   or treated as rolled back.
+or treated as rolled back.
 7. The provider exchange continues only with assistant-tool-call and tool-role
-   messages built from recorded calls and results.
+messages built from recorded calls and results.
 8. The M3/M4 no-port denial path remains byte-identical; historical M4
-   `ToolCallRecorded` facts keep their recorded meaning.
+`ToolCallRecorded` facts keep their recorded meaning.
 
 ## Failure semantics
 
 - Invalid tool input, workspace denial, or hook denial produces a typed failed
-  `ToolResultRecorded` fact and the run terminalizes `Failed` without retry.
+`ToolResultRecorded` fact and the run terminalizes `Failed` without retry.
 - A tool infrastructure error produces a safe normalized failure without
-  leaking provider or OS text.
+leaking provider or OS text.
 - A provider failure after tool rounds is terminal; it never re-executes or
-  replays recorded tool calls.
+replays recorded tool calls.
 
 ## Common durable-fact rules
 
-The following cross-direction durable-fact rules are adopted as future detail
-owned by
-[architecture 04](../architecture/04-sessions-runs-events-and-storage.md):
+The following cross-direction durable-fact rules are adopted as future detail owned by [architecture
+04](../architecture/04-sessions-runs-events-and-storage.md):
 
 - a new fact type does not create a new sequence merely for convenience; a
-  separate sequence is permitted only for an independent aggregate with
-  dedicated bounded queries and without replacing or filtering the ordinary
-  session event sequence;
+separate sequence is permitted only for an independent aggregate with dedicated bounded queries and without replacing or
+filtering the ordinary session event sequence;
 - a filesystem-dependent validation or hook must finish before the transition
-  transaction, and any stale result becomes a typed known pre-effect outcome
-  rather than an unrecorded second external check inside the transaction; and
+transaction, and any stale result becomes a typed known pre-effect outcome rather than an unrecorded second external
+check inside the transaction; and
 - catalog and lineage audit records are read through their own bounded queries
-  and do not enter the run publication gate merely because they are related
-  to the same user operation.
+and do not enter the run publication gate merely because they are related to the same user operation.
 
 ## Compatibility and non-goals
 
-This decision supersedes the M4 denial-only boundary for newly admitted
-ordinary runs. The closed M4 baseline,
-[M4 Closure Evidence](../closeout/m4-closure-evidence.md), and historical M4
-`ToolCallRecorded` facts remain unchanged, and the no-port denial path
-continues to behave byte-identically to M4. Mandate-specific tool-loop
-execution meaning remains future architecture-15 scope.
+This decision supersedes the M4 denial-only boundary for newly admitted ordinary runs. The closed M4 baseline, [M4
+Closure Evidence](../closeout/m4-closure-evidence.md), and historical M4 `ToolCallRecorded` facts remain unchanged, and
+the no-port denial path continues to behave byte-identically to M4. Mandate-specific tool-loop execution meaning remains
+future architecture-15 scope.
 
-This decision adds no OpenRouter or OpenAI Responses tool mapping, parallel
-tool execution, tool-failure-to-model continuation, or
-Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and Plan
-features remain outside it.
+This decision adds no OpenRouter or OpenAI Responses tool mapping, parallel tool execution, tool-failure-to-model
+continuation, or Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and Plan features remain outside
+it.
 
 ## Security and residual risk
 
 This decision intentionally accepts:
 
 - `WorkspaceRoot` is a filesystem and CWD boundary, not a sandbox; `execute`
-  is trusted-local and may interact with the wider user environment;
+is trusted-local and may interact with the wider user environment;
 - a TOCTOU residual between workspace validation and the filesystem
-  operation, narrowed but not eliminated by repeated symlink metadata checks;
+operation, narrowed but not eliminated by repeated symlink metadata checks;
 - prompt injection and adversarial provider content may influence which
-  registered tool is called; the fixed registry and typed invocation remain
-  the only execution path.
+registered tool is called; the fixed registry and typed invocation remain the only execution path.
 
-Durable facts and model-context payloads never contain credentials, absolute
-workspace roots, or OS error strings.
+Durable facts and model-context payloads never contain credentials, absolute workspace roots, or OS error strings.
 
 ## Evidence
 
-The activation runs `make quick`, `make verify`, and the required Linux/Windows
-CI matrix. The following tests prove the loop:
+The activation runs `make quick`, `make verify`, and the required Linux/Windows CI matrix. The following tests prove the
+loop:
 
 - runtime `m5_tool_loop` tests:
-  `tool_call_executes_tool_records_result_and_completes`,
-  `multiple_tool_calls_execute_sequentially_in_provider_order`,
-  `repeated_tool_rounds_continue_until_finished`,
-  `tool_failure_records_result_and_terminalizes_without_retry`,
-  `port_infrastructure_error_terminalizes_without_leaking_text`,
-  `cancellation_during_tool_execution_suppresses_continuation`,
-  `cancellation_during_provider_round_cancels_run`,
-  `cancellation_before_port_invocation_suppresses_tool`,
-  `provider_failure_after_tool_round_is_terminal_without_retry`, and
-  `no_port_preserves_m4_denial`;
+`tool_call_executes_tool_records_result_and_completes`, `multiple_tool_calls_execute_sequentially_in_provider_order`,
+`repeated_tool_rounds_continue_until_finished`, `tool_failure_records_result_and_terminalizes_without_retry`,
+`port_infrastructure_error_terminalizes_without_leaking_text`,
+`cancellation_during_tool_execution_suppresses_continuation`, `cancellation_during_provider_round_cancels_run`,
+`cancellation_before_port_invocation_suppresses_tool`, `provider_failure_after_tool_round_is_terminal_without_retry`,
+and `no_port_preserves_m4_denial`;
 - wiring `m5_tool_loop_wiring` tests:
-  `daemon_tool_executor_executes_real_read_tool_through_loop` and
-  `daemon_tool_executor_missing_file_returns_typed_failure`;
+`daemon_tool_executor_executes_real_read_tool_through_loop` and
+`daemon_tool_executor_missing_file_returns_typed_failure`;
 - the facade-level daemon-host E2E scenario
-  (`crates/intention-daemon/tests/facade_e2e.rs`): real binary over IPC, fake
-  provider tool call, real registry execution, durable result, provider
-  continuation, `Completed`, restart replay, and no re-execution;
+(`crates/intention-daemon/tests/facade_e2e.rs`): real binary over IPC, fake provider tool call, real registry execution,
+durable result, provider continuation, `Completed`, restart replay, and no re-execution;
 - durable fact and redaction assertions in `m4_durable_facts`,
-  `m5_tool_results`, and the SQLite reopen fixtures, proving bounded
-  credential-free results and restart durability.
+`m5_tool_results`, and the SQLite reopen fixtures, proving bounded credential-free results and restart durability.
 
-Owner: architecture 15. Evidence: activating specification per
-[architecture 12](../architecture/12-quality-gates-and-makefile.md).
+Owner: architecture 15. Evidence: activating specification per [architecture
+12](../architecture/12-quality-gates-and-makefile.md).
