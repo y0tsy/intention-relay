@@ -3,8 +3,7 @@
 **Superseded historical record. No implementation work is authorized here; the removed machinery has no implementation
 path.**
 
-Owner: architecture 14 (historical record). Decisions: ADR 0003 (superseded), ADR 0038, ADR 0046. Research:
-m4plus_concept.md.
+Owner: architecture 14 (historical record). Decisions: ADR 0038, ADR 0046. Research: m4plus_concept.md.
 
 This document was the detailed owner for immutable execution meaning, canonical semantic identity, decoding, and
 execution/replay/audit compatibility. That machinery is removed: the binary canonical codec, the semantic decoders, the
@@ -53,14 +52,14 @@ The removal (ADR 0046) deleted the binary canonical codec and the unconsumed con
 
 - `crates/intention-domain/src/canonical.rs`: the codec, tag registry, and canonical record framing;
 -  `crates/intention-domain/src/run_execution_meaning.rs`: the execution-kind envelope, `MandateRunExecutionMeaningV1`,
-  its field tables and validation, and the digest/identity helpers;
+its field tables and validation, and the digest/identity helpers;
 - `crates/intention-protocol/src/contract_families.rs`: the contract families and their public descriptors;
 -  the `sha2` dependency and its transitive crates, the architecture policy allowlist entry, and the regenerated
-  lockfile and third-party notices;
+lockfile and third-party notices;
 - the semantic decoders and compatibility classes;
 - the golden fixtures under `crates/intention-domain/tests/fixtures/goldens/`; and
 -  the 256/512-character checks, the frozen activity/run/child limit records (`Fixed*Limits`), and other speculative
-  contract limits that lived in those files.
+contract limits that lived in those files.
 
 No replacement codec was introduced: domain and wire records are typed serde JSON (ADR 0046), and the
 `IRCR`/`typed-tlv-v1` framing, a tag registry, canonical digests, and canonical semantic identity no longer exist
@@ -73,28 +72,28 @@ state.
 
 - The local protocol is JSON-RPC 2.0 over NDJSON (ADR 0045); domain and wire records are typed serde JSON DTOs.
 -  M3/M4 sessions, runs, queue tickets, provider kinds, tool-call denial, replay, and recovery keep their ordinary
-  current semantics under the single live schema and protocol version (ADR 0038). Transport and storage liveness
-  safeguards are the limits kept by ADR 0048, not semantic limits.
+current semantics under the single live schema and protocol version (ADR 0038). Transport and storage liveness
+safeguards are the limits kept by ADR 0048, not semantic limits.
 -  Provider selection for future work stays credential-free and non-authorizing: a model ID never selects provider kind,
-  driver, endpoint, protocol, capability, credential transport, or execution kind, and the frozen capability
-  intersection remains kind descriptor maximum intersect explicitly declared model subset intersect driver support.
-  `ProviderDriverContractRevisionDto` remains code-owned family plus `major.minor`; incompatible request, normalization,
-  order, capability, or credential-transport changes require a new major. [Architecture
-  22](22-provider-evolution-profiles-and-reasoning.md) owns `responses`, parse-time `openai` aliasing,
-  profiles/catalogs, and reasoning semantics.
+driver, endpoint, protocol, capability, credential transport, or execution kind, and the frozen capability intersection
+remains kind descriptor maximum intersect explicitly declared model subset intersect driver support.
+`ProviderDriverContractRevisionDto` remains code-owned family plus `major.minor`; incompatible request, normalization,
+order, capability, or credential-transport changes require a new major. [Architecture
+22](22-provider-evolution-profiles-and-reasoning.md) owns `responses`, parse-time `openai` aliasing, profiles/catalogs,
+and reasoning semantics.
 -  Future Mandate-side nested selections are typed JSON fields owned by their domain documents: tool selection by
-  [architecture 15](15-tool-registry-and-mandate-tool-loop.md), MCP by [architecture
-  18](18-mandate-mcp-capability-lifecycle.md), bridge by [architecture 19](19-mandate-gateway-rlm-bridge.md), kernel by
-  [architecture 20](20-ipython-kernel-lifecycle.md), and Goal/Skill/context by [architecture
-  21](21-goals-skills-context-memory-and-compaction.md); child and verifier payload semantics are owned by [architecture
-  17](17-mandate-child-graph-and-delegated-verifier-authority.md). None of them revives a canonical envelope, digest, or
-  decoder.
+[architecture 15](15-tool-registry-and-mandate-tool-loop.md), MCP by [architecture
+18](18-mandate-mcp-capability-lifecycle.md), bridge by [architecture 19](19-mandate-gateway-rlm-bridge.md), kernel by
+[architecture 20](20-ipython-kernel-lifecycle.md), and Goal/Skill/context by [architecture
+21](21-goals-skills-context-memory-and-compaction.md); child and verifier payload semantics are owned by [architecture
+17](17-mandate-child-graph-and-delegated-verifier-authority.md). None of them revives a canonical envelope, digest, or
+decoder.
 -  `WorkspaceRoot` is an addressing anchor: the default base for relative paths, the initial CWD for `execute`, and the
-  default scope root for glob/grep. It is not a security boundary, and no lexical symlink parser or containment check
-  gates it (ADR 0047).
+default scope root for glob/grep. It is not a security boundary, and no lexical symlink parser or containment check
+gates it (ADR 0047).
 -  [Architecture 30](30-instruction-sources-and-system-context.md) ([ADR
-  0043](../decisions/0043-instruction-sources-and-system-context.md)) keeps the effective instruction projection as
-  configuration and project content; no instruction digest exists, and instruction text is never execution meaning.
+0043](../decisions/0043-instruction-sources-and-system-context.md)) keeps the effective instruction projection as
+configuration and project content; no instruction digest exists, and instruction text is never execution meaning.
 
 ## Historical ownership
 

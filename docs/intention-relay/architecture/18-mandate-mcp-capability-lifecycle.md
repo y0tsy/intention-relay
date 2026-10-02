@@ -270,13 +270,13 @@ contract that never silently resumes old external work; it is not activated here
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13-17 and decisions 0001, 0002, 0003, 0004, 0006, 0007, 0008, and
+This document depends on architectures 13-17 and decisions 0001, 0002, 0004, 0006, 0007, 0008, and
 0009.  It defines no direct MCP administration, an MCP listener/inbound daemon attachment, raw string-method transport,
-      arbitrary maps/headers/schemas, plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider
-      evolution, bridge/IPython, Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates,
-      Cargo, Makefile/CI, or production implementation. It introduces no Mandate product
-      depth/count/calendar/lifetime/concurrency ceiling: intrinsic representation/protocol bounds and actual finite
-      resource capacity remain separately typed, with no truncation, hidden retry counter, or quota.
+arbitrary maps/headers/schemas, plugins/installations, dynamic ToolIds, long-lived workers/supervision, provider
+evolution, bridge/IPython, Skills/Goals/context semantics, session forks, activity/UI, schema, migrations, crates,
+Cargo, Makefile/CI, or production implementation. It introduces no Mandate product
+depth/count/calendar/lifetime/concurrency ceiling: intrinsic representation/protocol bounds and actual finite resource
+capacity remain separately typed, with no truncation, hidden retry counter, or quota.
 
 Architecture 19 may carry safe MCP projections through its shared ingress and delivery path but cannot discover, select,
 invoke, reattach, or recreate MCP work independently, and bridge replay remains zero-effect. Architecture 20

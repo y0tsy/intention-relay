@@ -210,14 +210,14 @@ Primary delegated operations are `MarkNeedsRework`, `MarkComplete`, `Stop`, `Rev
 `Pause` and `Resume` are not implicit verifier powers.
 
 -  `MarkNeedsRework` requires explicit authority and qualifying fail evidence. It creates neither a trigger nor a
-  resumed run.
+resumed run.
 -  `MarkComplete` requires explicit authority, unconditional pass evidence, no unresolved target uncertainty, and
-  required graph terminalization closure.
+required graph terminalization closure.
 - `Stop` never asserts completion and does not bypass exact uncertainty reconciliation.
 -  `ReviseFull` requires its own authority and creates only an immutable future revision. It never rewrites an admitted
-  run or historical evidence.
+run or historical evidence.
 -  `ResolveUnknownEffect` names the exact target uncertainty and baseline and may yield only `Active` for later fresh
-  work or `Stopped`. It never asserts rollback, absence, idempotence, repeatability, or safe replay.
+work or `Stopped`. It never asserts rollback, absence, idempotence, repeatability, or safe replay.
 
 One target-mutation transaction validates the authority, baseline, evidence, verdict, target
 revision/sequence/lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity.
@@ -427,12 +427,11 @@ transcript. The bounds above are RLM-tree policy and never become Mandate admiss
 
 ## Compatibility, dependencies, and non-goals
 
-This document depends on architectures 13-16 and decisions 0001, 0002, 0003, 0004, 0006, 0007, and 0008. Architecture 18
-owns MCP capability lifecycle; MCP evidence is non-authorizing and MCP uncertainty remains local to its owning Mandate.
-This document defines no sub-agent executor, worker or recursion topology, product
-depth/count/concurrency/lifetime/message quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context
-semantics, provider evolution, session forks, general activity/notifications/UI, schema, migrations, crates, Cargo,
-Makefile/CI, or production implementation.
+This document depends on architectures 13-16 and decisions 0001, 0002, 0004, 0006, 0007, and 0008. Architecture 18 owns
+MCP capability lifecycle; MCP evidence is non-authorizing and MCP uncertainty remains local to its owning Mandate. This
+document defines no sub-agent executor, worker or recursion topology, product depth/count/concurrency/lifetime/message
+quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context semantics, provider evolution, session
+forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
 
 M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegation snapshot, activity, verifier
 authority, target set, audit, verdict, mutation, reconciliation, or execution-kind state; historical M4 tool calls
