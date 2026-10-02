@@ -1029,10 +1029,11 @@ fn execute_inherits_the_invoking_environment() {
     // inherit the caller environment exits non-zero, and the rendered result
     // records that exit code.
     let (program, args): (&str, Vec<String>) = if cfg!(windows) {
-        (
-            "cmd",
-            vec!["/C if defined PATH (exit 0) else (exit 1)".to_owned()],
-        )
+        // `cmd` rejects the parenthesized `if defined … (…) else (…)` form on
+        // the Windows runners (`" was unexpected at this time.`), so the probe
+        // uses the single-line negated guard: it exits non-zero only when
+        // `PATH` is absent from the inherited environment.
+        ("cmd", vec!["/C if not defined PATH exit 1".to_owned()])
     } else {
         ("sh", vec!["-c".to_owned(), "test -n \"$PATH\"".to_owned()])
     };
