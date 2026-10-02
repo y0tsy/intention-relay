@@ -93,9 +93,9 @@ closed readiness projection is `ready`, `disabled`, or `unavailable` (never clai
 `activation_recovery_required`; the applicable closed degraded reason; active/candidate safe revisions; the default; and
 safe validation/removal impact.
 
-Adapters can only read safe state, set session defaults, supply user-originated overrides, accept/reject pending
-removal, and admit a held recovered run; they never write TOML, create/edit/enable/disable profiles or kinds, enter
-credentials, or receive configuration paths.
+Adapters can only read safe state, set session defaults, supply user-originated overrides, and accept/reject pending
+removal; they never write TOML, create/edit/enable/disable profiles or kinds, enter credentials, or receive
+configuration paths.
 
 ## Startup-only application and degraded recovery
 

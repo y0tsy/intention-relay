@@ -18,9 +18,9 @@ selection), and architecture 24 activity/UI projections. Architecture 27 owns pr
 
 This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
 record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, Mandate
-reason, lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority, MCP capability,
-bridge grant, or reconciliation result, and is not a second runtime, registry, scheduler, persistence authority, or
-sandbox.
+reason, lifecycle transition, scheduler candidate, tool permission, registry slot, child edge, verifier authority, MCP
+capability, bridge grant, kernel epoch, branch, or reconciliation result, and is not a second runtime, registry,
+scheduler, persistence authority, or sandbox.
 
 ## Goal identity, scope, and tree
 

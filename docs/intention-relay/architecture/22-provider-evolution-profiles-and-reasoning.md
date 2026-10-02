@@ -2,7 +2,8 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.** The M5+ Slice 2 activation
 was reverted; the catalog, selection, capability-taxonomy, reasoning-history, and header contracts are again accepted
-directions awaiting a new activating specification (`responses` driver remains not activated).
+directions awaiting a new activating specification; none of those surfaces exists in the tree (`responses` driver
+remains not activated).
 
 Owner: architecture 22. Decisions: ADR 0014, ADR 0028, ADR 0032, ADR 0033. Research: m4plus_concept.md.
 
@@ -481,7 +482,8 @@ runtime public API, or adapter boundary.
 The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) was removed by [ADR
 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md): no `LegacyM4SelectionBindingDto` is
 materialized, no `legacy_m4_selection_bindings` table exists, and provider binding identity is owned by the provider
-catalog runtime and resolved through the catalog admission port.
+catalog runtime and resolved through the catalog admission port. No synthetic binding or provider selection is ever
+created for historical runs.
 
 ## Session selection, degraded recovery, and protocol
 

@@ -32,7 +32,7 @@ live reload is the accepted direction that applies a validated TOML change to a 
 daemon re-parses and validates a candidate snapshot against the current single configuration shape, atomically commits a
 new accepted revision, and applies it to fresh runs only; configuration has no migration path, unversioned or legacy
 documents fail closed under [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), and there is
-no watcher, polling, or auto-restart;
+no watcher, polling, auto-restart, or automatic re-application;
 - a candidate that cannot be applied atomically fails closed and leaves the
 daemon on its recorded snapshot; a candidate that changes catalog-affecting configuration is rejected with
 `catalog_change_requires_restart`, and the next daemon restart re-derives the active catalog from the startup document
