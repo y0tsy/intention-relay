@@ -111,7 +111,9 @@ replace these semantic requirements.
 
 The closed-milestone delivery records are:
 
-- M0/M1 quality foundation and contracts: [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md);
+- M0/M1 quality foundation and contracts, including versioned JSON fixtures for `ErrorDto`,
+  `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and `ConfigSnapshotDto`:
+  [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md);
 - M1+ quality hardening: [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md);
 - M3 storage/runtime activation: [M3 Closure Evidence](../closeout/m3-closure-evidence.md);
 -  M4 model/provider and run-stream activation, including the controller-owned `M4 execution charter` and the final
