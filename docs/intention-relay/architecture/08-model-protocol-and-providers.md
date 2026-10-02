@@ -100,7 +100,7 @@ requested feature is valid.
 
 - OpenRouter configuration translation;
 -  private SDK request construction and fixture normalization for text, reasoning, usage, finish, tool-call, and error
-  facts;
+facts;
 - provider-specific model discovery/capability metadata where available; and
 - safe diagnostics and correlation identifiers.
 
@@ -114,7 +114,7 @@ typed wire. It owns:
 
 - generic endpoint/auth/config translation;
 -  private SDK request construction and fixture normalization for text, advertised tool definitions, usage, finish,
-  `tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error facts;
+`tool_calls` tool-call, `reasoning_content` reasoning, same-run assistant tool-call reasoning echo, and error facts;
 - documented capability limitations; and
 - normalized failures.
 
@@ -175,11 +175,11 @@ remains byte-identical: without a tool executor, the runtime records the tool-ca
 
 - Provider crates classify native failures into `ProviderErrorDto`.
 -  The Generic Chat Completion adapter derives retryability from the SDK API error's authoritative HTTP status: 429 and
-  5xx are transient, and every other 4xx is permanent, so a permanent client rejection without an error `type` is never
-  retried to the attempt maximum. The SDK error's optional `type` string stays only a secondary signal: it decides a
-  status this taxonomy does not classify by itself, and an unclassified status without a transient type stays permanent.
-  The classification selects the normalized `generic_chat_provider_unavailable` (retryable) or
-  `generic_chat_provider_request_rejected` (permanent) failure.
+5xx are transient, and every other 4xx is permanent, so a permanent client rejection without an error `type` is never
+retried to the attempt maximum. The SDK error's optional `type` string stays only a secondary signal: it decides a
+status this taxonomy does not classify by itself, and an unclassified status without a transient type stays permanent.
+The classification selects the normalized `generic_chat_provider_unavailable` (retryable) or
+`generic_chat_provider_request_rejected` (permanent) failure.
 - Runtime/application policy determines whether an error is retryable for the run.
 - Config snapshots define timeout/retry limits applied to the run.
 - A retry must produce explicit events and preserve causal relation to the originating model turn.
@@ -234,8 +234,8 @@ provider kind, driver, endpoint, capability, or execution kind.
 
 Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle, reasoning, and driver compatibility are
 owned by [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md). It preserves M4
-exactly: future `responses` is distinct from Generic Chat, `openai` is only a future parse-time alias, and model names
-never route provider behavior.
+exactly: no new M4 driver is introduced, future `responses` is distinct from Generic Chat, `openai` is only a future
+parse-time alias, and model names never route provider behavior.
 
 ## Post-M4 tool-loop consequence
 

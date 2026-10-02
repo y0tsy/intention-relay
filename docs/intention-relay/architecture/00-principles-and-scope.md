@@ -98,16 +98,16 @@ The implementation must demonstrably provide:
 1. Tauri and TUI/REPL can operate the same daemon-owned session without duplicating application logic.
 2. A daemon restart marks an unfinished run as interrupted and exposes that result through the same contract.
 3.  A filesystem tool cannot escape its session `WorkspaceRoot` through relative paths, absolute paths, or process CWD
-   fallback.
+fallback.
 4.  A Plan-mode agent can create and refine a physical plan, while normal write/edit tools cannot mutate the project
-   outside that plan's directory.
+outside that plan's directory.
 5.  VFR and Headroom can be enabled independently through hooks, preserve typed observability, and expose their
-   supporting tools.
+supporting tools.
 6. State visible to an adapter was committed before its corresponding live event was published.
 7.  Provider secrets cannot appear in transport events, persisted domain events, snapshots, diagnostics, or normal UI
-   output.
+output.
 8.  `make verify` proves the applicable formatting, lint, feature, test, documentation, architecture, coverage, and
-   supply-chain gates before an implementation slice is accepted.
+supply-chain gates before an implementation slice is accepted.
 
 ## Explicit v1 non-goals
 
@@ -158,7 +158,8 @@ requires at least one executable test or a justified documented exception.
 Principles 12–29 bind the post-M5+ Mandate track and its ordinary-run extensions. They govern future authoritative M4+
 packages without changing closed M4 or current ordinary-run behavior. Principle 27's provider-selection evidence was
 delivered by the M5+ Slice 2 control plane and then reverted, so it is again future work; principles 12–26 and 28 are
-held by the Mandate milestones (roadmap M10–M12) and their owning architecture documents 15–23.
+held by the Mandate milestones (roadmap M10–M12) and their owning architecture documents 15–23. The authoritative source
+and package boundaries for these principles are decision records 0001–0002 and 0004–0016.
 
 ### 12. Execution kinds are explicit
 

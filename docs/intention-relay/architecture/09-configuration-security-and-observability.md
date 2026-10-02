@@ -47,19 +47,18 @@ outcome test; it affects fresh runs only and never mutates a recorded snapshot.
 ### M3 lifecycle rules
 
 -  `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do
-  not enter storage, events, snapshots, or protocol DTOs.
+not enter storage, events, snapshots, or protocol DTOs.
 - The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
 - An accepted or promoted run receives an immutable copy of its selected snapshot/revision.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
-  to a configuration edit.
+to a configuration edit.
 -  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
-  already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
-  applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-  detecting or requesting the restart remains open; controlled live reload is the accepted future direction under [ADR
-  0020](../decisions/0020-configuration-provider-control-plane-directions.md) and must never be implied by M3/M4
-  behavior.
+already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
+applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
+detecting or requesting the restart remains open; controlled live reload is the accepted future direction under [ADR
+0020](../decisions/0020-configuration-provider-control-plane-directions.md) and must never be implied by M3/M4 behavior.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
-  back to process CWD.
+back to process CWD.
 
 ### M4 provider execution policy and startup material
 
@@ -91,20 +90,20 @@ in the M3 lifecycle rules above. A re-introduction through a new activating spec
 rules:
 
 -  a typed-edit candidate is rendered from the safe snapshot AST inside the configuration crate, and the composition
-  maps protocol typed-edit operations into that crate's credential-free edit-operation type without doing TOML rendering
-  itself;
+maps protocol typed-edit operations into that crate's credential-free edit-operation type without doing TOML rendering
+itself;
 -  values carrying TOML-significant characters are escaped by the serializer instead of producing an unparseable
-  document;
+document;
 - configuration fields the edit does not name survive the edit unchanged;
 -  a value the configuration shape cannot represent fails with a typed `configuration_edit_invalid` error instead of a
-  generic `invalid_config_toml` parse failure;
+generic `invalid_config_toml` parse failure;
 -  the rendered document stays credential-free by construction; only the private channel may re-insert
-  `provider.credential` as a TOML value before the candidate flows through the unchanged server-side reload contract
-  (`prepare`, `parse_candidate`, `reject_catalog_affecting_edits`), and a document-shape failure in the restore helper
-  is a typed validation error (`invalid_config_toml` or `invalid_config_schema`), never a credential-free document that
-  a caller could mistake for a configured one;
+`provider.credential` as a TOML value before the candidate flows through the unchanged server-side reload contract
+(`prepare`, `parse_candidate`, `reject_catalog_affecting_edits`), and a document-shape failure in the restore helper is
+a typed validation error (`invalid_config_toml` or `invalid_config_schema`), never a credential-free document that a
+caller could mistake for a configured one;
 -  the reload status projection is a closed enum validated by serde at decode, where an unknown status is rejected with
-  `configuration_projection_invalid` and a consumer can match the status exhaustively.
+`configuration_projection_invalid` and a consumer can match the status exhaustively.
 
 ## Open-text provider credentials
 
@@ -116,14 +115,13 @@ them to leak through the system.
 - configuration files have user-only permissions where the platform supports them, such as `0600` on Unix;
 - creation and update code warns or refuses unsafe permissions according to a documented platform policy;
 -  secrets are excluded from transport DTOs, domain events, run snapshots, plan frontmatter, UI DTOs, tool results, and
-  normal logs. `execute` is trusted-local and may inherit the invoking process environment; environment variables are
-  not name-filtered or copied into evidence or logs;
+normal logs. `execute` is trusted-local and may inherit the invoking process environment; environment variables are not
+name-filtered or copied into evidence or logs;
 - errors, logs, and diagnostic bundles use centralized redaction;
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel ([ADR
-  0040](../decisions/0040-opt-in-live-provider-e2e.md)) injects a real credential from the environment (or a CI
-  repository secret) into a private temporary configuration file only and remains subject to every protection in this
-  section.
+0040](../decisions/0040-opt-in-live-provider-e2e.md)) injects a real credential from the environment (or a CI repository
+secret) into a private temporary configuration file only and remains subject to every protection in this section.
 
 ## Data classification
 
@@ -172,12 +170,12 @@ Adapters render observations. They do not infer daemon health from presentation 
 ## Logging and audit
 
 -  Domain events are the durable audit of application facts; structured logs are operational diagnostics, not a
-  replacement for domain events.
+replacement for domain events.
 -  Logs have correlation IDs and safe context DTOs, and no sensitive prompt/configuration content is emitted merely for
-  diagnostics.
+diagnostics.
 - Tool output logging is size-bounded and subject to content policy.
 -  Audit retains plan/permission/policy facts required to explain an action without claiming proof of external process
-  atomicity.
+atomicity.
 
 ## Required tests and outcomes
 
@@ -267,9 +265,9 @@ authority, read-state by cursor, or operational diagnostics.
 ## Post-M5 instruction-source configuration and observability consequence
 
 [Architecture 30](30-instruction-sources-and-system-context.md) owns the instruction channel ([ADR
-0043](../decisions/0043-instruction-sources-and-system-context.md)). Its profile revision identity and project
-instruction content cross the configuration surface; instruction text stays on the editing surface where the user reads
-and edits it ([architecture 25](25-configuration-provider-control-plane.md)).
+0043](../decisions/0043-instruction-sources-and-system-context.md)). Its profile revision identity and workspace
+instruction reference cross the configuration surface; instruction text stays on the editing surface where the user
+reads and edits it ([architecture 25](25-configuration-provider-control-plane.md)).
 
 Fragment configuration follows the TOML-only typed-edit rules above: an edit is a validated candidate edit that fails
 closed and affects fresh runs only, and no credential, private endpoint material, SDK object, or raw provider payload

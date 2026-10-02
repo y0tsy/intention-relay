@@ -118,7 +118,7 @@ The following must not cross a boundary as public inputs or outputs:
 
 - `serde_json::Value` or loosely typed maps as a replacement for a typed schema;
 -  raw SQL rows, connection pools, transactions, file handles, `PathBuf` with unvalidated semantic meaning, Tokio tasks,
-  channels, mutex guards, or closures;
+channels, mutex guards, or closures;
 - provider SDK request/response/stream types;
 - Tauri commands, window handles, Svelte stores, terminal widgets, or presentation state;
 - bare strings for domain IDs, modes, risks, statuses, tool names, or event variants;
@@ -210,7 +210,7 @@ their recorded bytes and meaning.
 ## Contract tests required before implementation
 
 -  versioned JSON fixtures for every public DTO family, including valid current fixtures, supported legacy fixtures, and
-  malformed/compatibility cases;
+malformed/compatibility cases;
 - invalid-shape and invalid-ID tests at every input boundary;
 - explicit wire-validation tests for non-blank, path, timestamp, pagination, and schema invariants;
 - schema compatibility fixtures for transport and persisted events;
@@ -239,7 +239,8 @@ and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration c
 Future M4+ packages use closed, typed serde JSON families rather than widening historical records by implication. If a
 future execution-kind record is needed, it is a typed serde JSON contract declared by its own activating specification;
 kind/version/payload mismatch blocks dependent external work, and live availability never silently mutates a persisted
-meaning.
+meaning. The superseded execution-meaning envelope, canonical tag registry, and digest/identity codec — including
+`RunExecutionMeaningEnvelopeDto` — are deleted (ADR 0046): no canonical encoding or decoder retention schedule remains.
 
 ### Future DTO families
 
