@@ -1,8 +1,9 @@
 # Architecture Decision Records
 
-Decision records capture cross-document architectural decisions; they supplement, but do not replace, the authoritative
-architecture documents. A record is `Proposed`, `Accepted`, `Superseded`, or `Deprecated`; accepted records are
-normative only through their linked architecture sections.
+Decision records capture cross-document architectural decisions that require stable rationale, compatibility treatment,
+failure behavior, and later evidence; they supplement, but do not replace, the authoritative architecture documents. A
+record is `Proposed`, `Accepted`, `Superseded`, or `Deprecated`; accepted records are normative only through their
+linked architecture sections.
 
 ## Index
 

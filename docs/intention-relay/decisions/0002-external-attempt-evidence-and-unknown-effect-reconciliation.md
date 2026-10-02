@@ -35,8 +35,9 @@ target.
 
 ## Compatibility and non-goals
 
-This does not alter M4 interruption behavior or define verifier authority, MCP invocation, tool loop, or retry policy;
-package-specific attempt records remain deferred.
+The shared attempt-evidence DTO family is future detail owned by architecture 13 and activates no crate, schema,
+migration, or wire implementation. This does not alter M4 interruption behavior or define verifier authority, MCP
+invocation, tool loop, or retry policy; package-specific attempt records remain deferred.
 
 Owner: architecture 13. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).
