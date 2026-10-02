@@ -47,7 +47,7 @@ remain separate.
 
 ## Primary owner and evidence
 
-Provider evolution, profiles, and reasoning
+[Provider evolution, profiles, and reasoning](../architecture/22-provider-evolution-profiles-and-reasoning.md)
 owns detailed behavior. A later implementation requires canonical, provider,
 catalog, reasoning, recovery, protocol, compatibility, redaction, cross-platform,
 and outcome evidence through the standard quality gate.

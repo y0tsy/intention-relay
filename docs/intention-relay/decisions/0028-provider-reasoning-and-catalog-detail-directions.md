@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The following detail from
 `m4plus_concept.md` is adopted and owned by
-architecture 22:
+[architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md):
 
 - typed cross-turn reasoning history (`ReasoningHistoryTransferDto`,
   `TextualHistoryV1 { compatibility_id }`, `ReasoningHistoryManifestDto`,
@@ -64,7 +64,7 @@ architecture 22:
 
 The session-selection layer (session defaults/overrides, `provider_profiles_v1`,
 promotion/reconciliation, held recovered-run admission) is owned by
-architecture 29 and adopted by
+[architecture 29](../architecture/29-provider-session-and-profiles-protocol.md) and adopted by
 [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md);
 this decision removes the "session defaults/overrides" exclusion from
 architecture 22's non-goals.
@@ -142,6 +142,8 @@ specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
+- [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
+- [`architecture/29-provider-session-and-profiles-protocol.md`](../architecture/29-provider-session-and-profiles-protocol.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

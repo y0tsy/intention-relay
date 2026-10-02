@@ -84,6 +84,8 @@ must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
+- [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md)
+- [`architecture/28-goal-domain-and-verification.md`](../architecture/28-goal-domain-and-verification.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

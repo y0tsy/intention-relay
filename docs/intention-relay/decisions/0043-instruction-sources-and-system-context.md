@@ -26,14 +26,14 @@ This decision defines the one instruction channel of a model request: which
 instruction sources exist, how they become an immutable effective instruction
 projection, how that projection is bounded, materialized, and observed, and why
 instruction text never carries authority. It creates
-architecture 30
+[architecture 30](../architecture/30-instruction-sources-and-system-context.md)
 as the sole detailed owner and names the delivery home as the fifth activating
 slice of Milestone 5+.
 
 It supersedes nothing. It amends two recorded positions:
 
 - the documentation-only exclusion in
-  architecture 21
+  [architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md)
   that leaves prompt assembly undefined; instruction assembly is now owned by
   architecture 30 while architecture 21 keeps Goals, Skills, context manifests,
   memory, and compaction;
@@ -113,7 +113,7 @@ InstructionProjectionV1
 - **Materialization**: the projection is the contents of the
   `effective_instruction_projection` and
   `materialized_effective_instruction_projection` fields of the fork records
-  (architecture 23),
+  ([architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)),
   and its revision identity is recorded as safe usage provenance. It adds no
   event sequence and no authority.
 - **Required editing surface**: the control plane lists, creates, edits,
@@ -215,20 +215,24 @@ excluded register with their reconsideration owners.
 
 ## Affected documents
 
+- [Architecture 30](../architecture/30-instruction-sources-and-system-context.md)
   is the sole detailed owner of the source model, profile revisions, assembly,
   projection, bounds, failures, and observability.
+- [Architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md)
   keeps Goals, Skills, context manifests, memory, and compaction, and records
   that instruction assembly is owned by architecture 30.
+- [Architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)
   defines the fork projection fields that carry this projection.
-- Architecture 07 owns the `Mode`
-  contribution; architecture 06 owns
+- [Architecture 07](../architecture/07-plan-and-build-modes.md) owns the `Mode`
+  contribution; [architecture 06](../architecture/06-vfr-and-headroom.md) owns
   the `Vfr` contribution.
 - [Architecture 08](../architecture/08-model-protocol-and-providers.md) owns the
   request system-context semantics; [architecture 09](../architecture/09-configuration-security-and-observability.md)
   owns configuration, classification, and observability.
+- [Architecture 25](../architecture/25-configuration-provider-control-plane.md)
   owns the editing and preview surface.
 - [Architecture 04](../architecture/04-sessions-runs-events-and-storage.md) and
-  architecture 14
+  [architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
   own the persisted provenance and compatibility rules.
 - [Architecture 00](../architecture/00-principles-and-scope.md),
   [architecture 11](../architecture/11-implementation-roadmap.md), the

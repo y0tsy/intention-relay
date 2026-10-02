@@ -7,7 +7,7 @@ execution-meaning envelope, its canonical bytes, and its digest no longer
 exist, and the binary codec is removed. The historical-compatibility rules
 that no recorded run gains synthetic meaning and that missing meaning is never
 reconstructed from current state are not superseded; they remain owned by
-architecture 14
+[architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
 and [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md).
 
 ## Decision
@@ -37,7 +37,7 @@ from current state.
 ## Common historical-version policy
 
 The following cross-direction historical-version rules are adopted as future
-detail owned by architecture 14:
+detail owned by [architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md):
 
 - `intention-domain` owns versions for domain facts, semantic snapshots, and
   canonical record tags; `intention-storage` owns the single current-schema
@@ -52,11 +52,11 @@ detail owned by architecture 14:
 - materialized context projections follow the selected `fork-model-context-v1`
   rule: a later implementation uses the stored compatible schema unchanged,
   defines a separately versioned compatible projection, or blocks the dependent
-  operation (owned by architecture 23).
+  operation (owned by [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md)).
 
 ## Ownership and deferrals
 
-Architecture 14
+[Architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
 owns canonical field tables, tags, digest/decoder rules and compatibility
 outcomes. Later packages own nested provider, tool, MCP, Skill, Goal, child,
 verifier, bridge and UI payload semantics. Provider profiles/Responses and reasoning are owned by architecture 22 and

@@ -83,7 +83,7 @@ helper, the `configuration_edit_invalid` failure, and the
 `ConfigurationProjectionDto.reload_status` vocabulary are removed from the
 tree. Configuration editing is again an accepted future direction
 ([ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md),
-architecture 25) with no live
+[architecture 25](25-configuration-provider-control-plane.md)) with no live
 implementation, and controlled reload is again only the accepted future
 direction of [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)
 described in the M3 lifecycle rules above. A re-introduction through a new
@@ -238,7 +238,7 @@ Canonical execution meaning never carries raw TOML, configuration paths,
 credentials, SDK objects, provider payloads, handles or live resources. The
 compatibility owner defines its canonical/digest and decoder requirements; this
 document retains M3/M4 startup-only configuration and redaction boundaries.
-See Run execution meaning and historical compatibility.
+See [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
 
 ## Post-M4 tool-loop observability consequence
 
@@ -246,8 +246,8 @@ Future registry/descriptor revisions and safe tool state may be observable, but
 canonical or public projections may not expose credentials, raw typed inputs,
 unsafe absolute/canonical/symlink paths, process resources, provider-native call
 identifiers, SDK values, or raw output. Mandate outside-root observation is
-audit-only and non-authorizing. See Tool registry and direct Mandate tool
-loop.
+audit-only and non-authorizing. See [Tool registry and direct Mandate tool
+loop](15-tool-registry-and-mandate-tool-loop.md).
 
 ## Post-M4 kernel observability consequence
 
@@ -280,12 +280,12 @@ read-state by cursor, or operational diagnostics.
 
 ## Post-M5 instruction-source configuration and observability consequence
 
-Architecture 30 owns the
+[Architecture 30](30-instruction-sources-and-system-context.md) owns the
 instruction channel ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
 Its profile revision identity, workspace instruction digest, and canonical
 projection digest cross the configuration surface; instruction text stays on
 the editing surface where the user reads and edits it
-(architecture 25). Fragment
+([architecture 25](25-configuration-provider-control-plane.md)). Fragment
 configuration follows the TOML-only typed-edit rules above: an edit is a
 validated candidate edit that fails closed and affects fresh runs only, and no
 credential, private endpoint material, SDK object, or raw provider payload may

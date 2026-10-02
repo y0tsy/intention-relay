@@ -405,7 +405,7 @@ typed ordering and short-circuiting.
 M6-M9.** Milestone 5+ is the consolidation point for all retrospective changes
 to already-implemented M0-M5 code that the accepted post-M5 directions
 require, and the activation home for the full post-M5 package stack: the
-Configuration and Provider Control Plane
+[Configuration and Provider Control Plane](25-configuration-provider-control-plane.md)
 cluster adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md),
 the continual-harness, programmatic-caller, Goal-domain, provider
 session-selection, and base-tool contracts adopted by
@@ -501,7 +501,7 @@ activated by earlier slices in this order:
    classification (architecture 24), and the physical deletion/GC retention
    policy for historical work under architecture 04's retention rules.
 5. **Instruction sources and system context** — the instruction channel of
-   architecture 30, adopted by
+   [architecture 30](30-instruction-sources-and-system-context.md), adopted by
    [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md): the
    closed instruction source kinds and scopes, the deployment instruction
    profile adapted from the legacy Antibusy static prompt set, user-editable
@@ -671,7 +671,7 @@ records the deleted groups so no M6-M9 slice claims them:
   Anchors:
   `m4plus_concept.md` (session selection, runs, queues,
   and usage),
-  architecture 29 (session
+  [architecture 29](29-provider-session-and-profiles-protocol.md) (session
   selection, runs, queues, and usage).
   Until Milestone 6 lands the layer, and until a new activating specification
   re-introduces a session-default change, no control-plane event is produced or
@@ -726,7 +726,7 @@ records the deleted groups so no M6-M9 slice claims them:
 - model-safe body projection;
 - plan submission/approval/rejection state flow;
 - Plan-mode normal filesystem mutation restrictions;
-- Plan `execute` availability with advisory focus instruction and trusted-local audit; the focus instruction is the `Mode` contribution of architecture 30 ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
+- Plan `execute` availability with advisory focus instruction and trusted-local audit; the focus instruction is the `Mode` contribution of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - automatic same-Session fresh Build start after approval;
 - optional full-context implementation handoff to a new Session.
 
@@ -761,7 +761,7 @@ not redefine the loop.
 
 ### Deliver
 
-- VFR hook, mapping, expansion/raw tools, model instructions as the `Vfr` contribution of architecture 30 ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
+- VFR hook, mapping, expansion/raw tools, model instructions as the `Vfr` contribution of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - Headroom hook, CCR retention contract, retrieve tool;
 - deterministic composition with workspace/tool pipeline;
 - adapter/model representation policy.
@@ -1151,7 +1151,7 @@ See [decision 0005](../decisions/0005-m4plus-authority-reconciliation-and-delive
 ## Post-M4 Mandate lifecycle and admission architecture package
 
 **Documentation-only package.** It depends on the Post-M4 Foundation and
-creates the authoritative Mandate lifecycle owner.
+creates the authoritative [Mandate lifecycle owner](13-mandate-domain-and-durable-lifecycle.md).
 It does not activate a crate, migration, protocol, runtime, or implementation
 milestone and does not renumber or replace ordinary M5–M9.
 
@@ -1175,8 +1175,8 @@ milestone and does not renumber or replace ordinary M5–M9.
 
 **Documentation-only package.** It depends on Foundation and Mandate lifecycle
 and precedes provider evolution, tool-loop/gateway, scheduler, child/verifier,
-MCP, bridge/kernel and UI packages. It creates the authoritative execution
-meaning contract but
+MCP, bridge/kernel and UI packages. It creates [the authoritative execution
+meaning contract](14-run-execution-meaning-and-historical-compatibility.md) but
 activates no crate, schema, migration, protocol family, feature profile or
 implementation milestone.
 
@@ -1198,8 +1198,8 @@ implementation milestone.
 ## Post-M4 unified tool registry and direct Mandate tool-loop package
 
 **Documentation-only package.** It depends on Foundation, Mandate lifecycle,
-and execution meaning. It creates the authoritative tool registry and
-Mandate-loop contract and decision
+and execution meaning. It creates [the authoritative tool registry and
+Mandate-loop contract](15-tool-registry-and-mandate-tool-loop.md) and decision
 0007, but activates no crate, schema, migration, protocol implementation,
 feature profile, quality-policy target, or implementation milestone.
 
@@ -1226,7 +1226,7 @@ feature profile, quality-policy target, or implementation milestone.
 ## Post-M4 durable Mandate scheduler and readiness-driven admission package
 
 **Documentation-only package.** It depends on Mandate lifecycle and execution
-meaning, creates the authoritative scheduler contract
+meaning, creates [the authoritative scheduler contract](16-mandate-scheduler-and-readiness-driven-admission.md)
 and decision 0008, and activates no crate, schema, migration, protocol
 implementation, feature profile, quality-policy target, or implementation
 milestone.
@@ -1252,8 +1252,8 @@ milestone.
 ## Post-M4 Mandate child graph and delegated verifier authority package
 
 **Documentation-only package.** It depends on Mandate lifecycle, execution
-meaning, the fixed tool-loop boundary, and scheduler admission. It creates the
-authoritative child/verifier contract
+meaning, the fixed tool-loop boundary, and scheduler admission. It creates [the
+authoritative child/verifier contract](17-mandate-child-graph-and-delegated-verifier-authority.md)
 and decision 0009, and activates no crate, schema, migration, protocol
 implementation, feature profile, quality-policy target, or implementation
 milestone.
@@ -1283,8 +1283,8 @@ milestone.
 ## Post-M4 Mandate MCP capability lifecycle package
 
 **Documentation-only package.** It depends on Mandate lifecycle, execution
-meaning, fixed tool registry/tool loop, and scheduler readiness. It creates the
-authoritative MCP contract and decision
+meaning, fixed tool registry/tool loop, and scheduler readiness. It creates [the
+authoritative MCP contract](18-mandate-mcp-capability-lifecycle.md) and decision
 0010, and activates no crate, schema, migration, protocol implementation,
 network/process behavior, feature profile, quality-policy target, or
 implementation milestone.
@@ -1313,8 +1313,8 @@ implementation milestone.
 
 **Documentation-only package.** It depends on Mandate lifecycle, execution
 meaning, the fixed tool registry/tool loop, scheduler recovery, child/verifier
-authority, and MCP lifecycle. It creates the authoritative Gateway/RLM bridge
-contract and decision 0011, and activates no
+authority, and MCP lifecycle. It creates [the authoritative Gateway/RLM bridge
+contract](19-mandate-gateway-rlm-bridge.md) and decision 0011, and activates no
 crate, Python dependency, listener, protocol implementation, kernel, schema,
 migration, feature profile, quality-policy target, or implementation milestone.
 
@@ -1345,8 +1345,8 @@ migration, feature profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package.** It depends on Mandate lifecycle, execution
 meaning, fixed tool loop, scheduler recovery, child/verifier authority, MCP
-lifecycle, and Gateway/RLM bridge. It creates the authoritative kernel
-contract and decision 0012, and activates no
+lifecycle, and Gateway/RLM bridge. It creates [the authoritative kernel
+contract](20-ipython-kernel-lifecycle.md) and decision 0012, and activates no
 crate, Python/Jupyter dependency, listener, protocol implementation, schema,
 migration, feature profile, quality-policy target, or implementation milestone.
 
@@ -1381,7 +1381,7 @@ migration, feature profile, quality-policy target, or implementation milestone.
 ## Post-M4 Goals, Skills, context, memory, and compaction package
 
 **Documentation-only package.** It depends on Mandate lifecycle and execution
-meaning, creates the authoritative context contract
+meaning, creates [the authoritative context contract](21-goals-skills-context-memory-and-compaction.md)
 and decision 0013, and activates no crate, search/index engine, prompt builder,
 schema, migration, protocol implementation, feature profile, quality-policy
 target, or implementation milestone.
@@ -1408,8 +1408,8 @@ target, or implementation milestone.
 
 ## Post-M4 provider evolution, profiles, and reasoning package
 
-**Documentation-only package.** It depends on execution meaning and creates the
-authoritative provider contract
+**Documentation-only package.** It depends on execution meaning and creates [the
+authoritative provider contract](22-provider-evolution-profiles-and-reasoning.md)
 and decision 0014. It activates no SDK, crate, parser, catalog storage, schema,
 migration, protocol implementation, feature profile, quality-policy target, or
 implementation milestone.
@@ -1442,8 +1442,8 @@ implementation milestone.
 
 **Documentation-only package.** It depends on ordinary Session/storage
 compatibility, Mandate lifecycle boundaries, execution meaning, context, and
-provider evolution. It creates the authoritative session-branching
-contract and decision
+provider evolution. It creates [the authoritative session-branching
+contract](23-non-destructive-session-branching-and-regeneration.md) and decision
 0015, and activates no crate, schema, migration, protocol implementation,
 feature profile, quality-policy target, or implementation milestone.
 
@@ -1472,8 +1472,8 @@ feature profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package extending M6 planning.** It depends on transport,
 execution meaning, child/verifier, MCP, bridge, kernel, context, provider, and
-Session branching contracts. It creates the authoritative activity/UI
-contract and decision 0016, but activates no
+Session branching contracts. It creates [the authoritative activity/UI
+contract](24-activity-ui-and-adapters.md) and decision 0016, but activates no
 crate, schema, migration, protocol implementation, feature profile, quality-policy
 target, or implementation milestone.
 
@@ -1499,8 +1499,8 @@ target, or implementation milestone.
 
 **Documentation-only package.** It depends on Mandate lifecycle boundaries,
 execution meaning, the fixed tool loop, scheduler readiness, provider
-evolution, activity/UI, and the programmatic-caller policy. It creates the
-authoritative continual-harness contract and decision
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative continual-harness contract](26-continual-harness.md) and decision
 0021, and activates no crate, schema, migration, protocol implementation,
 feature profile, quality-policy target, or implementation milestone.
 
@@ -1535,7 +1535,7 @@ feature profile, quality-policy target, or implementation milestone.
 **Documentation-only package.** It depends on Mandate lifecycle boundaries,
 execution meaning, the fixed tool registry/loop, child/verifier, MCP, bridge,
 provider evolution, activity/UI, and the continual-harness model. It creates
-the authoritative programmatic-caller policy contract
+[the authoritative programmatic-caller policy contract](27-programmatic-caller-policy-and-admission.md)
 and decision 0022, and activates no crate, schema, migration, protocol
 implementation, feature profile, quality-policy target, or implementation
 milestone.
@@ -1565,8 +1565,8 @@ milestone.
 
 **Documentation-only package.** It depends on Mandate lifecycle boundaries,
 execution meaning, the fixed tool loop, child/verifier, MCP, context, provider
-evolution, activity/UI, and the programmatic-caller policy. It creates the
-authoritative Goal domain contract and
+evolution, activity/UI, and the programmatic-caller policy. It creates [the
+authoritative Goal domain contract](28-goal-domain-and-verification.md) and
 decision 0023, and activates no crate, schema, migration, protocol
 implementation, feature profile, quality-policy target, or implementation
 milestone.
@@ -1597,8 +1597,8 @@ milestone.
 
 **Documentation-only package.** It depends on provider evolution, execution
 meaning, session branching, and the configuration/provider control plane. It
-creates the authoritative provider session-selection and profiles protocol
-contract and decision 0024, and
+creates [the authoritative provider session-selection and profiles protocol
+contract](29-provider-session-and-profiles-protocol.md) and decision 0024, and
 activates no crate, schema, migration, protocol implementation, feature
 profile, quality-policy target, or implementation milestone.
 
@@ -1956,7 +1956,7 @@ profile, quality-policy target, or implementation milestone.
 
 **Documentation-only package extending architectures 30, 00, 02, 04, 06, 07,
 08, 09, 14, 21, 23, and 25.** It creates
-the authoritative instruction-source contract
+[the authoritative instruction-source contract](30-instruction-sources-and-system-context.md)
 and [decision 0043](../decisions/0043-instruction-sources-and-system-context.md),
 and it amends
 [decision 0035](../decisions/0035-m5plus-complete-foundation-activation.md) with

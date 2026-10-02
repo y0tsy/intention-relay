@@ -270,19 +270,20 @@ is enabled for dependency updates
   repository.
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/intention-relay/README.md](docs/intention-relay/README.md):
-  authoritative product reference material, closeouts, and decisions.
+  authoritative product reference material, closeouts, decisions,
+  reconciliation, and the legacy-derived baseline.
 - [docs/intention-relay/architecture/README.md](docs/intention-relay/architecture/README.md):
   target architecture with reading paths (principles, crate map, DTO policy,
-  quality gates, TTD, and roadmap).
+  quality gates, TTD, roadmap, and the instruction channel).
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
-  milestone-by-milestone delivery plan.
+  milestone-by-milestone delivery plan and the M5+ slice order.
 - [docs/intention-relay/closeout/](docs/intention-relay/closeout/):
   immutable closure evidence for each milestone, including CI results and
   coverage.
 - [docs/intention-relay/decisions/README.md](docs/intention-relay/decisions/README.md):
-  accepted architecture decision records (ADR 0001-0049).
-- [docs/reference/README.md](docs/reference/README.md): preserved research
-  material, not an implementation dependency.
+  accepted architecture decision records (ADR 0001-0048).
+- [docs/reference/README.md](docs/reference/README.md): preserved legacy
+  research material, not an implementation dependency.
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
   for registry dependencies.
 

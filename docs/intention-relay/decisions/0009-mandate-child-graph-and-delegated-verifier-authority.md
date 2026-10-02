@@ -26,7 +26,7 @@ This is additive future architecture only. It preserves M3/M4 queue/replay, prov
 
 ## Primary owner and evidence
 
-Mandate Child Graph and Delegated Verifier Authority owns detailed behavior. A later implementation requires graph/authority canonical goldens, atomic fault injection, deterministic races, recovery/no-resume, historical compatibility, redaction, negotiated replay, and end-to-end outcomes through the standard quality gate.
+[Mandate Child Graph and Delegated Verifier Authority](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md) owns detailed behavior. A later implementation requires graph/authority canonical goldens, atomic fault injection, deterministic races, recovery/no-resume, historical compatibility, redaction, negotiated replay, and end-to-end outcomes through the standard quality gate.
 
 ## Provenance
 

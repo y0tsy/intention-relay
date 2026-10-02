@@ -39,7 +39,7 @@ destructive retention, and implementation activation remain separate.
 
 ## Primary owner and evidence
 
-Non-destructive session branching and regeneration
+[Non-destructive session branching and regeneration](../architecture/23-non-destructive-session-branching-and-regeneration.md)
 owns detailed behavior. A later implementation requires canonical, transaction,
 migration, protocol, recovery, isolation, redaction, cross-platform, and outcome
 evidence through the standard quality gate.

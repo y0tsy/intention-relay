@@ -230,7 +230,7 @@ SDK resources, or recreate stored selection from a current registry.
 
 The future instruction-source families include `InstructionSourceV1`,
 `InstructionProfileRevisionV1`, and `InstructionProjectionV1`
-(architecture 30,
+([architecture 30](30-instruction-sources-and-system-context.md),
 [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). They
 carry bounded credential-free instruction text with its declared kind, scope,
 order, and audience; they carry no tool, policy, admission,
@@ -256,10 +256,10 @@ cursors, snapshots, or event envelopes. Unknown or
 corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 
-Mandate lifecycle DTO families, validation and revision/sequence rules are owned by Mandate domain and durable lifecycle. Historical compatibility rules are owned by Run execution meaning and historical compatibility.
+Mandate lifecycle DTO families, validation and revision/sequence rules are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md). Historical compatibility rules are owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
 
 Registry, direct-admission, WorkspaceRoot, and tool-loop DTO semantics are owned
-by Tool registry and direct Mandate tool loop.
+by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
 
 Future scheduler families include typed readiness observations, candidate views,
 capacity-unavailable outcomes, and scheduler admission requests. They are closed,
@@ -267,7 +267,7 @@ credential/resource-free DTOs: no SDK health values, handles, task identities,
 opaque timer objects, raw paths, or current-state-derived execution meaning may
 cross a boundary. Unknown scheduler/readiness variants block dependent admission
 and cannot synthesize ordinary queue or Mandate state. Detailed semantics are
-owned by Mandate scheduler and readiness-driven admission.
+owned by [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
 
 Future child/verifier families include typed child-edge, `ParentMandateId`,
 delegation snapshot, direct-edge control/message, terminal-summary, verifier

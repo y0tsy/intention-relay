@@ -18,7 +18,7 @@ and admission direction stands, bound to Milestone 5+ as before.
 
 The programmatic-caller policy and admission model from
 `m4plus_concept.md` is adopted as the accepted future
-direction and owned by the new Programmatic Caller Policy and Admission
+direction and owned by the new [Programmatic Caller Policy and Admission](../architecture/27-programmatic-caller-policy-and-admission.md)
 package:
 
 - two closed root origins (`InteractiveUser`, `ContinualHarness`) with no third
@@ -102,6 +102,7 @@ specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
+- [`architecture/27-programmatic-caller-policy-and-admission.md`](../architecture/27-programmatic-caller-policy-and-admission.md) (new)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

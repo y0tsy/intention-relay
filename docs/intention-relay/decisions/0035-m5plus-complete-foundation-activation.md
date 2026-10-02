@@ -74,7 +74,7 @@ of activating slices, all approved together as one package:
    export, and the exact typed client/protocol surface that M6 consumes.
 5. **Instruction sources and system context** — the instruction channel added
    by [ADR 0043](0043-instruction-sources-and-system-context.md) and owned by
-   architecture 30:
+   [architecture 30](../architecture/30-instruction-sources-and-system-context.md):
    the closed instruction source kinds and scopes, the deployment instruction
    profile adapted from the legacy Antibusy static prompt set, user-editable
    fragments, workspace `AGENTS.md` project instructions, the reserved `Mode`
