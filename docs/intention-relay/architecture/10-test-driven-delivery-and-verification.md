@@ -1,10 +1,8 @@
 # Test-Driven Delivery and Verification
 
-## Scope
+**Current policy.**
 
-This document makes TTD a delivery requirement for Intention Relay. It defines how architecture rules become executable checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. The mandatory pinned tooling, strict linting, the coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
-
-It applies to every crate, vertical slice, and adapter.
+This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
 
@@ -55,14 +53,6 @@ For each implementation slice:
 6. run `make verify` before accepting the slice;
 7. record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open decision, never by omitted test coverage.
 
-The closed M4 delivery followed the controller-owned
-`M4 execution charter`: each bounded lane established its complete
-fixture portfolio before production behavior and passed the standard `make
-quick` / `make verify` acceptance rule at its integration barrier. This is
-historical evidence, not authorization for further M4 work. The closure
-baseline and final Linux/Windows CI results are recorded in [M4 Closure
-Evidence](../closeout/m4-closure-evidence.md).
-
 A test should expose the observable intent. Avoid tests that only assert private implementation steps when a stable contract or result can be asserted instead.
 
 ## Architecture rules to encode
@@ -84,7 +74,7 @@ The following are mandatory candidates for automated architecture tests:
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
 
-The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests are executed through `make architecture`; the complete reproducible acceptance gate is `make verify` and CI invokes `make ci` only.
+The mandatory tooling is fixed by [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Architecture tests are executed through `make architecture`; the complete reproducible acceptance gate is `make verify` and CI invokes `make ci` only. `make architecture` also contains isolated expected-failure fixtures for adapter isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage, policy-aligned workspace cycles, and executable Cargo test-target declarations.
 
 ## Minimum test portfolio by crate
 
@@ -105,116 +95,17 @@ Every planned crate must declare a test target before implementation. Minimum ex
 
 The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated invariant, contract, failure mode, and outcome. The base 80% line-coverage threshold and the designated-files mechanism are mandatory guardrails defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
 
-## M1 serialized-contract evidence
+## Closed-milestone evidence
 
-M1 owns versioned JSON fixtures for current `ErrorDto`, persisted `EventEnvelopeDto<DomainEventDto>`, protocol hello and subscription commands, and credential-free `ConfigSnapshotDto`. The evidence must prove all of the following:
+The closed-milestone delivery records are:
 
-- current `ErrorDto` optional `correlation_id`/`detail` fields decode as `None` when absent;
-- typed `MissingWorkspacePath` detail and canonical `CorrelationIdDto` serialize safely, and malformed/absolute/traversing paths or malformed correlations fail at wire decoding;
-- required fields, IDs, closed enum variants, any schema/protocol version other than the current one, and invalid scalar types fail safely;
-- the documented additive-field policy is tested, rather than inferred from serde defaults;
-- public resolved-config and snapshot projections exclude credentials and local `ConfigPathDto` values.
+- M0/M1 quality foundation and contracts: [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md);
+- M1+ quality hardening: [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md);
+- M3 storage/runtime activation: [M3 Closure Evidence](../closeout/m3-closure-evidence.md);
+- M4 model/provider and run-stream activation, including the controller-owned `M4 execution charter` and the final Linux/Windows CI results: [M4 Closure Evidence](../closeout/m4-closure-evidence.md);
+- M5 trusted-local execute and model-tool-loop activation: [M5 Closure Evidence](../closeout/m5-closure-evidence.md).
 
-`make architecture` also contains isolated expected-failure fixtures for adapter isolation, protocol isolation, composition-only concrete selection, provider-SDK public-contract leakage, policy-aligned workspace cycles, and executable Cargo test-target declarations.
-
-## M1+ quality-hardening evidence
-
-M1+ strengthens the executable quality policy without adding M2 product behavior. Its copied-repository fixtures prove all of the following:
-
-- a policy-aligned workspace dependency cycle reports its deterministic closed path before a normal Cargo compile gate;
-- every active crate's declared `test_targets` exactly equals Cargo metadata integration targets, while M1 skeletons declare and expose none;
-- provider SDK namespaces (`async_openai::`, `openrouter_rs::`) are rejected outside their owner crate's private implementation;
-- an enabled coverage exclusion is an owned, exact reported source file and changes only that crate's coverage denominator; unsafe, unowned, unreported, duplicate, and all-source exclusions fail.
-
-The M1+ baseline and criterion-to-fixture evidence are recorded in [M1+ Quality Hardening Evidence](../closeout/m1-plus-quality-hardening-evidence.md).
-
-## M3 required test and evidence matrix
-
-M3 activates Tier B `intention-application`, `intention-runtime`,
-`intention-storage`, and `intention-storage-sqlite`; each must meet the 90%
-line-coverage threshold defined in [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md). The threshold is necessary but
-never substitutes for the following required semantic evidence.
-This is the historical M3 record: the tier threshold below was the policy in
-force at M3, and [ADR 0049](../decisions/0049-base-coverage-threshold.md) later
-replaced the tiers with the base 80% line-coverage threshold.
-
-| M3 concern | Required test/evidence target | Required observable result |
-| --- | --- | --- |
-| DTO and event evolution | `m3_contracts`, event-fixture, and protocol contract suites. | `WorkspaceId`, run/queue projections, explicit event variants, accepted outcomes, and safe snapshots round-trip while current fixtures remain decodable. |
-| SQLite durability and current schema | `sqlite_contracts` current-schema fixtures. | Bundled SQLite creates the complete current storage schema directly on open, persists only credential-free config snapshots, and rejects a known-session future/overflow tail cursor with `invalid_event_tail_position` before SQLite conversion. |
-| Semantic atomicity | SQLite fault-injection outcome fixture at event, projection, and snapshot boundaries. | Each injected write-stage failure rolls back completely: no new projection, event envelope, or session/run snapshot row persists. |
-| Canonical config revisions | SQLite config-revision contract fixture. | Reaccepting an equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID returns a typed conflict without sensitive details. |
-| Queue and idempotency | Storage/application contracts. | Repeated identical turn acceptance is stable, conflicting identity reuse fails typed, tickets are never reused after removal, repository-owned promotion selects the oldest ticket, and no parallel active run exists. |
-| Lifecycle and cancellation | `m3_runtime` state-machine fixture. | `Starting -> Cancelling -> Cancelled` is required; a direct `Starting -> Cancelled` transition fails. |
-| Terminal promotion | Runtime/storage integration fixture. | A terminal state and the next queued turn's `RunStarted` fact commit atomically with the queued turn's original proposed `RunId`, immutable snapshot, and revision, even after a daemon config change. |
-| Recovery-before-ready | Durable composition restart fixture. | Every unfinished run is durably interrupted before ready and no external work resumes automatically. |
-| Replay-only subscription | Durable facade/client contract fixture, including matching, nonexistent, cross-session, unknown-session, and future-cursor run-scoped requests. | An unscoped one-shot request yields a current durable projection snapshot with an empty contiguous tail or typed resync; every `run_id: Some` request yields `HistoryUnavailable` before cursor/session validation and without unfiltered session state. This is not a persistent stream; safely represented scoped replay remains M4 hardening. |
-| Storage location | Platform-state location fixture. | Database state resolves under platform AppData/state, and missing an absolute platform directory fails typed without CWD fallback. |
-| Quality evidence | `make quick`, narrow M3 suites, then `make verify`. | All active Tier B crates meet 90%; failure/recovery branches and feature profiles remain covered. |
-
-The M3 closure record must distinguish listed tests from actually executed
-commands and results. Until those commands are captured, the baseline SHA,
-coverage values, and gate results remain pending; see [M3 Closure
-Evidence](../closeout/m3-closure-evidence.md).
-
-## Completed M4 model/provider evidence
-
-M4 activated Tier C `intention-model`, `intention-provider-openrouter`, and `intention-provider-generic-chat`. Their policy-declared Cargo integration targets prove valid and invalid model DTOs, stream lifecycle ordering, tool/usage validation, safe provider errors, execution-policy default/override/range and legacy snapshot decoding, credential redaction, provider mapping of text/usage/finish/error/tool-call facts, and rejection of unsupported generic capabilities before outbound preparation. The Tier B `intention-runtime` target `m4_model_execution` proves preflight/no-execute failure, exact persisted/current safe-selection mismatch failure, exact-cursor durable ordering, UTF-8-safe 4 KiB assistant batching, reasoning/usage persistence, durable tool-call recording, two-stage completion, malformed/provider/EOF safe failure, timeout and fixed 250 ms retry ordering with manual time, no retry after durable output or a terminal/cancellation/non-retryable outcome, and cancellation suppression while an event or retry wait is blocked without a production Tokio runtime. Copied-repository architecture fixtures reject M4 phase or test-target drift, out-of-owner SDK namespaces, SDK public API exposure, and non-composition concrete-provider selection. The blocking and hermetic suites require no live credentials or provider network access; the only exception is the opt-in, manual, never-blocking live channel defined by [ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md). Final gate and cross-platform evidence are recorded in [M4 Closure Evidence](../closeout/m4-closure-evidence.md).
-
-## Completed M4 run-stream protocol evidence
-
-M4's run-stream behavior is delivered over the JSON-RPC 2.0 local protocol
-(ADR 0045): a `run.subscribe` request returns the initial authoritative replay
-as its ordinary response result, and later live, snapshot, and resync frames
-arrive as `run.frame` notifications. `m4_run_stream_contracts` covers validated
-run subscription/replay/live/snapshot/resync payloads, all closed resync
-reasons, additive JSON compatibility, and retained M3 session behavior.
-`run_stream_contract` uses a real scripted asynchronous local peer to prove
-initial replay followed by uncorrelated notifications, duplicate/stale
-tolerance, gap recovery from the last valid cursor, wrong-scope rejection,
-fail-closed unavailable history, historical reasoning without snapshot double
-application, and daemon-authoritative status-only snapshot updates.
-`transport_integration` proves the JSON-RPC request/response and notification
-exchange on the real local endpoint.
-
-`m4_streaming_foundation` adds daemon-host outcome evidence using injected
-scripted/blocking drivers and a real asynchronous local transport. It proves a
-host-accepted `SendUserTurn` invokes the driver once, exposes an initial
-authoritative replay followed by durable live state and `Completed` on one
-persistent connection, and permits a new connection plus a repeated correlated
-replay request to receive the current snapshot. Its blocked-driver scenario
-proves host `run.stop` reaches task-owned `Cancelled` without late facts. The
-real host's deterministic first-append gate proves the durable `Cancelling`
-race after initial `Starting` observation is terminalized exactly once by that
-registered task at cursor zero, with no provider call or fact. A real-host
-stop-before-registration fixture proves registry/stop linearization installs
-and cleans up an exact cancellation terminalizer rather than stranding durable
-`Cancelling` state. A real-host
-promotion fixture proves the commit observer schedules the original persisted
-queued `RunId` once with its durable context and ignores duplicate admission.
-A durable blocked-host restart fixture first aborts and joins all first-host
-connection/execution tasks and drops all first-facade clones, then serializes actual replay, transport
-replay/error responses, events, snapshots, and safe errors from a recognizable
-fake-credential configuration; the credential is absent, the old run becomes
-`Interrupted` before replay, and neither it nor a recovery-promoted `Starting`
-run resumes provider execution. Queue capacity and exact writer-deadline
-behavior remain focused daemon-host unit evidence. The fixture uses no network
-or real credential.
-
-## M5 trusted-local execute environment decision
-
-M5 `execute` inherits the invoking process environment without name-based or
-pattern-based filtering. This is intentional: the agent is trusted-local and
-WorkspaceRoot anchors filesystem addressing and child CWD, not environment
-visibility or process privileges. Environment values remain excluded from
-durable lifecycle evidence, logs, protocol DTOs, and published projections.
-
-M5 fixes the active tool surface at six executable tools: `read`, `write`,
-`edit`, `execute`, `glob`, and `grep`; remaining registry slots are reserved.
-WorkspaceRoot is an addressing anchor, not a containment boundary: relative
-paths join the root, `execute` starts there, pathless `glob`/`grep` search from
-there, and absolute paths and `..` are addressed as given (ADR 0047).
+M5's trusted-local `execute` environment, the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`), and `WorkspaceRoot` addressing semantics are owned by [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md).
 
 ## Result-oriented acceptance scenarios
 
@@ -332,25 +223,18 @@ real credential. It runs only under the explicit opt-in ([ADR
 
 Each completed implementation slice must report:
 
-- the architecture document, the applicable coverage declarations under
-  [ADR 0049](../decisions/0049-base-coverage-threshold.md), and acceptance criteria it implements;
+- the architecture document, the applicable coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), and acceptance criteria it implements;
 - tests added before or alongside behavior;
 - `make quick`, narrow, integration, and `make verify` checks run;
 - outcome scenarios covered;
 - lint, coverage, feature, dependency, or architecture exceptions, if any;
 - known non-covered risk, if any;
-- a recorded live run, when one is cited, reports the date, commit, provider,
-  model, and workflow run URL and never the credential; the opt-in live channel
-  ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additional
-  evidence and never a substitute for the mandatory hermetic gates;
+- a recorded live run, when one is cited, reports the date, commit, provider, model, and workflow run URL and never the credential; the opt-in live channel ([ADR 0040](../decisions/0040-opt-in-live-provider-e2e.md)) is additional evidence and never a substitute for the mandatory hermetic gates;
 - whether the behavior is proven by automated test, manual smoke test, or intentionally still deferred.
 
 ## Non-goals
 
-- Mandating a specific Rust test framework.
-- Replacing reviewer judgment with a test count or coverage percentage.
-- Treating snapshots as a substitute for semantic assertions.
-- Claiming a user flow works because a unit test reached a private method.
+No specific Rust test framework is mandated, and no test count or coverage percentage replaces reviewer judgment. Snapshots are not a substitute for semantic assertions, and a unit test reaching a private method never proves that a user flow works.
 
 ## Post-M4 Foundation evidence obligations
 
@@ -373,21 +257,21 @@ cover:
   and diagnostics.
 
 These are obligations for later implementation packages, not claims that the
-corresponding runtime behavior exists today. See the
-reconciliation matrix.
+corresponding runtime behavior exists today.
+
+Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 ## Execution-meaning compatibility evidence
 
-The binary canonical codec, execution-meaning envelope, tag registry, and
-digest/identity layer were removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md);
-no golden bytes, digests, kind/tag mismatch fixtures, or decoder retention
-schedule remain. Historical-compatibility work that survives the removal (M3/M4
-byte preservation, no current-state reconstruction, and no resume after an
-incompatible record) is owned by [Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md) and
-carries typed serde JSON evidence.
+The binary canonical codec, execution-meaning envelope, tag registry, and digest/identity layer were removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md); no golden bytes, digests, kind/tag mismatch fixtures, or decoder retention schedule remain.
 
-## Tool-registry and Mandate-loop evidence
+Historical-compatibility work that survives the removal (M3/M4 byte preservation, no current-state reconstruction, and no resume after an incompatible record) is owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md) and carries typed serde JSON evidence.
+
+## Future package evidence
+
+Each later package declares its own evidence portfolio through the activating-specification contract in [architecture 12](12-quality-gates-and-makefile.md).
+
+### Tool-registry and Mandate-loop evidence
 
 Before implementation, future tool-loop work requires fixed-slot and owner
 fixtures, Reserved/non-bypass fixtures, typed registry/descriptor selection,
@@ -400,7 +284,7 @@ are future obligations, not claims that a runtime or test target exists; the
 detailed portfolio is owned by [Tool registry and direct Mandate tool
 loop](15-tool-registry-and-mandate-tool-loop.md).
 
-## Mandate scheduler and readiness evidence
+### Mandate scheduler and readiness evidence
 
 Before implementation, future scheduler work requires durable-reason versus
 observation/candidate/admission fixtures; deterministic ordering; unavailable
@@ -411,7 +295,7 @@ protocol replay; and fake-secret/resource absence. These are future obligations,
 current tests or targets. The detailed portfolio is owned by [Mandate scheduler
 and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
 
-## Mandate child graph and verifier evidence
+### Mandate child graph and verifier evidence
 
 Before implementation, future child/verifier work requires typed
 edge/delegation/authority/baseline/evidence/verdict/mutation fixtures;
@@ -424,7 +308,7 @@ resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate child graph and delegated verifier
 authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
 
-## Mandate MCP capability evidence
+### Mandate MCP capability evidence
 
 Before implementation, future MCP work requires typed source/discovery/
 capability/selection/invocation fixtures; closed schema-normalization negatives;
@@ -436,7 +320,7 @@ M3/M4 plus retained bounded-MCP preservation. These are future obligations, not
 current tests or targets. The detailed portfolio is owned by [Mandate MCP
 capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
 
-## Mandate Gateway/RLM bridge evidence
+### Mandate Gateway/RLM bridge evidence
 
 Before implementation, future bridge work requires typed bridge-selection
 fixtures; grant scope/expiry and no-bypass fixtures; operation idempotency and
@@ -446,7 +330,7 @@ M3/M4 plus retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
 The detailed portfolio is owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
 
-## Run-scoped IPython kernel evidence
+### Run-scoped IPython kernel evidence
 
 Before implementation, future kernel work requires typed selection/checkpoint
 fixtures; run-scoped lazy epoch/no-sharing fixtures; required/optional restore and
@@ -458,7 +342,7 @@ Python/Jupyter/resource absence. These are future obligations, not current tests
 or targets. The detailed portfolio is owned by [Run-scoped IPython kernel
 lifecycle](20-ipython-kernel-lifecycle.md).
 
-## Goals, Skills, context, memory, and compaction evidence
+### Goals, Skills, context, memory, and compaction evidence
 
 Before implementation, future context work requires canonical Goal scope and
 applicability, Skill selection/disclosure, source-manifest/projection, memory,
@@ -469,7 +353,7 @@ M3/M4 preservation; and fake-secret/raw-source/private-reference absence. These
 are future obligations, not current tests or targets. The detailed portfolio is
 owned by [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md).
 
-## Provider evolution, profiles, and reasoning evidence
+### Provider evolution, profiles, and reasoning evidence
 
 Before implementation, future provider work requires typed descriptor/
 profile/catalog/selection/capability/driver-contract fixtures; M3/M4 preservation;
@@ -480,16 +364,19 @@ typed protocol replay; redaction; and Linux/Windows outcomes. These are future
 obligations, not current tests or targets. The detailed portfolio is owned by
 [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
 
-## Session branching evidence
+### Session branching evidence
 
 Before implementation, architecture 23 requires typed v1/v2 fixtures and
 negative cases; boundary/context/anchor tests; transaction fault injection;
 additive migration byte preservation; protocol and bounded tree-page tests;
 authority/no-resume/no-current-state-reconstruction matrices; redaction; and
 Linux/Windows fork/regeneration outcomes. These are future obligations only.
-## Activity, UI, and adapter evidence
+The detailed portfolio is owned by [Session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md).
+
+### Activity, UI, and adapter evidence
 
 Before implementation, architecture 24 requires activity/message/journal/
 notification/acknowledgement fixtures and negative cases; transaction and
 sequence isolation; typed protocol replay/resync; redaction; no-resume; Tauri/TUI/REPL
 parity; and Linux/Windows outcome evidence. These are future obligations only.
+The detailed portfolio is owned by [Activity, UI, and adapters](24-activity-ui-and-adapters.md).

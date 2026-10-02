@@ -1,10 +1,6 @@
 # VFR and Headroom
 
-## Scope
-
-Virtual File Representation (VFR) and Headroom/CCR are required v1 capabilities. They are separate extension crates attached through the typed tool hook system, not hard-coded dependencies of base tools.
-
-This document depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md).
+**Approved future design. Not implemented; activation requires an activating specification.** Virtual File Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached through the typed tool hook system, not hard-coded dependencies of base tools.
 
 ## Design principle
 
@@ -25,6 +21,10 @@ flowchart LR
 
 VFR changes a suitable source-file read into a structured virtual representation. Headroom changes suitable retained model context into a compressed representation with retrievable originals. They solve different problems and must not be conflated.
 
+## Ownership and non-authorities
+
+Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no assembly order ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
+
 ## `intention-vfr`
 
 ### Responsibilities
@@ -35,8 +35,8 @@ VFR changes a suitable source-file read into a structured virtual representation
 - typed virtual representation DTOs;
 - source map/hidden segment metadata;
 - expansion and raw-read tool contracts;
-- a VFR-specific typed instruction contribution with its own revision and
-  digest, assembled into the effective instruction projection by
+- a VFR-specific typed instruction contribution with its own revision
+  identity, assembled into the effective instruction projection by
   [architecture 30](30-instruction-sources-and-system-context.md)
   ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
 - tests proving loss-aware, deterministic transformations.
@@ -89,12 +89,7 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 | 5 | Compress model context | `intention-headroom` | Model-specific compressed/reference value. |
 | 6 | Publish adapter event | Runtime/transport | Agreed human-readable result and metadata. |
 
-The v1 default presentation policy is:
-
-- adapters receive the normalized result, including VFR representation where applicable;
-- the model may receive a further Headroom-compressed representation;
-- the event metadata exposes that compression occurred without leaking CCR internals or secrets;
-- a future product decision may add an explicit UI affordance for original/retrieved content.
+The v1 default presentation policy: adapters receive the normalized result, including VFR representation where applicable; the model may receive a further Headroom-compressed representation; event metadata exposes that compression occurred without leaking CCR internals or secrets; a future product decision may add an explicit UI affordance for original/retrieved content.
 
 ## Data boundaries
 
@@ -107,10 +102,10 @@ The v1 default presentation policy is:
 
 ## Failure behavior
 
-- An invalid VFR mapping must fail back to a normal safe read result or a typed tool failure, according to configured fail policy. It must never emit an invalid placeholder that cannot be resolved.
-- Failure to retain required CCR content must prevent an unsafe compressed reference from reaching the model.
-- An expired CCR reference returns a typed, observable result. It does not fabricate recovered content.
-- A hook failure must record which extension phase failed without exposing source content or secrets in normal diagnostics.
+- An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail policy; it never emits an unresolvable placeholder.
+- Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
+- An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
+- A hook failure records which extension phase failed without exposing source content or secrets in normal diagnostics.
 
 ## Required tests and outcomes
 
@@ -127,7 +122,11 @@ The v1 default presentation policy is:
 
 ## Quality-gate integration
 
-`intention-vfr` and `intention-headroom` are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)). Their transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove base tools do not import either extension implementation crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Both crates are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)); their transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove base tools do not import either extension implementation crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+
+## Dependencies and non-goals
+
+Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md) and [architecture 30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to an extension implementation crate.
 
 ## Open decisions
 
@@ -136,3 +135,5 @@ The v1 default presentation policy is:
 - which metadata becomes visible in UI;
 - whether content is encrypted at rest in a later version;
 - exact fallback policy for VFR parser failures.
+
+Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
