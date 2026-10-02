@@ -17,7 +17,7 @@ stand.
 ## Decision
 
 The following items, recorded as `Defer` in the
-[deferred/excluded register](../reconciliation/deferred-excluded-register.md)
+deferred/excluded register
 (EXC-008, EXC-009, EXC-010, EXC-011, and EXC-015), are adopted as accepted
 future directions for execution in Milestone 5+, except item 5, which is
 superseded as recorded below:
@@ -146,14 +146,6 @@ authority.
 - [`architecture/16-mandate-scheduler-and-readiness-driven-admission.md`](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
 - [`architecture/20-ipython-kernel-lifecycle.md`](../architecture/20-ipython-kernel-lifecycle.md)
 - [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
-- [`reconciliation/ownership-and-dependency-map.md`](../reconciliation/ownership-and-dependency-map.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

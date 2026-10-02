@@ -318,7 +318,7 @@ streaming deferral.
 The baseline passed local `make verify` and the required Linux and Windows
 `make ci` matrix. The [M4 Closure Evidence](../closeout/m4-closure-evidence.md)
 records the complete verification matrix, coverage, exceptions, and retained
-deferrals; the [M4 execution charter](../m4.md) retains the accepted decisions
+deferrals; the M4 execution charter retains the accepted decisions
 and integration history.
 
 M4 delivered the Tier C provider foundation and all runtime, protocol,
@@ -417,7 +417,7 @@ M6-M9 boundary implementation. The post-M4 Mandate packages (architectures
 13-21) are not part of these five slices: they are delivered by the
 Mandate-track milestones 10-12, which consume this milestone's foundation and
 whose contract records the slices below name. The full authoritative package review of
-2026-08-30 confirmed that the [`m4plus_concept.md`](../m4plus_concept.md)
+2026-08-30 confirmed that the `m4plus_concept.md`
 research directions are otherwise covered by architectures 13-24 and decisions
 0001-0019; M5+ closes the identified configuration/provider control-plane gap
 and hosts every retrospective code change. The fifth review wave of 2026-08-30
@@ -669,7 +669,7 @@ records the deleted groups so no M6-M9 slice claims them:
   exists to produce it. The durable append/delivery layer remains reserved to
   the first M6-M9 milestone that consumes session state and reconnect delivery.
   Anchors:
-  [`m4plus_concept.md`](../m4plus_concept.md) (session selection, runs, queues,
+  `m4plus_concept.md` (session selection, runs, queues,
   and usage),
   [architecture 29](29-provider-session-and-profiles-protocol.md) (session
   selection, runs, queues, and usage).
@@ -1106,7 +1106,7 @@ and evidence requirements.
 
 ### Deliver
 
-- the [reconciliation package](../reconciliation/README.md), including the
+- the reconciliation package, including the
   source-of-truth matrix, compatibility register, contradiction register,
   dependency map, and supersession index;
 - accepted Foundation decision records;

@@ -201,7 +201,7 @@ Linux/Windows CI matrix; the live channel is never one of them.
 
 The channel is delivery-integrity provenance for the ADR 0039 request-side
 advertisement completion (PR-E2E workstream E3), not a new research direction:
-[`m4plus_concept.md`](../m4plus_concept.md) does not require a live-provider
+`m4plus_concept.md` does not require a live-provider
 test. It follows the manual-only, non-blocking `quality-benchmark` workflow
 precedent recorded in architecture 12 and the open-text provider credential
 protections in architecture 09 (user-only file permissions; credentials never

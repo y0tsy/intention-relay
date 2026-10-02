@@ -193,7 +193,7 @@ Architecture 16 creates no scheduler crate or dependency edge. Exact crate
 allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md)
-and the [ownership map](../reconciliation/ownership-and-dependency-map.md).
+and the ownership map.
 
 ## Post-M4 provider evolution ownership
 

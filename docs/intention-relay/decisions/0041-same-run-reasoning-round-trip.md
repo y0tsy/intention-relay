@@ -243,7 +243,7 @@ recorded.
 
 ## Research provenance
 
-The reasoning directions in [`m4plus_concept.md`](../m4plus_concept.md) were
+The reasoning directions in `m4plus_concept.md` were
 filtered through [ADR 0014](0014-provider-evolution-profiles-and-reasoning.md),
 [ADR 0028](0028-provider-reasoning-and-catalog-detail-directions.md), and the
 M5+ Slice 2 activation of [ADR 0037](0037-m5plus-slice2-control-plane.md),

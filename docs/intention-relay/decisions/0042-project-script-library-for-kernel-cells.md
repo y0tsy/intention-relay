@@ -193,7 +193,7 @@ coverage tiers, feature profiles, and architecture fixtures, then pass
 
 ## Research provenance
 
-[`m4plus_concept.md`](../m4plus_concept.md) research,
+`m4plus_concept.md` research,
 [`docs/reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md`](../../reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md)
 (persistent scratch state in the RLM/IPython harness analysis),
 [architecture 20](../architecture/20-ipython-kernel-lifecycle.md) checkpoint

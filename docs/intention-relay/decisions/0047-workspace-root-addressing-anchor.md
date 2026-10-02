@@ -133,7 +133,7 @@ removed error codes; no new configurable root policy.
 - [Architecture 11](../architecture/11-implementation-roadmap.md) and the
   [architecture README](../architecture/README.md) record the new root
   semantics.
-- The [reconciliation registers](../reconciliation/README.md) record the
+- The reconciliation registers record the
   removed containment rows and the corrected boundary wording.
 - [ADR 0042](0042-project-script-library-for-kernel-cells.md) carries the
   superseded boundary clause listed above; its other rules stand.

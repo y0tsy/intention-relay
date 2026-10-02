@@ -165,7 +165,7 @@ fake-secret tests or the CI documentation secret scan.
   own the removal of the scanner and limit tests from the gate surface.
 - [Architecture 11](../architecture/11-implementation-roadmap.md) and the
   [architecture README](../architecture/README.md) record the policy change.
-- The [reconciliation registers](../reconciliation/README.md) record the
+- The reconciliation registers record the
   removed limit, corridor, period, and queue-audit rows.
 - [`AGENTS.md`](../../../AGENTS.md) records the content-scanning ban.
 - [Decisions README](README.md) indexes this record.

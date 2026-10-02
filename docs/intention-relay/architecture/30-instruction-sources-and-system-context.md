@@ -35,9 +35,9 @@ their recorded meaning and gain no instruction state.
   (configuration, classification, observability), and
   [architecture 25](25-configuration-provider-control-plane.md) (editing and
   preview surface).
-- Research provenance: [`legacy-antibusy-prompts/`](../legacy-antibusy-prompts/README.md),
-  [`legacy-baseline/02-capability-catalog.md`](../legacy-baseline/02-capability-catalog.md),
-  [`legacy-baseline/04-agent-behavior.md`](../legacy-baseline/04-agent-behavior.md),
+- Research provenance: `legacy-antibusy-prompts/`,
+  `legacy-baseline/02-capability-catalog.md`,
+  `legacy-baseline/04-agent-behavior.md`,
   [ADR 0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md),
   and [ADR 0019](../decisions/0019-production-model-tool-loop.md).
 - Status: documentation-approved; implementation-authorized work requires a

@@ -7,7 +7,7 @@
 - Normative owner: architecture 29.
 - Decision record: [`0024`](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 - Reconciliation topics: `PSS-001..008`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the layer is again an accepted direction awaiting a new activating specification.
 
 **Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This

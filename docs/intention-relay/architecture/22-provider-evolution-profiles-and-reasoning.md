@@ -8,7 +8,7 @@
 - Decision record: [`0014`](../decisions/0014-provider-evolution-profiles-and-reasoning.md).
 - Detail decisions: [`0028`](../decisions/0028-provider-reasoning-and-catalog-detail-directions.md) (reasoning and catalog detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (semantic content inspection direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (arbitrary headers, provider-native preservation, server-side parser).
 - Reconciliation topics: `PRV-001..012, RSN-001..020`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the catalog, selection, capability-taxonomy, reasoning-history, and header contracts are again accepted directions awaiting a new activating specification (`responses` driver remains not activated).
 
 
