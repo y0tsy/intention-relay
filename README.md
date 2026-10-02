@@ -235,10 +235,10 @@ quick` while iterating and run `make verify` before acceptance.
 | `make check` | Complete non-mutating source gate: format, features, `check-cargo`, lint, tests/doctests, docs, architecture. |
 | `make docs-check` | Rustdoc across feature profiles, then Markdown link/Mermaid/secret-pattern validation. |
 | `make coverage` | Branch-aware coverage for all profiles, enforcing the declared line thresholds (see [quality/coverage.toml](quality/coverage.toml)). |
-| `make verify` | Full acceptance gate: `check` plus coverage, dependency gates, and quality self-tests; removes only generated LLVM coverage artifacts. |
+| `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
 | `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
-| `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default|no-default|all`, `ci-selftest`, `ci-deps`) in parallel. |
+| `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default|no-default|all`, `ci-deps`) in parallel. |
 
 `make verify` requires pinned tools, the committed lockfile, and performs no
 hidden dependency or tool installation. See
@@ -252,8 +252,8 @@ The blocking workflow is
 and pull requests to `main`:
 
 - `lint-arch` and `test` jobs on `ubuntu-24.04` and `windows-2025`;
-- `coverage-default`, `coverage-no-default`, `coverage-all`, `selftest`, and
-  `deps` jobs on `ubuntu-24.04`;
+- `coverage-default`, `coverage-no-default`, `coverage-all`, and `deps` jobs on
+  `ubuntu-24.04`;
 - pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
   sccache for coverage builds, and uploaded quality reports/metrics.
 

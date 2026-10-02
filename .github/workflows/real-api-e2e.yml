@@ -43,8 +43,7 @@ jobs:
     # Covers the 120-minute live-run step plus checkout, cache restore, tool
     # installation, and report upload. This job timeout and the run step
     # timeout must stay above the worst-case harness budget documented next to
-    # the timing constants in crates/intention-daemon/tests/real_api_e2e.rs;
-    # quality/self_test.py binds all four values.
+    # the timing constants in crates/intention-daemon/tests/real_api_e2e.rs.
     timeout-minutes: 150
     env:
       CARGO_TERM_COLOR: never
@@ -97,8 +96,7 @@ jobs:
         # credential run, each up to three 180-second attempts, the bounded
         # synchronous session calls, three 30-second daemon starts, and the
         # bounded replay, kill, and session-read windows come to about 82
-        # minutes; the rest of this step covers the build. quality/self_test.py
-        # recomputes the budget against this timeout and the job timeout.
+        # minutes; the rest of this step covers the build.
         timeout-minutes: 120
         env:
           INTENTION_REAL_API_KEY: ${{ secrets.REAL_API_E2E_PROVIDER_KEY }}

@@ -52,7 +52,7 @@ A crate is not considered complete because it compiles or has unit tests. Each d
 
 ### 11. Reproducible quality gates are architectural
 
-Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, the base 80% line-coverage threshold and designated-files mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-selftest`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and `make ci` is the local single-pass alias for the same full gate. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
+Before production functionality is accepted, the workspace must have a pinned toolchain, strict pragmatic linting, the base 80% line-coverage threshold and designated-files mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature-profile checks, documentation checks, architecture checks, and supply-chain verification. The root Makefile orchestrates these non-mutating gates. GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-coverage-no-default`, `ci-coverage-all`, `ci-deps`) as parallel matrix jobs in `.github/workflows/quality.yml`, and `make ci` is the local single-pass alias for the same full gate. See [Quality gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Scope boundaries
 

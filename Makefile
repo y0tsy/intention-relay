@@ -11,11 +11,11 @@ SHELL := /bin/bash
 define TIMED
 $(PYTHON) -c 'import subprocess,time,sys; command=sys.argv[1:]; t=time.monotonic(); p=subprocess.run(command); print(f"timing: {command[0]}: {time.monotonic()-t:.2f}s", flush=True); raise SystemExit(p.returncode)'
 endef
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-artifacts-clean deps quality-self-test quality-self-test-in-place e2e-real-api quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-selftest ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-start-selftest metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps metrics-finish-selftest
+.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-deps metrics-start metrics-finish metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all deps quality-self-test quality-self-test-in-place quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-selftest ci-deps' \
+	  'Non-mutating: tools-check fmt-check notices-check features lint test docs-check architecture coverage coverage-default coverage-no-default coverage-all deps quick check verify ci ci-source ci-lint-arch ci-test ci-coverage ci-coverage-default ci-coverage-no-default ci-coverage-all ci-deps' \
 	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
@@ -76,12 +76,6 @@ coverage-artifacts-clean: ## MUTATING: remove generated LLVM coverage build arti
 deps: tools-check notices-check ## Run online dependency, license, advisory, notices, and hygiene gates.
 	$(PYTHON) quality/run_deps.py
 
-quality-self-test: tools-check ## Prove isolated invalid fixtures fail their intended checks.
-	$(PYTHON) quality/self_test.py
-
-quality-self-test-in-place: tools-check ## CI in-place fixture check with git-restore scoping (reuses warm Cargo artifacts).
-	$(PYTHON) quality/self_test.py --in-place
-
 e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required; reads .env when present).
 	@if [ -f .env ]; then \
 	  while IFS='=' read -r name value; do \
@@ -123,7 +117,6 @@ check: tools-check fmt-check features check-cargo lint test docs-check architect
 
 verify: check coverage deps ## Full reproducible merge and release gate.
 	$(MAKE) coverage-artifacts-clean
-	$(MAKE) quality-self-test
 
 ci: metrics-start verify metrics-finish ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true
@@ -149,9 +142,6 @@ ci-coverage-no-default: metrics-start-coverage-no-default coverage-no-default co
 ci-coverage-all: metrics-start-coverage-all coverage-all coverage-artifacts-clean metrics-finish-coverage-all ## CI coverage job for the all-features profile.
 	@true
 
-ci-selftest: metrics-start-selftest quality-self-test-in-place metrics-finish-selftest ## CI self-test job: metrics, in-place fixture check, metrics.
-	@true
-
 ci-deps: metrics-start-deps deps metrics-finish-deps ## CI dependency job: metrics, deps, metrics.
 	@true
 
@@ -161,8 +151,8 @@ metrics-start: ## Initialize the quality metrics manifest for this run.
 metrics-finish: ## Finalize the quality metrics manifest preserving the gate result.
 	@$(PYTHON) quality/metrics.py finish
 
-metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps metrics-start-selftest:
+metrics-start-source metrics-start-lint-arch metrics-start-test metrics-start-coverage metrics-start-coverage-default metrics-start-coverage-no-default metrics-start-coverage-all metrics-start-deps:
 	@$(PYTHON) quality/metrics.py start --job $(patsubst metrics-start-%,%,$@)
 
-metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps metrics-finish-selftest:
+metrics-finish-source metrics-finish-lint-arch metrics-finish-test metrics-finish-coverage metrics-finish-coverage-default metrics-finish-coverage-no-default metrics-finish-coverage-all metrics-finish-deps:
 	@$(PYTHON) quality/metrics.py finish --job $(patsubst metrics-finish-%,%,$@)

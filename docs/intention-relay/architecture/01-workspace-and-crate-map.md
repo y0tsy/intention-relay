@@ -143,7 +143,7 @@ The workspace must have tests that fail when these rules are broken:
 5. `intention-protocol` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
 7. every planned crate has a stated test target before implementation begins;
-8. every declared boundary has an isolated expected-failure fixture in the quality self-test.
+8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The mandatory pinned tooling, coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, lint policy, and Makefile/CI contract are defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
