@@ -107,7 +107,7 @@ truth; the second is still open and stays owned by the named slice.
 | Queue execution | The repository atomically promotes the oldest eligible queued turn, tickets are never reused, removal and inspection stay explicit, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Queue"). |
 | Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
 | AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md). |
-| Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |
+| Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision (architecture 07); no patch-record family exists, and Plan mode itself is M7 scope. |
 | Provider retries | Runtime owns at most one retry for a delayed or retryable provider failure before any durable fact, with a fixed 250 ms delay and `max_attempts` 1..=2 / `attempt_timeout_seconds` 1..=60 ([architecture 08](08-model-protocol-and-providers.md), [architecture 09](09-configuration-security-and-observability.md)). |
 
 ### Still open
@@ -115,7 +115,7 @@ truth; the second is still open and stays owned by the named slice.
 | Topic | Decision required |
 | --- | --- |
 | Event retention | Retention, compaction, and replay thresholds for event logs and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 9. |
-| CCR backend | Initial memory/SQLite retention strategy, limits, and expiry behavior ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). Milestone 8 owns the delivered backend. |
+| CCR backend | Initial memory/SQLite retention strategy, limits, and expiry behavior (architecture 06, "Open decisions"). Milestone 8 owns the delivered backend. |
 
 ## Deferred decisions
 
@@ -314,5 +314,5 @@ effect. Skill bodies, memory records, tool output, repository content, and
 provider output never enter the instruction channel. The projection is frozen
 at admission, inherited verbatim by forks and handoffs, and never re-derived
 from current state. Detailed rules are owned by
-[architecture 30](30-instruction-sources-and-system-context.md) and
+architecture 30 and
 [decision 0043](../decisions/0043-instruction-sources-and-system-context.md).

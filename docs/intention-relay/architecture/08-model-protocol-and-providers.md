@@ -34,7 +34,7 @@ Core DTO families:
 | `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
 
 The optional system context is the effective instruction projection of
-[architecture 30](30-instruction-sources-and-system-context.md)
+architecture 30
 ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)): the
 daemon assembles it once per admitted run from declared instruction sources, it
 is bounded and credential-free, and the current drivers keep translating it
@@ -216,8 +216,8 @@ authority, tools, continuation, or current-state fallback. Model names never
 select a provider kind or driver.
 
 Future `responses`, parse-time `openai` aliasing, profiles, catalog lifecycle,
-reasoning, and driver compatibility are owned by [Provider evolution, profiles,
-and reasoning](22-provider-evolution-profiles-and-reasoning.md). It preserves M4
+reasoning, and driver compatibility are owned by Provider evolution, profiles,
+and reasoning. It preserves M4
 exactly: future `responses` is distinct from Generic Chat, `openai` is only a
 future parse-time alias, and model names never route provider behavior.
 
@@ -226,8 +226,8 @@ future parse-time alias, and model names never route provider behavior.
 Future provider selection is a credential-free nested execution-meaning
 selection. Model names never infer provider kind, driver, endpoint, capability
 or execution kind. Driver-contract compatibility and the distinction between
-stored semantic compatibility and live availability are owned by [Run execution
-meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+stored semantic compatibility and live availability are owned by Run execution
+meaning and historical compatibility.
 This does not introduce profiles, `responses`, aliases or a new M4 driver;
 architecture 22 defines only their future documentation contract.
 
@@ -245,7 +245,7 @@ driver may support `model_tool_loop_v1` only when it can translate a frozen
 local typed tool selection and complete `ModelToolExchangeDto` history into a
 fresh provider request. It never invokes a local primitive or reuses opaque
 remote continuation state. Registry and tool-loop semantics are owned by
-[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md);
+Tool registry and direct Mandate tool loop;
 provider evolution remains separate.
 
 ## Post-M4 session branching consequence

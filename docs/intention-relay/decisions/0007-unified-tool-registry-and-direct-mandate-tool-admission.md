@@ -39,7 +39,7 @@ SQL, protocol implementation, crates, or runtime activation.
 
 ## Primary owner and evidence
 
-[Tool Registry and Direct Mandate Tool Loop](../architecture/15-tool-registry-and-mandate-tool-loop.md)
+Tool Registry and Direct Mandate Tool Loop
 owns detailed rules. A later implementation requires registry/selection golden
 vectors, no-bypass and no-current-state-reconstruction fixtures, direct-admission
 and workspace matrices, transaction/effect/recovery fixtures, negotiated replay,

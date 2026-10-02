@@ -45,7 +45,7 @@ context, session branching, activity/UI, and MCP administration remain separate.
 
 ## Primary owner and evidence
 
-[Mandate Gateway/RLM Bridge](../architecture/19-mandate-gateway-rlm-bridge.md)
+Mandate Gateway/RLM Bridge
 owns detailed behavior. A later implementation requires canonical, authority,
 idempotency, fault/recovery, protocol, compatibility, redaction, cross-platform,
 and outcome evidence through the standard quality gate.

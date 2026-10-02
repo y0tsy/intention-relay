@@ -126,10 +126,6 @@ activating specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/17-mandate-child-graph-and-delegated-verifier-authority.md`](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md)
-- [`architecture/18-mandate-mcp-capability-lifecycle.md`](../architecture/18-mandate-mcp-capability-lifecycle.md)
-- [`architecture/19-mandate-gateway-rlm-bridge.md`](../architecture/19-mandate-gateway-rlm-bridge.md)
-- [`architecture/20-ipython-kernel-lifecycle.md`](../architecture/20-ipython-kernel-lifecycle.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

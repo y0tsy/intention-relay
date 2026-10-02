@@ -154,14 +154,6 @@ mode and post-disconnect work must never resume old external work.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/18-mandate-mcp-capability-lifecycle.md`](../architecture/18-mandate-mcp-capability-lifecycle.md)
-- [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
-- [`architecture/23-non-destructive-session-branching-and-regeneration.md`](../architecture/23-non-destructive-session-branching-and-regeneration.md)
-- [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
-- [`architecture/25-configuration-provider-control-plane.md`](../architecture/25-configuration-provider-control-plane.md)
-- [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md)
-- [`architecture/28-goal-domain-and-verification.md`](../architecture/28-goal-domain-and-verification.md)
-- [`architecture/29-provider-session-and-profiles-protocol.md`](../architecture/29-provider-session-and-profiles-protocol.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

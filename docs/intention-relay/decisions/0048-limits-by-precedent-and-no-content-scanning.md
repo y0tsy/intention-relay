@@ -149,12 +149,10 @@ fake-secret tests or the CI documentation secret scan.
   [ADR 0035](0035-m5plus-complete-foundation-activation.md) are amended as
   recorded above; [ADR 0036](0036-m5plus-slice1-contract-ledger.md) is
   superseded.
-- [Architecture 27](../architecture/27-programmatic-caller-policy-and-admission.md)
   owns the programmatic-caller policy that loses the limit, corridor, and
   period clauses.
-- [Architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md)
   owns the tool-loop contracts that lose the numeric group and output bounds.
-- [Architecture 24](../architecture/24-activity-ui-and-adapters.md) owns the
+- Architecture 24 owns the
   activity surface whose numeric classification is superseded.
 - [Architecture 04](../architecture/04-sessions-runs-events-and-storage.md)
   owns the live M3 queue that stays unchanged, and

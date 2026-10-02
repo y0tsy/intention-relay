@@ -383,8 +383,8 @@ digest/identity layer were removed by [ADR 0046](../decisions/0046-typed-serde-j
 no golden bytes, digests, kind/tag mismatch fixtures, or decoder retention
 schedule remain. Historical-compatibility work that survives the removal (M3/M4
 byte preservation, no current-state reconstruction, and no resume after an
-incompatible record) is owned by [Run execution meaning and historical
-compatibility](14-run-execution-meaning-and-historical-compatibility.md) and
+incompatible record) is owned by Run execution meaning and historical
+compatibility and
 carries typed serde JSON evidence.
 
 ## Tool-registry and Mandate-loop evidence
@@ -397,8 +397,8 @@ before-start/started/known/unknown recovery, typed protocol replay, historical M
 tool-call compatibility, no-current-state reconstruction, and fake-secret
 absence. These
 are future obligations, not claims that a runtime or test target exists; the
-detailed portfolio is owned by [Tool registry and direct Mandate tool
-loop](15-tool-registry-and-mandate-tool-loop.md).
+detailed portfolio is owned by Tool registry and direct Mandate tool
+loop.
 
 ## Mandate scheduler and readiness evidence
 
@@ -408,8 +408,8 @@ reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
 races; transaction fault injection; recovery-before-scheduling; no-resume;
 ordinary queue and M4 preservation; no-current-state reconstruction; typed
 protocol replay; and fake-secret/resource absence. These are future obligations, not
-current tests or targets. The detailed portfolio is owned by [Mandate scheduler
-and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+current tests or targets. The detailed portfolio is owned by Mandate scheduler
+and readiness-driven admission.
 
 ## Mandate child graph and verifier evidence
 
@@ -421,8 +421,8 @@ matrices; authority revision/revocation/target-set/stale-baseline/operation
 fixtures; user-precedence races; atomic fault injection; recovery/no-resume;
 typed protocol replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
-The detailed portfolio is owned by [Mandate child graph and delegated verifier
-authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
+The detailed portfolio is owned by Mandate child graph and delegated verifier
+authority.
 
 ## Mandate MCP capability evidence
 
@@ -433,8 +433,8 @@ freeze, schema-drift, and no-current-state reconstruction cases; transaction
 fault injection; HTTP/local-stdio cancellation/recovery/no-resume; private
 resource redaction; scheduler/child/verifier isolation; typed protocol replay; and
 M3/M4 plus retained bounded-MCP preservation. These are future obligations, not
-current tests or targets. The detailed portfolio is owned by [Mandate MCP
-capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
+current tests or targets. The detailed portfolio is owned by Mandate MCP
+capability lifecycle.
 
 ## Mandate Gateway/RLM bridge evidence
 
@@ -444,7 +444,7 @@ fault injection; cancellation/crash/late-result/no-resume matrices; child,
 verifier, and MCP isolation; typed protocol replay/resync and zero-effect reconnect;
 M3/M4 plus retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets.
-The detailed portfolio is owned by [Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md).
+The detailed portfolio is owned by Mandate Gateway/RLM bridge.
 
 ## Run-scoped IPython kernel evidence
 
@@ -455,8 +455,8 @@ cancellation/crash/late-message/no-resume matrices; bridge-only/no-bypass and
 stale-grant/task tests; child/verifier/MCP isolation; typed protocol replay/resync;
 historical M3/M4 and retained IPython/RLM preservation; and fake-secret/raw
 Python/Jupyter/resource absence. These are future obligations, not current tests
-or targets. The detailed portfolio is owned by [Run-scoped IPython kernel
-lifecycle](20-ipython-kernel-lifecycle.md).
+or targets. The detailed portfolio is owned by Run-scoped IPython kernel
+lifecycle.
 
 ## Goals, Skills, context, memory, and compaction evidence
 
@@ -467,7 +467,7 @@ no-current-state reconstruction; audience/redaction and non-authority outcomes;
 recovery/no-resume and replay/resync; child/verifier/MCP/bridge/kernel isolation;
 M3/M4 preservation; and fake-secret/raw-source/private-reference absence. These
 are future obligations, not current tests or targets. The detailed portfolio is
-owned by [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md).
+owned by Goals, Skills, context, memory, and compaction.
 
 ## Provider evolution, profiles, and reasoning evidence
 
@@ -478,7 +478,7 @@ outbound work; Responses `store: false`; normalized reasoning and context-owner
 selection; catalog activation/recovery fault injection; no-resume/retry matrices;
 typed protocol replay; redaction; and Linux/Windows outcomes. These are future
 obligations, not current tests or targets. The detailed portfolio is owned by
-[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
+Provider evolution, profiles, and reasoning.
 
 ## Session branching evidence
 

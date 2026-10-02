@@ -39,7 +39,7 @@ activation.
 
 ## Primary owner and evidence
 
-[Mandate scheduler and readiness-driven admission](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
+Mandate scheduler and readiness-driven admission
 owns detailed rules. A later implementation requires deterministic ordering,
 readiness/unavailability, conflict, fault-injection, recovery, compatibility,
 redaction, protocol, and end-to-end fresh-admission fixtures through the standard

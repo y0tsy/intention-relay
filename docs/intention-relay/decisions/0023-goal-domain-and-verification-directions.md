@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The Goal aggregate domain from
 `m4plus_concept.md` is adopted as the accepted future
-direction and owned by the new [Goal Domain and Verification](../architecture/28-goal-domain-and-verification.md)
+direction and owned by the new Goal Domain and Verification
 package:
 
 - Goal identity, scope, and tree (project/session scopes, obligatory children,
@@ -93,8 +93,6 @@ specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/21-goals-skills-context-memory-and-compaction.md`](../architecture/21-goals-skills-context-memory-and-compaction.md)
-- [`architecture/28-goal-domain-and-verification.md`](../architecture/28-goal-domain-and-verification.md) (new)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

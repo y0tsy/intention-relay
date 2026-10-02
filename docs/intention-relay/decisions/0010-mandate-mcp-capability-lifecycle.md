@@ -27,7 +27,7 @@ Dynamic run-local capability acquisition supersedes retained fixed-catalog/no-di
 
 ## Primary owner and evidence
 
-[Mandate MCP Capability Lifecycle](../architecture/18-mandate-mcp-capability-lifecycle.md) owns detailed behavior. A later implementation requires canonical/schema/idempotency/fault-injection/recovery/redaction/protocol/compatibility/outcome evidence through the standard quality gate.
+Mandate MCP Capability Lifecycle owns detailed behavior. A later implementation requires canonical/schema/idempotency/fault-injection/recovery/redaction/protocol/compatibility/outcome evidence through the standard quality gate.
 
 ## Provenance
 

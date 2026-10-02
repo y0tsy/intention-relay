@@ -332,7 +332,7 @@ For future Mandate work:
   explicit future reconciliation, not an automatic retry or next model step.
 
 The detailed Mandate lifecycle, trigger ordering, fresh admission, uncertainty,
-and recovery contract is owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md).
+and recovery contract is owned by Mandate domain and durable lifecycle.
 Scheduler semantics are owned by architecture 16; concrete timer/process
 topology, event variants, protocol delivery, and schema design remain later
 packages. Child graph and verifier authority semantics are owned by architecture
@@ -352,14 +352,14 @@ publish only after an independent scoped reread. A started effect without
 terminal proof follows the Mandate uncertainty transition; recovery never retries
 or resumes a tool action. This adds no current table, event, state, migration,
 or reinterpretation of M4 `ToolCallRecorded` denial. Exact semantics are owned
-by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
+by Tool registry and direct Mandate tool loop.
 
 ## Post-M4 execution-meaning storage consequence
 
 Future Mandate admission binds immutable canonical execution meaning in the same
 transaction as the new RunId and Mandate transition. The detailed envelope,
-canonical bytes, decoder outcomes and historical bridge law are owned by [Run
-execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+canonical bytes, decoder outcomes and historical bridge law are owned by Run
+execution meaning and historical compatibility.
 This does not add a table, event, migration or synthetic M3/M4 field.
 
 ## Post-M4 scheduler storage consequence
@@ -371,7 +371,7 @@ admission revalidates lifecycle, sequence, revision, reason, meaning, and
 readiness atomically; no scheduler action occurs in that transaction. Scheduler
 admission begins only after recovery, and pre-crash live readiness is never
 trusted. This adds no current table, event, migration, or ordinary queue change.
-See [Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md).
+See Mandate scheduler and readiness-driven admission.
 
 ## Post-M4 child/verifier storage consequence
 
@@ -382,8 +382,8 @@ authority and frozen target baseline with its applied or rejected result. These
 facts remain separate from Session sequence, Run cursor, M3 queue tickets, and
 M4 replay. Recovery rebuilds only supported graph projections and never resumes
 child/verifier external work. This adds no current table, event, migration, or
-historical reinterpretation. Detailed semantics are owned by [Mandate child
-graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md).
+historical reinterpretation. Detailed semantics are owned by Mandate child
+graph and delegated verifier authority.
 
 ## Post-M4 MCP storage consequence
 
@@ -395,7 +395,7 @@ uncertainty evidence. These records remain separate from Session sequence, Run
 cursor, ordinary queues, and M4 replay. Recovery never reconnects, reattaches,
 rediscoveries, retries, or resumes MCP work. This adds no current table, event,
 migration, or historical reinterpretation. Detailed semantics are owned by
-[Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md).
+Mandate MCP capability lifecycle.
 
 ## Post-M4 provider-evolution storage consequence
 
@@ -404,7 +404,7 @@ bindings are additive, credential-free records. They do not rewrite or
 retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events,
 queues, run cursors, facts, or replay bytes; recovery never resumes a prior
 provider request. Detailed semantics are owned by
-[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
+Provider evolution, profiles, and reasoning.
 
 ## Post-M4 session branching storage consequence
 
@@ -416,7 +416,7 @@ Sessions, not parallel runs in one Session.
 
 ## Post-M5 instruction-source storage consequence
 
-[Architecture 30](30-instruction-sources-and-system-context.md) owns the
+Architecture 30 owns the
 effective instruction projection ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
 A run records the profile revision identity, the workspace instruction digest,
 and the canonical projection digest as safe usage provenance; a fork, plan, or

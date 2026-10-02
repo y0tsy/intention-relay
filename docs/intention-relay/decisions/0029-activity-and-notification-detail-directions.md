@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The agent-communication, activity-observation, and user-notification detail
 from `m4plus_concept.md` is adopted and owned by
-[architecture 24](../architecture/24-activity-ui-and-adapters.md):
+architecture 24:
 
 - `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;
 - `AgentActivityPairDto`, `AgentMessageDto`, `AgentMessageReferenceDto` (six
@@ -119,7 +119,6 @@ must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

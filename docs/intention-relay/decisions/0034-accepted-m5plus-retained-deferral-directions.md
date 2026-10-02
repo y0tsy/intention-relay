@@ -143,9 +143,6 @@ authority.
 - [`architecture/03-daemon-transport-and-adapters.md`](../architecture/03-daemon-transport-and-adapters.md)
 - [`architecture/04-sessions-runs-events-and-storage.md`](../architecture/04-sessions-runs-events-and-storage.md)
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/16-mandate-scheduler-and-readiness-driven-admission.md`](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
-- [`architecture/20-ipython-kernel-lifecycle.md`](../architecture/20-ipython-kernel-lifecycle.md)
-- [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

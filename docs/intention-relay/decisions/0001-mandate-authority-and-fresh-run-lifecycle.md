@@ -19,7 +19,7 @@ child work, MCP operation, or external effect resumes after restart.
 ### Mandate DTO family and limit classification
 
 The conceptual durable Mandate family is adopted as future detail owned by
-[architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
+architecture 13:
 
 ```text
 MandateDto

@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The following directions are accepted as future product/architecture
 directions and are moved out of the "excluded" set of architectures 09 and 22
-into the new [Configuration and Provider Control Plane](../architecture/25-configuration-provider-control-plane.md)
+into the new Configuration and Provider Control Plane
 package:
 
 - controlled configuration live reload: applying a validated TOML change to a
@@ -98,8 +98,6 @@ central, and pass the fake-secret regression suite.
 
 - [`architecture/09-configuration-security-and-observability.md`](../architecture/09-configuration-security-and-observability.md)
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
-- [`architecture/25-configuration-provider-control-plane.md`](../architecture/25-configuration-provider-control-plane.md) (new)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

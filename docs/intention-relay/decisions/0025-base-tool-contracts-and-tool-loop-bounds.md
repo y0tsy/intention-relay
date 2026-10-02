@@ -18,7 +18,7 @@ the capability gate are superseded by
 
 The following detail from
 `m4plus_concept.md` is adopted and owned by
-[architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md):
+architecture 15:
 
 - the initial effect-profile flag mapping table (read/glob/grep/expand =
   `workspace_read`; write = `workspace_write`; edit = read+write; execute =
@@ -113,7 +113,6 @@ fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/15-tool-registry-and-mandate-tool-loop.md`](../architecture/15-tool-registry-and-mandate-tool-loop.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

@@ -27,7 +27,7 @@ reconcile the exact uncertainty to a later fresh Active path or Stopped state.
 ## Shared attempt-evidence DTO family
 
 The closed shared attempt-evidence family is adopted as future detail owned by
-[architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
+architecture 13:
 
 ```text
 ExternalAttemptPhaseDto

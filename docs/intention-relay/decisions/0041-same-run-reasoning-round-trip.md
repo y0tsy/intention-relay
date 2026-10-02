@@ -73,7 +73,7 @@ run. This record claims no date, commit, or run identifier of its own.
    pinned SDK keeps HTTP, SSE, TLS, and error mapping; no custom HTTP or SSE
    parser is introduced, no SDK type leaves the provider crate, and the adapter
    still owns its private wire types. This follows the authorizing clause in
-   [architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md):
+   architecture 22:
    "The current `async-openai` core Chat Completions adapter is not assumed
    sufficient for every descriptor; a future implementation must choose a
    pinned private SDK or an explicitly specified private typed decoder per

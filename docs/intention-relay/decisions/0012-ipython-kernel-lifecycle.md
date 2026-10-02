@@ -45,7 +45,7 @@ activity/UI, and MCP administration remain separate.
 
 ## Primary owner and evidence
 
-[Run-scoped IPython kernel lifecycle](../architecture/20-ipython-kernel-lifecycle.md)
+Run-scoped IPython kernel lifecycle
 owns detailed behavior. A later implementation requires canonical, lifecycle,
 checkpoint, authority, fault/recovery, protocol, compatibility, redaction,
 cross-platform, and outcome evidence through the standard quality gate.

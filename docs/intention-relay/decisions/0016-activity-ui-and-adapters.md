@@ -34,7 +34,7 @@ separate.
 
 ## Primary owner and evidence
 
-[Activity, UI, and adapters](../architecture/24-activity-ui-and-adapters.md)
+Activity, UI, and adapters
 owns detailed behavior. A later M6 implementation requires contract, transaction,
 replay, recovery, redaction, adapter-parity, cross-platform, and outcome evidence.
 

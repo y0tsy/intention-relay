@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The "Continue autonomously" claim from
 `m4plus_concept.md` is adopted as an accepted future
-direction and owned by [architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
+direction and owned by architecture 13:
 
 - **Continue autonomously** creates or activates a **Build-mode Mandate** by
   default for future Mandate work;
@@ -88,7 +88,6 @@ every activating specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/13-mandate-domain-and-durable-lifecycle.md`](../architecture/13-mandate-domain-and-durable-lifecycle.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

@@ -147,7 +147,7 @@ implementation authorization are outside this decision.
 
 ## Affected documents
 
-- [Architecture 20](../architecture/20-ipython-kernel-lifecycle.md) owns the
+- Architecture 20 owns the
   kernel-side selection reference, import surface, script-import evidence,
   checkpoint exclusion rule, and closed failure.
 - [ADR 0046](0046-typed-serde-json-contracts.md) removes the canonical digest
@@ -156,11 +156,9 @@ implementation authorization are outside this decision.
 - [Architecture 05](../architecture/05-tools-workspace-and-hooks.md) owns the
   project-local path convention and the ordinary tool rules that create,
   read, and run the modules.
-- [Architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md)
   owns Mandate-scoped `WorkspaceRoot` semantics, the frozen-descriptor rule
   that admits the existing tools unchanged, and the publication gate that
   carries the import evidence.
-- [Architecture 21](../architecture/21-goals-skills-context-memory-and-compaction.md)
   records the boundary that the library is not a Skill body, supplement, or
   package reference.
 - [Architecture 09](../architecture/09-configuration-security-and-observability.md)
@@ -196,7 +194,7 @@ coverage tiers, feature profiles, and architecture fixtures, then pass
 `m4plus_concept.md` research,
 [`docs/reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md`](../../reference/prime-agent-research/rlm-ipython-harness-integration-analysis.md)
 (persistent scratch state in the RLM/IPython harness analysis),
-[architecture 20](../architecture/20-ipython-kernel-lifecycle.md) checkpoint
+architecture 20 checkpoint
 exclusion of executable payload, and the user-requested direction recorded on
 2026-09-25 that an agent must be able to persist its reusable kernel scripts in
 the project rather than only namespace variables.

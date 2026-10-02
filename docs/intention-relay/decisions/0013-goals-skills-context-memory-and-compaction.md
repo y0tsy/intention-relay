@@ -47,7 +47,7 @@ storage/wire implementation remain separate.
 
 ## Primary owner and evidence
 
-[Goals, Skills, context, memory, and compaction](../architecture/21-goals-skills-context-memory-and-compaction.md)
+Goals, Skills, context, memory, and compaction
 owns detailed behavior. A later implementation requires canonical, authority,
 projection, memory, compaction, fault/recovery, protocol, compatibility,
 redaction, cross-platform, and outcome evidence through the standard quality

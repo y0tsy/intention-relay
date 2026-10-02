@@ -13,7 +13,7 @@ at the start of that milestone.
 
 The session-branching detail from
 `m4plus_concept.md` is adopted and owned by
-[architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md):
+architecture 23:
 
 - the `session_fork_v1` public DTO families (`ForkSessionCommandDto`,
   `ForkSessionResultDto`, `GetForkPreviewQueryDto`, `ForkPreviewDto`,
@@ -95,7 +95,6 @@ must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/23-non-destructive-session-branching-and-regeneration.md`](../architecture/23-non-destructive-session-branching-and-regeneration.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

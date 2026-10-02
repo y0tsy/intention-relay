@@ -31,15 +31,15 @@ remain accepted as documentation direction under their owning documents:
 
 - the configuration/provider control-plane cluster of
   [ADR 0020](0020-configuration-provider-control-plane-directions.md) owned by
-  [architecture 25](../architecture/25-configuration-provider-control-plane.md);
+  architecture 25;
 - the provider session-selection and profiles protocol of
   [ADR 0024](0024-provider-session-and-profiles-protocol-directions.md) owned by
-  [architecture 29](../architecture/29-provider-session-and-profiles-protocol.md);
+  architecture 29;
 - the provider reasoning and catalog detail of
   [ADR 0028](0028-provider-reasoning-and-catalog-detail-directions.md) and the
   accepted execution directions of
   [ADR 0033](0033-accepted-m5plus-execution-directions.md) owned by
-  [architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md).
+  architecture 22.
 
 Those directions are again documentation-only and can return only through a new
 activating specification. This record is that withdrawal, not a new activation.
@@ -276,9 +276,9 @@ closed milestones M0-M5.
   [09](../architecture/09-configuration-security-and-observability.md),
   [11](../architecture/11-implementation-roadmap.md),
   [12](../architecture/12-quality-gates-and-makefile.md),
-  [22](../architecture/22-provider-evolution-profiles-and-reasoning.md),
-  [25](../architecture/25-configuration-provider-control-plane.md),
-  [29](../architecture/29-provider-session-and-profiles-protocol.md), and the
+  22,
+  25,
+  29, and the
   [architecture README](../architecture/README.md) record the revert.
 - The reconciliation registers, the root
   [README](../../../README.md), and

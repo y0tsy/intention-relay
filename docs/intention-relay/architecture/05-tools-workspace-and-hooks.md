@@ -265,8 +265,8 @@ WorkspaceRoot is a required default base/CWD with safe observation, not a path
 containment authority, and compatible frozen active descriptors admit without
 ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
 recreate discretionary Mandate authorization. The fixed registry, descriptor
-revisions, direct admission, and loop details are owned by [Tool registry and
-direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
+revisions, direct admission, and loop details are owned by Tool registry and
+direct Mandate tool loop. This does
 not create a second registry or bypass path. Plan `execute` remains available
 under advisory focus guidance and is not a sandbox; ordinary Plan `write` and
 `edit` remain denied.

@@ -16,19 +16,19 @@ The following three items, named in the
 "deliberately deferred", are adopted as accepted future directions:
 
 - **Tree-level metadata** (concept2 line 7608), owned by
-  [architecture 24](../architecture/24-activity-ui-and-adapters.md): a future
+  architecture 24: a future
   bounded, credential-free metadata surface on activity trees, distinct from
   journal records and notification state, that never becomes activity,
   authority, or a second sequence;
 - **Semantic content inspection** (concept2 line 7303), owned by
-  [architecture 22](../architecture/22-provider-evolution-profiles-and-reasoning.md):
+  architecture 22:
   a future explicit, code-owned content-inspection policy for reasoning and
   provider content that never substitutes for central redaction, never
   rewrites stored facts, and remains non-authorizing; and
 - **Per-call cancellation and owner-specific semantics beyond the selected
   direct-pair communication** (concept2 line 7304), owned by
-  [architecture 19](../architecture/19-mandate-gateway-rlm-bridge.md) and
-  [architecture 24](../architecture/24-activity-ui-and-adapters.md): a future
+  architecture 19 and
+  architecture 24: a future
   owner-specific cancellation contract beyond the first-scope
   `StopRunCommandDto`/direct-pair boundary.
 
@@ -84,9 +84,6 @@ suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/19-mandate-gateway-rlm-bridge.md`](../architecture/19-mandate-gateway-rlm-bridge.md)
-- [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
-- [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

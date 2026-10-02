@@ -12,7 +12,7 @@ at the start of that milestone.
 
 The continual-harness model from
 `m4plus_concept.md` is adopted as the accepted future
-direction and owned by the new [Continual Harness](../architecture/26-continual-harness.md)
+direction and owned by the new Continual Harness
 package:
 
 - user-managed durable rules at project or ordinary-user-session scope, each
@@ -97,7 +97,6 @@ specification must pass the fake-secret regression suite.
 ## Affected documents
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
-- [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md) (new)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence
