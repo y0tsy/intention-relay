@@ -17,7 +17,7 @@ the capability gate are superseded by
 ## Decision
 
 The following detail from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
+`m4plus_concept.md` is adopted and owned by
 [architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md):
 
 - the initial effect-profile flag mapping table (read/glob/grep/expand =

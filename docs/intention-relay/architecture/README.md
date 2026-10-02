@@ -6,14 +6,15 @@
 
 ## Purpose and precedence
 
-The active product baseline is the legacy-derived material in [`../legacy-baseline/`](../legacy-baseline/00-manifest.md). It describes proven user-facing behavior and known limitations. This directory defines the new implementation architecture that will realize selected product decisions.
+This directory defines the implementation architecture for Intention Relay. The
+legacy-derived baseline the rewrite started from is retired and remains in git
+history.
 
 When the documents differ:
 
 1. explicit future product decisions override legacy implementation details;
-2. the selected product baseline remains the source of user-facing capability evidence until a new product decision changes it;
-3. the broader preserved audit under [`../../reference/`](../../reference/README.md) is research material only;
-4. this architecture must not inherit a legacy design merely because it existed.
+2. research material under [`../../reference/`](../../reference/README.md) is preserved reference only;
+3. this architecture must not inherit a legacy design merely because it existed.
 
 ## Architectural summary
 
@@ -101,7 +102,6 @@ flowchart TD
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
 5. [Architecture decision records](../decisions/README.md)
-6. [M4 execution charter](../m4.md)
 7. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
 8. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
 9. [M2 closure evidence](../closeout/m2-closure-evidence.md)

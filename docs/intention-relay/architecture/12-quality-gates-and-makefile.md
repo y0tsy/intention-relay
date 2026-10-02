@@ -274,7 +274,7 @@ Every implementation slice must:
 7. record every policy exception, test exclusion, and known risk explicitly.
 
 During the completed M4 delivery, the controller-owned
-[`M4 execution charter`](../m4.md) additionally required package-level
+`M4 execution charter` additionally required package-level
 code-first batching: agents wrote the complete bounded fixture portfolio, then
 finished the bounded production change before entering a grouped Makefile
 validation/repair phase. This historical process did not replace steps 5–7 or
@@ -336,7 +336,7 @@ the credential.
 
 ### M4 controller charter and closure record
 
-[`docs/intention-relay/m4.md`](../m4.md) records the controller-owned M4
+`docs/intention-relay/m4.md` records the controller-owned M4
 execution charter. It is read-only historical context and does not override
 this quality policy or authorize worktrees, lane execution, or any Makefile
 change. M4 is closed at the immutable baseline documented in [M4 Closure

@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by the
+`m4plus_concept.md` is adopted and owned by the
 respective authoritative packages:
 
 - **Architecture 26 (continual harness)**: the 15 closed `harness_*` safe

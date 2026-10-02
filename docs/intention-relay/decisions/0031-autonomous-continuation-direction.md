@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The "Continue autonomously" claim from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as an accepted future
+`m4plus_concept.md` is adopted as an accepted future
 direction and owned by [architecture 13](../architecture/13-mandate-domain-and-durable-lifecycle.md):
 
 - **Continue autonomously** creates or activates a **Build-mode Mandate** by

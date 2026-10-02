@@ -3,7 +3,6 @@
 ## Authority and context
 
 - [`docs/intention-relay/`](docs/intention-relay/README.md) is the authoritative source for product, architecture, quality, and roadmap context.
-- [`docs/intention-relay/m4.md`](docs/intention-relay/m4.md) is the closed M4 charter and a read-only historical record: M4 is complete, and the charter authorizes no new M4 work, auxiliary worktree, or sub-agent. Read it when a task touches M4-era decisions or contracts, and every architecture source it names when that context applies. It does not override this file or the architecture; do not edit, stage, rename, move, delete, or amend it, and report a needed charter change to the controller.
 - Before work that affects milestones, phases, architecture, crate boundaries, quality policy, or workflow behavior, read the relevant documents in [`docs/intention-relay/architecture/`](docs/intention-relay/architecture/README.md) completely enough to understand the applicable context.
 - In particular, consult the [quality-gate policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md), [TDD/TTD policy](docs/intention-relay/architecture/10-test-driven-delivery-and-verification.md), and [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md) when they apply.
 

@@ -56,7 +56,7 @@ For each implementation slice:
 7. record any deliberately deferred behavior, lint/coverage/dependency exception, or known risk as an explicit open decision, never by omitted test coverage.
 
 The closed M4 delivery followed the controller-owned
-[`M4 execution charter`](../m4.md): each bounded lane established its complete
+`M4 execution charter`: each bounded lane established its complete
 fixture portfolio before production behavior and passed the standard `make
 quick` / `make verify` acceptance rule at its integration barrier. This is
 historical evidence, not authorization for further M4 work. The closure

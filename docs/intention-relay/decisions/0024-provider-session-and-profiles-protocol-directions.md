@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The provider session-selection and profiles protocol layer from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
+`m4plus_concept.md` is adopted as the accepted future
 direction and owned by the new [Provider Session Selection and Profiles Protocol](../architecture/29-provider-session-and-profiles-protocol.md)
 package:
 

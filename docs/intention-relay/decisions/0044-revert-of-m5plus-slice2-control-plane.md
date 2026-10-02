@@ -282,7 +282,7 @@ closed milestones M0-M5.
   [architecture README](../architecture/README.md) record the revert.
 - The reconciliation registers, the root
   [README](../../../README.md), and
-  [`m4plus_concept.md`](../m4plus_concept.md) record the reverted state.
+  `m4plus_concept.md` record the reverted state.
 
 ## Evidence
 
@@ -314,7 +314,7 @@ The revert is accepted only together with:
 - [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md): the
   single-version and legacy-removal program whose surviving waves define the
   post-revert baseline.
-- [`m4plus_concept.md`](../m4plus_concept.md): research provenance only; its
+- `m4plus_concept.md`: research provenance only; its
   single Slice 2 sentence was updated to past tense with a pointer to this
   record, and its research content is otherwise untouched, as the roadmap
   requires.

@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The agent-communication, activity-observation, and user-notification detail
-from [`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
+from `m4plus_concept.md` is adopted and owned by
 [architecture 24](../architecture/24-activity-ui-and-adapters.md):
 
 - `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;

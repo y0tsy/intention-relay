@@ -17,7 +17,7 @@ and admission direction stands, bound to Milestone 5+ as before.
 ## Decision
 
 The programmatic-caller policy and admission model from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
+`m4plus_concept.md` is adopted as the accepted future
 direction and owned by the new [Programmatic Caller Policy and Admission](../architecture/27-programmatic-caller-policy-and-admission.md)
 package:
 

@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following three items, named in the
-[`m4plus_concept.md`](../m4plus_concept.md) backlog as "still to decide" or
+`m4plus_concept.md` backlog as "still to decide" or
 "deliberately deferred", are adopted as accepted future directions:
 
 - **Tree-level metadata** (concept2 line 7608), owned by

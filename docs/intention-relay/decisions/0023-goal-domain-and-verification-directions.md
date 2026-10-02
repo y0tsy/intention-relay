@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The Goal aggregate domain from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
+`m4plus_concept.md` is adopted as the accepted future
 direction and owned by the new [Goal Domain and Verification](../architecture/28-goal-domain-and-verification.md)
 package:
 

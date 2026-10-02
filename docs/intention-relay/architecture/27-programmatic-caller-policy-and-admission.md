@@ -7,7 +7,7 @@
 - Normative owner: architecture 27.
 - Decision record: [`0022`](../decisions/0022-programmatic-caller-policy-directions.md), amended by [`0048`](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) (corridors, reservations, and calendar limits removed).
 - Reconciliation topics: `PCP-001..008`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: documentation-approved; implementation-authorized work requires a later activating specification under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
 
 **Approved future architecture, documentation-only.** This document is the sole

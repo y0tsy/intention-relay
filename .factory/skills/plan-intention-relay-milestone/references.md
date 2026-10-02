@@ -7,8 +7,7 @@ Read the current source files named below. This map helps select documents; it d
 1. [`AGENTS.md`](../../../AGENTS.md) defines repository operating instructions.
 2. [`docs/intention-relay/architecture/`](../../../docs/intention-relay/architecture/README.md) defines the approved target architecture and delivery constraints.
 3. Explicit future product decisions override legacy implementation details.
-4. [`docs/intention-relay/legacy-baseline/`](../../../docs/intention-relay/legacy-baseline/00-manifest.md) provides user-visible capability evidence until explicitly superseded.
-5. Preserved broader audit material under `docs/reference/` is research only and cannot override selected baseline or architecture.
+4. Preserved research material under `docs/reference/` is non-authoritative background only.
 
 ## Common sources for every milestone
 

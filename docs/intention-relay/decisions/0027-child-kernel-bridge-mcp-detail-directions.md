@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The following detail from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by the
+`m4plus_concept.md` is adopted and owned by the
 respective authoritative packages:
 
 - **Architecture 17 (child/verifier)**: `ParentSubAgentCommandDto`,

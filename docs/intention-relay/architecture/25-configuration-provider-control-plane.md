@@ -8,7 +8,7 @@
 - Decision record: [`0020`](../decisions/0020-configuration-provider-control-plane-directions.md).
 - Detail decision: [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (raw-TOML editing and configuration editing).
 - Reconciliation topics: `CFG-001..010`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: the M5+ Slice 2 activation ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md); the cluster is again an accepted direction awaiting a new activating specification.
 
 **Reverted by ADR 0044; the Slice 2 activation (ADR 0037) is withdrawn.** This
@@ -25,7 +25,7 @@ pricing engine, profile picker/editor presentation, or production
 configuration behavior.
 
 The authoritative package review of 2026-08-30 confirmed that the
-[`m4plus_concept.md`](../m4plus_concept.md) research directions are otherwise
+`m4plus_concept.md` research directions are otherwise
 covered by architectures 13--24 and decisions 0001--0019; this package closes
 the only identified gap by adopting this cluster as accepted future
 directions. It applies to future fresh runs only. M3/M4 startup-only TOML

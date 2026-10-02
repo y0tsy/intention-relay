@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The session-branching detail from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
+`m4plus_concept.md` is adopted and owned by
 [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md):
 
 - the `session_fork_v1` public DTO families (`ForkSessionCommandDto`,

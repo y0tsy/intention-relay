@@ -21,7 +21,7 @@ directions otherwise stand, non-authorizing as before.
 ## Decision
 
 The following items, named in the
-[`m4plus_concept.md`](../m4plus_concept.md) backlog as deferred or excluded,
+`m4plus_concept.md` backlog as deferred or excluded,
 are adopted as accepted future directions for execution in Milestone 5+:
 
 **Configuration and provider control plane (owner: architecture 25):**
