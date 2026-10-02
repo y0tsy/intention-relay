@@ -19,7 +19,7 @@ DEFAULT_POLICY = ROOT / "quality" / "tools.toml"
 # and tools its phase actually uses, while local runs (no scope) still
 # validate the complete pinned set. The union of all scopes equals the
 # unscoped policy, so no pinned tool or version escapes validation.
-SCOPES = ("all", "lint-arch", "test", "coverage", "selftest", "deps")
+SCOPES = ("all", "lint-arch", "test", "coverage", "deps")
 
 
 def scope_toolchains(scope: str, policy: dict[str, object]) -> list[str]:
@@ -31,7 +31,6 @@ def scope_toolchains(scope: str, policy: dict[str, object]) -> list[str]:
         "lint-arch": [stable],
         "test": [stable],
         "coverage": [nightly],
-        "selftest": [stable],
         "deps": [stable, nightly],
     }[scope]
 
@@ -48,7 +47,6 @@ def scope_components(scope: str, policy: dict[str, object]) -> dict[str, list[st
         "lint-arch": {stable: ["rustfmt", "clippy"]},
         "test": {},
         "coverage": {nightly: ["llvm-tools-preview"]},
-        "selftest": {stable: ["rustfmt", "clippy"]},
         "deps": {},
     }[scope]
 
@@ -61,7 +59,6 @@ def scope_tools(scope: str, policy: dict[str, object]) -> list[dict[str, object]
         "lint-arch": set(),
         "test": {"cargo-nextest"},
         "coverage": {"cargo-nextest", "cargo-llvm-cov"},
-        "selftest": {"cargo-machete", "cargo-outdated", "cargo-about"},
         "deps": {
             "cargo-deny",
             "cargo-audit",
