@@ -1,7 +1,5 @@
 # Intention Relay Architecture Plan
 
-## Status
-
 **Planning reference, approved direction.** This directory defines the target architecture and delivery constraints for Intention Relay. It is an implementation plan, not application code and not a migration plan for Antibusy.
 
 ## Purpose and precedence
@@ -159,12 +157,28 @@ v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in
 
 ## Post-M4 authority foundation
 
-The closed M4 baseline remains authoritative for implemented behavior. The
-post-M4 direction is recorded in the
-[accepted decision records](../decisions/README.md). Those records do not
-implement or silently supersede v1 behavior: they establish the authority,
-compatibility, ownership, and dependency boundary that later authoritative
-packages must satisfy.
+The closed M4 baseline remains authoritative for implemented behavior. The post-M4 direction is recorded in the [accepted decision records](../decisions/README.md); those records establish the authority, compatibility, ownership, and dependency boundary that later authoritative packages must satisfy, and the [implementation roadmap](11-implementation-roadmap.md) owns activation order and status.
+
+### Owner documents
+
+- [13 Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md): future Mandate lifecycle and admission; it does not amend M4 or ordinary v1 behavior.
+- [14 Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md): the historical compatibility semantics that remain after the binary canonical codec and digest layer were deleted by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
+- [15 Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md): future fixed registry identity, frozen tool selection, Mandate direct admission and WorkspaceRoot semantics, tool-loop facts, and tool-effect recovery.
+- [16 Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md): future durable candidate reevaluation, readiness/capacity evidence, scheduler handoff, and recovery admission gating; [architecture 13](13-mandate-domain-and-durable-lifecycle.md) keeps Mandate lifecycle, reason validity/order, and atomic fresh admission.
+- [17 Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md): future immutable child edges, direct-parent controls, graph terminalization, and target-scoped verifier authority.
+- [18 Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md): future typed MCP source acquisition, discovery normalization, run-local capability selections, invocation, disposal, and MCP recovery.
+- [19 Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md): future bridge attachment, ephemeral grants, operation correlation, safe replay, cancellation propagation, and bridge recovery; typed ingress to the one capability path.
+- [20 Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md): future private kernel epochs, cells, namespace checkpoints, safe projections, and kernel recovery, plus the kernel-side import surface and script-import evidence of the project script library (`.ir/scripts`, [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the library's path convention and tools stay with architectures 05 and 15.
+- [21 Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md): future non-authorizing Goal scope/evidence, Skill disclosure, context manifests/projections, typed memory, and immutable compaction; project Goals bind to sessions only through explicit applicability links.
+- [22 Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md): future provider kinds, profiles/catalogs, immutable provider and capability selections, driver compatibility, and normalized reasoning.
+- [23 Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md): future ordinary Session lineage, frozen fork context, regeneration, and bounded lineage projections.
+- [24 Activity, UI, and adapters](24-activity-ui-and-adapters.md): future activity trees, safe projections, direct-pair messages, notifications, acknowledgement projections, and shared-client adapter behavior.
+- [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5 directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the profile UI/control plane ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)); the Slice 2 activation was reverted and re-introduction requires a new activating specification.
+- [26 Continual harness](26-continual-harness.md): the accepted post-M5 continual-harness model — durable user-managed rules, trigger capture, schedule/time semantics, dossiers, verified checkpoints, read-and-delegate execution classes, and harness recovery ([ADR 0021](../decisions/0021-continual-harness-directions.md)); activated under Milestone 5+.
+- [27 Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md): the accepted post-M5 programmatic-caller policy — root origins, durable provenance, policy scope/narrowing, admission decisions, confirmation, lifecycle, and run-selection compatibility ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md)); activated under Milestone 5+.
+- [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain — Goal identity/scope/tree, lifecycle/readiness/user decision, leading-goal run selection, delegated Verification Mandates, verification gates, working memory/roles/templates, model proposals, and the conversation-compaction working form ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)); Goals remain acceptance/evidence records, not the work-authorization plane.
+- [29 Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md): the accepted post-M5 provider session-selection layer — session defaults, per-turn/fork overrides, profile-keyed usage, the provider profiles protocol, and pending-removal/degraded recovery ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)); the Slice 2 activation was reverted and re-introduction requires a new activating specification.
+- [30 Instruction sources and system context](30-instruction-sources-and-system-context.md): the instruction channel of a model request — closed instruction source kinds and scopes, the deployment profile, workspace `AGENTS.md` project instructions read through the `WorkspaceRoot` anchor, the `Mode` and `Vfr` contributions of architectures 07 and 06, deterministic assembly, the immutable effective instruction projection with its typed identity, closed failures, and safe observability ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)); activated under Milestone 5+ as the fifth slice.
 
 ### Foundation terms
 
@@ -187,10 +201,7 @@ boundaries.
 
 ### Cross-domain identity and sequencing invariants
 
-The following table is normative at the role level. Architecture 14 remains the
-owner of historical compatibility semantics; owner documents below define only
-their domain-specific semantic payloads, and every new family is typed serde
-JSON (ADR 0046).
+The following table is normative at the role level. [Architecture 14](14-run-execution-meaning-and-historical-compatibility.md) remains the owner of historical compatibility semantics; owner documents define only their domain-specific semantic payloads, and every new family is typed serde JSON ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)).
 
 | Value | Owner | Scope | Representation/ordering | Reconstruction rule |
 | --- | --- | --- | --- | --- |
@@ -216,188 +227,8 @@ Sequences and cursors are independent authorities and are never interchangeable:
 | notification cursor | architecture 24 | local-user observation | notification facts or acknowledgements |
 | scheduler observation order | architecture 16 | live readiness evidence | semantic identity or admission order |
 
-Semantic/frozen metadata includes identities, revisions,
-selection references, and baselines. Operational/live metadata includes
-readiness, capacity, processes, handles, endpoints, current catalogs, wakeups,
-grants, and publication state. Operational data may defer or reject fresh work,
-but can never repair, reroute, reinterpret, or replace frozen semantic data.
-
-
-### Mandate lifecycle owner
-
-[Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
-is the sole detailed authority for future Mandate lifecycle and admission. It
-does not amend M4 or current ordinary v1 behavior.
-
-### Execution-meaning owner
-
-[Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
-owns the historical compatibility semantics that remain after the binary
-canonical codec and digest layer were deleted by ADR 0046. It does not amend
-M3/M4 ordinary behavior or activate a protocol/runtime implementation.
-
-### Tool registry and loop owner
-
-[Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md)
-is the sole detailed authority for future fixed registry identity, frozen tool
-selection, Mandate direct admission, Mandate WorkspaceRoot semantics, tool-loop
-facts, and tool-effect recovery. It preserves ordinary M3/M4 tool behavior and
-does not activate a registry, protocol, schema, or runtime implementation.
-
-### Scheduler owner
-
-[Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md)
-is the sole detailed authority for future durable candidate reevaluation,
-readiness/capacity evidence, scheduler handoff, and recovery admission gating.
-Architecture 13 retains Mandate lifecycle, reason validity/order, and atomic
-fresh admission. This does not activate timer topology, a scheduler crate, or a
-protocol implementation.
-
-### Child graph and verifier owner
-
-[Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md)
-is the sole detailed authority for future immutable child edges, direct-parent
-controls, graph terminalization, and separately issued target-scoped verifier
-authority. It preserves M3/M4 and retained RLM history and does not activate an
-executor, protocol, schema, or runtime implementation.
-
-### Mandate MCP capability owner
-
-[Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md) is
-the sole detailed authority for future typed MCP source acquisition, discovery
-normalization, immutable run-local capability selections, invocation, disposal,
-and MCP recovery. It preserves the fixed `mcp` slot and M3/M4 behavior and does
-not activate direct administration, protocol, schema, crate, or runtime work.
-
-### Mandate Gateway/RLM bridge owner
-
-[Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md) is the sole
-detailed authority for future bridge attachment, ephemeral grants, operation
-correlation, safe bridge-visible replay, cancellation propagation, and bridge
-recovery. It is typed ingress to the one capability path, not a second registry,
-lifecycle authority, persistence authority, sandbox, or privilege boundary.
-
-### Run-scoped IPython kernel owner
-
-[Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md) is the
-sole detailed authority for future private kernel epochs, cells, namespace
-checkpoints, safe projections, and kernel recovery, and for the kernel-side
-import surface and script-import evidence of the project script library
-(`.ir/scripts`, [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md));
-the library's path convention and tools stay with architectures 05 and 15. It
-consumes the Gateway/RLM bridge and the one capability path; it is not a second
-runtime, registry, lifecycle authority, sandbox, or privilege boundary.
-
-### Goals, Skills, context, memory, and compaction owner
-
-[Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
-is the sole detailed authority for future non-authorizing Goal scope/evidence,
-Skill disclosure, context manifests/projections, typed memory, and immutable
-compaction. It preserves M3/M4 history, binds project Goals to sessions only
-through explicit applicability links, and cannot become lifecycle, scheduler,
-tool, child, verifier, MCP, bridge, kernel, provider, or reconciliation
-authority.
-
-### Provider evolution owner
-
-[Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
-is the sole detailed authority for future provider kinds, profiles/catalogs,
-immutable provider and capability selections, driver compatibility, and normalized
-reasoning. It preserves M4 provider kinds and behavior, is non-authorizing, and
-cannot infer, reroute, or reconstruct a provider selection from mutable state.
-
-### Session branching owner
-
-[Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-is the sole detailed authority for future ordinary Session lineage, frozen fork
-context, regeneration, and bounded lineage projections. It preserves M3/M4
-history and remains distinct from Mandate child graphs, lifecycle authority,
-provider selections, and activity/UI implementation.
-
-### Activity, UI, and adapters owner
-
-[Activity, UI, and adapters](24-activity-ui-and-adapters.md) is the sole
-detailed authority for future activity trees, safe projections, direct-pair
-messages, notifications, acknowledgement projections, and shared-client adapter
-behavior. It preserves historical Session/Run contracts and cannot become an
-authority or a second transport path.
-
-### Configuration and provider control-plane owner
-
-[Configuration and provider control plane](25-configuration-provider-control-plane.md)
-is the sole detailed authority for the accepted post-M5 configuration/provider
-control-plane directions: controlled live reload, credential rotation, provider
-health checks, discovery, pricing policy, and the profile UI/control plane,
-adopted by [ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
-The M5+ Slice 2 activation of those directions
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by
-[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so they
-are again documentation-only directions awaiting a new activating specification
-under [Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment).
-The document preserves M3/M4 startup-only configuration and cannot become a
-second authority, transport, registry, scheduler, or sandbox.
-
-### Continual-harness owner
-
-[Continual harness](26-continual-harness.md) is the sole detailed authority for
-the accepted post-M5 continual-harness model: user-managed durable rules,
-trigger capture, schedule/time semantics, dossiers, verified checkpoints,
-read-and-delegate execution classes, and harness recovery, adopted by
-[ADR 0021](../decisions/0021-continual-harness-directions.md) and activated
-under Milestone 5+. It preserves M3/M4 queue/session/run/recovery behavior and
-cannot become a second runtime, scheduler, registry, or sandbox.
-
-### Programmatic-caller policy owner
-
-[Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
-is the sole detailed authority for the accepted post-M5 programmatic-caller
-policy: root origins, durable provenance, policy scope/narrowing, admission
-decisions, confirmation, lifecycle, and run-selection compatibility, adopted by
-[ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md) and
-activated under Milestone 5+. It is logical product control, not an OS security
-boundary, and cannot become a second authority, registry, scheduler, or
-sandbox.
-
-### Goal domain and verification owner
-
-[Goal domain and verification](28-goal-domain-and-verification.md) is the sole
-detailed authority for the accepted post-M5 Goal aggregate domain: Goal
-identity/scope/tree, lifecycle/readiness/user decision, leading-goal run
-selection, delegated Verification Mandates, verification gates, working memory/
-roles/templates, model proposals, and the conversation-compaction working form,
-adopted by [ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)
-and activated under Milestone 5+. Goals remain acceptance/evidence records, not
-the work-authorization plane, and cannot become lifecycle, scheduler, tool,
-child, verifier, MCP, bridge, kernel, context, branch, or reconciliation
-authority.
-
-### Provider session selection and profiles protocol owner
-
-[Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
-is the sole detailed authority for the accepted post-M5 provider
-session-selection layer: session defaults, per-turn/fork overrides,
-profile-keyed usage, the provider profiles protocol, and pending-removal/degraded
-recovery, adopted by
-[ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
-The M5+ Slice 2 activation
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by
-[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md), so the
-layer is again a documentation-only direction awaiting a new activating
-specification under Milestone 5+. It cannot become a second runtime, registry,
-scheduler, catalog, persistence authority, or sandbox.
-
-### Instruction sources and system context owner
-
-[Instruction sources and system context](30-instruction-sources-and-system-context.md)
-is the sole detailed authority for the accepted instruction channel of a model
-request: the closed instruction source kinds and scopes, the deployment
-profile, workspace project instructions, user-editable fragments, the `Mode`
-and `Vfr` contributions of architectures 07 and 06, deterministic assembly, the
-immutable effective instruction projection with its typed identity, closed
-failures, and safe observability (byte-level canonicalization is settled at
-activation under ADR 0046), adopted by
-[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) and
-activated under Milestone 5+ (fifth slice). Instruction text is advisory and
-cannot become tool, policy, admission, Mandate, child, verifier, MCP, bridge,
-kernel, provider, scheduler, or reconciliation authority, and no untrusted
-material may enter the instruction channel.
+Semantic/frozen metadata includes identities, revisions, selection references,
+and baselines. Operational/live metadata includes readiness, capacity,
+processes, handles, endpoints, current catalogs, wakeups, grants, and
+publication state. Operational data may defer or reject fresh work, but never
+repairs, reroutes, reinterprets, or replaces frozen semantic data.
