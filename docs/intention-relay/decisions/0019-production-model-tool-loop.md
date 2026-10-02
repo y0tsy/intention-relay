@@ -1,11 +1,8 @@
-# ADR 0019: Production Model-Tool Loop
+# 0019: Production Model-Tool Loop
 
 ## Status
 
-Accepted 2026-08-29. This decision records the production daemon behavior for
-executing provider-emitted tool calls through the real typed tool registry. It
-does not activate Mandate-specific execution meaning; that remains future
-architecture-15 scope.
+Accepted 2026-08-29.
 
 ## Decision
 
@@ -52,26 +49,10 @@ preserves the no-resume rule.
    durable cancelling commit.
 6. A started tool operation without terminal proof is never retried, resumed,
    or treated as rolled back.
-7. The provider exchange continues only with assistant-tool-call and
-   tool-role messages built from recorded calls and results.
-8. M3/M4 historical bytes and the closed M4 baseline remain unchanged; the
-   no-port denial path stays as the M4-compatible fallback.
-
-### Common durable-fact rules
-
-The following cross-direction durable-fact rules are adopted as future detail
-owned by [architecture 04](../architecture/04-sessions-runs-events-and-storage.md):
-
-- a new fact type does not create a new sequence merely for convenience; a
-  separate sequence is permitted only for an independent aggregate with
-  dedicated bounded queries and without replacing or filtering the ordinary
-  session event sequence;
-- a filesystem-dependent validation or hook must finish before the transition
-  transaction, and any stale result becomes a typed known pre-effect outcome
-  rather than an unrecorded second external check inside the transaction; and
-- catalog and lineage audit records are read through their own bounded queries
-  and do not enter the run publication gate merely because they are related to
-  the same user operation.
+7. The provider exchange continues only with assistant-tool-call and tool-role
+   messages built from recorded calls and results.
+8. The M3/M4 no-port denial path remains byte-identical; historical M4
+   `ToolCallRecorded` facts keep their recorded meaning.
 
 ## Failure semantics
 
@@ -82,13 +63,36 @@ owned by [architecture 04](../architecture/04-sessions-runs-events-and-storage.m
 - A provider failure after tool rounds is terminal; it never re-executes or
   replays recorded tool calls.
 
-## Compatibility and supersession
+## Common durable-fact rules
+
+The following cross-direction durable-fact rules are adopted as future detail
+owned by
+[architecture 04](../architecture/04-sessions-runs-events-and-storage.md):
+
+- a new fact type does not create a new sequence merely for convenience; a
+  separate sequence is permitted only for an independent aggregate with
+  dedicated bounded queries and without replacing or filtering the ordinary
+  session event sequence;
+- a filesystem-dependent validation or hook must finish before the transition
+  transaction, and any stale result becomes a typed known pre-effect outcome
+  rather than an unrecorded second external check inside the transaction; and
+- catalog and lineage audit records are read through their own bounded queries
+  and do not enter the run publication gate merely because they are related
+  to the same user operation.
+
+## Compatibility and non-goals
 
 This decision supersedes the M4 denial-only boundary for newly admitted
-ordinary runs. The closed M4 baseline, [M4 Closure Evidence](../closeout/m4-closure-evidence.md),
-and historical M4 `ToolCallRecorded` facts remain unchanged, and the no-port
-denial path continues to behave byte-identically to M4. Mandate-specific tool
-loop execution meaning remains future architecture-15 scope.
+ordinary runs. The closed M4 baseline,
+[M4 Closure Evidence](../closeout/m4-closure-evidence.md), and historical M4
+`ToolCallRecorded` facts remain unchanged, and the no-port denial path
+continues to behave byte-identically to M4. Mandate-specific tool-loop
+execution meaning remains future architecture-15 scope.
+
+This decision adds no OpenRouter or OpenAI Responses tool mapping, parallel
+tool execution, tool-failure-to-model continuation, or
+Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and Plan
+features remain outside it.
 
 ## Security and residual risk
 
@@ -105,26 +109,13 @@ This decision intentionally accepts:
 Durable facts and model-context payloads never contain credentials, absolute
 workspace roots, or OS error strings.
 
-## Affected documents
+## Evidence
 
-- `architecture/04-sessions-runs-events-and-storage.md`
-- `architecture/05-tools-workspace-and-hooks.md`
-- `architecture/08-model-protocol-and-providers.md`
-- `architecture/10-test-driven-delivery-and-verification.md`
-- `architecture/11-implementation-roadmap.md`
-- `closeout/m5-closure-evidence.md`
-- `reconciliation/README.md`
-- `reconciliation/contradiction-register.md`
-- `reconciliation/concept-supersession-index.md`
-- `reconciliation/source-of-truth-matrix.md`
-- `reconciliation/evidence-register.md`
+The activation runs `make quick`, `make verify`, and the required Linux/Windows
+CI matrix. The following tests prove the loop:
 
-## Required evidence
-
-The activation must run `make quick`, `make verify`, and the required
-Linux/Windows CI matrix. The following tests prove the loop:
-
-- runtime `m5_tool_loop` tests: `tool_call_executes_tool_records_result_and_completes`,
+- runtime `m5_tool_loop` tests:
+  `tool_call_executes_tool_records_result_and_completes`,
   `multiple_tool_calls_execute_sequentially_in_provider_order`,
   `repeated_tool_rounds_continue_until_finished`,
   `tool_failure_records_result_and_terminalizes_without_retry`,
@@ -145,9 +136,5 @@ Linux/Windows CI matrix. The following tests prove the loop:
   `m5_tool_results`, and the SQLite reopen fixtures, proving bounded
   credential-free results and restart durability.
 
-## Non-goals
-
-This decision does not add OpenRouter or OpenAI Responses tool mapping,
-parallel tool execution, tool-failure-to-model continuation, or
-Mandate/architecture-15 loop activation. MCP, kernel, VFR, Headroom, and
-Plan features remain outside this decision.
+Owner: architecture 15. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
