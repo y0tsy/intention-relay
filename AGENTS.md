@@ -84,3 +84,14 @@
 - Use Conventional Commit messages in the form `type(scope): description`.
 - Prefer a new branch for non-trivial changes, including new features, behavior changes, multi-file refactors, or work spanning multiple logical concerns. Small isolated fixes may use the current branch when appropriate.
 - Prefer atomic commits. Combine changes only when splitting them would harm coherence or make history misleading. State the technical reason in the commit body when relevant.
+
+## GitHub labels
+
+- The repository keeps exactly this label set: ten `type:` labels matching the Conventional Commit types (`type: feat`, `type: fix`, `type: docs`, `type: refactor`, `type: test`, `type: chore`, `type: perf`, `type: ci`, `type: build`, `type: revert`), five `area:` labels for repository surfaces (`area: architecture`, `area: decisions`, `area: quality`, `area: crates`, `area: ci`), and the process labels `dependencies`, `security`, `breaking-change`, and `blocked`. Nothing else.
+- Every pull request and issue carries exactly one `type:` label matching the commit type of the change (`type: feat` for `feat(...)`, and so on).
+- An `area:` label marks each surface the change touches; a change spanning surfaces carries each one.
+- Dependabot applies `dependencies` and `security` to its pull requests; treat both as dependency work.
+- Add `breaking-change` when the change removes or alters existing behavior under the no-backward-compatibility policy; the accompanying ADR or owner document is updated in the same change.
+- Add `blocked` while an external dependency or a pending decision stops progress, and remove it when unblocked.
+- Do not invent ad-hoc labels. Extend this list first, then create the label with `gh label create`.
+- Labels are not a status tracker beyond `blocked`; milestone and slice state stays in `docs/intention-relay`.
