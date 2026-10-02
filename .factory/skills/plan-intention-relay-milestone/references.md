@@ -21,7 +21,6 @@ Read the current source files named below. This map helps select documents; it d
 | Roadmap and milestone acceptance criteria | [`11-implementation-roadmap.md`](../../../docs/intention-relay/architecture/11-implementation-roadmap.md) |
 | Test-first requirements and outcome evidence | [`10-test-driven-delivery-and-verification.md`](../../../docs/intention-relay/architecture/10-test-driven-delivery-and-verification.md) |
 | Makefile, quality tiers, features, and supply chain | [`12-quality-gates-and-makefile.md`](../../../docs/intention-relay/architecture/12-quality-gates-and-makefile.md) |
-| Authority, compatibility, ownership, evidence, and deferral registers | [`reconciliation/README.md`](../../../docs/intention-relay/reconciliation/README.md) |
 | Accepted cross-document decisions and their rationale | [`decisions/README.md`](../../../docs/intention-relay/decisions/README.md) |
 | Accepted phase status and immutable evidence | [`docs/intention-relay/closeout/`](../../../docs/intention-relay/closeout/) |
 

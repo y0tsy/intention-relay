@@ -286,7 +286,7 @@ socket, or process resource. Architecture 18 owns their semantics; architecture
 14 retains historical compatibility ownership.
 
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
-and the [compatibility register](../reconciliation/compatibility-register.md).
+and the compatibility register.
 
 ## Post-M4 kernel DTO boundary
 

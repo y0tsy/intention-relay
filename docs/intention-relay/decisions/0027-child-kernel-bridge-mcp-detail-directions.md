@@ -130,13 +130,6 @@ activating specification must pass the fake-secret regression suite.
 - [`architecture/18-mandate-mcp-capability-lifecycle.md`](../architecture/18-mandate-mcp-capability-lifecycle.md)
 - [`architecture/19-mandate-gateway-rlm-bridge.md`](../architecture/19-mandate-gateway-rlm-bridge.md)
 - [`architecture/20-ipython-kernel-lifecycle.md`](../architecture/20-ipython-kernel-lifecycle.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

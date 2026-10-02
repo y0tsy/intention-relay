@@ -162,14 +162,6 @@ mode and post-disconnect work must never resume old external work.
 - [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md)
 - [`architecture/28-goal-domain-and-verification.md`](../architecture/28-goal-domain-and-verification.md)
 - [`architecture/29-provider-session-and-profiles-protocol.md`](../architecture/29-provider-session-and-profiles-protocol.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
-- [`reconciliation/ownership-and-dependency-map.md`](../reconciliation/ownership-and-dependency-map.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

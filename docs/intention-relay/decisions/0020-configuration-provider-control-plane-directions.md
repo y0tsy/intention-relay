@@ -83,7 +83,7 @@ implemented without code evidence.
 
 This decision supersedes the "excluded" wording for the listed cluster in
 architectures 09 and 22 and the corresponding rows (EXC-001..004) of the
-[deferred/excluded register](../reconciliation/deferred-excluded-register.md).
+deferred/excluded register.
 The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged.
 Activation remains deferred: no code changes are authorized by this decision.
 
@@ -100,12 +100,6 @@ central, and pass the fake-secret regression suite.
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
 - [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
 - [`architecture/25-configuration-provider-control-plane.md`](../architecture/25-configuration-provider-control-plane.md) (new)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

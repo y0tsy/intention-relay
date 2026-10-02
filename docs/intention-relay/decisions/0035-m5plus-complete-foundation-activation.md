@@ -160,13 +160,6 @@ profile, or current-configuration meaning into M3/M4 runs.
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
 - [`architecture/README.md`](../architecture/README.md)
 - [`decisions/README.md`](README.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/ownership-and-dependency-map.md`](../reconciliation/ownership-and-dependency-map.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
 
 ## Required evidence
 

@@ -189,7 +189,7 @@ no second protocol version and no compatibility shim.
 - [Architecture 11](../architecture/11-implementation-roadmap.md) and the
   [architecture README](../architecture/README.md) record the protocol
   version and the removal of the capability plane.
-- The [reconciliation registers](../reconciliation/README.md) record the
+- The reconciliation registers record the
   superseded capability, handshake, and framing rows.
 - [ADR 0035](0035-m5plus-complete-foundation-activation.md),
   [ADR 0036](0036-m5plus-slice1-contract-ledger.md),

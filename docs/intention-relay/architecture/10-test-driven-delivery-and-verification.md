@@ -374,7 +374,7 @@ cover:
 
 These are obligations for later implementation packages, not claims that the
 corresponding runtime behavior exists today. See the
-[reconciliation matrix](../reconciliation/source-of-truth-matrix.md).
+reconciliation matrix.
 
 ## Execution-meaning compatibility evidence
 

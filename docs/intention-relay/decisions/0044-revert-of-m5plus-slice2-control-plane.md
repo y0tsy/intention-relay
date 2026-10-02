@@ -280,7 +280,7 @@ closed milestones M0-M5.
   [25](../architecture/25-configuration-provider-control-plane.md),
   [29](../architecture/29-provider-session-and-profiles-protocol.md), and the
   [architecture README](../architecture/README.md) record the revert.
-- The [reconciliation registers](../reconciliation/README.md), the root
+- The reconciliation registers, the root
   [README](../../../README.md), and
   [`m4plus_concept.md`](../m4plus_concept.md) record the reverted state.
 

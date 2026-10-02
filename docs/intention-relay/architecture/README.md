@@ -100,7 +100,6 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
-4. [Post-M4 authority reconciliation](../reconciliation/README.md)
 5. [Architecture decision records](../decisions/README.md)
 6. [M4 execution charter](../m4.md)
 7. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
@@ -161,9 +160,8 @@ v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in
 ## Post-M4 authority foundation
 
 The closed M4 baseline remains authoritative for implemented behavior. The
-post-M4 direction is coordinated by the
-[authority reconciliation package](../reconciliation/README.md) and its
-[accepted decision records](../decisions/README.md). Those artifacts do not
+post-M4 direction is recorded in the
+[accepted decision records](../decisions/README.md). Those records do not
 implement or silently supersede v1 behavior: they establish the authority,
 compatibility, ownership, and dependency boundary that later authoritative
 packages must satisfy.
@@ -228,9 +226,8 @@ but can never repair, reroute, reinterpret, or replace frozen semantic data.
 ### Mandate lifecycle owner
 
 [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
-is the sole detailed authority for future Mandate lifecycle and admission. The
-[reconciliation package](../reconciliation/README.md) remains a traceability
-index. Neither document amends M4 or current ordinary v1 behavior.
+is the sole detailed authority for future Mandate lifecycle and admission. It
+does not amend M4 or current ordinary v1 behavior.
 
 ### Execution-meaning owner
 

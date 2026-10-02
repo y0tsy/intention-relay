@@ -1106,7 +1106,7 @@ and evidence requirements.
 
 ### Deliver
 
-- the [reconciliation package](../reconciliation/README.md), including the
+- the reconciliation package, including the
   source-of-truth matrix, compatibility register, contradiction register,
   dependency map, and supersession index;
 - accepted Foundation decision records;
