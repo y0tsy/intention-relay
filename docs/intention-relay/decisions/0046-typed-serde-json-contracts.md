@@ -4,10 +4,7 @@
 
 Accepted 2026-09-30. It removes the binary canonical codec, the numeric tag
 registry, digests and identity, and the unconsumed contract families from the
-workspace, and it fixes the canonicalization policy for the future. It
-supersedes [ADR 0003](0003-run-execution-meaning-and-historical-compatibility.md)
-and [ADR 0036](0036-m5plus-slice1-contract-ledger.md), and the canonical-codec
-clauses of ADRs 0035, 0037, 0038, and 0044, as detailed below. It adds no
+workspace, and it fixes the canonicalization policy for the future. It adds no
 crate and no dependency: RFC 8785 canonicalization is adopted as policy, and
 its crate is added only together with a first real consumer.
 
@@ -26,12 +23,8 @@ retained domain, protocol, storage, and configuration DTOs are unaffected.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
-| [ADR 0003](0003-run-execution-meaning-and-historical-compatibility.md) | The closed execution-kind envelope with canonical payload variants, canonical bytes, and digest, and the "Canonical envelope and outcomes" section | No canonical meaning record exists; a future meaning record is a typed JSON DTO under the single live version only if a real consumer needs one |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 1 items `run-execution-meaning-v4` and "canonical tags and digests under the existing `typed-tlv-v1`/SHA-256 policy" | Slice 1 is the typed JSON protocol/DTO contract surface; no canonical codec and no digest identity |
-| [ADR 0036](0036-m5plus-slice1-contract-ledger.md) | The record in full: "Canonical codec and identity", the numeric tag registry, the execution-meaning record tables, the wire-family field tables, and "Version and tag linkage"; its capability clauses are superseded by [ADR 0045](0045-local-json-rpc-2-0-transport.md) | Typed serde JSON contracts only; the record becomes `Superseded` |
-| [ADR 0037](0037-m5plus-slice2-control-plane.md) | "Canonical codec and identity", "Numeric tag registry", and "Version and tag linkage", together with the canonical field-table appendix (already superseded by ADR 0044) | Removed with the codec |
 | [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The "Canonical records" version-ledger row and the Wave 2 plan that repins identity goldens and keeps the V4 record codec | The whole codec, not only the V3 record, is removed |
-| [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) | The "Numeric tag and wire-family consequence" section and the canonical-goldens consequence | No registry, no tags, and no wire-family descriptors exist; the revert record otherwise stands |
 
 The historical-compatibility rule that no historical record gains synthetic
 meaning and that missing meaning is never reconstructed from current state is
@@ -145,46 +138,35 @@ re-introduction of the deleted validation limits.
 
 ## Affected documents
 
-- [Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the
-  typed DTO and contract policy that replaces the canonical codec.
-- [Architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
-  keeps the historical-compatibility rules that do not depend on the codec.
-- [Architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
-  and [architecture 12](../architecture/12-quality-gates-and-makefile.md)
-  own the re-verified coverage tiers and the removal of the golden and parity
-  tests from the gate surface.
-- [Architecture 11](../architecture/11-implementation-roadmap.md) and the
-  [architecture README](../architecture/README.md) record the removed Slice 1
-  ledger artifacts.
-- The reconciliation registers record the
-  superseded ledger, tag, and digest rows.
-- `quality/architecture.toml`, `Cargo.lock`, and `THIRD_PARTY_NOTICES.md` are
-  updated in the same change with the dependency removal.
-- [ADR 0003](0003-run-execution-meaning-and-historical-compatibility.md) and
-  [ADR 0036](0036-m5plus-slice1-contract-ledger.md) become `Superseded`; ADRs
-  0035, 0037, 0038, and 0044 carry the superseded clauses listed above.
-- [Decisions README](README.md) indexes this record.
+[Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the
+typed DTO and contract policy that replaces the canonical codec;
+[architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
+keeps the historical-compatibility rules that do not depend on the codec;
+[architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
+and [architecture 12](../architecture/12-quality-gates-and-makefile.md) own the
+re-verified coverage tiers and the removal of the golden and parity tests from
+the gate surface;
+[architecture 11](../architecture/11-implementation-roadmap.md) and the
+[architecture README](../architecture/README.md) record the removed Slice 1
+ledger artifacts; and `quality/architecture.toml`, `Cargo.lock`, and
+`THIRD_PARTY_NOTICES.md` are updated in the same change with the dependency
+removal.
 
 ## Evidence
 
-The removal is accepted only together with:
-
-- the deleted files, goldens, and in-file tests absent from the tree, with no
-  remaining reference to a removed symbol;
-- the repository search receipt for `IRCR`, `typed-tlv`, `TagRegistry`,
-  `DigestMismatch`, `execution_meaning`, and `credentials_forbidden`;
-- `make notices` regenerating the notices and lockfile without `sha2` and its
-  transitive crates;
-- re-verified coverage tiers and green `make quick`, `make verify`,
-  `docs-check`, and Linux/Windows CI;
-- unchanged M3/M4 current-schema round trips and an unchanged live
-  `make e2e-real-api` path.
+The removal is accepted only together with: the deleted files, goldens, and
+in-file tests absent from the tree, with no remaining reference to a removed
+symbol; the repository search receipt for `IRCR`, `typed-tlv`, `TagRegistry`,
+`DigestMismatch`, `execution_meaning`, and `credentials_forbidden`;
+`make notices` regenerating the notices and lockfile without `sha2` and its
+transitive crates; re-verified coverage tiers; and unchanged M3/M4
+current-schema round trips with an unchanged live `make e2e-real-api` path.
+Gates: `make quick`, `make verify`, `docs-check`, Linux/Windows CI.
 
 ## Research provenance
 
 The canonical codec's original purpose of typed-TLV record identity across
-M3/M4; the audit finding that no consumer outside the codec, its tests, and
-its goldens existed; the single-version and no-bureaucracy policy of
+M3/M4; the audit finding that no consumer outside the codec, its tests, and its
+goldens existed; the single-version and no-bureaucracy policy of
 [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md); and the
-decision to defer RFC 8785 until a real consumer appears so that no dead
-dependency enters the workspace.
+deferral of RFC 8785 until a real consumer appears.

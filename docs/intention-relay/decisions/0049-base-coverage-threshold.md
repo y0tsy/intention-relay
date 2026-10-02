@@ -2,13 +2,12 @@
 
 ## Status
 
-Accepted 2026-09-30. It deletes the A/B/C coverage tiers and replaces them with
-a single base line-coverage threshold of 80% for every production crate and for
-the workspace aggregate, plus a designated-files list whose files must reach
-85%. It supersedes the tier clauses of the records below and the tier cells of
-the reconciliation ownership map. The designated-files list is empty at
-adoption; the mechanism exists so a future high-risk file can carry a higher
-bar. This record authorizes no new test, exclusion, override, or quality gate.
+Accepted 2026-09-30. It deletes the A/B/C coverage tiers and replaces them
+with a single base line-coverage threshold of 80% for every production crate
+and for the workspace aggregate, plus a designated-files list whose files must
+reach 85%. The designated-files list is empty at adoption; the mechanism
+exists so a future high-risk file can carry a higher bar. This record
+authorizes no new test, exclusion, override, or quality gate.
 
 ## Scope and supersession
 
@@ -19,14 +18,13 @@ its declaration surface.
 | --- | --- | --- |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 1 "ownership, feature-profile, and coverage-tier declarations for every activated family" and the required-evidence "coverage tiers, fixtures, and outcome evidence" item | Coverage declarations under this record: every activated family falls under the base 80% threshold, designated files (if any) carry 85%, and exclusions stay exact and reviewable |
 | [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The Wave 9 "re-verify all tiers" step, "No new crate, dependency, feature, coverage tier, or exclusion is introduced", and "Coverage tiers are unchanged" | Coverage is re-verified against the base 80% threshold and the designated-files list; the single-version removal program itself is unchanged |
-| ADRs [0017](0017-build-autopilot-and-plan-focus-continuity.md), [0020](0020-configuration-provider-control-plane-directions.md)-[0034](0034-accepted-m5plus-retained-deferral-directions.md), [0042](0042-project-script-library-for-kernel-cells.md), [0043](0043-instruction-sources-and-system-context.md), and [0044](0044-revert-of-m5plus-slice2-control-plane.md) | The activating-specification item "declare exact crate owners, ..., coverage tiers, ..." (each record's evidence or activation clause) | The activating specification declares coverage under this record: coverage-crate membership, any designated file with its rationale, and any enabled exclusion; no tier is declared |
+| ADRs [0017](0017-build-autopilot-and-plan-focus-continuity.md), [0020](0020-configuration-provider-control-plane-directions.md)-[0034](0034-accepted-m5plus-retained-deferral-directions.md), [0042](0042-project-script-library-for-kernel-cells.md), and [0043](0043-instruction-sources-and-system-context.md) | The activating-specification item "declare exact crate owners, ..., coverage tiers, ..." (each record's evidence or activation clause) | The activating specification declares coverage under this record: coverage-crate membership, any designated file with its rationale, and any enabled exclusion; no tier is declared |
 | ADRs [0046](0046-typed-serde-json-contracts.md) and [0048](0048-limits-by-precedent-and-no-content-scanning.md) | The evidence and ownership wording "re-verified coverage tiers" | Coverage is re-verified against the base 80% threshold; the underlying deletions and removals stand unchanged |
 | Reconciliation ownership map | The tier cells whose text is "Existing declared tiers" | Base 80% threshold (ADR 0049) |
 | [Architecture 12](../architecture/12-quality-gates-and-makefile.md) | The "Tiered line coverage thresholds" table and every tier policy statement | The base 80% threshold, the designated-files mechanism, and the unchanged exclusion semantics recorded in that document |
 
-The tier mentions that remain in closed milestone records, the superseded
-consolidation records (ADRs 0036 and 0037), and the "no coverage tier is
-introduced" clauses of ADRs 0040 and 0044 are historical or no-op wording: they
+The tier mentions that remain in closed milestone records and the "no coverage
+tier is introduced" clause of ADR 0040 are historical or no-op wording: they
 are not policy declarations and are left as written.
 
 ## Decision
@@ -73,13 +71,12 @@ are not policy declarations and are left as written.
   category rather than by measured risk, and the three numbers required
   explanation without changing what was tested.
 - One legible base threshold is easier to state, review, and apply, and gives
-  every production crate the same floor.
-- The designated-files mechanism keeps a higher bar possible for a future
-  high-risk file without reintroducing crate categories.
+  every production crate the same floor; the designated-files mechanism keeps a
+  higher bar possible for a future high-risk file without reintroducing crate
+  categories.
 - Exclusions remain reviewable and exact. Nothing is weakened to make the base
-  threshold pass.
-- The change does not change what is tested: every scenario, branch, safety,
-  boundary, and outcome test remains mandatory.
+  threshold pass, and no scenario, branch, safety, boundary, or outcome test
+  stops being mandatory.
 
 ## Invariants
 
@@ -103,10 +100,7 @@ are not policy declarations and are left as written.
 The change is a policy simplification, not a behavior change: no protocol,
 DTO, storage, configuration, or wire format changes, and no production code is
 rewritten to satisfy it. The policy file and checker move to the base and
-designated thresholds in the same change. Under the repository's
-no-backward-compatibility rule ([ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md)),
-the tiers are deleted rather than preserved as a deprecated alternative;
-historical milestone records that mention them stay as history.
+designated thresholds in the same change.
 
 ## Security and failure behavior
 
@@ -119,50 +113,39 @@ declaration surface.
 
 ## Non-goals
 
-- No change to what is tested, how tests run, or which gates block.
-- No weakening of any enabled exclusion, and no new exclusion.
-- No new override mechanism, waiver, ratchet, grace period, or per-crate
-  escape hatch.
-- No per-crate categories or additional thresholds beyond the base 80% and the
-  designated 85%.
-- No change to adapter mapping/outcome evidence, branch metrics, the pinned
-  nightly toolchain, or feature-profile coverage.
-- No edit to closed milestone records; their tier numbers remain history.
+No change to what is tested, how tests run, or which gates block; no weakening
+of any enabled exclusion and no new exclusion; no override mechanism, waiver,
+ratchet, grace period, or per-crate escape hatch; no per-crate categories or
+additional thresholds beyond the base 80% and the designated 85%; no change to
+adapter mapping/outcome evidence, branch metrics, the pinned nightly toolchain,
+or feature-profile coverage; no edit to closed milestone records, whose tier
+numbers remain history.
 
 ## Affected documents
 
-- [Architecture 12](../architecture/12-quality-gates-and-makefile.md) owns the
-  current coverage policy and the renamed policy section.
-- [Architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
-  keeps the TTD workflow and its closed-milestone evidence with a history
-  pointer.
-- [Architecture 11](../architecture/11-implementation-roadmap.md) records the
-  policy change and the history pointer for closed milestone records.
-- Architectures 00-09 and 13-30 replace their current-policy and
-  future-activation "coverage tier" references with coverage declarations under
-  this record.
-- The
-  reconciliation ownership map
-  records the replaced tier cells, and the
-  source-of-truth matrix records
-  the future requirement.
-- [`AGENTS.md`](../../../AGENTS.md) records the declaration rule for new
-  production crates.
-- [Decisions README](README.md) indexes this record.
+[Architecture 12](../architecture/12-quality-gates-and-makefile.md) owns the
+current coverage policy and the renamed policy section;
+[architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
+keeps the TTD workflow with a history pointer;
+[architecture 11](../architecture/11-implementation-roadmap.md) records the
+policy change; and architectures 00-09 and 13-30 replace their current-policy
+and future-activation "coverage tier" references with coverage declarations
+under this record. The reconciliation ownership map records the replaced tier
+cells, and the source-of-truth matrix records the future requirement.
+[`AGENTS.md`](../../../AGENTS.md) records the declaration rule for new
+production crates.
 
 ## Evidence
 
-The policy change is accepted only together with:
-
-- `quality/coverage.toml` declaring `base_threshold_percent = 80.0` and
-  `designated_threshold_percent = 85.0` with an empty designated-files list;
-- the coverage checker and its self-test fixtures exercising the per-crate base
-  threshold, the workspace aggregate, the designated-file bar, and the
-  unchanged exclusion semantics;
-- a documentation search receipt showing no current-policy or
-  future-milestone statement still requires coverage tiers, and naming the
-  closed records deliberately left as history;
-- green `make quick`, `make verify`, `docs-check`, and Linux/Windows CI.
+The policy change is accepted only together with: `quality/coverage.toml`
+declaring `base_threshold_percent = 80.0` and
+`designated_threshold_percent = 85.0` with an empty designated-files list; the
+coverage checker and its self-test fixtures exercising the per-crate base
+threshold, the workspace aggregate, the designated-file bar, and the unchanged
+exclusion semantics; a documentation search receipt showing no current-policy
+or future-milestone statement still requires coverage tiers, and naming the
+closed records deliberately left as history; and the gate suite passing. Gates:
+`make quick`, `make verify`, `docs-check`, Linux/Windows CI.
 
 ## Research provenance
 

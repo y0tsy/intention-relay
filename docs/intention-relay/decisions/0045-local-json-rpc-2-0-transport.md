@@ -5,10 +5,9 @@
 Accepted 2026-09-30. It replaces the bespoke length-prefixed local protocol
 with JSON-RPC 2.0 over the existing local socket, raises the protocol version
 to 2.0 with exact-match negotiation, and removes the negotiated capability
-plane and the connection-role split. It supersedes the protocol-version and
-capability clauses recorded in ADRs 0035, 0036, 0037, 0038, and 0044, as
-detailed below. It activates no remote transport, no authentication layer, no
-second protocol version, and no capability substitute.
+plane and the connection-role split. It activates no remote transport, no
+authentication layer, no second protocol version, and no capability
+substitute.
 
 ## Scope and supersession
 
@@ -24,16 +23,13 @@ and SQLite storage schemas; and every non-local transport.
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 1 negotiated capability families (`provider_profiles_v1`, `session_fork_v1`, `normalized_reasoning_stream_v1`, `agent_activity_v1`, `user_notifications_v1`, `daemon_tool_gateway_v1`, `model_tool_loop_v1`) | No capability plane exists; one protocol version and typed methods only |
-| [ADR 0036](0036-m5plus-slice1-contract-ledger.md) | "Negotiated capabilities and failure semantics"; the local-protocol row of the version ledger; the protocol-version text of "Runtime version resolution" | Exact protocol 2.0 equality; the method and error decisions below |
-| [ADR 0037](0037-m5plus-slice2-control-plane.md) | Capability and family-gate clauses, `provider_profiles_v1` activation, and the connection-role wording (already superseded by ADR 0044) | No capability plane |
 | [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The local-protocol row of the version ledger, the "Protocol same-major compatibility" superseded commitment, and the Wave 3 instruction to keep the 1.1 negotiation gates | Protocol 2.0 exact equality; the single-version policy is unchanged |
-| [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) | The "Local protocol 1.1, unchanged" version-ledger row and the compatibility sentence accepting exactly protocol 1.1 | Protocol 2.0 is the single live version; the remainder of ADR 0044 stands |
 | [ADR 0039](0039-request-side-tool-advertisement.md), [ADR 0040](0040-opt-in-live-provider-e2e.md), [ADR 0041](0041-same-run-reasoning-round-trip.md) | Their compatibility lines "Local protocol 1.1 ... unchanged" | Protocol 2.0 exact equality; the feature records otherwise stand |
 
-[ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) remains accepted as
-the Slice 2 revert record; only its protocol-version clauses are read through
-this record. The protocol-version clauses of ADRs 0039, 0040, and 0041 are
-read through this record in the same way.
+The protocol-version clauses of ADRs 0039, 0040, and 0041 are read through
+this record. The M5+ Slice 2 control plane was activated and then reverted
+(Slice 2 revert); the capability and connection-role surfaces this record
+removes were the remaining live pieces of that negotiated plane.
 
 ## Decision
 
@@ -50,7 +46,8 @@ read through this record in the same way.
 3. `MAX_FRAME_BYTES` (1 MiB) is retained under the name `MAX_MESSAGE_BYTES`
    as a transport liveness cap: an over-size message fails closed instead of
    allowing a self-inflicted out-of-memory or hang. It is not a contract
-   limit on message content ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
+   limit on message content
+   ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
 4. The envelope DTOs are removed: `ProtocolMessageDto`,
    `ProtocolRequestEnvelopeDto`, `ProtocolResponseEnvelopeDto`,
    `RunSubscriptionRequestEnvelopeDto`, and `ProtocolDaemonFrameDto`. A new
@@ -165,8 +162,7 @@ daemon. Malformed, unknown, or over-size messages fail closed with a typed
 error or a bounded transport failure; they never panic, hang, or allocate
 without bound. The version-mismatch error discloses only the two version
 values and the adapter name; no path, credential, or daemon internals are
-echoed. Removing the capability plane removes the capability-gated branches
-and the risk that a handshake string is treated as authority.
+echoed.
 
 ## Non-goals
 
@@ -179,47 +175,33 @@ no second protocol version and no compatibility shim.
 
 ## Affected documents
 
-- [Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the
-  DTO and contract policy the typed payloads follow.
-- [Architecture 03](../architecture/03-daemon-transport-and-adapters.md) owns
-  the daemon transport, handshake, methods, and error mapping.
-- [Architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
-  and [architecture 12](../architecture/12-quality-gates-and-makefile.md)
-  own the conformance tests and the gate policy for the rewritten targets.
-- [Architecture 11](../architecture/11-implementation-roadmap.md) and the
-  [architecture README](../architecture/README.md) record the protocol
-  version and the removal of the capability plane.
-- The reconciliation registers record the
-  superseded capability, handshake, and framing rows.
-- [ADR 0035](0035-m5plus-complete-foundation-activation.md),
-  [ADR 0036](0036-m5plus-slice1-contract-ledger.md),
-  [ADR 0037](0037-m5plus-slice2-control-plane.md),
-  [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md), and
-  [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) carry the
-  superseded clauses listed above; their status and notes are updated with
-  this record.
-- [Decisions README](README.md) indexes this record.
+[Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the DTO
+and contract policy the typed payloads follow;
+[architecture 03](../architecture/03-daemon-transport-and-adapters.md) the
+daemon transport, handshake, methods, and error mapping;
+[architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
+and [architecture 12](../architecture/12-quality-gates-and-makefile.md) the
+conformance tests and gate policy;
+[architecture 11](../architecture/11-implementation-roadmap.md) and the
+[architecture README](../architecture/README.md) the protocol version and the
+removal of the capability plane.
 
 ## Evidence
 
-The transport is accepted only together with:
-
-- conformance tests for the JSON-RPC envelope, the four standard error codes,
-  the version-mismatch `-32001` error, notification framing, and the
-  one-to-one command and query method table;
-- rewritten `transport_integration`, client, daemon, facade, and
-  run-streaming tests that speak JSON-RPC 2.0 over the real socket, including
-  the Windows named-pipe path;
-- updated or removed hello goldens that no longer carry capabilities;
-- `make quick`, `make verify`, `docs-check`, and the Linux/Windows CI matrix;
-- one live `make e2e-real-api` run (2/2) after the change, proving the
-  protocol rewrite did not break the ordinary production path.
+The transport is accepted only together with: conformance tests for the
+JSON-RPC envelope, the four standard error codes, the version-mismatch `-32001`
+error, notification framing, and the one-to-one command and query method table;
+rewritten `transport_integration`, client, daemon, facade, and run-streaming
+tests that speak JSON-RPC 2.0 over the real socket, including the Windows
+named-pipe path; updated or removed hello goldens that no longer carry
+capabilities; and one live `make e2e-real-api` run (2/2) after the change,
+proving the protocol rewrite did not break the ordinary production path. Gates:
+`make quick`, `make verify`, `docs-check`, Linux/Windows CI.
 
 ## Research provenance
 
 The JSON-RPC 2.0 specification; the existing local socket, permissions,
-stale-socket probe, and timeout behavior; the recorded diagnostics defect
-where an incompatible hello closed the connection without a typed reason; and
-the cleanup-branch audit that found the hand-written envelope protocol, the
-capability plane, and the connection-role split to be the source of the
-removed complexity.
+stale-socket probe, and timeout behavior; the recorded diagnostics defect where
+an incompatible hello closed without a typed reason; and the cleanup-branch
+audit that found the hand-written envelope protocol, the capability plane, and
+the connection-role split to be the source of the removed complexity.

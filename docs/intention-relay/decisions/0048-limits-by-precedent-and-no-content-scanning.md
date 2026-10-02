@@ -5,10 +5,8 @@
 Accepted 2026-09-30. It fixes the numeric-limit policy, bans runtime content
 scanning, and removes the corridor and reservation model, the Day/Week/Month
 period engine, and the queue audits from the documentation because they never
-existed in code. It supersedes the corridor, reservation, calendar-limit, and
-numeric-limit clauses recorded in ADRs 0022, 0025, 0034, and 0035, and it
-removes the remaining fixed-limit rows of the superseded Slice 1 ledger. It
-authorizes no new limit, scanner, corridor, period engine, or queue audit.
+existed in code. It authorizes no new limit, scanner, corridor, period engine,
+or queue audit.
 
 ## Scope and supersession
 
@@ -21,13 +19,13 @@ reservation, calendar-period, and queue-audit surfaces.
 | [ADR 0022](0022-programmatic-caller-policy-directions.md) | `InteractiveLocalReadBaselineV1` (256/16); the bounded `ProgrammaticAuthorizationCorridorDto`; "run and calendar limits with atomic reservations"; the corridor and reservation invariants; and the corridor, counter, reservation, and limit failure wording | The remaining programmatic-caller policy and admission direction stands without limits, corridors, reservations, or calendar counters |
 | [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md) | The 16-call tool-group maximum and `provider_tool_group_invalid`; the "first-scope bounds" (512 KiB per canonical fact, 4 MiB per group, `tool_output_limit_exceeded`); the 256-fact and 512-KiB replay page bounds; and the `model_tool_loop_required` gate (also removed with the capability plane by [ADR 0045](0045-local-json-rpc-2-0-transport.md)) | The qualitative fragment, descriptor, and terminal-taxonomy contracts stand; numeric bounds exist only by recorded precedent |
 | [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md) | Item 5, the future classification of activity numeric values as intrinsic bounds, capacity availability, or ordinary product policy | A numeric activity bound is introduced only with a recorded precedent, under the rule below |
-| [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The reverted Slice 2 state of [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md) and the precedent rule below |
-| [ADR 0036](0036-m5plus-slice1-contract-ledger.md) | The fixed-limit rows of the ledger (activity, run, child, and tool-loop limit records) | The ledger is `Superseded` under [ADR 0046](0046-typed-serde-json-contracts.md); no limit record remains |
+| [ADR 0035](0035-m5plus-complete-foundation-activation.md) | The Slice 2 queue-promotion and reconciliation wording and the Slice 3 "corridors and reservations" wording | The Slice 2 revert and the precedent rule below |
 
-The unavailable-queue promotion and reconciliation, held-run admission, and
-related queue audits were reverted with the Slice 2 control plane by
-[ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md); this record removes
-their documentation remnants.
+The fixed-limit rows of the removed Slice 1 ledger (activity, run, child, and
+tool-loop limit records) are removed with the ledger; no limit record
+remains. The unavailable-queue promotion and reconciliation, held-run
+admission, and related queue audits were reverted (Slice 2 revert); this
+record removes their documentation remnants.
 
 ## Decision
 
@@ -89,10 +87,10 @@ their documentation remnants.
    being kept as unimplemented direction, and ADR 0022 above is amended
    accordingly.
 9. The unavailable-queue promotion and reconciliation, held-run admission,
-   and related queue audits exist only in documentation after the revert of
-   [ADR 0044](0044-revert-of-m5plus-slice2-control-plane.md). They are removed
-   from the documentation. The live M3 queue with its tickets and atomic
-   promotion is untouched and remains the queue authority.
+   and related queue audits exist only in documentation after the Slice 2
+   revert (`AdmitRecoveredRun`). They are removed from the documentation. The
+   live M3 queue with its tickets and atomic promotion is untouched and
+   remains the queue authority.
 10. This removal is documentation-only: no queue behavior changes, and no new
     queue reconciliation, held-run admission, or audit surface is created.
 
@@ -100,10 +98,10 @@ their documentation remnants.
 
 1. Precedent rule. Every numeric limit has a recorded precedent naming the
    failure mode it prevents; a limit without one is removed.
-2. Closed liveness list. The safeguard classes above — transport, socket, storage
-   read, tool read and output, durable content, process timeout and drain, and
-   model progress — are the only numeric safeguards retained; a new safeguard or
-   a changed value requires its recorded reason.
+2. Closed liveness list. The safeguard classes above — transport, socket,
+   storage read, tool read and output, durable content, process timeout and
+   drain, and model progress — are the only numeric safeguards retained; a
+   new safeguard or a changed value requires its recorded reason.
 3. No content scanning. No runtime path scans content for credential-like
    shapes, and no heuristic replaces the removed scanners.
 4. No corridors or periods. No corridor, reservation, calendar counter, or
@@ -119,7 +117,8 @@ M3/M4 durable behavior, queue tickets, promotion, replay, and storage bytes
 are unchanged. The removed limits were either speculative contract vocabulary
 never enforced on the live path or clauses of the reverted Slice 2 surface.
 Where a real bound exists on a live path and is retained, its value is
-unchanged. No protocol, DTO, configuration, or storage schema version changes.
+unchanged. No protocol, DTO, configuration, or storage schema version
+changes.
 
 ## Security and failure behavior
 
@@ -136,58 +135,48 @@ storage read remain rejectable.
 
 No new limits, quotas, or scanners; no heuristics, entropy checks, or
 allowlists instead of content scanning; no corridor, reservation, calendar
-period, or quota engine; no queue reconciliation, held-run admission, or
-queue audit; no change to the live M3 queue; no change to the value of a
-retained liveness safeguard without a recorded precedent; no change to the
-fake-secret tests or the CI documentation secret scan.
+period, or quota engine; no queue reconciliation, held-run admission, or queue
+audit; no change to the live M3 queue; no change to a retained liveness
+safeguard's value without a recorded precedent; no change to the fake-secret
+tests or the CI documentation secret scan.
 
 ## Affected documents
 
-- [ADR 0022](0022-programmatic-caller-policy-directions.md),
-  [ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md),
-  [ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and
-  [ADR 0035](0035-m5plus-complete-foundation-activation.md) are amended as
-  recorded above; [ADR 0036](0036-m5plus-slice1-contract-ledger.md) is
-  superseded.
-- [Architecture 27](../architecture/27-programmatic-caller-policy-and-admission.md)
-  owns the programmatic-caller policy that loses the limit, corridor, and
-  period clauses.
-- [Architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md)
-  owns the tool-loop contracts that lose the numeric group and output bounds.
-- [Architecture 24](../architecture/24-activity-ui-and-adapters.md) owns the
-  activity surface whose numeric classification is superseded.
-- [Architecture 04](../architecture/04-sessions-runs-events-and-storage.md)
-  owns the live M3 queue that stays unchanged, and
-  [architecture 09](../architecture/09-configuration-security-and-observability.md)
-  owns redaction and the surviving secret hygiene.
-- [Architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
-  and [architecture 12](../architecture/12-quality-gates-and-makefile.md)
-  own the removal of the scanner and limit tests from the gate surface.
-- [Architecture 11](../architecture/11-implementation-roadmap.md) and the
-  [architecture README](../architecture/README.md) record the policy change.
-- The reconciliation registers record the
-  removed limit, corridor, period, and queue-audit rows.
-- [`AGENTS.md`](../../../AGENTS.md) records the content-scanning ban.
-- [Decisions README](README.md) indexes this record.
+[ADR 0022](0022-programmatic-caller-policy-directions.md),
+[ADR 0025](0025-base-tool-contracts-and-tool-loop-bounds.md),
+[ADR 0034](0034-accepted-m5plus-retained-deferral-directions.md), and
+[ADR 0035](0035-m5plus-complete-foundation-activation.md) are amended as
+recorded above.
+[Architecture 27](../architecture/27-programmatic-caller-policy-and-admission.md)
+owns the programmatic-caller policy that loses the limit, corridor, and period
+clauses;
+[architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md)
+owns the tool-loop contracts that lose the numeric group and output bounds;
+[architecture 24](../architecture/24-activity-ui-and-adapters.md) owns the
+activity surface whose numeric classification is superseded;
+[architecture 04](../architecture/04-sessions-runs-events-and-storage.md) owns
+the live M3 queue that stays unchanged;
+[architecture 09](../architecture/09-configuration-security-and-observability.md)
+owns redaction and the surviving secret hygiene;
+[architecture 10](../architecture/10-test-driven-delivery-and-verification.md)
+and [architecture 12](../architecture/12-quality-gates-and-makefile.md) own the
+removal of the scanner and limit tests from the gate surface; and
+[`AGENTS.md`](../../../AGENTS.md) records the content-scanning ban.
 
 ## Evidence
 
-The policy change is accepted only together with:
-
-- a repository search receipt showing zero occurrences of
-  `credential_shaped_identifier`, `bearer_token_shape`,
-  `credentials_forbidden`, `MAX_GLOB_MATCHES`, `provider_tool_group_invalid`,
-  and the `Fixed*Limits` records, and a named list of the surviving keep-list
-  sites with their reasons;
-- a documentation search receipt showing no corridor, reservation,
-  calendar-period, queue-reconciliation, or held-run admission direction
-  remains;
-- the surviving fake-secret absence tests and the `quality/check_docs.py`
-  secret scan passing unchanged;
-- green `make quick`, `make verify`, `docs-check`, and Linux/Windows CI with
-  the coverage tiers re-verified after the deletions;
-- an unchanged live `make e2e-real-api` path, where the retained transport and
-  storage safeguards still apply.
+The policy change is accepted only together with: a repository search receipt
+showing zero occurrences of `credential_shaped_identifier`,
+`bearer_token_shape`, `credentials_forbidden`, `MAX_GLOB_MATCHES`,
+`provider_tool_group_invalid`, and the `Fixed*Limits` records, plus a named
+list of the surviving keep-list sites with their reasons; a documentation
+search receipt showing no corridor, reservation, calendar-period,
+queue-reconciliation, or held-run admission direction remains; the surviving
+fake-secret absence tests and the `quality/check_docs.py` secret scan passing
+unchanged; re-verified coverage tiers after the deletions; and an unchanged
+live `make e2e-real-api` path, where the retained transport and storage
+safeguards still apply. Gates: `make quick`, `make verify`, `docs-check`,
+Linux/Windows CI.
 
 ## Research provenance
 

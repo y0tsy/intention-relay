@@ -6,9 +6,7 @@ Accepted 2026-09-30. It reduces `WorkspaceRoot` to three functions: the
 anchor for relative paths, the working directory of child processes, and the
 default search scope. It removes the lexical symlink machinery and the
 containment checks, and it records that the root is not a security boundary.
-It supersedes the containment and symlink clauses of accepted directions,
-including [ADR 0042](0042-project-script-library-for-kernel-cells.md), as
-recorded below. It activates no sandbox and no new isolation mechanism.
+It activates no sandbox and no new isolation mechanism.
 
 ## Scope and supersession
 
@@ -112,10 +110,10 @@ not a boundary, while the typed inputs (`WorkspaceRelativePathDto` and the
 `glob`/`grep` pattern validator) still reject absolute and parent paths as an
 input-shape rule rather than a containment guarantee. The daemon still relies
 on OS permissions, socket permissions, and the trusted-local model, none of
-which change. No code path
-emits `workspace_path_symlink` or `workspace_path_outside_root` after the
-change. Tools and kernel features that need a scope state it as an addressing
-rule and do not present it as containment.
+which change. No code path emits `workspace_path_symlink` or
+`workspace_path_outside_root` after the change. Tools and kernel features that
+need a scope state it as an addressing rule and do not present it as
+containment.
 
 ## Non-goals
 
@@ -126,39 +124,31 @@ removed error codes; no new configurable root policy.
 
 ## Affected documents
 
-- [Architecture 05](../architecture/05-tools-workspace-and-hooks.md) owns the
-  workspace, path, and tool rules that this record simplifies.
-- [Architecture 02](../architecture/02-dto-and-contract-policy.md) owns the
-  error vocabulary that loses the two removed codes.
-- [Architecture 11](../architecture/11-implementation-roadmap.md) and the
-  [architecture README](../architecture/README.md) record the new root
-  semantics.
-- The reconciliation registers record the
-  removed containment rows and the corrected boundary wording.
-- [ADR 0042](0042-project-script-library-for-kernel-cells.md) carries the
-  superseded boundary clause listed above; its other rules stand.
-- [Decisions README](README.md) indexes this record.
+[Architecture 05](../architecture/05-tools-workspace-and-hooks.md) owns the
+workspace, path, and tool rules that this record simplifies;
+[architecture 02](../architecture/02-dto-and-contract-policy.md) owns the error
+vocabulary that loses the two removed codes;
+[architecture 11](../architecture/11-implementation-roadmap.md) and the
+[architecture README](../architecture/README.md) record the new root
+semantics.
 
 ## Evidence
 
-The change is accepted only together with:
-
-- the workspace contract tests rewritten to the positive join, cwd, and
-  scope semantics, with the symlink and outside-root cases removed;
-- the `intention-tools` tests updated to the same semantics, including the
-  removal of the glob match cap;
-- a repository search receipt showing no `contains_symlink_component`,
-  `workspace_path_symlink`, or `workspace_path_outside_root` remains;
-- green `make quick`, `make verify`, `docs-check`, and Linux/Windows CI,
-  including the platform-native path fixtures;
-- an unchanged live `make e2e-real-api` path, where tools continue to run
-  under the session root.
+The change is accepted only together with: the workspace contract tests
+rewritten to the positive join, cwd, and scope semantics, with the symlink and
+outside-root cases removed; the `intention-tools` tests updated to the same
+semantics, including the removal of the glob match cap; a repository search
+receipt showing no `contains_symlink_component`, `workspace_path_symlink`, or
+`workspace_path_outside_root` remains; the platform-native path fixtures
+passing on both Linux and Windows; and an unchanged live `make e2e-real-api`
+path, where tools continue to run under the session root. Gates: `make quick`,
+`make verify`, `docs-check`, Linux/Windows CI.
 
 ## Research provenance
 
 The audit finding that two independent symlink scanners existed, one in
 `intention-workspace` and a duplicate in `intention-tools`, that neither
 provided containment, and that both encoded an isolation claim the trusted
-local model does not make; the existing `execute` behavior of running with
-the root as its working directory; and the decision to state the addressing
+local model does not make; the existing `execute` behavior of running with the
+root as its working directory; and the decision to state the addressing
 semantics honestly instead of keeping unenforceable checks.
