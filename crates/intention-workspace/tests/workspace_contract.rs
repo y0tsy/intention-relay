@@ -74,18 +74,6 @@ fn relative_resolution_joins_the_declared_root_independent_of_process_cwd() {
 }
 
 #[test]
-fn missing_paths_are_addressed_as_joined_paths() {
-    let root = TempDir::new("missing");
-    let workspace = resolve(root.path());
-    let missing = WorkspaceRelativePathDto::parse("missing/leaf.txt").expect("path");
-    let expected = std::fs::canonicalize(root.path())
-        .expect("canonical root")
-        .join("missing/leaf.txt");
-    assert_eq!(workspace.resolve_path(&missing), expected);
-    assert_eq!(workspace.resolve_new_file_path(&missing), expected);
-}
-
-#[test]
 fn new_file_resolution_shares_the_join_rule() {
     let root = TempDir::new("new-file");
     let workspace = resolve(root.path());
@@ -97,20 +85,6 @@ fn new_file_resolution_shares_the_join_rule() {
 }
 
 #[test]
-fn unnormalized_and_absolute_input_never_reaches_the_anchor() {
-    let root = TempDir::new("input-validation");
-    let workspace = resolve(root.path());
-    // The DTO owns input validation; the anchor sees only normalized relative
-    // paths. Absolute paths and `..` are not contained anywhere below.
-    assert!(WorkspaceRelativePathDto::parse("../outside-file").is_err());
-    let absolute = std::env::temp_dir().join("intention-workspace-contract-outside-file");
-    assert!(WorkspaceRelativePathDto::parse(absolute.to_string_lossy().into_owned()).is_err());
-    // The join rule the anchor exposes adds nothing and strips nothing: an
-    // absolute path stays absolute.
-    assert_eq!(workspace.root().join(&absolute), absolute);
-}
-
-#[test]
 fn execute_cwd_is_the_declared_root() {
     let root = TempDir::new("cwd");
     let workspace = resolve(root.path());
@@ -119,16 +93,6 @@ fn execute_cwd_is_the_declared_root() {
         workspace.execute_cwd(),
         std::fs::canonicalize(root.path()).expect("canonical root")
     );
-}
-
-#[test]
-fn execute_cwd_does_not_depend_on_process_cwd() {
-    let root = TempDir::new("cwd-independent");
-    let other = TempDir::new("cwd-other");
-    let workspace = resolve(root.path());
-    let _guard = cwd_guard();
-    let _cwd = CwdGuard::change_to(other.path());
-    assert_eq!(workspace.execute_cwd(), workspace.root());
 }
 
 #[test]

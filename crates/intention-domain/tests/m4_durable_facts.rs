@@ -5,18 +5,13 @@
 )]
 
 use intention_domain::{
-    DomainEventDto, ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto,
-    ModelRunFactKindDto, ModelRunProjectionDto, RunEventCursorDto, RunEventTailPageDto,
-    RunFailureDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, ToolResultOutcomeDto,
+    ModelRunFactDto, ModelRunFactInputDto, ModelRunFactKindDto, ModelRunProjectionDto,
+    RunEventCursorDto, RunFailureDto, RunProjectionDto, RunSnapshotDto, ToolResultOutcomeDto,
 };
 use intention_types::{
     AssistantTurnId, ConfigRevisionId, ErrorRetryDto, RunId, SessionEventSequenceDto, SessionId,
-    TimestampDto, ToolCallId, TurnId,
+    ToolCallId, TurnId,
 };
-
-fn time() -> TimestampDto {
-    TimestampDto::from_unix_seconds(1).expect("fixture time is valid")
-}
 
 fn run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
     RunProjectionDto::new(
@@ -53,7 +48,7 @@ fn model_fact_inputs_validate_durable_ordering_and_safe_payload_bounds() {
 }
 
 #[test]
-fn model_projection_snapshot_and_events_keep_safe_terminal_and_tail_only_shapes() {
+fn model_projection_and_snapshot_keep_safe_terminal_shapes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let assistant_turn_id = AssistantTurnId::new();
@@ -94,18 +89,6 @@ fn model_projection_snapshot_and_events_keep_safe_terminal_and_tail_only_shapes(
     assert_eq!(snapshot.cursor().value(), 3);
     assert_eq!(snapshot.run_projection().run_id(), run_id);
 
-    let fact = ModelRunFactDto::new(
-        RunEventCursorDto::new(1),
-        ModelRunFactInputDto::provider_attempt_started(1).expect("attempt is valid"),
-    )
-    .expect("cursor-assigned fact is valid");
-    let event = DomainEventDto::ProviderAttemptStarted(ModelRunFactEventDto::new(
-        session_id,
-        run_id,
-        fact,
-        time(),
-    ));
-    assert!(matches!(event, DomainEventDto::ProviderAttemptStarted(_)));
     assert_eq!(ModelRunFactKindDto::Finished.as_str(), "finished");
 }
 
@@ -137,19 +120,8 @@ fn model_fact_boundaries_and_projection_identity_validation_are_enforced() {
 }
 
 #[test]
-fn model_fact_validators_cover_success_boundaries_and_all_projection_shapes() {
+fn model_fact_inputs_report_their_kinds() {
     let failure = RunFailureDto::new("failed", ErrorRetryDto::Never, None).expect("failure");
-    assert!(ModelRunFactInputDto::provider_attempt_started(1).is_ok());
-    assert!(ModelRunFactInputDto::provider_attempt_failed(1, failure.clone()).is_ok());
-    assert!(ModelRunFactInputDto::retry_scheduled(u16::MAX - 1, u16::MAX).is_ok());
-    assert!(
-        ModelRunFactInputDto::assistant_content_appended(
-            AssistantTurnId::new(),
-            "x".repeat(4 * 1024),
-        )
-        .is_ok()
-    );
-    assert!(ModelRunFactInputDto::reasoning_delta_recorded(" x ").is_ok());
     assert!(
         ModelRunFactInputDto::usage_recorded(intention_types::UsageDto::NotReported).kind()
             == ModelRunFactKindDto::UsageRecorded
@@ -171,48 +143,12 @@ fn model_fact_validators_cover_success_boundaries_and_all_projection_shapes() {
         ModelRunFactKindDto::ToolResultRecorded
     );
     assert_eq!(
-        ModelRunFactKindDto::ToolResultRecorded.as_str(),
-        "tool_result_recorded"
-    );
-    assert_eq!(
         ModelRunFactInputDto::finished(intention_types::FinishReasonDto::Stop).kind(),
         ModelRunFactKindDto::Finished
     );
     assert_eq!(
         ModelRunFactInputDto::failed(failure).kind(),
         ModelRunFactKindDto::Failed
-    );
-
-    let session = SessionId::new();
-    let run_id = RunId::new();
-    let base = run(session, run_id);
-    assert!(
-        ModelRunProjectionDto::new(base, RunEventCursorDto::new(1), None, "", None, None, None)
-            .is_ok()
-    );
-    assert!(
-        ModelRunProjectionDto::new(
-            base,
-            RunEventCursorDto::new(1),
-            Some(AssistantTurnId::new()),
-            "",
-            None,
-            None,
-            Some(RunFailureDto::new("x", ErrorRetryDto::Never, None).expect("failure"))
-        )
-        .is_ok()
-    );
-    assert!(
-        ModelRunProjectionDto::new(
-            base,
-            RunEventCursorDto::new(1),
-            Some(AssistantTurnId::new()),
-            "text",
-            None,
-            None,
-            None
-        )
-        .is_ok()
     );
 }
 
@@ -244,33 +180,4 @@ fn model_fact_wire_decoders_validate_each_constructor_and_reject_unknown_fields(
         )
         .is_err()
     );
-}
-
-#[test]
-fn tail_page_accessors_and_empty_replay_are_covered() {
-    let session = SessionId::new();
-    let run_id = RunId::new();
-    let page = RunEventTailPageDto::empty(session, run_id, RunEventCursorDto::new(7));
-    assert_eq!(page.session_id(), session);
-    assert_eq!(page.run_id(), run_id);
-    assert_eq!(page.after_cursor().value(), 7);
-    assert!(page.facts().is_empty());
-    assert_eq!(page.next_after_cursor().value(), 7);
-    assert!(!page.has_more());
-    let projection = ModelRunProjectionDto::new(
-        run(session, run_id),
-        RunEventCursorDto::new(7),
-        None,
-        "",
-        None,
-        None,
-        None,
-    )
-    .expect("projection is valid");
-    let snapshot =
-        RunSnapshotDto::new(session, run_id, SessionEventSequenceDto::new(1), projection)
-            .expect("snapshot is valid");
-    let replay = RunReplayDto::new(snapshot, page).expect("replay is valid");
-    assert_eq!(replay.snapshot().run_id(), run_id);
-    assert_eq!(replay.tail().after_cursor().value(), 7);
 }

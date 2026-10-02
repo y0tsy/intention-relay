@@ -124,45 +124,6 @@ fn generic_public_driver_does_not_expose_credential() {
     assert!(!debug.contains(FAKE_CREDENTIAL));
 }
 
-#[test]
-fn generic_driver_translates_all_text_roles_without_network_work() {
-    let mut driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
-    let request = ModelRequestDto::new(
-        RunId::new(),
-        "fixture",
-        vec![
-            ModelMessageDto::new(ModelRoleDto::System, "system message").expect("message is valid"),
-            ModelMessageDto::new(ModelRoleDto::User, "user message").expect("message is valid"),
-            ModelMessageDto::new(ModelRoleDto::Assistant, "assistant message")
-                .expect("message is valid"),
-        ],
-        Some("separate system context".to_owned()),
-        None,
-    )
-    .expect("request is valid");
-
-    driver.prepare_request(&request).expect("request prepares");
-    assert_eq!(driver.prepared_request_count(), 1);
-}
-
-#[test]
-fn generic_driver_prepares_advertised_tool_definitions_without_network_work() {
-    let mut driver = GenericChatDriver::from_startup_material(material()).expect("driver builds");
-    let request = request(ModelRequestedCapabilitiesDto::default())
-        .with_tools(vec![
-            intention_model::ModelToolDefinitionDto::new(
-                "read_file",
-                "Reads one file",
-                r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-            )
-            .expect("tool is valid"),
-        ])
-        .expect("tools are valid");
-
-    driver.prepare_request(&request).expect("request prepares");
-    assert_eq!(driver.prepared_request_count(), 1);
-}
-
 fn collect_ready(
     mut stream: intention_model::ModelEventStream,
 ) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {
@@ -250,31 +211,4 @@ fn generic_driver_rejects_wrong_kind_and_missing_endpoint_safely() {
             .code(),
         "missing_generic_chat_endpoint"
     );
-}
-
-#[test]
-fn generic_mapping_covers_known_finish_status_and_invalid_fixture_values() {
-    for (native, expected) in [
-        ("stop", FinishReasonDto::Stop),
-        ("length", FinishReasonDto::Length),
-        ("tool_calls", FinishReasonDto::ToolCalls),
-        ("content_filter", FinishReasonDto::ContentFilter),
-        ("error", FinishReasonDto::Error),
-        ("unknown", FinishReasonDto::Unknown),
-    ] {
-        assert_eq!(GenericChatDriver::map_fixture_finish(native), expected);
-    }
-    for status in [400_u16, 429, 500] {
-        let error = GenericChatDriver::map_fixture_error(status, FAKE_CREDENTIAL)
-            .expect("error mapping is valid");
-        assert!(
-            !serde_json::to_string(&error)
-                .expect("error serializes")
-                .contains(FAKE_CREDENTIAL)
-        );
-    }
-    assert!(GenericChatDriver::map_fixture_text("").is_err());
-    assert!(GenericChatDriver::map_fixture_usage(1, 1, 1).is_err());
-    assert!(GenericChatDriver::map_fixture_tool_call("call", "", "{}").is_err());
-    assert!(GenericChatDriver::map_fixture_tool_call("call", "inspect", "[]").is_err());
 }

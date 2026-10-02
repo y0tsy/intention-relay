@@ -372,28 +372,6 @@ fn model_tool_messages_round_trip_and_validate() {
 }
 
 #[test]
-fn model_message_legacy_wire_still_decodes() {
-    let legacy: ModelMessageDto = serde_json::from_str(r#"{"role":"user","content":"hi"}"#)
-        .expect("legacy user message decodes");
-    assert_eq!(legacy.role(), ModelRoleDto::User);
-    assert_eq!(legacy.content(), "hi");
-    assert_eq!(legacy.tool_calls(), None);
-    assert_eq!(legacy.tool_call_id(), None);
-    assert_eq!(
-        serde_json::to_string(&legacy).expect("legacy message serializes"),
-        r#"{"role":"user","content":"hi"}"#
-    );
-    let assistant: ModelMessageDto =
-        serde_json::from_str(r#"{"role":"assistant","content":"answer"}"#)
-            .expect("legacy assistant message decodes");
-    assert_eq!(assistant.role(), ModelRoleDto::Assistant);
-    assert_eq!(assistant.content(), "answer");
-    let system: ModelMessageDto = serde_json::from_str(r#"{"role":"system","content":"context"}"#)
-        .expect("legacy system message decodes");
-    assert_eq!(system.role(), ModelRoleDto::System);
-}
-
-#[test]
 fn model_request_with_messages_preserves_fields() {
     let request = ModelRequestDto::new(
         RunId::new(),

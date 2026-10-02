@@ -203,9 +203,10 @@ def main() -> None:
             )
 
     for name, flags in combinations:
-        # The package reports enforce each crate's denominator.  This aggregate
-        # report also exercises dependency code in the same instrumented test
-        # process, preventing package isolation from hiding production paths.
+        # The package reports enforce the base threshold for each crate.  This
+        # aggregate report also exercises dependency code in the same
+        # instrumented test process, preventing package isolation from hiding
+        # production paths, and its aggregate line metric is enforced too.
         report = REPORTS / f"coverage-{name}-workspace.json"
         run([
             "cargo", "+nightly-2026-07-31", "llvm-cov", "--branch", "--json",

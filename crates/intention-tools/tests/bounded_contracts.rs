@@ -12,7 +12,7 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
-    ReadInput, ToolInput, ToolResult, ToolService, WriteInput,
+    ToolInput, ToolResult, ToolService, WriteInput,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use serde_json::json;
@@ -198,23 +198,6 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
         grep.matches.len() < 200,
         "the aggregate bound must clamp the retained match set"
     );
-}
-
-#[test]
-fn read_and_grep_dispatches_remain_bounded_after_all_changes() {
-    let root_dir = fixture_dir("read-bounds");
-    std::fs::write(root_dir.path().join("file.txt"), "content").expect("seed");
-    let service = ToolService::new(workspace(&root_dir));
-    assert!(matches!(
-        service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Read(ReadInput {
-                path: relative("file.txt"),
-            }),
-            CancellationSignal::new(),
-        ),
-        Ok(ToolResult::Read(_))
-    ));
 }
 
 #[test]

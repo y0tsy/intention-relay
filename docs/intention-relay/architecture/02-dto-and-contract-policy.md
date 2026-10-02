@@ -182,7 +182,7 @@ A live event is emitted only after the storage commit succeeds. The command resu
 
 ## Quality-gate integration
 
-DTO compatibility, validation, redaction, and public-API boundary tests are blocking inputs to `make verify`. Every DTO-owning crate declares its coverage tier before production code is accepted, and contract fixtures run across the required feature profiles. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+DTO compatibility, validation, redaction, and public-API boundary tests are blocking inputs to `make verify`. Every DTO-owning crate is subject to the base 80% line-coverage threshold and the designated-files mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) before production code is accepted, and contract fixtures run across the required feature profiles. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Outcome criteria
 

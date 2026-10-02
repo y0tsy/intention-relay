@@ -239,7 +239,7 @@ It introduces no Mandate product depth/count/calendar/lifetime/concurrency ceili
 
 ## Required evidence before implementation
 
-A later activating specification must declare exact crate owners, targets, coverage tiers, feature profiles, architecture fixtures, and storage/wire versions, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
+A later activating specification must declare exact crate owners, targets, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, architecture fixtures, and storage/wire versions, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
 
 - typed source/discovery/server/capability/selection/model-step/invocation fixtures and negative vectors;
 - fixed-slot/composition/no-bypass and server-non-authority fixtures;

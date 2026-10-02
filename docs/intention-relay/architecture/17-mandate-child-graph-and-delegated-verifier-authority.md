@@ -422,7 +422,7 @@ M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegati
 
 ## Required evidence before implementation
 
-A later activating specification must declare exact crate owners, test targets, coverage tiers, feature profiles, architecture fixtures, and storage/wire versions, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
+A later activating specification must declare exact crate owners, test targets, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, architecture fixtures, and storage/wire versions, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
 
 - typed child-edge/delegation/message/summary and verifier authority/target/baseline/evidence/verdict/mutation/reconciliation fixtures and negative vectors;
 - atomic idempotent creation, message, cascade, authority, and mutation fault injection at every projection/event/snapshot/sequence/idempotency stage;

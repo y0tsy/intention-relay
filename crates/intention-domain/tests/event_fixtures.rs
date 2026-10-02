@@ -109,9 +109,6 @@ fn tool_lifecycle_event_round_trips_and_rejects_unsafe_detail() {
         )
         .is_ok()
     );
-    assert_eq!(event.session_id(), event.session_id());
-    assert_eq!(event.run_id(), event.run_id());
-    assert_eq!(event.call_id(), event.call_id());
     assert_eq!(event.tool_id(), "read");
     assert_eq!(event.status(), &ToolLifecycleStatusDto::Completed);
     assert_eq!(event.detail(), "bounded result");

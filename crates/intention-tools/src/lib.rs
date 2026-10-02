@@ -685,6 +685,14 @@ mod process_failure_tests {
         }
     }
 
+    struct PanicReader;
+
+    impl Read for PanicReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            std::panic::resume_unwind(Box::new("injected reader panic"))
+        }
+    }
+
     #[test]
     fn read_failure_is_classified_as_read_failure() {
         let mut output = Vec::new();
@@ -698,6 +706,16 @@ mod process_failure_tests {
     fn reader_join_failure_is_classified_as_read_failure() {
         let reader = thread::spawn(|| -> Result<(Vec<u8>, bool), &'static str> {
             Err("tool_execute_read_failed")
+        });
+        assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
+    }
+
+    #[test]
+    fn reader_panic_is_classified_as_read_failure() {
+        let reader = thread::spawn(|| {
+            let mut reader = PanicReader;
+            let mut output = Vec::new();
+            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
         });
         assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
     }
@@ -1723,11 +1741,9 @@ fn execute_tool(
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
-    // Execute with the caller's environment. WorkspaceRoot scopes filesystem
-    // path resolution and the child CWD, not the process environment.
-    // Preserve the caller environment without requiring every inherited key
-    // and value to be valid Unicode. `vars()` panics on such entries.
-    command.envs(std::env::vars_os());
+    // The child inherits the caller's environment by default. WorkspaceRoot
+    // scopes filesystem path resolution and the child CWD, not the process
+    // environment.
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -2182,14 +2198,6 @@ fn validate_search_pattern(pattern: &str) -> DtoResult<()> {
 #[cfg(test)]
 mod coverage_helpers {
     use super::*;
-    use std::io::{self, Read};
-
-    struct PanicReader;
-    impl Read for PanicReader {
-        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-            std::panic::resume_unwind(Box::new("injected reader panic"))
-        }
-    }
 
     #[test]
     fn bounded_lossy_handles_invalid_utf8_at_boundary() {
@@ -2200,26 +2208,6 @@ mod coverage_helpers {
         assert!(text.ends_with("\n[truncated]"));
         assert!(!text.contains('\u{fffd}'));
     }
-
-    #[test]
-    fn reader_panic_is_join_error() {
-        let handle = thread::spawn(|| {
-            let mut reader = PanicReader;
-            let mut output = Vec::new();
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
-        });
-        assert!(matches!(
-            join_reader(Some(handle)),
-            Err("tool_execute_read_failed")
-        ));
-    }
-
-    #[test]
-    fn validation_rejects_empty_nul_and_windows_patterns() {
-        for pattern in ["", "a\0b", "C:/x", "\\\\server\\share", "../x", "/x", "\\x"] {
-            assert!(validate_search_pattern(pattern).is_err(), "{pattern:?}");
-        }
-    }
 }
 
 /// Private execution boundary; adapters implement this without leaking erased values.
@@ -2229,297 +2217,4 @@ mod coverage_helpers {
 )]
 trait ToolExecutor {
     fn execute(&self, call: ToolCallId, input: ToolInput) -> DtoResult<ToolResult>;
-}
-
-#[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unwrap_used,
-    reason = "local fixture assertions"
-)]
-mod direct_execution_tests {
-    use super::*;
-    use intention_types::WorkspaceRelativePathDto;
-    use tempfile::TempDir;
-
-    fn workspace(root: &TempDir) -> intention_workspace::WorkspaceRoot {
-        intention_workspace::WorkspaceRoot::resolve(
-            &intention_domain::WorkspaceRootDto::parse(root.path().to_string_lossy().into_owned())
-                .expect("fixture root parses"),
-        )
-        .expect("fixture workspace resolves")
-    }
-
-    fn relative(path: &str) -> WorkspaceRelativePathDto {
-        WorkspaceRelativePathDto::parse(path).expect("fixture path parses")
-    }
-
-    #[test]
-    fn direct_read_edit_and_grep_executions_cover_bounded_file_paths() {
-        let dir = TempDir::new().expect("temporary fixture dir");
-        std::fs::write(
-            dir.path().join("source.txt"),
-            "line one\nneedle here\nline three",
-        )
-        .expect("seed source");
-        let root = workspace(&dir);
-        let service = ToolService::new(root);
-
-        // Read path.
-        let read = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Read(ReadInput {
-                    path: relative("source.txt"),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("direct read dispatches");
-        assert!(matches!(read, ToolResult::Read(_)));
-
-        // Pattern-only grep path.
-        let grep = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Grep(GrepInput {
-                    pattern: BoundedText::new("needle").expect("pattern"),
-                    scope: None,
-                    path: Some(relative("source.txt")),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("direct file grep dispatches");
-        let ToolResult::Grep(grep) = grep else {
-            panic!("grep result expected");
-        };
-        assert_eq!(grep.matches.len(), 1);
-
-        // Edit path with expected-content verification (the expected value is
-        // the complete file content before the edit); a stale expectation
-        // conflicts before any mutation, then the matching edit succeeds.
-        let full = "line one\nneedle here\nline three";
-        let mismatch = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Edit(EditInput {
-                path: relative("source.txt"),
-                old: BoundedText::new("needle").expect("old"),
-                new: BoundedText::new("again").expect("new"),
-                expected_content: Some(BoundedText::new("stale content").expect("expected")),
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(
-            matches!(&mismatch, Err(error) if error.code() == "tool_edit_conflict"),
-            "unexpected mismatch result: {mismatch:?}"
-        );
-        let edit = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Edit(EditInput {
-                    path: relative("source.txt"),
-                    old: BoundedText::new("needle").expect("old"),
-                    new: BoundedText::new("replaced").expect("new"),
-                    expected_content: Some(BoundedText::new(full).expect("expected")),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("direct edit dispatches");
-        assert!(matches!(edit, ToolResult::Edit(_)));
-    }
-
-    #[test]
-    fn direct_execute_collects_bounded_output_successfully() {
-        let dir = TempDir::new().expect("temporary fixture dir");
-        let service = ToolService::new(workspace(&dir));
-        let result = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Execute(ExecuteInput {
-                    program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" })
-                        .expect("program"),
-                    args: if cfg!(windows) {
-                        vec![BoundedText::new("/C echo ok").expect("arg")]
-                    } else {
-                        vec![
-                            BoundedText::new("-c").expect("flag"),
-                            BoundedText::new("printf 'ok\\n'").expect("script"),
-                        ]
-                    },
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("direct execute dispatches");
-        let ToolResult::Execute(value) = result else {
-            panic!("execute result expected");
-        };
-        assert!(value.text.as_str().contains("exit_code:0"));
-    }
-
-    #[test]
-    fn direct_write_glob_and_oversized_read_paths_stay_bounded() {
-        let dir = TempDir::new().expect("temporary fixture dir");
-        std::fs::write(dir.path().join("existing.txt"), "before").expect("seed existing");
-        std::fs::write(dir.path().join("big.bin"), vec![b'x'; 70 * 1024]).expect("seed big");
-        let root = workspace(&dir);
-        let service = ToolService::new(root);
-
-        // Oversized read reports truncation within the tool output bound.
-        let read = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Read(ReadInput {
-                    path: relative("big.bin"),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("oversized read dispatches");
-        let ToolResult::Read(value) = read else {
-            panic!("read result expected");
-        };
-        assert!(value.truncated);
-
-        // Write with a stale expected content conflicts; then the matching
-        // write succeeds.
-        let stale = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Write(WriteInput {
-                path: relative("existing.txt"),
-                content: BoundedText::new("after").expect("content"),
-                expected_content: Some(BoundedText::new("stale").expect("expected")),
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(
-            matches!(&stale, Err(error) if error.code() == "tool_write_conflict"),
-            "unexpected write conflict result: {stale:?}"
-        );
-        let write = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Write(WriteInput {
-                    path: relative("existing.txt"),
-                    content: BoundedText::new("after").expect("content"),
-                    expected_content: Some(BoundedText::new("before").expect("expected")),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("matching write dispatches");
-        assert!(matches!(write, ToolResult::Write(_)));
-
-        // Glob of a new path resolves to an empty result.
-        let glob = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Glob(GlobInput {
-                    pattern: BoundedText::new("*.new").expect("pattern"),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("empty glob dispatches");
-        assert!(matches!(glob, ToolResult::Glob(_)));
-    }
-
-    #[test]
-    fn direct_edit_and_glob_error_and_bound_branches_are_typed() {
-        let dir = TempDir::new().expect("temporary fixture dir");
-        std::fs::write(dir.path().join("plain.txt"), "known content").expect("seed plain");
-        std::fs::write(dir.path().join("huge.txt"), vec![b'a'; 1024 * 1024 + 16])
-            .expect("seed huge");
-        std::fs::create_dir(dir.path().join("files")).expect("seed directory");
-        std::fs::write(dir.path().join("files/one.txt"), "one").expect("seed one");
-        let service = ToolService::new(workspace(&dir));
-
-        // A missing edit target is a typed failure.
-        let missing = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Edit(EditInput {
-                path: relative("plain.txt"),
-                old: BoundedText::new("absent").expect("old"),
-                new: BoundedText::new("x").expect("new"),
-                expected_content: None,
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(matches!(&missing, Err(error) if error.code() == "edit_target_missing"));
-
-        // An oversized edit target is rejected before any read-back.
-        let oversized = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Edit(EditInput {
-                path: relative("huge.txt"),
-                old: BoundedText::new("a").expect("old"),
-                new: BoundedText::new("b").expect("new"),
-                expected_content: None,
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(matches!(
-            &oversized,
-            Err(error) if error.code() == "tool_edit_target_too_large"
-        ));
-
-        // Reading a directory fails closed.
-        let directory = service.dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Read(ReadInput {
-                path: relative("files"),
-            }),
-            CancellationSignal::new(),
-        );
-        assert!(matches!(&directory, Err(error) if error.code() == "tool_read_failed"));
-
-        // A successful glob returns the matching workspace-relative paths.
-        let matched = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Glob(GlobInput {
-                    pattern: BoundedText::new("files/*.txt").expect("pattern"),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("matching glob dispatches");
-        let ToolResult::Glob(glob) = matched else {
-            panic!("glob result expected");
-        };
-        assert_eq!(glob.paths.len(), 1);
-    }
-
-    #[test]
-    fn direct_grep_clamps_long_lines_within_the_fragment_window() {
-        let dir = TempDir::new().expect("temporary fixture dir");
-        let mut long_line = vec![b'x'; 70 * 1024];
-        long_line.splice(70 * 1024 - 8.., b"needle!".iter().copied());
-        std::fs::write(dir.path().join("long.txt"), &long_line).expect("seed long line");
-        let service = ToolService::new(workspace(&dir));
-
-        let grep = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Grep(GrepInput {
-                    pattern: BoundedText::new("needle").expect("pattern"),
-                    scope: None,
-                    path: Some(relative("long.txt")),
-                }),
-                CancellationSignal::new(),
-            )
-            .expect("long-line grep dispatches");
-        let ToolResult::Grep(grep) = grep else {
-            panic!("grep result expected");
-        };
-        assert!(
-            grep.truncated,
-            "a match beyond the fragment window truncates"
-        );
-        for matched in &grep.matches {
-            assert!(matched.fragment.as_str().len() <= 64 * 1024);
-        }
-    }
-
-    #[test]
-    fn execute_input_serde_decodes_arguments() {
-        let valid = serde_json::from_str::<ExecuteInput>(r#"{"program":"echo","args":["a","b"]}"#)
-            .expect("valid execute input decodes");
-        assert_eq!(valid.args.len(), 2);
-    }
 }

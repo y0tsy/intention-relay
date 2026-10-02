@@ -4,7 +4,7 @@
 
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make verify` evidence passes.
 
-The required quality commands, pinned tools, coverage tiers, lint policy, feature profiles, architecture checks, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md). Test-first and outcome-verification rules are defined in [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The immutable M0/M1 phase-closure baseline and verification matrix are recorded in [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md). M2 closeout evidence is tracked separately in [M2 Closure Evidence](../closeout/m2-closure-evidence.md); its full `make verify` result passed on the recorded M2 worktree, while its immutable commit baseline remains pending.
+The required quality commands, pinned tools, the coverage policy ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), lint policy, feature profiles, architecture checks, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md). Test-first and outcome-verification rules are defined in [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md). The immutable M0/M1 phase-closure baseline and verification matrix are recorded in [M0/M1 Closure Evidence](../closeout/m0-m1-closure-evidence.md). M2 closeout evidence is tracked separately in [M2 Closure Evidence](../closeout/m2-closure-evidence.md); its full `make verify` result passed on the recorded M2 worktree, while its immutable commit baseline remains pending.
 
 ## Dependency graph
 
@@ -48,12 +48,18 @@ flowchart TD
 
 Every milestone after Milestone 0 must:
 
-1. assign every new production crate a coverage tier before code is merged;
+1. cover every new production crate with the base 80% line-coverage threshold
+   before code is merged ([ADR 0049](../decisions/0049-base-coverage-threshold.md));
 2. add or update failing DTO, domain, architecture, and outcome tests before or with implementation;
 3. classify new optional Cargo features in the feature-profile policy in the same change;
 4. use only pinned dependencies and tools;
 5. run `make quick` during development and `make verify` before acceptance;
 6. record any policy exception in a reviewed, versioned policy file with rationale and equivalent test evidence.
+
+The tier numbers in the closed M0-M5 milestone records below are historical
+acceptance evidence, not current policy: [ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced
+them with the base 80% line-coverage threshold and the designated-files
+mechanism.
 
 ## Milestone 0: Reproducible quality foundation
 
@@ -445,8 +451,9 @@ activated by earlier slices in this order:
    ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)); explicit DTO
    schema versions with exact-equality comparison; SQLite as one live storage
    schema created directly on open (no migration chain; ADR 0038); and crate
-   ownership, feature-profile, and coverage-tier declarations for every
-   activated family. The former contract ledger, `run-execution-meaning-v4`
+   ownership, feature-profile, and coverage declarations under
+   [ADR 0049](../decisions/0049-base-coverage-threshold.md) for every activated
+   family. The former contract ledger, `run-execution-meaning-v4`
    field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and digests
    were deleted by
    [ADR 0046](../decisions/0046-typed-serde-json-contracts.md): no ledger, tag
@@ -581,8 +588,9 @@ nothing.
   capability, bridge grant, kernel epoch, context projection, or branch;
   their recorded non-authority fixtures were removed
   with the revert, and a re-introduction must restore them;
-- applicable crates meet their declared coverage tiers without excluding
-  policy or boundary logic; every activated slice passes `make quick`,
+- applicable crates meet the base 80% line-coverage threshold (and any
+  designated-file bar) without excluding policy or boundary logic; every
+  activated slice passes `make quick`,
   `make verify`, and Linux/Windows CI;
 - no slice ships half-ready: every activated contract ships with its version,
   owner, tests, policy mapping, storage/schema treatment, and evidence
@@ -734,7 +742,8 @@ not redefine the loop.
 - Plan `execute` focus/audit tests;
 - same-Session approval-to-fresh-Build tests with new `RunId` and pinned plan revision;
 - optional handoff snapshot, lineage, redaction, and no-live-state-transfer tests;
-- Tier B coverage fixtures for plan policy and artifact integrity.
+- Coverage fixtures for plan policy and artifact integrity under the base 80%
+  threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)).
 
 ### Acceptance outcomes
 
@@ -744,7 +753,9 @@ not redefine the loop.
 - approving a plan starts Build Autopilot in the same Session with a new `RunId`;
 - optional handoff creates an independent Session from a safe frozen context;
 - model context excludes plan frontmatter;
-- plan policy/artifact crates meet Tier B coverage with mandatory captured-context and denial scenarios.
+- plan policy/artifact crates meet the base 80% line-coverage threshold
+  ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) with mandatory
+  captured-context and denial scenarios.
 
 ## Milestone 8: VFR and Headroom extensions
 
@@ -761,14 +772,17 @@ not redefine the loop.
 - Headroom retention/retrieval/expiry fixtures;
 - full hook-order integration test;
 - UI/model representation distinction test;
-- Tier B coverage fixtures for transform, expiry, retrieval, and error paths.
+- Coverage fixtures for transform, expiry, retrieval, and error paths under the
+  base 80% threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)).
 
 ### Acceptance outcomes
 
 - VFR and Headroom operate as independently enabled hook extensions;
 - `retrieve` returns retained content while valid and typed expiry behavior afterward;
 - base tools do not import VFR or Headroom implementation crates;
-- extension crates meet Tier B coverage and feature-profile checks.
+- extension crates meet the base 80% line-coverage threshold
+  ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) and feature-profile
+  checks.
 
 ## Milestone 9: Hardening and acceptance verification
 
@@ -834,7 +848,9 @@ calendar/interval/time-zone/DST direction of
 It activates no M5+ slice, no second runtime, registry, scheduler, persistence
 authority, or sandbox, and it begins only after its approved implementation
 specification declares crates, DTO/wire/storage versions, feature profiles,
-coverage tiers, fixtures, and outcome evidence.
+coverage declarations under
+[ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome
+evidence.
 
 ### Deliver
 
@@ -852,7 +868,8 @@ coverage tiers, fixtures, and outcome evidence.
   recovery-before-scheduling (architecture 16);
 - calendar/interval/time-zone/DST semantics for Mandate scheduler triggers,
   never an admission quota (ADR 0034, architecture 16); and
-- crate ownership, feature-profile, coverage-tier, and quality-policy
+- crate ownership, feature-profile, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), and quality-policy
   declarations for every activated family (architecture 01 post-M4 allocation),
   published with the activating specification.
 
@@ -894,7 +911,8 @@ packages (architectures 15/17/19) under decisions 0004, 0007, 0009, 0011, and
 [decision 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md),
 and the worker/process supervision topology direction of ADR 0034. It begins
 only after its approved implementation specification declares crates,
-DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
+DTO/wire/storage versions, feature profiles, coverage declarations under
+[ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and
 outcome evidence.
 
 ### Deliver
@@ -918,7 +936,8 @@ outcome evidence.
 - worker/process supervision topology, never a second runtime, registry,
   scheduler, persistence authority, or sandbox (ADR 0034, architecture 03);
   and
-- crate ownership, feature-profile, coverage-tier, and quality-policy
+- crate ownership, feature-profile, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), and quality-policy
   declarations for every activated family.
 
 ### Tests first
@@ -965,7 +984,8 @@ projection direction of ADR 0034, and the architecture 22 provider work that
 remains not activated after the Slice 2 revert: the `responses`
 driver, `SafeHeader` live wire injection, and the user-kind parser. It begins only
 after its approved implementation specification declares crates,
-DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
+DTO/wire/storage versions, feature profiles, coverage declarations under
+[ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and
 outcome evidence; that activating change also declares the kernel contract
 families as typed serde JSON contracts (ADR 0046).
 
@@ -992,7 +1012,8 @@ families as typed serde JSON contracts (ADR 0046).
   by architecture 28;
 - the canonical `responses` provider driver, `SafeHeader` live wire injection,
   and the user-kind parser (architecture 22); and
-- crate ownership, feature-profile, coverage-tier, and quality-policy
+- crate ownership, feature-profile, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), and quality-policy
   declarations for every activated family.
 
 ### Tests first
@@ -1625,7 +1646,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - M3/M4 bytes, `tool_execution_unavailable`, replay, and recovery remain
   unchanged;
 - the Slice 3 activation delivers the tool-descriptor, tool-registry, and
@@ -1655,7 +1677,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - M3/M4 linear sessions and the additive byte-preserving migration remain
   unchanged; and
 - activation remains excluded pending a later M5+ specification.
@@ -1688,7 +1711,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - the RLM tree bounds never become Mandate admission quotas or child-graph
   limits; M3/M4 bytes remain unchanged;
 - the Slice 3 activation delivers the bridge-invocation and MCP-method-catalog
@@ -1725,7 +1749,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - M3/M4 provider bytes, `openrouter`/`generic-chat-completion-api` kinds, and
   legacy replay remain unchanged; and
 - activation remains excluded pending a later M5+ specification.
@@ -1756,7 +1781,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - M3/M4 session/run subscriptions and replay remain unchanged; the adopted
   numeric values are intrinsic/capacity bounds, never Mandate quotas; and
 - activation remains excluded pending a later M5+ specification.
@@ -1787,7 +1813,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - the failures are known typed pre-effect rejections, never Mandate quotas;
   historical M4 and non-harness runs acquire no synthetic harness record; and
 - activation remains excluded pending a later M5+ specification.
@@ -1812,7 +1839,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - the direction is additive to ADR 0017/0018 and never resumes old work;
   M3/M4 bytes remain unchanged; and
 - activation remains excluded pending a later M5+ specification.
@@ -1838,7 +1866,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - the directions are non-authorizing and never expose raw content or partially
   cancel work; M3/M4 bytes remain unchanged; and
 - activation remains excluded pending a later M5+ specification.
@@ -1876,7 +1905,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - each direction affects fresh runs only, is non-authorizing before its own
   activating specification, never resumes old external work, and never
   rewrites historical bytes; M3/M4 bytes remain unchanged; and
@@ -1915,7 +1945,8 @@ profile, quality-policy target, or implementation milestone.
 ### Exit criteria
 
 - the M5+ activating specification declares exact crates, DTO/wire/storage
-  versions, feature profiles, coverage tiers, fixtures, and outcome evidence;
+  versions, feature profiles, coverage declarations under
+  [ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and outcome evidence;
 - each direction affects fresh runs only, is non-authorizing before its own
   activating specification, never resumes old external work, and never
   rewrites historical bytes; M3/M4 bytes remain unchanged; and
@@ -1959,7 +1990,8 @@ implementation, feature profile, quality-policy target, or production behavior.
 ### Exit criteria
 
 - the fifth slice's activating specification declares exact crates,
-  DTO/wire/storage versions, feature profiles, coverage tiers, fixtures, and
+  DTO/wire/storage versions, feature profiles, coverage declarations under
+[ADR 0049](../decisions/0049-base-coverage-threshold.md), fixtures, and
   outcome evidence, and declares the instruction contract families as typed
   serde JSON contracts;
 - instruction text is advisory-only: no instruction source grants authority, no

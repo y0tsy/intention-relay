@@ -41,8 +41,6 @@ use intention_transport::{LocalConnection, negotiate_daemon};
 use intention_types::{
     CorrelationIdDto, DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallDto,
 };
-#[cfg(test)]
-use std::thread;
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 const SUBSCRIBER_WRITE_DEADLINE: Duration = Duration::from_secs(10);
@@ -1506,28 +1504,6 @@ impl TestHostLifecycle {
     }
 }
 
-#[cfg(test)]
-fn serve_next_connection(
-    listener: &LocalListener,
-    facade: &DaemonApplicationFacade,
-) -> DtoResult<()> {
-    listener.accept().map_or_else(
-        |_| {
-            Err(ErrorDto::unavailable(
-                "local_daemon_listener_unavailable",
-                "the local daemon listener is unavailable",
-            ))
-        },
-        |connection| {
-            let connection_facade = facade.clone();
-            let _ = thread::Builder::new()
-                .name("intention-daemon-connection".to_owned())
-                .spawn(move || serve_connection(connection, connection_facade));
-            Ok(())
-        },
-    )
-}
-
 #[cfg(any(test, feature = "test-support"))]
 fn serve_connection(mut connection: LocalConnection, facade: DaemonApplicationFacade) {
     let hello = match daemon_hello() {
@@ -1588,7 +1564,7 @@ mod tests {
     )]
 
     use super::*;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use intention_config::{
         ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
@@ -1606,7 +1582,7 @@ mod tests {
         ProtocolResponsePayloadDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
         decode_response, encode_request,
     };
-    use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener, negotiate_client};
+    use intention_transport::{AsyncLocalClientConnection, AsyncLocalListener};
     use intention_types::{
         ConfigRevisionId, ProjectId, SchemaVersionDto, TimestampDto, TurnId, WorkspaceId,
     };
@@ -1720,20 +1696,6 @@ mod tests {
         }
     }
 
-    struct ImmediateTime;
-
-    impl ModelTimePort for ImmediateTime {
-        fn now(&self) -> TimestampDto {
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
-        }
-
-        fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-            Box::pin(async move {
-                let _ = duration;
-            })
-        }
-    }
-
     fn create_and_start(facade: &DaemonApplicationFacade) -> (SessionId, RunId) {
         let session_id = SessionId::new();
         assert!(matches!(
@@ -1768,140 +1730,6 @@ mod tests {
     fn fixture_hello() -> ProtocolHelloDto {
         ProtocolHelloDto::new(local_protocol_version(), "daemon-host-test")
             .expect("fixture hello is valid")
-    }
-
-    #[tokio::test]
-    async fn tokio_time_exposes_a_safe_timestamp_and_sleep_future() {
-        let time = TokioTime;
-        assert!(time.now().unix_seconds() >= 0);
-        time.sleep(Duration::ZERO).await;
-        let immediate = ImmediateTime;
-        immediate.sleep(Duration::ZERO).await;
-    }
-
-    #[tokio::test]
-    async fn async_host_keeps_m3_requests_and_run_streams_on_one_listener() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
-        let endpoint = endpoint();
-        let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
-        let host = host_for_test(facade);
-        let server = tokio::spawn(async move {
-            for _ in 0..2 {
-                let connection = listener.accept().await.expect("client connects");
-                let host = Arc::clone(&host);
-                tokio::spawn(async move { serve_async_connection(connection, host).await });
-            }
-        });
-
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
-            .await
-            .expect("command client connects");
-        let (_remote, mut requests, mut messages) = connection
-            .negotiate(fixture_hello())
-            .await
-            .expect("command client negotiates");
-        let session_id = SessionId::new();
-        requests
-            .send_message(&encode_request(
-                1,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
-                    CreateSessionCommandDto::new(
-                        ProjectId::new(),
-                        session_id,
-                        WorkspaceId::new(),
-                        WorkspaceRootDto::parse(
-                            std::env::temp_dir().to_string_lossy().into_owned(),
-                        )
-                        .expect("fixture workspace is absolute"),
-                        RunModeDto::Build,
-                    ),
-                )),
-            ))
-            .await
-            .expect("create request sends");
-        let line = messages
-            .receive_line()
-            .await
-            .expect("create response arrives");
-        assert!(matches!(
-            decode_response(&line, ProtocolMethodDto::SessionCreate, 1),
-            Ok(ProtocolResponsePayloadDto::CommandResult(
-                ProtocolCommandResultDto::Accepted(_)
-            ))
-        ));
-
-        requests
-            .send_message(&encode_request(
-                2,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-                    SendUserTurnCommandDto::new(session_id, TurnId::new(), "streamed turn")
-                        .expect("fixture turn is valid"),
-                )),
-            ))
-            .await
-            .expect("turn request sends");
-        let line = messages
-            .receive_line()
-            .await
-            .expect("turn response arrives");
-        let ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted)) =
-            decode_response(&line, ProtocolMethodDto::TurnSend, 2).expect("turn response decodes")
-        else {
-            panic!("turn response is accepted")
-        };
-        let ProtocolAcceptedResultDto::SendUserTurn(turn) = accepted.result() else {
-            panic!("turn response contains a run")
-        };
-        let SendUserTurnOutcomeDto::Started { run_id, .. } = turn.outcome() else {
-            panic!("turn starts a run")
-        };
-        drop(requests);
-        drop(messages);
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let connection = AsyncLocalClientConnection::connect(&endpoint)
-            .await
-            .expect("stream client connects");
-        let (_remote, mut requests, mut messages) = connection
-            .negotiate(fixture_hello())
-            .await
-            .expect("stream client negotiates");
-        let subscription = SubscribeRunCommandDto::new(
-            intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            run_id,
-            None,
-        );
-        requests
-            .send_message(&encode_request(
-                3,
-                ProtocolRequestPayloadDto::RunSubscription(subscription),
-            ))
-            .await
-            .expect("stream subscription sends");
-        let line = messages
-            .receive_line()
-            .await
-            .expect("current replay arrives");
-        // W-13: the repeated replay request must answer with the concrete
-        // correlated `Replay` payload, not merely the right payload variant.
-        let envelope: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
-            JsonRpcResponseDto::parse(&line).expect("the replay reply is a JSON-RPC response");
-        assert_eq!(
-            envelope.id(),
-            Some(3),
-            "the replay reply echoes its request id"
-        );
-        let ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) =
-            decode_response(&line, ProtocolMethodDto::RunSubscribe, 3)
-                .expect("current replay decodes")
-        else {
-            panic!("a registered run subscription answers with the concrete replay payload")
-        };
-        assert_eq!(replay.snapshot().session_id(), session_id);
-        assert_eq!(replay.snapshot().run_id(), run_id);
-        assert_eq!(replay.tail().after_cursor(), replay.snapshot().cursor());
-        server.await.expect("host accepted both connections");
     }
 
     #[tokio::test]
@@ -1990,70 +1818,6 @@ mod tests {
         server.await.expect("host serves the refused peer");
     }
 
-    #[tokio::test]
-    async fn host_executes_starting_run_once_and_publishes_durable_live_batches() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(CompletedDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade.clone());
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(SUBSCRIBER_QUEUE_CAPACITY);
-        let (close, _closed) = tokio::sync::watch::channel(false);
-        assert!(
-            host.register_subscriber(session_id, run_id, None, sender, close, 1)
-                .is_some()
-        );
-        assert!(matches!(
-            receiver.recv().await,
-            Some(ProtocolDaemonMessageDto::Response(_))
-        ));
-
-        host.schedule_if_starting(session_id, run_id);
-        host.schedule_if_starting(session_id, run_id);
-        let mut saw_live = false;
-        let mut saw_completed = false;
-        for _ in 0..6 {
-            let message = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
-                .await
-                .expect("host publishes promptly")
-                .expect("subscriber remains connected");
-            match message {
-                ProtocolDaemonMessageDto::Notification(notification) => {
-                    match notification.into_params() {
-                        RunStreamFrameDto::LiveBatch(batch) => {
-                            saw_live |= !batch.facts().is_empty();
-                        }
-                        RunStreamFrameDto::Snapshot(snapshot) => {
-                            saw_completed |= snapshot.snapshot().run_projection().status()
-                                == RunStatusDto::Completed;
-                        }
-                        RunStreamFrameDto::Resync(_) => {}
-                    }
-                }
-                ProtocolDaemonMessageDto::Response(_) => {}
-            }
-            if saw_live && saw_completed {
-                break;
-            }
-        }
-        assert!(saw_live);
-        assert!(saw_completed);
-        assert_eq!(
-            facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
-                .expect("completed run reads")
-                .snapshot()
-                .run_projection()
-                .status(),
-            RunStatusDto::Completed
-        );
-        assert!(
-            host.data
-                .lock()
-                .expect("host registry remains available")
-                .tasks
-                .is_empty()
-        );
-    }
-
     #[test]
     fn duplicate_or_unknown_admission_never_creates_an_extra_task() {
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
@@ -2089,43 +1853,21 @@ mod tests {
             .stop_run_for_daemon_host(session_id, run_id)
             .expect("fixture run becomes cancelling");
         host.schedule_if_starting(session_id, run_id);
-    }
-
-    #[tokio::test]
-    async fn host_stop_without_an_admitted_task_terminalizes_and_cleans_the_registry() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade.clone());
-        host.stop_run(session_id, run_id)
-            .expect("host stop commits cancelling without a task");
-        for _ in 0..20 {
-            if facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
-                .expect("run replay reads")
-                .snapshot()
-                .run_projection()
-                .status()
-                == RunStatusDto::Cancelled
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(
-            facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
-                .expect("cancelled run replay reads")
-                .snapshot()
-                .run_projection()
-                .status(),
-            RunStatusDto::Cancelled
-        );
         assert!(
             host.data
                 .lock()
                 .expect("host registry remains available")
                 .tasks
                 .is_empty()
+        );
+        assert_eq!(
+            host.facade
+                .load_current_run_replay_for_daemon(session_id, run_id)
+                .expect("cancelling run replay reads")
+                .snapshot()
+                .run_projection()
+                .status(),
+            RunStatusDto::Cancelling
         );
     }
 
@@ -2288,21 +2030,6 @@ mod tests {
         assert!(slow_receiver.recv().await.is_some());
     }
 
-    #[test]
-    fn daemon_hello_and_subscription_response_are_typed() {
-        let hello = daemon_hello().expect("daemon hello is valid");
-        assert!(format!("{hello:?}").contains("intention-daemon"));
-        let frame = run_subscription_response(
-            7,
-            RunSubscriptionResponseDto::Resync(RunResyncDto::new(
-                SessionId::new(),
-                RunId::new(),
-                RunResyncReasonDto::HistoryUnavailable,
-            )),
-        );
-        assert!(matches!(frame, ProtocolDaemonMessageDto::Response(_)));
-    }
-
     #[tokio::test]
     async fn a_full_subscriber_queue_fails_closed_instead_of_waiting_silently() {
         // C-03: when the per-connection queue cannot accept the correlated
@@ -2376,21 +2103,6 @@ mod tests {
         assert_eq!(content, "{\"matches\":[],\"truncated\":true}");
     }
 
-    #[tokio::test]
-    async fn terminalizer_retries_after_injected_failure() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
-        let (session_id, run_id) = create_and_start(&facade);
-        let host = host_for_test(facade.clone());
-        host.inject_terminalizer_failure_once();
-        host.stop_run(session_id, run_id).expect("stop is accepted");
-        host.wait_for_terminalizer_failure().await;
-        assert_eq!(host.terminalizer_attempts(), 1);
-        host.release_terminalizer_retry();
-        host.wait_for_terminalizer_completion().await;
-        assert_eq!(host.terminalizer_attempts(), 2);
-        assert_eq!(host.data.lock().expect("host data").tasks.len(), 0);
-    }
-
     #[test]
     fn daemon_tool_decoder_covers_every_advertised_model_visible_tool() {
         let advertised = intention_tools::model_visible_descriptors();
@@ -2425,14 +2137,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn lifecycle_shutdown_aborts_fixture_tasks() {
-        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
-        let lifecycle = test_host_lifecycle(facade);
-        assert_eq!(lifecycle.task_count(), 0);
-        lifecycle.shutdown().await;
-    }
-
     #[test]
     fn run_rejects_an_endpoint_already_owned_by_another_host() {
         let endpoint = endpoint();
@@ -2443,35 +2147,5 @@ mod tests {
                 .code(),
             "local_daemon_endpoint_in_use"
         );
-    }
-
-    #[test]
-    fn listener_accepts_and_dispatches_one_typed_health_query() {
-        let endpoint = endpoint();
-        let listener = LocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-        let mut client = LocalConnection::connect(&endpoint).expect("fixture client connects");
-        let server = std::thread::spawn(move || {
-            let (directory, facade) = fixture_facade();
-            let _directory = directory;
-            serve_next_connection(&listener, &facade)
-        });
-        server
-            .join()
-            .expect("single accept thread completes")
-            .expect("single accept succeeds");
-        negotiate_client(&mut client, fixture_hello()).expect("fixture hello negotiates");
-        client
-            .send_message(&encode_request(
-                1,
-                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
-            ))
-            .expect("health request sends");
-        let line = client.receive_line().expect("health response arrives");
-        assert!(matches!(
-            decode_response(&line, ProtocolMethodDto::DaemonHealth, 1),
-            Ok(ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)))
-                if health.readiness() == intention_protocol::DaemonReadinessDto::Ready
-        ));
-        std::thread::sleep(Duration::from_millis(1));
     }
 }

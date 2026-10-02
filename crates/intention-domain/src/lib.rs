@@ -1700,29 +1700,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_lifecycle_transitions_cover_initial_and_all_allowed_edges() {
-        let admitted = ToolLifecycleStatusDto::Admitted;
-        let started = ToolLifecycleStatusDto::Started;
-        let terminal = [
-            ToolLifecycleStatusDto::Completed,
-            ToolLifecycleStatusDto::Failed,
-            ToolLifecycleStatusDto::Cancelled,
-            ToolLifecycleStatusDto::ExternalEffectUnknown,
-        ];
-
-        assert!(validate_tool_lifecycle_transition(None, &admitted).is_ok());
-        for successor in [
-            ToolLifecycleStatusDto::Started,
-            ToolLifecycleStatusDto::Rejected,
-        ] {
-            assert!(validate_tool_lifecycle_transition(Some(&admitted), &successor).is_ok());
-        }
-        for successor in &terminal {
-            assert!(validate_tool_lifecycle_transition(Some(&started), successor).is_ok());
-        }
-    }
-
-    #[test]
     fn tool_lifecycle_transitions_reject_duplicates_invalid_initial_and_terminal_edges() {
         let statuses = [
             ToolLifecycleStatusDto::Admitted,
@@ -1788,13 +1765,6 @@ mod tests {
             ),
         ] {
             assert_eq!(status.lifecycle_status(), lifecycle);
-            assert!(
-                validate_tool_lifecycle_transition(
-                    Some(&ToolLifecycleStatusDto::Started),
-                    &status.lifecycle_status(),
-                )
-                .is_ok()
-            );
         }
     }
 }

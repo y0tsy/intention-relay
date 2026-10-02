@@ -572,10 +572,12 @@ async fn request_replay_rejects_mismatched_correlation_and_error_reply_without_m
             .request_replay()
             .await
             .expect_err("invalid replay response rejects");
-        assert!(matches!(
-            error.code(),
-            "invalid_local_protocol_response" | "run_replay_rejected"
-        ));
+        let expected_code = if is_error_reply {
+            "run_replay_rejected"
+        } else {
+            "invalid_local_protocol_response"
+        };
+        assert_eq!(error.code(), expected_code);
         assert_eq!(subscription.reducer(), &before);
         server.await.expect("scripted peer completes");
     }

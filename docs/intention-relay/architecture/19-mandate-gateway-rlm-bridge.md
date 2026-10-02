@@ -351,7 +351,7 @@ migrations, wire tags, crates, Cargo, Makefile/CI, or production implementation.
 ## Required evidence before implementation
 
 A later activating specification must declare exact crate owners, test targets,
-coverage tiers, feature profiles, storage/wire versions, and architecture
+coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, storage/wire versions, and architecture
 fixtures, then pass `make quick`, `make verify`, and Linux/Windows CI. It must
 cover:
 

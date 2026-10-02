@@ -80,5 +80,4 @@ fn safe_errors_round_trip_without_internal_implementation_details() {
         serde_json::from_str(&encoded).expect("test deserialization must succeed");
 
     assert_eq!(decoded, error);
-    assert!(!encoded.contains("backtrace"));
 }

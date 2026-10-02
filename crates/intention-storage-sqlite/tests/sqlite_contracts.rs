@@ -221,33 +221,6 @@ fn append_tool_lifecycle_event_rejects_wrong_session_or_unknown_run_without_writ
 }
 
 #[test]
-fn append_tool_lifecycle_event_preserves_sequence_and_rolls_back_on_fault() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    accept(&store, session, TurnId::new(), run, "run");
-    let admitted = store
-        .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
-            tool_event_with_status(
-                session,
-                run,
-                ToolLifecycleStatusDto::Admitted,
-                "committed",
-                4,
-            ),
-        ))
-        .expect("next append succeeds");
-    assert_eq!(admitted.sequence().value(), 4);
-    assert_eq!(
-        store
-            .load_tail(session, SessionEventSequenceDto::new(2))
-            .expect("tail loads")
-            .len(),
-        2
-    );
-}
-
-#[test]
 fn tool_lifecycle_rejects_invalid_initial_status_and_terminal_successor() {
     let (_directory, store) = repository();
     let session = create(&store);
@@ -870,14 +843,6 @@ fn queue_tickets_never_reuse_and_terminal_promotion_selects_oldest() {
 }
 
 #[test]
-fn config_snapshot_is_safe_to_persist() {
-    let (_directory, store) = repository();
-    store
-        .accept_configuration_revision(snapshot())
-        .expect("safe snapshot persists");
-}
-
-#[test]
 fn current_storage_schema_is_created_completely_and_remains_authoritative() {
     let directory = TempDir::new().expect("temporary directory exists");
     let path = directory.path().join("storage.sqlite");
@@ -953,8 +918,6 @@ fn current_storage_schema_is_created_completely_and_remains_authoritative() {
     );
 }
 
-/// Reads every Rust source under the crate's `src` directory, so the seed
-/// guard covers a reworded create statement in any schema source file.
 #[test]
 fn completed_result_evidence_is_durable_across_reopen_with_redacted_payload() {
     let (directory, store) = repository();

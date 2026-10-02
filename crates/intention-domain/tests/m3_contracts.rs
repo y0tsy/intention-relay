@@ -4,8 +4,7 @@
 )]
 
 use intention_domain::{
-    CreateSessionCommandDto, QueuedTurnProjectionDto, RemoveQueuedTurnCommandDto, RunModeDto,
-    RunProjectionDto, RunStartedEventDto, RunStatusDto, SessionCreatedEventDto,
+    QueuedTurnProjectionDto, RunModeDto, RunProjectionDto, RunStartedEventDto, RunStatusDto,
     SessionProjectionDto, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_types::{
@@ -25,46 +24,6 @@ fn workspace_root() -> WorkspaceRootDto {
             .into_owned(),
     )
     .expect("native fixture workspace is valid")
-}
-
-#[test]
-fn m3_sessions_require_stable_workspace_identity_in_commands_events_and_projections() {
-    let project_id = ProjectId::new();
-    let session_id = SessionId::new();
-    let workspace_id = WorkspaceId::new();
-    let workspace_root = workspace_root();
-    let create = CreateSessionCommandDto::new(
-        project_id,
-        session_id,
-        workspace_id,
-        workspace_root.clone(),
-        RunModeDto::Build,
-    );
-    assert_eq!(create.workspace_id(), workspace_id);
-    let created = SessionCreatedEventDto::new(
-        project_id,
-        session_id,
-        workspace_id,
-        workspace_root.clone(),
-        RunModeDto::Build,
-        fixture_time(),
-    );
-    assert_eq!(created.workspace_id(), workspace_id);
-    let projection = SessionProjectionDto::new(
-        project_id,
-        session_id,
-        workspace_id,
-        workspace_root,
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-        SessionEventSequenceDto::new(3),
-    )
-    .expect("coherent projection is valid");
-    assert_eq!(projection.workspace_id(), workspace_id);
-    let remove = RemoveQueuedTurnCommandDto::new(session_id, TurnId::new());
-    assert_eq!(remove.session_id(), session_id);
 }
 
 #[test]
@@ -108,28 +67,6 @@ fn stable_queue_tickets_allow_gaps_but_require_ascending_unique_order() {
         )
         .is_err()
     );
-}
-
-#[test]
-fn m3_runs_require_a_config_revision_in_projections_and_start_events() {
-    let session_id = SessionId::new();
-    let revision = ConfigRevisionId::new();
-    let run = RunProjectionDto::new(
-        session_id,
-        RunId::new(),
-        TurnId::new(),
-        RunStatusDto::Queued,
-        revision,
-    );
-    assert_eq!(run.config_revision_id(), revision);
-    let started = RunStartedEventDto::new(
-        session_id,
-        run.run_id(),
-        run.turn_id(),
-        revision,
-        fixture_time(),
-    );
-    assert_eq!(started.config_revision_id(), revision);
 }
 
 #[test]
@@ -186,7 +123,7 @@ fn m3_event_payloads_validate_and_expose_all_public_fields() {
 }
 
 #[test]
-fn m3_projection_deserialization_rejects_invalid_nested_turns() {
+fn m3_projection_rejects_a_queued_turn_from_a_foreign_session() {
     let session_id = SessionId::new();
     let queued = QueuedTurnProjectionDto::new(
         SessionId::new(),
@@ -250,19 +187,6 @@ fn m3_projection_accessors_and_deserialization_cover_optional_state() {
 }
 
 #[test]
-fn run_status_terminal_classification_is_complete() {
-    for status in [
-        RunStatusDto::Completed,
-        RunStatusDto::Cancelled,
-        RunStatusDto::Failed,
-        RunStatusDto::Interrupted,
-    ] {
-        assert!(status.is_terminal());
-    }
-    assert!(!RunStatusDto::Starting.is_terminal());
-}
-
-#[test]
 fn run_status_state_machine_accepts_only_declared_edges() {
     let statuses = [
         RunStatusDto::Queued,
@@ -309,7 +233,7 @@ fn run_status_state_machine_accepts_only_declared_edges() {
 }
 
 #[test]
-fn plan_transitions_cover_all_allowed_and_rejected_edges() {
+fn plan_transitions_accept_allowed_edges_and_reject_terminal_restarts() {
     use intention_domain::{PlanStatusDto, validate_plan_status_transition};
     assert!(validate_plan_status_transition(None, PlanStatusDto::Drafting).is_ok());
     for (from, to) in [

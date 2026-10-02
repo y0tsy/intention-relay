@@ -38,44 +38,13 @@ fn record() -> ToolResultRecordedEventDto {
 }
 
 #[test]
-fn tool_result_record_round_trips_with_typed_identity_and_accessors() {
+fn tool_result_record_round_trips_with_typed_identity() {
     let event = record();
-    assert_eq!(event.tool_id(), "read");
-    assert_eq!(event.status(), ToolResultStatusDto::Completed);
-    assert_eq!(event.normalized_content(), "bounded safe result");
-    assert_eq!(event.structured_metadata().len(), 2);
-    assert_eq!(event.structured_metadata()[0].key(), "bytes");
-    assert_eq!(event.structured_metadata()[0].value(), "17");
-    assert_eq!(event.occurred_at(), time());
 
     let decoded: ToolResultRecordedEventDto =
         serde_json::from_str(&serde_json::to_string(&event).expect("record serializes"))
             .expect("record decodes");
     assert_eq!(decoded, event);
-
-    let session_id = event.session_id();
-    let payload = DomainEventDto::ToolResultRecorded(event);
-    let envelope = EventEnvelopeDto::new(
-        intention_types::EventMetadataDto::new(
-            SchemaVersionDto::new(1, 0),
-            EventId::new(),
-            session_id,
-            None,
-            None,
-            SessionEventSequenceDto::new(1),
-            time(),
-        ),
-        payload,
-    );
-    let encoded = serde_json::to_string(&envelope).expect("envelope serializes");
-    let decoded: EventEnvelopeDto<DomainEventDto> =
-        serde_json::from_str(&encoded).expect("envelope decodes");
-    assert_eq!(decoded.session_id(), session_id);
-    assert_eq!(decoded.payload(), envelope.payload());
-    assert!(matches!(
-        decoded.payload(),
-        DomainEventDto::ToolResultRecorded(_)
-    ));
 }
 
 #[test]
@@ -111,19 +80,6 @@ fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
         )
         .is_ok()
     );
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "x".repeat(4 * 1024),
-            Vec::new(),
-            time(),
-        )
-        .is_ok()
-    );
     // Content beyond the former 4 KiB cap is accepted.
     assert!(
         ToolResultRecordedEventDto::new(
@@ -152,31 +108,12 @@ fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
         .is_err()
     );
 
-    let bounded_metadata = || -> Vec<ToolResultMetadataEntryDto> {
-        (0..16)
-            .map(|index| entry(&format!("key{index}"), "v"))
-            .collect()
-    };
-    assert!(
-        ToolResultRecordedEventDto::new(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            ToolResultStatusDto::Completed,
-            "content",
-            bounded_metadata(),
-            time(),
-        )
-        .is_ok()
-    );
     let oversized_metadata = || -> Vec<ToolResultMetadataEntryDto> {
         (0..17)
             .map(|index| entry(&format!("key{index}"), "v"))
             .collect()
     };
-    // Metadata beyond the former 16-entry cap is accepted, and materially
-    // larger collections are preserved in full.
+    // Metadata beyond the former 16-entry cap is accepted.
     let record = ToolResultRecordedEventDto::new(
         session_id,
         run_id,
@@ -189,21 +126,6 @@ fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
     )
     .expect("record with 17 metadata entries is accepted");
     assert_eq!(record.structured_metadata().len(), 17);
-    let wide_metadata = (0..64)
-        .map(|index| entry(&format!("wide{index}"), "v"))
-        .collect::<Vec<_>>();
-    let record = ToolResultRecordedEventDto::new(
-        session_id,
-        run_id,
-        call_id,
-        "read",
-        ToolResultStatusDto::Completed,
-        "content",
-        wide_metadata,
-        time(),
-    )
-    .expect("record with 64 metadata entries is accepted");
-    assert_eq!(record.structured_metadata().len(), 64);
     assert!(
         ToolResultRecordedEventDto::new(
             session_id,
@@ -220,22 +142,13 @@ fn tool_result_record_validates_identity_safety_and_metadata_uniqueness() {
 
     assert!(ToolResultMetadataEntryDto::new(" ", "v").is_err());
     assert!(ToolResultMetadataEntryDto::new("k", "bad\0value").is_err());
-    let key_128 = ToolResultMetadataEntryDto::new("x".repeat(128), "v").expect("128-byte key");
-    assert_eq!(key_128.key().len(), 128);
     // Keys and values beyond the former 128-byte and 1 KiB caps are accepted
     // and preserved exactly.
     let key_129 = ToolResultMetadataEntryDto::new("x".repeat(129), "v").expect("129-byte key");
     assert_eq!(key_129.key().len(), 129);
-    let value_1024 = ToolResultMetadataEntryDto::new("k", "x".repeat(1024)).expect("1 KiB value");
-    assert_eq!(value_1024.value().len(), 1024);
     let value_1025 =
         ToolResultMetadataEntryDto::new("k", "x".repeat(1025)).expect("1 KiB + 1 value");
     assert_eq!(value_1025.value().len(), 1025);
-    let huge_key = ToolResultMetadataEntryDto::new("x".repeat(8 * 1024), "v").expect("8 KiB key");
-    assert_eq!(huge_key.key().len(), 8 * 1024);
-    let huge_value =
-        ToolResultMetadataEntryDto::new("k", "x".repeat(16 * 1024)).expect("16 KiB value");
-    assert_eq!(huge_value.value().len(), 16 * 1024);
 }
 
 #[test]

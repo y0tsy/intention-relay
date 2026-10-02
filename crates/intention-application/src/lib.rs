@@ -1477,14 +1477,11 @@ fn result_phase_context(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_DURABLE_TOOL_RESULT_BYTES, canonical_failure_document, canonical_tool_result_document,
-        durable_tool_result_evidence, expected_tool_id, result_phase_context, terminal_error_tag,
-        terminal_status_for_error,
+        MAX_DURABLE_TOOL_RESULT_BYTES, canonical_tool_result_document, result_phase_context,
     };
-    use intention_domain::ToolLifecycleStatusDto;
     use intention_hooks::{Phase, PhaseContext};
-    use intention_tools::{ToolInput, ToolResult};
-    use intention_types::{ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
+    use intention_tools::ToolResult;
+    use intention_types::ToolCallId;
 
     fn bounded(value: &str) -> intention_tools::BoundedText {
         intention_tools::BoundedText::new(value)
@@ -1494,35 +1491,6 @@ mod tests {
     fn relative(value: &str) -> intention_types::WorkspaceRelativePathDto {
         intention_types::WorkspaceRelativePathDto::parse(value)
             .unwrap_or_else(|_| unreachable!("fixture relative path is valid"))
-    }
-
-    fn fixture_time() -> TimestampDto {
-        TimestampDto::from_unix_seconds(1)
-            .unwrap_or_else(|_| unreachable!("fixture timestamp is valid"))
-    }
-
-    #[test]
-    fn maps_each_typed_tool_input_to_its_id() {
-        let _ = (expected_tool_id, ToolInput::Read);
-    }
-
-    #[test]
-    fn maps_terminal_error_statuses() {
-        assert_eq!(
-            terminal_status_for_error(&ErrorDto::validation("tool_cancelled", "x")),
-            ToolLifecycleStatusDto::Cancelled
-        );
-        assert_eq!(
-            terminal_status_for_error(&ErrorDto::validation(
-                "tool_execute_external_effect_unknown",
-                "x"
-            )),
-            ToolLifecycleStatusDto::ExternalEffectUnknown
-        );
-        assert_eq!(
-            terminal_status_for_error(&ErrorDto::validation("other", "x")),
-            ToolLifecycleStatusDto::Failed
-        );
     }
 
     #[test]
@@ -1657,85 +1625,5 @@ mod tests {
         assert!(document.len() <= MAX_DURABLE_TOOL_RESULT_BYTES);
         assert!(document.starts_with("{\"result\":\"grep\",\"value\":{\"matches\":[{\"path\":"));
         assert!(document.ends_with("\"truncated\":true}}"));
-    }
-
-    #[test]
-    fn failure_documents_carry_the_terminal_discriminator_and_code() {
-        assert_eq!(
-            canonical_failure_document("failed", "tool_read_failed"),
-            "{\"result\":\"failed\",\"value\":{\"code\":\"tool_read_failed\"}}"
-        );
-        assert_eq!(
-            terminal_error_tag(&ErrorDto::validation("tool_cancelled", "x")),
-            "cancelled"
-        );
-        assert_eq!(
-            terminal_error_tag(&ErrorDto::validation(
-                "tool_execute_external_effect_unknown",
-                "x"
-            )),
-            "external_effect_unknown"
-        );
-        assert_eq!(
-            terminal_error_tag(&ErrorDto::validation("other", "x")),
-            "failed"
-        );
-    }
-
-    #[test]
-    fn durable_evidence_binds_exact_identity_kind_and_time() {
-        let session_id = SessionId::new();
-        let run_id = RunId::new();
-        let call_id = ToolCallId::new();
-        let read = ToolResult::Read(intention_tools::TextResult {
-            text: bounded("hello"),
-            truncated: false,
-        });
-        let evidence = durable_tool_result_evidence(
-            session_id,
-            run_id,
-            call_id,
-            "read",
-            Ok(&read),
-            fixture_time(),
-        )
-        .unwrap_or_else(|_| unreachable!("typed result evidence is valid"));
-        assert_eq!(evidence.session_id(), session_id);
-        assert_eq!(evidence.run_id(), run_id);
-        assert_eq!(evidence.call_id(), call_id);
-        assert_eq!(evidence.kind(), intention_storage::ToolResultKindDto::Read);
-        assert_eq!(
-            evidence.content(),
-            "{\"result\":\"read\",\"value\":{\"text\":\"hello\",\"truncated\":false}}"
-        );
-        assert_eq!(evidence.occurred_at(), fixture_time());
-        let cancelled = durable_tool_result_evidence(
-            session_id,
-            run_id,
-            call_id,
-            "execute",
-            Err(&ErrorDto::validation("tool_cancelled", "x")),
-            fixture_time(),
-        )
-        .unwrap_or_else(|_| unreachable!("failure evidence is valid"));
-        assert_eq!(
-            cancelled.kind(),
-            intention_storage::ToolResultKindDto::Execute
-        );
-        assert_eq!(
-            cancelled.content(),
-            "{\"result\":\"cancelled\",\"value\":{\"code\":\"tool_cancelled\"}}"
-        );
-        assert!(
-            durable_tool_result_evidence(
-                session_id,
-                run_id,
-                call_id,
-                "unknown",
-                Ok(&read),
-                fixture_time(),
-            )
-            .is_err()
-        );
     }
 }

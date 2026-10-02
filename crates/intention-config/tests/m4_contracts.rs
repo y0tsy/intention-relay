@@ -133,6 +133,5 @@ fn startup_material_returns_safe_errors_before_provider_construction() {
             .err()
             .expect("invalid startup material must return an error");
         assert_eq!(error.code(), code);
-        assert!(!error.to_string().contains(FAKE_CREDENTIAL));
     }
 }

@@ -66,25 +66,6 @@ impl Hook for OrderingHook {
 }
 
 #[test]
-fn rejection_is_typed_and_stops_before_execution() {
-    let context = PhaseContext::Execution {
-        call: ToolCallId::new(),
-        input: ToolInput::Execute(ExecuteInput {
-            program: BoundedText::new("false").expect("program"),
-            args: vec![],
-        }),
-    };
-    let mut registry = Registry::default();
-    registry
-        .register(Box::new(RejectingHook))
-        .expect("register");
-    assert!(matches!(
-        registry.dispatch(&context).expect("dispatch"),
-        Outcome::Reject(_)
-    ));
-}
-
-#[test]
 fn rejection_skips_later_hook_effects() {
     let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let context = PhaseContext::Execution {
@@ -251,7 +232,6 @@ fn registration_revision_is_safe_metadata_and_ordering_tiebreaker() {
         .expect("dispatch");
     assert_eq!(*seen.lock().unwrap(), vec!["old", "new"]);
     assert!(result.failures.is_empty());
-    assert_eq!(FailurePolicy::FailClosed, FailurePolicy::FailClosed);
 }
 
 struct OutcomeHook {
@@ -392,7 +372,7 @@ fn result_transforms_are_rejected_for_every_input_phase() {
 }
 
 #[test]
-fn fail_open_is_observable_and_fail_closed_is_not_swallowed() {
+fn rejection_is_not_swallowed_and_emits_no_failure_metadata() {
     for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
         let mut registry = Registry::new();
         registry

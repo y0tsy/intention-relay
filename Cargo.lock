@@ -1008,7 +1008,6 @@ dependencies = [
  "intention-test-support",
  "intention-transport",
  "intention-types",
- "serde_json",
 ]
 
 [[package]]

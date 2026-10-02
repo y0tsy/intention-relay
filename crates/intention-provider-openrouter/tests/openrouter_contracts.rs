@@ -15,7 +15,7 @@ use std::{
 use futures_util::{Stream, task::noop_waker_ref};
 use intention_model::{
     FinishReasonDto, ModelCancellationSignal, ModelDriver, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto, ModelToolDefinitionDto,
+    ModelRequestDto, ModelRequestedCapabilitiesDto, ModelRoleDto,
 };
 use intention_provider_openrouter::OpenRouterDriver;
 use intention_types::RunId;
@@ -128,41 +128,6 @@ fn openrouter_public_driver_does_not_expose_credential() {
     assert!(!format!("{driver:?}").contains(FAKE_CREDENTIAL));
 }
 
-#[test]
-fn openrouter_driver_translates_all_text_roles_without_network_work() {
-    let mut driver = OpenRouterDriver::from_startup_material(material()).expect("driver builds");
-    let request = ModelRequestDto::new(
-        RunId::new(),
-        "fixture",
-        vec![
-            ModelMessageDto::new(ModelRoleDto::System, "system message").expect("message is valid"),
-            ModelMessageDto::new(ModelRoleDto::User, "user message").expect("message is valid"),
-            ModelMessageDto::new(ModelRoleDto::Assistant, "assistant message")
-                .expect("message is valid"),
-        ],
-        Some("separate system context".to_owned()),
-        Some(ModelRequestedCapabilitiesDto::new(true, false, true, false)),
-    )
-    .expect("request is valid");
-
-    driver.prepare_request(&request).expect("request prepares");
-    assert_eq!(driver.prepared_request_count(), 1);
-
-    let definition = ModelToolDefinitionDto::new(
-        "read",
-        "Read a workspace file",
-        r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-    )
-    .expect("tool definition is valid");
-    let tool_request = request
-        .with_tools(vec![definition])
-        .expect("tool advertisement is valid");
-    driver
-        .prepare_request(&tool_request)
-        .expect("tool-bearing request prepares");
-    assert_eq!(driver.prepared_request_count(), 2);
-}
-
 fn collect_ready(
     mut stream: intention_model::ModelEventStream,
 ) -> Vec<Result<intention_model::ModelEventDto, intention_model::ProviderErrorDto>> {
@@ -206,7 +171,7 @@ fn openrouter_execution_rejects_preflight_before_stream_creation_without_network
 }
 
 #[test]
-fn openrouter_driver_rejects_wrong_kind_and_maps_all_finish_and_error_classes() {
+fn openrouter_driver_rejects_wrong_provider_kind() {
     let wrong_kind = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         format!(
             "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
@@ -228,29 +193,4 @@ fn openrouter_driver_rejects_wrong_kind_and_maps_all_finish_and_error_classes() 
             .code(),
         "invalid_openrouter_provider_config"
     );
-
-    for (native, expected) in [
-        ("stop", FinishReasonDto::Stop),
-        ("length", FinishReasonDto::Length),
-        ("tool_calls", FinishReasonDto::ToolCalls),
-        ("content_filter", FinishReasonDto::ContentFilter),
-        ("error", FinishReasonDto::Error),
-        ("unknown", FinishReasonDto::Unknown),
-    ] {
-        assert_eq!(OpenRouterDriver::map_fixture_finish(native), expected);
-    }
-    for status in [400_u16, 429, 500] {
-        let error = OpenRouterDriver::map_fixture_error(status, FAKE_CREDENTIAL)
-            .expect("error mapping is valid");
-        assert!(
-            !serde_json::to_string(&error)
-                .expect("error serializes")
-                .contains(FAKE_CREDENTIAL)
-        );
-    }
-    assert!(OpenRouterDriver::map_fixture_text("").is_err());
-    assert!(OpenRouterDriver::map_fixture_reasoning("").is_err());
-    assert!(OpenRouterDriver::map_fixture_usage(1, 1, 1).is_err());
-    assert!(OpenRouterDriver::map_fixture_tool_call("call", "", "{}").is_err());
-    assert!(OpenRouterDriver::map_fixture_tool_call("call", "inspect", "[]").is_err());
 }

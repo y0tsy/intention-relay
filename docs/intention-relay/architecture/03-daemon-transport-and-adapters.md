@@ -377,7 +377,7 @@ new retry or manually reconciled follow-up run.
 
 ## Quality-gate integration
 
-The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs. Their crates use the coverage tier, feature-profile matrix, strict lint policy, and architecture boundaries defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Tauri and TUI are accepted through mapping contracts and fixture-daemon outcome scenarios, not a misleading aggregate UI line-coverage target.
+The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs. Their crates use the coverage policy (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature-profile matrix, strict lint policy, and architecture boundaries defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md). Tauri and TUI are accepted through mapping contracts and fixture-daemon outcome scenarios, not a misleading aggregate UI line-coverage target.
 
 ## Open implementation decisions
 
