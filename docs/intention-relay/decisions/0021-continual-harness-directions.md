@@ -11,7 +11,7 @@ at the start of that milestone.
 ## Decision
 
 The continual-harness model from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
+`m4plus_concept.md` is adopted as the accepted future
 direction and owned by the new [Continual Harness](../architecture/26-continual-harness.md)
 package:
 
@@ -98,13 +98,6 @@ specification must pass the fake-secret regression suite.
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
 - [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md) (new)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

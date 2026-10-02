@@ -271,21 +271,20 @@ cover at least:
 
 ## Research provenance
 
-- [`legacy-antibusy-prompts/`](../legacy-antibusy-prompts/README.md): the
+- `legacy-antibusy-prompts/`: the
   read-only reference copy of the legacy static session prompts (source
   revision `8604fde0566d4dfadf8124e0724c5a82db3f89de`, assembly site
   `crates/tauri-app/src/state.rs`, `build_system_prompt()`), whose four
   static sources this decision adapts for Intention Relay instead of consuming
   unchanged; its size cap is not carried over.
-- [`legacy-baseline/02-capability-catalog.md`](../legacy-baseline/02-capability-catalog.md)
-  and [`legacy-baseline/04-agent-behavior.md`](../legacy-baseline/04-agent-behavior.md):
+  and `legacy-baseline/04-agent-behavior.md`:
   the recorded user-visible legacy behavior of assembling a system prompt from
   project context, conventions, mode, and optional project files.
 - [ADR 0017](0017-build-autopilot-and-plan-focus-continuity.md): the accepted
   advisory Plan focus instruction, which becomes the `Mode` contribution.
 - [ADR 0019](0019-production-model-tool-loop.md): the recorded prompt-injection
   risk of the production model-tool loop, whose boundary this decision keeps.
-- [`m4plus_concept.md`](../m4plus_concept.md): research provenance only. The
+- `m4plus_concept.md`: research provenance only. The
   roadmap declares it immutable, so this direction is recorded from the legacy
   reference material and the user-requested direction of 2026-09-26 rather than
   by editing the concept.

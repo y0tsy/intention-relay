@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The provider session-selection and profiles protocol layer from
-[`m4plus_concept.md`](../m4plus_concept.md) is adopted as the accepted future
+`m4plus_concept.md` is adopted as the accepted future
 direction and owned by the new [Provider Session Selection and Profiles Protocol](../architecture/29-provider-session-and-profiles-protocol.md)
 package:
 
@@ -93,13 +93,6 @@ specification must pass the fake-secret regression suite.
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
 - [`architecture/22-provider-evolution-profiles-and-reasoning.md`](../architecture/22-provider-evolution-profiles-and-reasoning.md)
 - [`architecture/29-provider-session-and-profiles-protocol.md`](../architecture/29-provider-session-and-profiles-protocol.md) (new)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

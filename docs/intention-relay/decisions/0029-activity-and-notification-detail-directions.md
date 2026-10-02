@@ -12,7 +12,7 @@ at the start of that milestone.
 ## Decision
 
 The agent-communication, activity-observation, and user-notification detail
-from [`m4plus_concept.md`](../m4plus_concept.md) is adopted and owned by
+from `m4plus_concept.md` is adopted and owned by
 [architecture 24](../architecture/24-activity-ui-and-adapters.md):
 
 - `AgentActivitySelectionV1` (Root/Descendant) in `run-execution-meaning-v4`;
@@ -120,13 +120,6 @@ must pass the fake-secret regression suite.
 
 - [`architecture/11-implementation-roadmap.md`](../architecture/11-implementation-roadmap.md)
 - [`architecture/24-activity-ui-and-adapters.md`](../architecture/24-activity-ui-and-adapters.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

@@ -21,7 +21,7 @@ its declaration surface.
 | [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md) | The Wave 9 "re-verify all tiers" step, "No new crate, dependency, feature, coverage tier, or exclusion is introduced", and "Coverage tiers are unchanged" | Coverage is re-verified against the base 80% threshold and the designated-files list; the single-version removal program itself is unchanged |
 | ADRs [0017](0017-build-autopilot-and-plan-focus-continuity.md), [0020](0020-configuration-provider-control-plane-directions.md)-[0034](0034-accepted-m5plus-retained-deferral-directions.md), [0042](0042-project-script-library-for-kernel-cells.md), [0043](0043-instruction-sources-and-system-context.md), and [0044](0044-revert-of-m5plus-slice2-control-plane.md) | The activating-specification item "declare exact crate owners, ..., coverage tiers, ..." (each record's evidence or activation clause) | The activating specification declares coverage under this record: coverage-crate membership, any designated file with its rationale, and any enabled exclusion; no tier is declared |
 | ADRs [0046](0046-typed-serde-json-contracts.md) and [0048](0048-limits-by-precedent-and-no-content-scanning.md) | The evidence and ownership wording "re-verified coverage tiers" | Coverage is re-verified against the base 80% threshold; the underlying deletions and removals stand unchanged |
-| [Reconciliation ownership map](../reconciliation/ownership-and-dependency-map.md) | The tier cells whose text is "Existing declared tiers" | Base 80% threshold (ADR 0049) |
+| Reconciliation ownership map | The tier cells whose text is "Existing declared tiers" | Base 80% threshold (ADR 0049) |
 | [Architecture 12](../architecture/12-quality-gates-and-makefile.md) | The "Tiered line coverage thresholds" table and every tier policy statement | The base 80% threshold, the designated-files mechanism, and the unchanged exclusion semantics recorded in that document |
 
 The tier mentions that remain in closed milestone records, the superseded
@@ -142,9 +142,9 @@ declaration surface.
   future-activation "coverage tier" references with coverage declarations under
   this record.
 - The
-  [reconciliation ownership map](../reconciliation/ownership-and-dependency-map.md)
+  reconciliation ownership map
   records the replaced tier cells, and the
-  [source-of-truth matrix](../reconciliation/source-of-truth-matrix.md) records
+  source-of-truth matrix records
   the future requirement.
 - [`AGENTS.md`](../../../AGENTS.md) records the declaration rule for new
   production crates.

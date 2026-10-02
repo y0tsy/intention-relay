@@ -10,7 +10,7 @@
 - Detail decision: [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (rich MIME/raw kernel output projection).
 - Detail decision: [`0042`](../decisions/0042-project-script-library-for-kernel-cells.md) (project script library for kernel cells).
 - Reconciliation topics: `KER-001..027`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
 
 

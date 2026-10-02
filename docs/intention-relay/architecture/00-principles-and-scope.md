@@ -251,7 +251,7 @@ read-only after binding; restart never resumes or reattaches old work. The bridg
 is a trusted-local product control, not a sandbox or privilege boundary. Detailed
 rules are owned by architecture 19 and decision 0011.
 The authoritative source and package boundaries for these principles are the
-[Post-M4 Authority Reconciliation](../reconciliation/README.md) and decision
+Post-M4 Authority Reconciliation and decision
 records [0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md),
 [0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md),
 and [0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md),

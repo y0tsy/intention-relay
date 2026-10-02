@@ -11,8 +11,9 @@ persistent run-scoped delivery. The baseline passed local `make verify` and
 the required Linux and Windows `make ci` matrix before this separate closeout
 documentation commit.
 
-M4 decisions and accepted lane integrations are retained in the [M4 execution
-charter](../m4.md). The implemented contracts and verification requirements are
+M4 decisions and accepted lane integrations were recorded in the M4 execution
+charter, which the documentation purge retired; the text remains in git
+history. The implemented contracts and verification requirements are
 defined in [Model Protocol and Providers](../architecture/08-model-protocol-and-providers.md),
 [Configuration, Security, and Observability](../architecture/09-configuration-security-and-observability.md),
 [Daemon, Transport, and Adapters](../architecture/03-daemon-transport-and-adapters.md),
