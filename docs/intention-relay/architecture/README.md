@@ -6,14 +6,15 @@
 
 ## Purpose and precedence
 
-The active product baseline is the legacy-derived material in [`../legacy-baseline/`](../legacy-baseline/00-manifest.md). It describes proven user-facing behavior and known limitations. This directory defines the new implementation architecture that will realize selected product decisions.
+This directory defines the implementation architecture for Intention Relay. The
+legacy-derived baseline the rewrite started from is retired and remains in git
+history.
 
 When the documents differ:
 
 1. explicit future product decisions override legacy implementation details;
-2. the selected product baseline remains the source of user-facing capability evidence until a new product decision changes it;
-3. the broader preserved audit under [`../../reference/`](../../reference/README.md) is research material only;
-4. this architecture must not inherit a legacy design merely because it existed.
+2. research material under [`../../reference/`](../../reference/README.md) is preserved reference only;
+3. this architecture must not inherit a legacy design merely because it existed.
 
 ## Architectural summary
 
@@ -100,9 +101,7 @@ flowchart TD
 1. [Quality gates and Makefile](12-quality-gates-and-makefile.md)
 2. [Test-driven delivery and verification](10-test-driven-delivery-and-verification.md)
 3. [Implementation roadmap](11-implementation-roadmap.md)
-4. [Post-M4 authority reconciliation](../reconciliation/README.md)
 5. [Architecture decision records](../decisions/README.md)
-6. [M4 execution charter](../m4.md)
 7. [M0/M1 closure evidence](../closeout/m0-m1-closure-evidence.md)
 8. [M1+ quality hardening evidence](../closeout/m1-plus-quality-hardening-evidence.md)
 9. [M2 closure evidence](../closeout/m2-closure-evidence.md)
@@ -161,9 +160,8 @@ v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in
 ## Post-M4 authority foundation
 
 The closed M4 baseline remains authoritative for implemented behavior. The
-post-M4 direction is coordinated by the
-[authority reconciliation package](../reconciliation/README.md) and its
-[accepted decision records](../decisions/README.md). Those artifacts do not
+post-M4 direction is recorded in the
+[accepted decision records](../decisions/README.md). Those records do not
 implement or silently supersede v1 behavior: they establish the authority,
 compatibility, ownership, and dependency boundary that later authoritative
 packages must satisfy.
@@ -228,9 +226,8 @@ but can never repair, reroute, reinterpret, or replace frozen semantic data.
 ### Mandate lifecycle owner
 
 [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md)
-is the sole detailed authority for future Mandate lifecycle and admission. The
-[reconciliation package](../reconciliation/README.md) remains a traceability
-index. Neither document amends M4 or current ordinary v1 behavior.
+is the sole detailed authority for future Mandate lifecycle and admission. It
+does not amend M4 or current ordinary v1 behavior.
 
 ### Execution-meaning owner
 

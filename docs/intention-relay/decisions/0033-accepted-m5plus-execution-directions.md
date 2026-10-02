@@ -21,7 +21,7 @@ directions otherwise stand, non-authorizing as before.
 ## Decision
 
 The following items, named in the
-[`m4plus_concept.md`](../m4plus_concept.md) backlog as deferred or excluded,
+`m4plus_concept.md` backlog as deferred or excluded,
 are adopted as accepted future directions for execution in Milestone 5+:
 
 **Configuration and provider control plane (owner: architecture 25):**
@@ -162,14 +162,6 @@ mode and post-disconnect work must never resume old external work.
 - [`architecture/26-continual-harness.md`](../architecture/26-continual-harness.md)
 - [`architecture/28-goal-domain-and-verification.md`](../architecture/28-goal-domain-and-verification.md)
 - [`architecture/29-provider-session-and-profiles-protocol.md`](../architecture/29-provider-session-and-profiles-protocol.md)
-- [`reconciliation/README.md`](../reconciliation/README.md)
-- [`reconciliation/source-of-truth-matrix.md`](../reconciliation/source-of-truth-matrix.md)
-- [`reconciliation/contradiction-register.md`](../reconciliation/contradiction-register.md)
-- [`reconciliation/concept-supersession-index.md`](../reconciliation/concept-supersession-index.md)
-- [`reconciliation/deferred-excluded-register.md`](../reconciliation/deferred-excluded-register.md)
-- [`reconciliation/evidence-register.md`](../reconciliation/evidence-register.md)
-- [`reconciliation/compatibility-register.md`](../reconciliation/compatibility-register.md)
-- [`reconciliation/ownership-and-dependency-map.md`](../reconciliation/ownership-and-dependency-map.md)
 - [`decisions/README.md`](README.md)
 
 ## Required evidence

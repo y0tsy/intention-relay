@@ -156,7 +156,7 @@ re-introduction of the deleted validation limits.
 - [Architecture 11](../architecture/11-implementation-roadmap.md) and the
   [architecture README](../architecture/README.md) record the removed Slice 1
   ledger artifacts.
-- The [reconciliation registers](../reconciliation/README.md) record the
+- The reconciliation registers record the
   superseded ledger, tag, and digest rows.
 - `quality/architecture.toml`, `Cargo.lock`, and `THIRD_PARTY_NOTICES.md` are
   updated in the same change with the dependency removal.

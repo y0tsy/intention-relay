@@ -7,8 +7,7 @@ Read the current source files named below. This map helps select documents; it d
 1. [`AGENTS.md`](../../../AGENTS.md) defines repository operating instructions.
 2. [`docs/intention-relay/architecture/`](../../../docs/intention-relay/architecture/README.md) defines the approved target architecture and delivery constraints.
 3. Explicit future product decisions override legacy implementation details.
-4. [`docs/intention-relay/legacy-baseline/`](../../../docs/intention-relay/legacy-baseline/00-manifest.md) provides user-visible capability evidence until explicitly superseded.
-5. Preserved broader audit material under `docs/reference/` is research only and cannot override selected baseline or architecture.
+4. Preserved research material under `docs/reference/` is non-authoritative background only.
 
 ## Common sources for every milestone
 
@@ -21,7 +20,6 @@ Read the current source files named below. This map helps select documents; it d
 | Roadmap and milestone acceptance criteria | [`11-implementation-roadmap.md`](../../../docs/intention-relay/architecture/11-implementation-roadmap.md) |
 | Test-first requirements and outcome evidence | [`10-test-driven-delivery-and-verification.md`](../../../docs/intention-relay/architecture/10-test-driven-delivery-and-verification.md) |
 | Makefile, quality tiers, features, and supply chain | [`12-quality-gates-and-makefile.md`](../../../docs/intention-relay/architecture/12-quality-gates-and-makefile.md) |
-| Authority, compatibility, ownership, evidence, and deferral registers | [`reconciliation/README.md`](../../../docs/intention-relay/reconciliation/README.md) |
 | Accepted cross-document decisions and their rationale | [`decisions/README.md`](../../../docs/intention-relay/decisions/README.md) |
 | Accepted phase status and immutable evidence | [`docs/intention-relay/closeout/`](../../../docs/intention-relay/closeout/) |
 

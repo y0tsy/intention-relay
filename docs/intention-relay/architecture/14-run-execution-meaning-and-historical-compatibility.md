@@ -8,7 +8,7 @@
 - Decision record: [`0003`](../decisions/0003-run-execution-meaning-and-historical-compatibility.md) (superseded).
 - Superseding records: ADR 0046 (typed serde JSON; the binary canonical codec and unconsumed contract families are removed), ADR 0038 (no backward compatibility and legacy removal).
 - Reconciliation topics: `RUN-001..002`.
-- Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
+- Research provenance: `m4plus_concept.md`.
 - Status: superseded historical record; no implementation work is authorized here.
 
 
