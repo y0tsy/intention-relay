@@ -11,9 +11,6 @@ use intention_types::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-pub mod canonical;
-pub mod run_execution_meaning;
-
 mod model_facts;
 
 pub use model_facts::{
@@ -149,8 +146,9 @@ impl<'de> Deserialize<'de> for WorkspaceRootDto {
 impl WorkspaceRootDto {
     /// Parses an absolute, non-empty native workspace path without resolving it.
     ///
-    /// Resolution, symlink policy, and filesystem containment checks belong to
-    /// `intention-workspace` in M5.
+    /// Resolution and root validation belong to `intention-workspace`, where
+    /// the root is an addressing anchor rather than a containment boundary
+    /// (ADR 0047).
     ///
     /// # Errors
     ///

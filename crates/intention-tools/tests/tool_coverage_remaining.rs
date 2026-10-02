@@ -75,7 +75,7 @@ fn logical_paths_cover_all_inputs_and_projections() {
         }),
         ToolResult::Glob(PathsResult {
             paths: vec![path],
-            truncated: true,
+            truncated: false,
         }),
         ToolResult::Grep(GrepResult {
             matches: vec![],
@@ -118,7 +118,7 @@ fn execute_failures_and_status_are_normalized() {
 }
 
 #[test]
-fn search_scopes_truncation_and_invalid_paths() {
+fn search_scopes_report_all_results_and_reject_invalid_paths() {
     let (dir, service) = service();
     std::fs::create_dir(dir.path().join("sub")).unwrap();
     for i in 0..1100 {

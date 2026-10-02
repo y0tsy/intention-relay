@@ -28,19 +28,16 @@ use intention_domain::{
     RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
 use intention_protocol::{
-    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
-    ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto,
-    SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
+    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    RunStreamFrameDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SubscribeRunCommandDto,
+    decode_response, encode_request, parse_run_frame_notification,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
     negotiate_client,
 };
-use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId,
-};
+use intention_types::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
 use tempfile::TempDir;
 
 /// One daemon-host fixture: isolated config/state/workspace, a fake provider,
@@ -456,32 +453,9 @@ fn excess_response() -> String {
     )
 }
 
-/// The exact capability list the shared client requires from the daemon.
-///
-/// The list itself is private to `intention-client`, but its values are public
-/// protocol capabilities and the daemon's negotiation only verifies protocol
-/// version compatibility, so the fixture reconstructs the same hello with
-/// public APIs only.
-fn command_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![
-            ProtocolCapabilityDto::SessionSubscriptions,
-            ProtocolCapabilityDto::CorrelatedRequests,
-            ProtocolCapabilityDto::DaemonHealth,
-        ],
-        "facade-e2e",
-    )
-    .expect("fixture command hello is valid")
-}
-
-fn stream_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![ProtocolCapabilityDto::RunStreamSubscriptions],
-        "facade-e2e",
-    )
-    .expect("fixture stream hello is valid")
+/// The exact hello the fixture clients exchange with the daemon.
+fn fixture_hello() -> ProtocolHelloDto {
+    ProtocolHelloDto::new(local_protocol_version(), "facade-e2e").expect("fixture hello is valid")
 }
 
 /// Sends one typed protocol command over a fresh negotiated connection and
@@ -491,22 +465,13 @@ fn send_command(
     endpoint: &LocalEndpoint,
     payload: ProtocolRequestPayloadDto,
 ) -> DtoResult<ProtocolCommandResultDto> {
+    let method = ProtocolMethodDto::for_payload(&payload);
     let mut connection = LocalConnection::connect(endpoint)?;
-    let remote = negotiate_client(&mut connection, command_hello())?;
-    let correlation_id = CorrelationIdDto::new();
-    connection.send_request(&ProtocolRequestEnvelopeDto::new(
-        local_protocol_version(),
-        correlation_id,
-        ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
-    ))?;
-    let response = connection.receive_response()?;
-    if response.correlation_id() != correlation_id
-        || response.protocol_version() != remote.version()
-    {
-        return Err(invalid_response());
-    }
-    match response.message().payload() {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result.clone()),
+    negotiate_client(&mut connection, fixture_hello())?;
+    connection.send_message(&encode_request(1, payload))?;
+    let line = connection.receive_line()?;
+    match decode_response(&line, method, 1)? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
         _ => Err(invalid_response()),
     }
 }
@@ -588,63 +553,59 @@ async fn collect_run_facts(
     let connection = AsyncLocalClientConnection::connect(endpoint)
         .await
         .expect("run stream connects");
-    let (_remote, mut requests, mut frames) = connection
-        .negotiate_daemon_frames(stream_hello())
+    let (_remote, mut requests, mut messages) = connection
+        .negotiate(fixture_hello())
         .await
         .expect("run stream negotiates");
-    let correlation_id = CorrelationIdDto::new();
     requests
-        .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation_id,
-            ProtocolMessageDto::new(
+        .send_message(&encode_request(
+            1,
+            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                SubscribeRunCommandDto::new(
-                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                    session_id,
-                    run_id,
-                    None,
-                ),
-            ),
+                session_id,
+                run_id,
+                None,
+            )),
         ))
         .await
         .expect("run subscription request sends");
+    let reply = messages
+        .receive_line()
+        .await
+        .expect("run subscription reply arrives");
+    let reply = decode_response(&reply, ProtocolMethodDto::RunSubscribe, 1)
+        .expect("run subscription reply decodes");
     let mut facts = Vec::new();
+    match reply {
+        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) => {
+            facts.extend(replay.tail().facts().iter().cloned());
+            let snapshot = replay.snapshot().clone();
+            if snapshot.run_projection().status().is_terminal() {
+                return (facts, snapshot);
+            }
+        }
+        _ => panic!("run subscription reply must be a replay"),
+    }
     loop {
         assert!(
             Instant::now() < deadline,
             "run facts arrive before the deadline"
         );
-        let frame = tokio::time::timeout(Duration::from_secs(1), frames.receive())
+        let line = tokio::time::timeout(Duration::from_secs(1), messages.receive_line())
             .await
             .expect("run stream frame within the deadline")
             .expect("run stream frame is valid");
-        match frame {
-            ProtocolDaemonFrameDto::Response(response) => {
-                assert_eq!(response.correlation_id(), correlation_id);
-                match response.message().payload() {
-                    ProtocolResponsePayloadDto::RunSubscription(
-                        RunSubscriptionResponseDto::Replay(replay),
-                    ) => {
-                        facts.extend(replay.tail().facts().iter().cloned());
-                        let snapshot = replay.snapshot().clone();
-                        if snapshot.run_projection().status().is_terminal() {
-                            return (facts, snapshot);
-                        }
-                    }
-                    _ => panic!("run subscription reply must be a replay"),
-                }
-            }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::LiveBatch(batch)) => {
+        match parse_run_frame_notification(&line).expect("run frame notification decodes") {
+            RunStreamFrameDto::LiveBatch(batch) => {
                 facts.extend(batch.facts().iter().cloned());
             }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Snapshot(frame)) => {
+            RunStreamFrameDto::Snapshot(frame) => {
                 let snapshot = frame.snapshot().clone();
                 if snapshot.run_projection().status().is_terminal() {
                     return (facts, snapshot);
                 }
             }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Resync(resync)) => {
+            RunStreamFrameDto::Resync(resync) => {
                 panic!("unexpected run resync: {:?}", resync.reason());
             }
         }
@@ -960,7 +921,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
             ModelRunFactInputDto::ToolResultRecorded {
                 outcome: ToolResultOutcomeDto::Failed { failure },
                 ..
-            } if failure.code() == "workspace_path_unavailable"
+            } if failure.code() == "tool_read_failed"
         )),
         "the missing-file tool result is a durable typed failure"
     );
@@ -968,7 +929,7 @@ async fn real_daemon_tool_loop_denies_without_provider_retry_on_tool_failure() {
         facts.iter().any(|fact| matches!(
             fact.input(),
             ModelRunFactInputDto::Failed { failure }
-                if failure.code() == "workspace_path_unavailable"
+                if failure.code() == "tool_read_failed"
         )),
         "the run terminalizes with the durable tool failure"
     );

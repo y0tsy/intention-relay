@@ -45,7 +45,7 @@ flowchart TD
 | **Session** | A durable project-backed conversation and work record. It has one `WorkspaceRoot` and at most one active run. |
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
-| **WorkspaceRoot** | The required directory boundary and process CWD for every session tool that touches the filesystem or launches a process. |
+| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there (ADR 0047). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Hook** | A typed, ordered extension point around tool execution and result processing. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
@@ -154,7 +154,7 @@ Every plan in this directory must:
 
 ## v1 boundary
 
-v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot enforcement, Plan/Build modes, Build Autopilot, VFR, and Headroom/CCR.
+v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot addressing, Plan/Build modes, Build Autopilot, VFR, and Headroom/CCR.
 
 v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container execution, automatic run resumption, and a direct MCP administration interface. Build Autopilot is trusted-local and does not claim shell isolation; Plan `execute` is advisory-guided rather than technically read-only.
 
@@ -180,7 +180,7 @@ packages must satisfy.
 | **ExternalEffectUnknown** | A future started external attempt whose terminal effect cannot be durably proven. It is distinct from a known failure. |
 | **Intrinsic bound** | A representation, correctness, or security constraint. |
 | **Capacity availability** | Observable temporary resource availability, not a product quota. |
-| **Product ceiling** | A policy quota. It cannot silently govern future Mandate admission. |
+| **Product ceiling** | A policy quota that requires a recorded precedent; it cannot silently govern future Mandate admission. |
 
 A state name is always qualified by its owner, for example Mandate `Active` or
 Run `Running`. WorkspaceRoot, modes, hooks, gateways, and audit are logical
@@ -190,19 +190,20 @@ boundaries.
 ### Cross-domain identity and sequencing invariants
 
 The following table is normative at the role level. Architecture 14 remains the
-sole owner of byte-level canonical framing and digest encoding; owner documents
-below define only their domain-specific semantic payloads.
+owner of historical compatibility semantics; owner documents below define only
+their domain-specific semantic payloads, and every new family is typed serde
+JSON (ADR 0046).
 
 | Value | Owner | Scope | Representation/ordering | Reconstruction rule |
 | --- | --- | --- | --- | --- |
 | `SessionId`, `WorkspaceId`, `RunId`, `TurnId` | architecture 04 and existing domain owners | ordinary M3/M4 | historical domain newtypes and recorded sequences | never reconstruct or replace historical identity |
 | `MandateId`, revision, `ReasonId` | architecture 13 | Mandate aggregate | daemon/user-issued domain values with Mandate-local ordering | never derive from current mutable state |
-| execution-meaning envelope and digest | architecture 14 | admitted run | versioned canonical bytes and tagged SHA-256 digest | no fallback after missing/corrupt/mismatched bytes |
-| child edge, delegation, verifier authority/baseline | architecture 17 | Mandate graph and target mutation | domain newtypes plus owner-defined canonical references | stale or absent baselines fail before mutation |
+| future execution-kind contract | architecture 14 | admitted run | typed serde JSON contract; no canonical bytes or digest layer (ADR 0046) | no fallback after missing or mismatched typed data |
+| child edge, delegation, verifier authority/baseline | architecture 17 | Mandate graph and target mutation | domain newtypes plus owner-defined typed references | stale or absent baselines fail before mutation |
 | `ConversationTreeId`, `ForkOperationId` | architecture 23 | ordinary Session lineage | typed lineage values; tree root derivation is frozen by architecture 23 | never infer lineage from current ancestry |
 | `AgentActivityTreeId` and activity records | architecture 24 | projections | daemon-assigned IDs and tree-local journal sequence | never convert from Session/Run/lineage identity |
 | provider/tool/MCP/kernel selections | architectures 15, 18, 20, 22 | future admitted run | immutable credential-free semantic references | live registry/resources cannot repair selection |
-| UUIDs, digests, operation IDs, correlation IDs | architecture 02 plus owning architecture | all | distinct domain newtypes; UUID equality is not cross-domain identity | no conversion or authority inference |
+| UUIDs, operation IDs, correlation IDs | architecture 02 plus owning architecture | all | distinct domain newtypes; UUID equality is not cross-domain identity | no conversion or authority inference |
 
 Sequences and cursors are independent authorities and are never interchangeable:
 
@@ -217,8 +218,8 @@ Sequences and cursors are independent authorities and are never interchangeable:
 | notification cursor | architecture 24 | local-user observation | notification facts or acknowledgements |
 | scheduler observation order | architecture 16 | live readiness evidence | semantic identity or admission order |
 
-Semantic/frozen metadata includes identities, revisions, canonicalization,
-selection references, digests, and baselines. Operational/live metadata includes
+Semantic/frozen metadata includes identities, revisions,
+selection references, and baselines. Operational/live metadata includes
 readiness, capacity, processes, handles, endpoints, current catalogs, wakeups,
 grants, and publication state. Operational data may defer or reject fresh work,
 but can never repair, reroute, reinterpret, or replace frozen semantic data.
@@ -234,9 +235,9 @@ index. Neither document amends M4 or current ordinary v1 behavior.
 ### Execution-meaning owner
 
 [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md)
-is the sole detailed authority for future envelope, canonical identity and
-compatibility semantics. It does not amend M3/M4 ordinary behavior or activate
-a protocol/runtime implementation.
+owns the historical compatibility semantics that remain after the binary
+canonical codec and digest layer were deleted by ADR 0046. It does not amend
+M3/M4 ordinary behavior or activate a protocol/runtime implementation.
 
 ### Tool registry and loop owner
 
@@ -354,8 +355,7 @@ cannot become a second runtime, scheduler, registry, or sandbox.
 [Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
 is the sole detailed authority for the accepted post-M5 programmatic-caller
 policy: root origins, durable provenance, policy scope/narrowing, admission
-decisions, confirmation and bounded corridors, lifecycle, run and calendar
-limits with reservations, and run-selection compatibility, adopted by
+decisions, confirmation, lifecycle, and run-selection compatibility, adopted by
 [ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md) and
 activated under Milestone 5+. It is logical product control, not an OS security
 boundary, and cannot become a second authority, registry, scheduler, or
@@ -379,9 +379,8 @@ authority.
 [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
 is the sole detailed authority for the accepted post-M5 provider
 session-selection layer: session defaults, per-turn/fork overrides,
-unavailable-queue promotion and reconciliation, profile-keyed usage,
-`provider_profiles_v1`, pending-removal/degraded recovery, and held
-recovery-promoted run admission, adopted by
+profile-keyed usage, the provider profiles protocol, and pending-removal/degraded
+recovery, adopted by
 [ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md).
 The M5+ Slice 2 activation
 ([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) was reverted by
@@ -396,9 +395,10 @@ scheduler, catalog, persistence authority, or sandbox.
 is the sole detailed authority for the accepted instruction channel of a model
 request: the closed instruction source kinds and scopes, the deployment
 profile, workspace project instructions, user-editable fragments, the `Mode`
-and `Vfr` contributions of architectures 07 and 06, canonical assembly, the
-immutable effective instruction projection with its digests, intrinsic bounds,
-closed failures, and digest-only observability, adopted by
+and `Vfr` contributions of architectures 07 and 06, deterministic assembly, the
+immutable effective instruction projection with its typed identity, closed
+failures, and safe observability (byte-level canonicalization is settled at
+activation under ADR 0046), adopted by
 [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) and
 activated under Milestone 5+ (fifth slice). Instruction text is advisory and
 cannot become tool, policy, admission, Mandate, child, verifier, MCP, bridge,

@@ -10,6 +10,13 @@ below. It activates nothing: no crate, DTO, tag, wire, storage schema,
 configuration field, capability, test target, feature profile, quality-policy
 target, or production behavior is authorized here.
 
+Amended 2026-09-30 by
+[ADR 0045](0045-local-json-rpc-2-0-transport.md): its "Local protocol 1.1,
+unchanged" version-ledger row and the compatibility sentence that accepts
+exactly protocol 1.1 are superseded — the local protocol is JSON-RPC 2.0 over
+NDJSON at protocol version 2.0, matched by exact equality with no capability
+plane. The remainder of this record stands.
+
 ## Scope and supersession
 
 This decision reverts the M5+ Slice 2 control-plane activation and restores the

@@ -142,8 +142,12 @@ run. This record claims no date, commit, or run identifier of its own.
 
 ## Compatibility
 
-- Local protocol 1.1, public DTO schema 1.1, TOML configuration schema 1, and
-  the single live SQLite schema are unchanged. Reasoning attachment is
+- Public DTO schema 1.1, TOML configuration schema 1, and the single live
+  SQLite schema are unchanged; the local protocol version clause of this
+  bullet is superseded by
+  [ADR 0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON
+  at protocol version 2.0, no capability plane), and the record otherwise
+  stands. Reasoning attachment is
   provider-neutral request state, not a public wire family; no migration,
   version change, or durable representation is added.
 - M3/M4/M5 recorded history, replay, durable facts, snapshots, and evidence

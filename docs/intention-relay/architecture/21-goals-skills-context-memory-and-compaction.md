@@ -19,7 +19,7 @@ engine, vector index, prompt builder, storage migration, wire implementation,
 retention/deletion/encryption policy, or production context behavior.
 
 It applies only to future Mandate and VerifierMandate execution. M3/M4 bytes,
-IDs, UUIDs, digests, cursors, events, snapshots, queue tickets, provider
+IDs, UUIDs, cursors, events, snapshots, queue tickets, provider
 behavior, replay, recovery, and M4 `ToolCallRecorded -> tool_execution_unavailable`
 retain their recorded ordinary semantics. Retained Goal, Skill, memory, or
 compaction material remains research provenance and historical-only where it
@@ -28,8 +28,8 @@ conflicts with architectures 13--20.
 ## Ownership and non-authorities
 
 Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact
-reconciliation. Architecture 14 owns execution-envelope framing, canonical
-encoding, digest validation, decoding, and compatibility classes. Architecture
+reconciliation. Architecture 14 is the historical record of the removed
+execution-meaning envelope and decoders (ADR 0046). Architecture
 15 owns the registry, frozen direct-tool selection, tool admission, model-tool
 loop, `ToolCallId`, and generic effect facts. Architecture 16 owns scheduler
 reevaluation and readiness. Architecture 17 owns child graph and verifier
@@ -48,14 +48,15 @@ mechanism.
 
 ## Immutable selection and Goal scope
 
-Architecture 14 owns canonical framing. This document owns detailed semantics of
-these credential-free nested future Mandate-meaning fields:
+This document owns detailed semantics of
+these credential-free nested future Mandate-meaning fields (typed serde JSON,
+ADR 0046):
 
-| Architecture 14 field | Selection owner | Meaning |
-| ---: | --- | --- |
-| 5 | Context projection selection | Admission source-manifest and projection contract. |
-| 7 | Goal context selection | Selected scoped Goal revisions and applicability links. |
-| 14 | Skill selection | Selected immutable Skill revisions and disclosure contract. |
+| Nested selection | Selection owner | Meaning |
+| --- | --- | --- |
+| Context projection selection | Admission source-manifest and projection contract. |
+| Goal context selection | Selected scoped Goal revisions and applicability links. |
+| Skill selection | Selected immutable Skill revisions and disclosure contract. |
 
 Each optional selection remains exactly `Disabled` or `Selected`. Unknown,
 corrupt, unsupported, mismatched, or unavailable required selection blocks
@@ -77,11 +78,10 @@ GoalContextSelectionV1
   ordered_goal_references
   ordered_applicability_link_references
   safe_acceptance_projection_revision
-  canonical_goal_selection_digest
 ```
 
-A selected reference freezes typed identity, revision, scope, canonical digest,
-and safe acceptance/evidence projection. A later edit creates a new Goal
+A selected reference freezes typed identity, revision, scope, and safe
+acceptance/evidence projection. A later edit creates a new Goal
 revision; it cannot rewrite admitted or model-step context. Goal evidence may be
 referenced by a verifier baseline only through architecture 17's separately
 issued authority. A Goal cannot create a verifier, target, verdict, target
@@ -90,7 +90,7 @@ mutation, child, or lifecycle transition.
 ## Skills and progressive disclosure
 
 A Skill is immutable, versioned, untrusted instructional content with typed
-provenance, declared audience, selection digest, and safe disclosure policy. A
+provenance, declared audience, and safe disclosure policy. A
 Skill cannot contain executable authority, hidden tool permissions, registry
 mutation, provider credential, bridge/kernel/MCP resource, or implicit
 child/verifier/scheduler/lifecycle power.
@@ -101,7 +101,6 @@ SkillSelectionV1
   ordered_skill_references
   disclosure_policy_revision
   safe_projection_revision
-  canonical_skill_selection_digest
 ```
 
 A model step receives only its explicitly selected bounded safe Skill projection.
@@ -132,7 +131,6 @@ SkillDto
   active_revision
   safe_card
   provenance
-  canonical_skill_digest
 
 SkillRevisionDto
   skill_id
@@ -143,7 +141,6 @@ SkillRevisionDto
   typed_reference_set
   replacement_reference_when_present
   rollback_reference_when_present
-  canonical_revision_digest
 
 SkillFrontmatterV1
   name
@@ -171,7 +168,6 @@ SkillCardDto
   user_invocable
   allowed_tool_ids
   content_reference
-  canonical_card_digest
 
 SkillSupplementDto
   supplement_id
@@ -179,7 +175,6 @@ SkillSupplementDto
   logical_name
   kind = Checklist | Schema | ReferenceText
   retained_content_reference
-  canonical_supplement_digest
 ```
 
 `name` is a canonical lowercase letters/numbers/hyphens identifier and
@@ -228,13 +223,13 @@ authority: no recursive path scan, symlink traversal, remote fetch, marketplace
 activity, executable package, MCP/server activation, or installation occurs at
 runtime. A user may explicitly import a reviewed Factory-compatible textual
 bundle; the daemon validates it and creates an immutable Skill revision with
-source identity/revision/digest, importer, and time. An import never installs or
+source identity/revision, importer, and time. An import never installs or
 activates another plugin component.
 
 For one canonical name, effective resolution is `Session`, then nearest selected
 Goal, then `Project`, `ProjectPlugin`, `Personal`, `UserPlugin`, and `Builtin`.
 Same-name records across origins are not merged: the winner and every overridden
-loser remain safely queryable with identity, revision, origin, digest, and
+loser remain safely queryable with identity, revision, origin, and
 resolution reason. A duplicate canonical name in one origin is invalid. A
 disabled effective record prevents invocation. Explicit replacement is still
 required to replace a record's semantic content; precedence selects one exposed
@@ -260,7 +255,7 @@ the selected Rust-owned descriptor/gateway path. A card, body, supplement,
 frontmatter, declared tools, origin, role link, Goal, child relation, verifier,
 IPython facade, MCP server, or model request cannot create a ToolId, descriptor,
 registry entry, credential access, provider selection, authorization,
-confirmation, policy/corridor/quota, lifecycle mutation, scheduler trigger,
+confirmation, policy/quota, lifecycle mutation, scheduler trigger,
 child authority, gate success, or external effect.
 
 Skill text is untrusted model-visible data, not policy or executable authority.
@@ -286,12 +281,11 @@ SkillSelectionV1
   exact_revision
   origin
   owner_scope_provenance
-  card_digest
+  card_reference
   body_reference_when_disclosed
   disclosed_supplement_references
-  typed_reference_set_digest
+  typed_reference_set_reference
   invocation_origin = UserSlash | ModelMatch
-  canonical_selection_digest
 ```
 
 Selection is immutable before the next affected model step or external action.
@@ -312,18 +306,16 @@ cursors. `SkillCreated`, `SkillImported`, `SkillRevisionCreated`,
 `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`, `SkillDisclosed`,
 `SkillSupplementDisclosed`, `SkillProposalAccepted`, and
 `SkillProposalRejected` are typed facts. Every state-changing command atomically
-commits its projection, event(s), canonical digest, idempotency binding, and
+commits its projection, event(s), idempotency binding, and
 affected snapshot(s), then publishes only after durable reread. Current cards
 and catalog snapshots accelerate queries but never reconstruct historical use.
 
-`skills_v1` is an additive negotiated capability for card-only `ListSkills`,
-exact inspect/disclosure, user invocation, lifecycle commands, and durable
-skill audit. A list captures one catalog revision, uses stable ordering and an
+Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact
+inspect/disclosure, user invocation, lifecycle commands, and durable
+skill audit; ADR 0045). A list captures one catalog revision, uses stable ordering and an
 opaque token, and returns `has_more`; a malformed, cross-scope, or stale token
-fails typed conflict/resynchronization. An older client keeps existing
-session/run behavior and receives `skill_capability_required` for a Skill
-operation rather than a partially understood frame. Canonical Skill records use
-new fixed tags/field tables in the selected typed-TLV/SHA-256 family. Unknown,
+fails with typed conflict/resynchronization. Skill records are typed serde JSON
+(ADR 0046) with no canonical tags or digest framing. Unknown,
 corrupt, incompatible, stale, missing, archived, revoked, or over-limit content
 blocks only the dependent disclosure/model step before external work while
 unrelated history remains readable; no current card, body, origin, or live path
@@ -337,7 +329,7 @@ At minimum, closed failures are `skill_invalid`, `skill_disabled`,
 `skill_catalog_conflict`, `skill_name_collision`, `skill_frontmatter_invalid`,
 `skill_content_too_large`, `skill_forbidden_content`,
 `skill_capability_reference_unavailable`, `skill_selection_incompatible`,
-`skill_capability_required`, and `skill_revision_conflict`. They reveal no full
+and `skill_revision_conflict`. They reveal no full
 body, secret, private host, path, raw reference body, implementation resource,
 or external state.
 
@@ -358,11 +350,10 @@ Admission freezes an exact typed manifest before a dependent model step begins:
 ContextSourceManifestV1
   manifest_contract_revision
   ordered_source_references
-  source_revision_and_digest
+  source_revision_references
   declared_audience
   representation_policy_revision
   omission_references
-  canonical_manifest_digest
 
 ModelContextProjectionV1
   projection_contract_revision
@@ -371,10 +362,9 @@ ModelContextProjectionV1
   ordered_safe_items
   disclosure_decisions
   omission_or_degradation_evidence
-  canonical_projection_digest
 ```
 
-The manifest binds identities, revisions, digests, audience, safe
+The manifest binds identities, revisions, audience, safe
 representation policy, declared semantic order, and typed omission reasons. A
 projection binds one model step to an ordered safe representation of that exact
 manifest. It is immutable before the step begins. A source or card may be
@@ -392,8 +382,8 @@ selects an earlier record explicitly and does not erase either record.
 ## Compaction, cancellation, and recovery
 
 Compaction creates an immutable safe summary over an exact ordered set of
-**completed** durable history. It retains source ranges/digests, compaction
-policy/version, summary digest, safe audience, omission evidence, and exact
+**completed** durable history. It retains source ranges, compaction
+policy/version, safe audience, omission evidence, and exact
 uncompacted suffix. Original durable facts remain authoritative and are never
 deleted, replaced, or reinterpreted by a summary. A compaction cannot cover
 unfinished or unknown effects, synthesize completion, reorder history, create
@@ -442,11 +432,11 @@ a target.
 
 MCP, bridge, and kernel context is safe projection only. Context cannot discover
 or invoke MCP, issue a bridge grant/operation, create a kernel epoch, restore a
-checkpoint, or cause a host request. Future delivery is separately negotiated,
-correlated, history-before-live, read-only safe projection or typed resync/error.
-Replay, reconnect, or audit cannot create a Goal, disclose memory, recompact,
-execute a model step, invoke a tool, start a child, issue authority, or perform
-external work. Unnegotiated peers fail closed.
+checkpoint, or cause a host request. Future delivery uses typed JSON-RPC 2.0 methods
+(ADR 0045): correlated, history-before-live, read-only safe projection or typed
+resync/error. Replay, reconnect, or audit cannot create a Goal, disclose memory,
+recompact, execute a model step, invoke a tool, start a child, issue authority,
+or perform external work. Partial delivery is never permitted.
 
 M3/M4 and retained records gain no Goal, Skill, source-manifest, projection,
 memory, disclosure, summary, applicability link, Mandate, child, verifier, MCP,
@@ -470,7 +460,7 @@ coverage tiers, feature profiles, storage/wire versions, retention/deletion/
 encryption policy, and intrinsic versus capacity bounds. It must pass `make
 quick`, `make verify`, and Linux/Windows CI, and cover:
 
-- canonical and negative vectors for Goal scope/applicability, Skills, manifests,
+- typed positive and negative fixtures for Goal scope/applicability, Skills, manifests,
   projections, memory cards/disclosures/supersession, and summary provenance;
 - admission/model-step fault injection proving no dependent external effect
   occurs before immutable selection and projection binding;

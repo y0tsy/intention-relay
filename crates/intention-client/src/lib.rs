@@ -4,7 +4,7 @@
 //! transport implementation access. It retains only reconnect projection state;
 //! daemon authority remains remote.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -14,31 +14,23 @@ use std::time::{Duration, Instant};
 
 use intention_domain::{ModelRunFactDto, ModelRunFactInputDto, RunEventCursorDto, RunSnapshotDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolDaemonFrameDto,
-    ProtocolHelloDto, ProtocolMessageDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    ProtocolVersionDto, RunLiveBatchDto, RunResyncDto, RunResyncReasonDto, RunStreamFrameDto,
-    RunSubscriptionRequestEnvelopeDto, RunSubscriptionResponseDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeRunCommandDto, SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto,
+    ProtocolQueryResultDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunLiveBatchDto,
+    RunResyncDto, RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionResponseDto,
+    SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeRunCommandDto,
+    SubscribeSessionCommandDto, decode_response, encode_request, parse_run_frame_notification,
 };
 use intention_transport::{
-    AsyncDaemonFrameReceiver, AsyncLocalClientConnection, AsyncRequestSender, LocalConnection,
+    AsyncLocalClientConnection, AsyncMessageReceiver, AsyncRequestSender, LocalConnection,
     LocalEndpoint, local_protocol_version, negotiate_client,
 };
-use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorCategoryDto, ErrorDto, SchemaVersionDto, SessionId,
-};
+use intention_types::{DtoResult, ErrorCategoryDto, ErrorDto, SchemaVersionDto, SessionId};
 
 const SCHEMA_VERSION: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_RETRY: Duration = Duration::from_millis(25);
-const REQUIRED_CAPABILITIES: [ProtocolCapabilityDto; 3] = [
-    ProtocolCapabilityDto::SessionSubscriptions,
-    ProtocolCapabilityDto::CorrelatedRequests,
-    ProtocolCapabilityDto::DaemonHealth,
-];
-const RUN_STREAM_CAPABILITIES: [ProtocolCapabilityDto; 1] =
-    [ProtocolCapabilityDto::RunStreamSubscriptions];
+/// Bounded wait for one correlated run-stream reply or notification.
+const STREAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Launches a daemon process after bootstrap has acquired the startup lock.
 pub trait DaemonLauncher: Send + Sync {
@@ -96,7 +88,6 @@ impl DaemonLauncher for ProcessDaemonLauncher {
 
 struct NegotiatedConnection {
     connection: LocalConnection,
-    daemon_version: ProtocolVersionDto,
 }
 
 /// The connected shared-client facade exposed to presentation adapters.
@@ -117,11 +108,7 @@ impl IntentionClient {
         adapter_name: impl Into<String>,
         launcher: Box<dyn DaemonLauncher>,
     ) -> DtoResult<Self> {
-        let hello = ProtocolHelloDto::new(
-            local_protocol_version(),
-            REQUIRED_CAPABILITIES.to_vec(),
-            adapter_name,
-        )?;
+        let hello = ProtocolHelloDto::new(local_protocol_version(), adapter_name)?;
         Ok(Self {
             endpoint,
             hello,
@@ -133,8 +120,8 @@ impl IntentionClient {
     ///
     /// The client attempts IPC before spawning, retries an already-starting
     /// daemon without spawning, then uses a process-wide advisory lock only when
-    /// the endpoint is unavailable. Readiness requires compatible hello,
-    /// capabilities, a correlated health query, and `Ready` state.
+    /// the endpoint is unavailable. Readiness requires compatible hello, a
+    /// correlated health query, and `Ready` state.
     ///
     /// # Errors
     ///
@@ -218,32 +205,27 @@ impl IntentionClient {
         match health {
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(
                 health,
-            )) => {
-                if health.protocol_version() != connection.daemon_version {
-                    return Err(invalid_response());
-                }
-                match health.readiness() {
-                    DaemonReadinessDto::Ready => Ok(health),
-                    DaemonReadinessDto::Starting => Err(ErrorDto::new(
-                        "local_daemon_starting",
+            )) => match health.readiness() {
+                DaemonReadinessDto::Ready => Ok(health),
+                DaemonReadinessDto::Starting => Err(ErrorDto::new(
+                    "local_daemon_starting",
+                    ErrorCategoryDto::Unavailable,
+                    "the local daemon is starting",
+                    intention_types::ErrorRetryDto::Delayed,
+                    None,
+                )
+                .unwrap_or_else(|_| unavailable("local_daemon_starting"))),
+                DaemonReadinessDto::Draining | DaemonReadinessDto::Unavailable => {
+                    Err(ErrorDto::new(
+                        "local_daemon_not_ready",
                         ErrorCategoryDto::Unavailable,
-                        "the local daemon is starting",
+                        "the local daemon is not ready to serve requests",
                         intention_types::ErrorRetryDto::Delayed,
                         None,
                     )
-                    .unwrap_or_else(|_| unavailable("local_daemon_starting"))),
-                    DaemonReadinessDto::Draining | DaemonReadinessDto::Unavailable => {
-                        Err(ErrorDto::new(
-                            "local_daemon_not_ready",
-                            ErrorCategoryDto::Unavailable,
-                            "the local daemon is not ready to serve requests",
-                            intention_types::ErrorRetryDto::Delayed,
-                            None,
-                        )
-                        .unwrap_or_else(|_| unavailable("local_daemon_not_ready")))
-                    }
+                    .unwrap_or_else(|_| unavailable("local_daemon_not_ready")))
                 }
-            }
+            },
             ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error)) => {
                 Err(error)
             }
@@ -258,20 +240,8 @@ impl IntentionClient {
 
     fn connect(&self) -> DtoResult<NegotiatedConnection> {
         let mut connection = LocalConnection::connect(&self.endpoint)?;
-        let remote = negotiate_client(&mut connection, self.hello.clone())?;
-        if !REQUIRED_CAPABILITIES
-            .iter()
-            .all(|capability| remote.capabilities().contains(capability))
-        {
-            return Err(ErrorDto::unavailable(
-                "incompatible_protocol_capabilities",
-                "the local daemon lacks a required protocol capability",
-            ));
-        }
-        Ok(NegotiatedConnection {
-            connection,
-            daemon_version: remote.version(),
-        })
+        negotiate_client(&mut connection, self.hello.clone())?;
+        Ok(NegotiatedConnection { connection })
     }
 
     fn request_on(
@@ -279,24 +249,11 @@ impl IntentionClient {
         connection: &mut NegotiatedConnection,
         payload: ProtocolRequestPayloadDto,
     ) -> DtoResult<ProtocolResponsePayloadDto> {
-        let correlation_id = CorrelationIdDto::new();
-        let request = ProtocolRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation_id,
-            ProtocolMessageDto::new(SCHEMA_VERSION, payload),
-        );
-        connection.connection.send_request(&request)?;
-        let response = connection.connection.receive_response()?;
-        // The synchronous response path applies the same DTO schema-version
-        // equality as the stream clients, not only correlation and protocol
-        // version checks.
-        if response.correlation_id() != correlation_id
-            || response.protocol_version() != connection.daemon_version
-            || response.message().schema_version() != SCHEMA_VERSION
-        {
-            return Err(invalid_response());
-        }
-        Ok(response.message().payload().clone())
+        let method = ProtocolMethodDto::for_payload(&payload);
+        let request = encode_request(1, payload);
+        connection.connection.send_message(&request)?;
+        let line = connection.connection.receive_line()?;
+        decode_response(&line, method, 1)
     }
 
     fn wait_for_ready(&self) -> DtoResult<DaemonHealthDto> {
@@ -316,10 +273,10 @@ impl IntentionClient {
     }
 }
 
-/// An opt-in asynchronous facade for dedicated run-stream subscriptions.
+/// An asynchronous facade for dedicated run-stream subscriptions.
 ///
-/// It negotiates only the run-stream capability and never changes the M3
-/// synchronous [`IntentionClient`] connection or capability requirements.
+/// It shares the one local connection role: requests flow to the daemon, and
+/// responses or `run.frame` notifications flow back.
 pub struct RunStreamClient {
     endpoint: LocalEndpoint,
     hello: ProtocolHelloDto,
@@ -334,74 +291,42 @@ impl RunStreamClient {
     pub fn new(endpoint: LocalEndpoint, adapter_name: impl Into<String>) -> DtoResult<Self> {
         Ok(Self {
             endpoint,
-            hello: ProtocolHelloDto::new(
-                local_protocol_version(),
-                RUN_STREAM_CAPABILITIES.to_vec(),
-                adapter_name,
-            )?,
+            hello: ProtocolHelloDto::new(local_protocol_version(), adapter_name)?,
         })
     }
 
-    /// Connects, subscribes, and applies the correlated authoritative first reply.
+    /// Connects, subscribes, and applies the authoritative first reply.
     ///
     /// # Errors
     ///
-    /// Returns a typed protocol, transport, or scoped-response error. A
-    /// subscription whose schema version is not the current DTO schema version
-    /// is rejected with `incompatible_protocol_version` before any connection
-    /// is opened or request is sent.
+    /// Returns a typed protocol, transport, or scoped-response error, or an
+    /// unavailable timeout error when the correlated reply does not arrive
+    /// before the bounded deadline.
     pub async fn subscribe(
         &self,
         subscription: SubscribeRunCommandDto,
     ) -> DtoResult<RunStreamSubscription> {
-        if subscription.schema_version() != SCHEMA_VERSION {
-            return Err(ErrorDto::validation(
-                "incompatible_protocol_version",
-                "the run subscription schema version must equal the current DTO schema version",
-            ));
-        }
+        let session_id = subscription.session_id();
+        let run_id = subscription.run_id();
         let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
-        let (remote, mut requests, mut frames) = connection
-            .negotiate_daemon_frames(self.hello.clone())
-            .await?;
-        if !RUN_STREAM_CAPABILITIES
-            .iter()
-            .all(|capability| remote.capabilities().contains(capability))
-        {
-            return Err(ErrorDto::unavailable(
-                "incompatible_protocol_capabilities",
-                "the local daemon lacks a required protocol capability",
-            ));
-        }
-        let correlation_id = CorrelationIdDto::new();
-        let request = RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation_id,
-            ProtocolMessageDto::new(SCHEMA_VERSION, subscription),
-        );
-        requests.send_run_subscription(&request).await?;
-        let initial = frames.receive().await?;
-        let response = match initial {
-            ProtocolDaemonFrameDto::Response(response)
-                if response.correlation_id() == correlation_id
-                    && response.protocol_version() == remote.version()
-                    && response.message().schema_version() == SCHEMA_VERSION =>
-            {
-                response
-            }
+        let (_, mut requests, mut messages) = connection.negotiate(self.hello.clone()).await?;
+        let request = encode_request(1, ProtocolRequestPayloadDto::RunSubscription(subscription));
+        requests.send_message(&request).await?;
+        let line = tokio::time::timeout(STREAM_REPLY_TIMEOUT, messages.receive_line())
+            .await
+            .map_err(|_| stream_reply_timeout())??;
+        let response = decode_response(&line, ProtocolMethodDto::RunSubscribe, 1)?;
+        let initial = match response {
+            ProtocolResponsePayloadDto::RunSubscription(response) => response,
             _ => return Err(invalid_response()),
         };
-        let initial = match response.message().payload() {
-            ProtocolResponsePayloadDto::RunSubscription(response) => response.clone(),
-            _ => return Err(invalid_response()),
-        };
-        let mut reducer =
-            RunSubscriptionReducer::new(subscription.session_id(), subscription.run_id());
+        let mut reducer = RunSubscriptionReducer::new(session_id, run_id);
         reducer.apply_initial(initial)?;
         Ok(RunStreamSubscription {
             requests,
-            frames,
-            daemon_version: remote.version(),
+            messages,
+            next_request_id: 2,
+            pending_frames: VecDeque::new(),
             reducer,
         })
     }
@@ -410,34 +335,47 @@ impl RunStreamClient {
 /// An established run-stream subscription with opaque transport resources.
 pub struct RunStreamSubscription {
     requests: AsyncRequestSender,
-    frames: AsyncDaemonFrameReceiver,
-    daemon_version: ProtocolVersionDto,
+    messages: AsyncMessageReceiver,
+    next_request_id: u64,
+    pending_frames: VecDeque<RunStreamFrameDto>,
     reducer: RunSubscriptionReducer,
 }
 
 impl RunStreamSubscription {
-    /// Receives and applies one uncorrelated daemon run-stream frame.
+    /// Receives and applies one daemon run-frame notification.
     ///
-    /// A returned resync is locally generated for a detected cursor gap. A
-    /// daemon-originated matching resync clears the reducer and returns `None`.
+    /// Frames buffered while an earlier replay reply was pending are applied
+    /// first. A returned resync is locally generated for a detected cursor gap.
+    /// A daemon-originated matching resync clears the reducer and returns
+    /// `None`.
     ///
     /// # Errors
     ///
-    /// Returns a typed framing, protocol, or scope-validation error.
+    /// Returns a typed framing, protocol, or scope-validation error. Live
+    /// frames may be arbitrarily sparse, so this wait is intentionally
+    /// unbounded; only the correlated reply waits carry a deadline.
     pub async fn receive(&mut self) -> DtoResult<Option<RunResyncDto>> {
-        match self.frames.receive().await? {
-            ProtocolDaemonFrameDto::RunStream(frame) => self.reducer.apply_frame(frame),
-            ProtocolDaemonFrameDto::Response(_) => Err(invalid_response()),
+        if let Some(frame) = self.pending_frames.pop_front() {
+            return self.reducer.apply_frame(frame);
         }
+        let line = self.messages.receive_line().await?;
+        let frame = parse_run_frame_notification(&line)?;
+        self.reducer.apply_frame(frame)
     }
 
     /// Sends a new subscription request from the last valid cursor and applies
-    /// its immediate correlated replay, resync, or error response.
+    /// its immediate replay, resync, or error response.
+    ///
+    /// Frames the daemon queued ahead of the correlated reply are buffered and
+    /// applied in arrival order after the reply, so the reply is never mistaken
+    /// for a frame.
     ///
     /// # Errors
     ///
-    /// Returns a typed transport, protocol, or scoped-response error. The
-    /// current reducer state is retained if the reply is invalid or rejected.
+    /// Returns a typed transport, protocol, or scoped-response error, or an
+    /// unavailable timeout error when the correlated reply does not arrive
+    /// before the bounded deadline. The current reducer state is retained if
+    /// the reply is invalid or rejected.
     pub async fn request_replay(&mut self) -> DtoResult<()> {
         let subscription = SubscribeRunCommandDto::new(
             SCHEMA_VERSION,
@@ -445,28 +383,58 @@ impl RunStreamSubscription {
             self.reducer.run_id(),
             self.reducer.last_cursor(),
         );
-        let correlation_id = CorrelationIdDto::new();
-        let request = RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation_id,
-            ProtocolMessageDto::new(SCHEMA_VERSION, subscription),
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        let request = encode_request(
+            request_id,
+            ProtocolRequestPayloadDto::RunSubscription(subscription),
         );
-        self.requests.send_run_subscription(&request).await?;
-        let response = match self.frames.receive().await? {
-            ProtocolDaemonFrameDto::Response(response)
-                if response.correlation_id() == correlation_id
-                    && response.protocol_version() == self.daemon_version
-                    && response.message().schema_version() == SCHEMA_VERSION =>
-            {
-                response
+        self.requests.send_message(&request).await?;
+        let response = self.await_replay_response(request_id).await?;
+        match response {
+            ProtocolResponsePayloadDto::RunSubscription(response) => {
+                self.reducer.apply_initial(response)?;
             }
             _ => return Err(invalid_response()),
-        };
-        let response = match response.message().payload() {
-            ProtocolResponsePayloadDto::RunSubscription(response) => response.clone(),
-            _ => return Err(invalid_response()),
-        };
-        self.reducer.apply_initial(response)
+        }
+        self.apply_buffered_frames()
+    }
+
+    /// Reads until the correlated replay reply, buffering interleaved frames.
+    ///
+    /// Only a `run.frame` notification is buffered; any other line, including a
+    /// response with another correlation id, is rejected by `decode_response`.
+    async fn await_replay_response(
+        &mut self,
+        request_id: u64,
+    ) -> DtoResult<ProtocolResponsePayloadDto> {
+        tokio::time::timeout(STREAM_REPLY_TIMEOUT, async {
+            loop {
+                let line = self.messages.receive_line().await?;
+                match parse_run_frame_notification(&line) {
+                    Ok(frame) => self.pending_frames.push_back(frame),
+                    Err(_) => {
+                        return decode_response(&line, ProtocolMethodDto::RunSubscribe, request_id);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| stream_reply_timeout())?
+    }
+
+    /// Applies buffered frames in order, stopping at the first local resync.
+    ///
+    /// A frame that requires a resync is left buffered so the next `receive`
+    /// reports that resync; the reducer keeps its state for both paths.
+    fn apply_buffered_frames(&mut self) -> DtoResult<()> {
+        while let Some(frame) = self.pending_frames.pop_front() {
+            if self.reducer.apply_frame(frame.clone())?.is_some() {
+                self.pending_frames.push_front(frame);
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 
     /// Returns the state reducer for this fixed run scope.
@@ -811,6 +779,13 @@ fn invalid_response() -> ErrorDto {
     ErrorDto::validation(
         "invalid_local_protocol_response",
         "the local daemon returned an unexpected protocol response",
+    )
+}
+
+fn stream_reply_timeout() -> ErrorDto {
+    ErrorDto::unavailable(
+        "run_stream_reply_timeout",
+        "the local daemon did not answer the run-stream request in time",
     )
 }
 

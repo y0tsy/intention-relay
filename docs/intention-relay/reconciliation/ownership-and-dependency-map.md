@@ -6,11 +6,11 @@
 | --- | --- | --- |
 | Domain | IDs, revisions, invariants, lifecycle/value DTOs. | Runtime tasks, storage resources, SDKs. |
 | Storage | Atomic persistence contracts, snapshots, events, recovery facts. | Policy selection, external effects, provider/tool objects. |
-| Protocol | DTO-only commands, queries, events, replay/negotiation families. | Local business authority or resource ownership. |
+| Protocol | DTO-only JSON-RPC 2.0 methods, queries, events, and replay families; no capability negotiation ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)). | Local business authority or resource ownership. |
 | Application/runtime | Admission workflows, lifecycle validation, operational transitions, recovery orchestration. | Concrete provider/tool/storage selection. |
 | Mandate lifecycle package | Mandate aggregate, revisions, reasons, lifecycle, admission linearization, uncertainty pause, and fresh-run boundary. | Tool execution, scheduler topology, child/verifier/MCP authority, and adapters. |
-| Execution-meaning package | Envelope, canonical identity, digest, decoder and historical compatibility. | Payload owner semantics, SQL/wire implementation, current-state fallback or adapter inference. |
-| Tool registry and Mandate-loop package | Registry/descriptor revisions, frozen tool selection, direct Mandate admission, WorkspaceRoot policy, step/group loop, and tool-effect recovery. | Mandate lifecycle, execution-kind selection, child/MCP/verifier, bridge/kernel, provider evolution, scheduler, and adapters. |
+| Execution-meaning package | Envelope and historical compatibility; the canonical codec, digest, identity, and tag families are removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md), so the remaining meaning is typed serde JSON. | Payload owner semantics, SQL/wire implementation, current-state fallback or adapter inference. |
+| Tool registry and Mandate-loop package | Registry/descriptor revisions, frozen tool selection, direct Mandate admission, `WorkspaceRoot` anchoring policy ([ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md)), step/group loop, and tool-effect recovery. | Mandate lifecycle, execution-kind selection, child/MCP/verifier, bridge/kernel, provider evolution, scheduler, and adapters. |
 | Scheduler and readiness package | Durable candidate reevaluation, typed readiness/capacity evidence, admission handoff, and scheduler recovery gate. | Lifecycle/reason authority, immutable meaning, tool admission, worker topology, child/MCP/verifier, bridge/kernel, provider evolution, and adapters. |
 | Child graph and verifier package | Immutable child edges/delegation, direct controls, terminalization, child-local uncertainty, verifier authority/targets/audits, and target mutation. | Lifecycle/reason ordering, envelope/codec, scheduler admission, tool implementation, MCP, provider evolution, general activity/UI, and activation. |
 | Mandate MCP capability package | Typed source/discovery, normalization, immutable capability/selection revisions, invocation binding, safe projection, disposal, and MCP recovery. | ToolId/registry creation, generic loop, lifecycle/scheduling, child/verifier/Goal/Skill authority, administration UI, plugins, supervision, and activation. |
@@ -34,6 +34,11 @@
 ## Future package dependency shape
 
 ## M5+ Slice 1 contract ownership
+
+This table is retained as the historical ownership record of the Slice 1
+ledger. The capability, tag-registry, canonical-codec, digest, and identity
+families named here were removed by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md) and [ADR 0046](../decisions/0046-typed-serde-json-contracts.md); the remaining DTO,
+storage, daemon, and adapter ownership split stays as recorded.
 
 | Family | Semantic owner | Codec owner | Tag owner | Storage owner | Wire owner | Test target | Tier |
 | --- | --- | --- | --- | --- | --- | --- | --- |

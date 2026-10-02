@@ -1,79 +1,75 @@
-# Production ceiling removal — scope
+# Limits by precedent
 
-**Status:** the domain part (candidate rows 3–8 below) is removed and merged
-(PR #15, squash `83a257e`, merged 2026-08-29). Tools (rows 1–2) and
-config/runtime (rows 9–10) remain undecided; the audit said tools cuts carry
-context/memory risk and the runtime timeout is retained by concept2.
+**Status:** current policy, recorded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md). This document replaces the
+earlier product-ceiling audit scope. The PR #15 ceiling removal and the M5+
+Slice 1 cleanup are historical inputs, not open work items.
 
 ## Purpose
 
-Remove product ceilings (product counters, reservations, quotas) from
-post-M4 production code where [`m4plus_concept.md`](m4plus_concept.md) marks
-them as forbidden for new Mandate work or as historical-only. Intrinsic
-correctness bounds and capacity availability must remain untouched.
+State when a numeric or procedural bound may exist at all. The default is no
+bound: a limit is a product decision that silently defines what otherwise valid
+work may accomplish, so it needs a real, demonstrated precedent before it can
+exist. Liveness safeguards are the single exception, and even they exist to
+prevent a concrete self-inflicted failure, never to ration work.
 
-## Classification (concept2)
+## The rule
 
-- `ProductCeiling` — forbidden for new Mandate admission: "A fixed number of
-  calls, queued reasons, agents, child depth, messages, lifetime, output
-  bytes, page items, retries, catalog entries, or calendar actions must not
-  silently define what an otherwise valid Mandate may accomplish" (L335–336).
-- `IntrinsicBound` — mandatory correctness boundary of the canonical
-  representation, identifier, schema, ordering, framing, or atomic commit; it
-  remains mandatory and rejects without truncation (L306–311).
-- `CapacityAvailability` — temporary finite resource availability; typed
-  `Unavailable` outcome, never a quota or a successful result (L313–321).
-- Numeric constraints retained later in concept2 are historical first-scope
-  semantics and compatibility data, not future admission policy (L337–338);
-  "Retained policy inheritance and product ceilings are historical-only for
-  new Mandate execution" (L5175).
+A limit, quota, cap, reservation, counter, or bureaucratic bound may be added
+only when a real, demonstrated precedent exists. A precedent is an observed
+failure or an externally fixed constraint, not a hypothetical:
 
-## Candidate ceilings (TBD)
+- an observed crash, hang, unbounded memory growth, or file/stream overrun;
+- a bound imposed by a real platform, protocol, or operating-system interface;
+- a capacity fact the system must report rather than hide.
 
-| # | Crate | Cap | Value | Kind | Notes |
-|---|---|---|---|---|---|
-| 1 | intention-tools | `MAX_TOOL_OUTPUT_BYTES` with `[truncated]` marker and truncate-with-flag on read/execute/grep | 64 KiB | ProductCeiling | lib.rs L145; forbidden per L335–336, historical-only per L337–338 |
-| 2 | intention-tools | `MAX_GLOB_MATCHES` / `MAX_GREP_MATCHES` (page items) | 10 000 | ProductCeiling | lib.rs L147–148, L1567–1568 |
-| 3 | intention-domain | `ToolLifecycleEventDto.detail` inline cap | 4 KiB | ProductCeiling | **REMOVED** (PR #15) |
-| 4 | intention-domain | `MAX_TOOL_RESULT_CONTENT_BYTES` | 4 KiB | ProductCeiling | lib.rs L938, L1110; **REMOVED** (PR #15) |
-| 5 | intention-domain | `MAX_TOOL_RESULT_METADATA_ENTRIES` | 16 | ProductCeiling | lib.rs L940, L1112; **REMOVED** (PR #15) |
-| 6 | intention-domain | `MAX_TOOL_RESULT_METADATA_KEY_BYTES` | 128 | ProductCeiling | lib.rs L942, L1010; **REMOVED** (PR #15) |
-| 7 | intention-domain | `MAX_TOOL_RESULT_METADATA_VALUE_BYTES` | 1024 | ProductCeiling | lib.rs L944, L1011; **REMOVED** (PR #15) |
-| 8 | intention-domain | `ToolResultOutcomeDto::succeeded` reuses the 4-KiB content cap | 4 KiB | ProductCeiling | **REMOVED** (PR #15) |
-| 9 | intention-config / intention-runtime | `max_attempts` (default 2, schema cap 1..=2) | 2 | ProductCeiling | retry counter, listed at L335; historical-only; config lib.rs L633, L650–657; runtime lib.rs L555 |
-| 10 | intention-config / intention-runtime | `attempt_timeout_seconds` (default 30, schema cap 1..=60) | 30 | confirm | timeout; concept2 retains attempt timeouts (L709); likely out of scope; config lib.rs L632; runtime lib.rs L572 |
+The precedent is written down together with the failure it prevents. If no
+precedent is recorded, the limit does not ship. The following are forbidden:
 
-Line numbers were captured at the 2026-08-30 audit of `49d6b5a`; the rows that
-are still live carry anchors refreshed at `37bad4e`. The values and crate names
-are the stable part.
+- product counters that cap calls, actions, messages, retries, page items,
+  catalog entries, child depth, lifetime, or output without a measured reason;
+- reservations, corridors, leases, or entitlements that turn capacity into
+  admission policy;
+- speculative contract-level shape caps (for example field-size or
+  count-of-items validation) that reject otherwise valid typed content;
+- truncation markers that pretend a capped result is complete;
+- calendar or period quotas (Day/Week/Month) and queue-admission audits or
+  reconciliation machinery added without a demonstrated queue failure.
 
-## Watch items (classify before deciding)
+Capacity availability stays a typed, observable outcome. A resource that is
+temporarily unavailable reports unavailability; it is never converted into a
+quota, a successful truncated result, or an admission ceiling.
 
-- `intention-application` `MAX_DURABLE_TOOL_RESULT_BYTES` = 512 KiB — durable
-  tool-result bound; gray zone, needs classification.
-- `intention-storage` `MAX_TOOL_RESULT_CONTENT_BYTES` = 512 KiB (lib.rs
-  L96, L189) — distinguish from the retained 256-facts / 512-KiB page bounds
-  (L912, L4586).
-- concept2 L7598: per-run output and required transferred history are each
-  capped at 4 MiB — a defined first-scope accounting limit; confirm in or out
-  of scope.
+## Keep-list: liveness safeguards
 
-## Explicitly out of scope (retained)
+These bounds already prevent a concrete self-inflicted failure and stay. Each
+one is a transport, storage, or runtime liveness safeguard, not a policy quota;
+if any is ever revisited, its precedent and failure mode are recorded with it.
 
-- Intrinsic bounds: NUL/blank/unique-key validation on tool-result metadata,
-  canonical encodings, identifier widths, ordering, idempotency, atomic
-  durable commit, protocol framing (L306–311).
-- Capacity availability: typed `Unavailable` outcomes for finite runtime,
-  storage, provider, registry, process, kernel, or scheduler availability
-  (L313–321).
-- Attempt timeouts (L709); slow-peer 64-frame / 10 s client bounds.
-- History page bounds: at most 256 facts and 512 KiB per page (L912, L4586).
+| Safeguard | Where | Precedent it answers |
+| --- | --- | --- |
+| Maximum message size | Local transport framing | A single inbound/outbound message could exhaust memory or stall the connection. |
+| Connect and synchronous I/O timeouts | Local transport client/server | A dead or stalled peer could hang a caller indefinitely. |
+| Stale-socket probe and reclaim | Daemon socket lifecycle | A leftover socket file after a crash could block startup or connect. |
+| Storage read bounds (`MAX_TAIL_FACTS`, `MAX_*_BYTES`) | Storage reads/pages | An unbounded read could load unbounded history into memory. |
+| Model progress and retry timeouts | Model runtime | A provider stream that stops producing could hang a run forever. |
 
-## Provenance
+These five safeguards are the only numeric safeguards retained; a new one or a
+changed value requires its recorded reason. Socket permissions (0700/0600) and
+boundary redaction are structural protections rather than numeric limits, and
+they stay. Everything outside this keep-list needs a precedent, and a removed
+limit is never replaced by a warning, a soft cap, a counter, or a periodic
+audit. When a bound is kept, the record says what it protects and why the
+specific value is sufficient; the value itself is not policy.
 
-The candidate list comes from an audit of the 19 post-M4 production files
-against the M4 baseline `d2a85370` using the classification above. A first cut
-was attempted and then fully reverted inside PR #14 (`ce80989` → `cc4bcb3`);
-PR #15 (`refactor(domain): remove tool-result product ceilings`, squash
-`83a257e`, merged 2026-08-29) landed the domain rows. The rows that are still
-live stay open work here, and each needs its own decision before code moves.
+## Related policy
+
+- Runtime credential-content scanners are removed and banned: user, model, and
+  tool content is never scanned or filtered for credential-shaped strings.
+  Secrets are protected structurally (never collected, echoed, stored, or
+  logged), while the CI documentation secret scan and the fake-secret absence
+  tests remain.
+- Corridors, reservations, the Day/Week/Month period engine, and
+  unavailable-queue promotion/reconciliation audits are removed from the
+  corpus; the live M3 queue (tickets and atomic promotion) is untouched.
+- The protocol and domain contracts are typed serde JSON; canonicalization is
+  RFC 8785 only, and only when a first real consumer exists.

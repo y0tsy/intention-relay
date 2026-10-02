@@ -27,7 +27,7 @@ erDiagram
 
 ## Core invariants
 
-1. Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root association, while M5 owns filesystem containment enforcement.
+1. Each session has one mandatory stable `WorkspaceId` and declared `WorkspaceRootDto`; M3 persists the identity/root association, while M5 owns the workspace addressing policy — the root as an anchor, not a containment boundary (ADR 0047).
 2. A session has at most one run in an active state.
 3. Every turn, run, plan, tool call, todo, permission, question, and event carries stable typed identity.
 4. Every semantic state-changing repository method commits the current-state projection, append-only event envelope(s), and updated session/run snapshot in one SQLite transaction, or changes nothing.
@@ -155,10 +155,7 @@ sequences (adopted by [ADR 0019](../decisions/0019-production-model-tool-loop.md
   session event sequence;
 - a filesystem-dependent validation or hook must finish before the transition
   transaction, and any stale result becomes a typed known pre-effect outcome
-  rather than an unrecorded second external check inside the transaction; and
-- catalog and lineage audit records are read through their own bounded queries
-  and do not enter the run publication gate merely because they are related to
-  the same user operation.
+  rather than an unrecorded second external check inside the transaction.
 
 Daemon-host outcome fixtures make the `Starting`/`Cancelling` first-append race
 deterministic and prove task-owned cancellation leaves cursor zero with neither
@@ -402,11 +399,11 @@ migration, or historical reinterpretation. Detailed semantics are owned by
 
 ## Post-M4 provider-evolution storage consequence
 
-Future provider catalog/profile/revision/audit records and provider-selection
+Future provider catalog/profile/revision records and provider-selection
 bindings are additive, credential-free records. They do not rewrite or
 retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events,
-queues, run cursors, facts, or replay bytes. Catalog audit uses its own sequence;
-recovery never resumes a prior provider request. Detailed semantics are owned by
+queues, run cursors, facts, or replay bytes; recovery never resumes a prior
+provider request. Detailed semantics are owned by
 [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md).
 
 ## Post-M4 session branching storage consequence

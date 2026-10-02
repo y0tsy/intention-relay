@@ -395,12 +395,11 @@ impl WorkspaceRelativePathDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error for blank, absolute, traversal, control-character,
-    /// or overly long logical path input.
+    /// Returns a validation error for blank, absolute, traversal, or
+    /// control-character path input.
     pub fn parse(value: impl Into<String>) -> DtoResult<Self> {
         let value = value.into();
         let is_invalid = value.trim().is_empty()
-            || value.len() > 4_096
             || value.starts_with('/')
             || value.starts_with('\\')
             || value.contains('\\')
@@ -411,7 +410,7 @@ impl WorkspaceRelativePathDto {
         if is_invalid {
             Err(ErrorDto::validation(
                 "invalid_workspace_relative_path",
-                "workspace-relative path must be normalized and contained",
+                "workspace-relative path must be normalized and relative",
             ))
         } else {
             Ok(Self(value))
@@ -430,6 +429,10 @@ impl WorkspaceRelativePathDto {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ErrorDetailDto {
     /// An authorized logical workspace-relative path was not found.
+    ///
+    /// Reserved vocabulary: no production path produces this variant today;
+    /// the file-oriented tools answer `tool_read_failed` instead. It is kept as
+    /// the reviewed not-found detail shape rather than deleted.
     MissingWorkspacePath {
         /// The logical path relative to the authorized workspace root.
         path: WorkspaceRelativePathDto,

@@ -93,7 +93,7 @@ public_resource_patterns = [
 
 [external_dependencies]
 "intention-types" = ["serde", "serde_json", "uuid"]
-"intention-domain" = ["serde", "serde_json", "sha2"]
+"intention-domain" = ["serde", "serde_json"]
 "intention-config" = ["serde", "serde_json", "toml"]
 "intention-protocol" = ["serde", "serde_json"]
 "intention-transport" = ["interprocess", "serde", "serde_json", "tempfile", "tokio"]
@@ -247,8 +247,8 @@ coverage_tier = "B"
 
 [[future_crates]]
 name = "intention-workspace"
-responsibility = "WorkspaceRoot path policy and process CWD enforcement."
-test_target = "workspace containment tests"
+responsibility = "WorkspaceRoot addressing anchor and process CWD."
+test_target = "workspace addressing and CWD tests"
 test_targets = ["workspace_contract"]
 coverage_tier = "B"
 

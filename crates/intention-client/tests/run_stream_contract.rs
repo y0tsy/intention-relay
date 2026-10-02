@@ -13,15 +13,16 @@ use intention_domain::{
     RunEventTailPageDto, RunProjectionDto, RunSnapshotDto,
 };
 use intention_protocol::{
-    ProtocolCapabilityDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
-    ProtocolResponseEnvelopeDto, ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto,
+    JsonRpcErrorDto, JsonRpcResponseDto, ProtocolDaemonMessageDto, ProtocolHelloDto,
+    ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunLiveBatchDto, RunResyncDto,
     RunResyncReasonDto, RunSnapshotFrameDto, RunStreamFrameDto, RunSubscriptionResponseDto,
-    SubscribeRunCommandDto,
+    SubscribeRunCommandDto, decode_request_line, encode_response,
 };
-use intention_transport::{AsyncLocalListener, LocalEndpoint, local_protocol_version};
+use intention_transport::{
+    AsyncLocalListener, AsyncRequestReceiver, LocalEndpoint, local_protocol_version,
+};
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, ErrorDto, RunId, SchemaVersionDto, SessionEventSequenceDto,
-    SessionId, TurnId,
+    ConfigRevisionId, ErrorDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId,
 };
 
 const SCHEMA: SchemaVersionDto = intention_protocol::CURRENT_DTO_SCHEMA_VERSION;
@@ -38,12 +39,19 @@ fn endpoint() -> LocalEndpoint {
 }
 
 fn hello(name: &str) -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![ProtocolCapabilityDto::RunStreamSubscriptions],
-        name,
-    )
-    .expect("fixture hello is valid")
+    ProtocolHelloDto::new(local_protocol_version(), name).expect("fixture hello is valid")
+}
+
+async fn receive_run_subscription(
+    requests: &mut AsyncRequestReceiver,
+) -> (u64, SubscribeRunCommandDto) {
+    let line = requests.receive_line().await.expect("request arrives");
+    let request = decode_request_line(&line).expect("request decodes");
+    let id = request.id();
+    match request.into_payload() {
+        ProtocolRequestPayloadDto::RunSubscription(subscription) => (id, subscription),
+        other => panic!("expected a run subscription request, got {other:?}"),
+    }
 }
 
 fn snapshot(
@@ -317,29 +325,22 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("peer accepts");
-        let (_, mut requests, mut frames) = connection
-            .negotiate_daemon_frames(hello("scripted-daemon"))
+        let (_, mut requests, mut messages) = connection
+            .negotiate(hello("scripted-daemon"))
             .await
             .expect("peer negotiates");
-        let initial_request = requests
-            .receive_run_subscription()
-            .await
-            .expect("initial subscription arrives");
-        frames
-            .send(&ProtocolDaemonFrameDto::Response(
-                ProtocolResponseEnvelopeDto::new(
-                    local_protocol_version(),
-                    initial_request.correlation_id(),
-                    ProtocolMessageDto::new(
-                        SCHEMA,
-                        ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
-                    ),
-                ),
+        let (initial_id, initial_request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(initial_request.session_id(), session_id);
+        assert_eq!(initial_request.run_id(), run_id);
+        messages
+            .send_message(&encode_response(
+                initial_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
             ))
             .await
             .expect("initial response sends");
-        frames
-            .send(&ProtocolDaemonFrameDto::RunStream(
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
                 RunStreamFrameDto::LiveBatch(
                     RunLiveBatchDto::new(
                         session_id,
@@ -353,29 +354,20 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
             ))
             .await
             .expect("gapped frame sends");
-        let replay_request = requests
-            .receive_run_subscription()
-            .await
-            .expect("replay subscription arrives");
+        let (replay_id, replay_request) = receive_run_subscription(&mut requests).await;
         assert_eq!(
-            replay_request.message().payload().after_cursor(),
+            replay_request.after_cursor(),
             Some(RunEventCursorDto::new(0))
         );
-        frames
-            .send(&ProtocolDaemonFrameDto::Response(
-                ProtocolResponseEnvelopeDto::new(
-                    local_protocol_version(),
-                    replay_request.correlation_id(),
-                    ProtocolMessageDto::new(
-                        SCHEMA,
-                        ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
-                            session_id,
-                            run_id,
-                            0,
-                            vec![fact(1, Some("recovered")), fact(2, None)],
-                        )),
-                    ),
-                ),
+        messages
+            .send_message(&encode_response(
+                replay_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
+                    session_id,
+                    run_id,
+                    0,
+                    vec![fact(1, Some("recovered")), fact(2, None)],
+                )),
             ))
             .await
             .expect("replay response sends");
@@ -407,62 +399,164 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
 }
 
 #[tokio::test]
+async fn request_replay_buffers_frames_queued_before_the_correlated_reply() {
+    let endpoint = endpoint();
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
+    let server = tokio::spawn(async move {
+        let connection = listener.accept().await.expect("peer accepts");
+        let (_, mut requests, mut messages) = connection
+            .negotiate(hello("scripted-daemon"))
+            .await
+            .expect("peer negotiates");
+        let (initial_id, _) = receive_run_subscription(&mut requests).await;
+        messages
+            .send_message(&encode_response(
+                initial_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
+            ))
+            .await
+            .expect("initial response sends");
+        let (replay_id, replay_request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(
+            replay_request.after_cursor(),
+            Some(RunEventCursorDto::new(0))
+        );
+        // Both frames reach the connection FIFO ahead of the correlated reply.
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
+                RunStreamFrameDto::LiveBatch(
+                    RunLiveBatchDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(0),
+                        vec![fact(1, None)],
+                        RunEventCursorDto::new(1),
+                    )
+                    .expect("contiguous buffered batch validates"),
+                ),
+            ))
+            .await
+            .expect("contiguous frame sends");
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
+                RunStreamFrameDto::LiveBatch(
+                    RunLiveBatchDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(2),
+                        vec![fact(3, None)],
+                        RunEventCursorDto::new(3),
+                    )
+                    .expect("gapped buffered batch validates"),
+                ),
+            ))
+            .await
+            .expect("gapped frame sends");
+        messages
+            .send_message(&encode_response(
+                replay_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
+            ))
+            .await
+            .expect("replay response sends");
+        let (recovery_id, recovery_request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(
+            recovery_request.after_cursor(),
+            Some(RunEventCursorDto::new(1))
+        );
+        messages
+            .send_message(&encode_response(
+                recovery_id,
+                ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
+                    session_id,
+                    run_id,
+                    1,
+                    vec![fact(2, None), fact(3, None)],
+                )),
+            ))
+            .await
+            .expect("recovery replay sends");
+    });
+    let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
+    let mut subscription = client
+        .subscribe(SubscribeRunCommandDto::new(
+            SCHEMA, session_id, run_id, None,
+        ))
+        .await
+        .expect("initial replay arrives");
+    subscription
+        .request_replay()
+        .await
+        .expect("replay applies despite frames queued ahead of the reply");
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(1))
+    );
+    let resync = subscription
+        .receive()
+        .await
+        .expect("buffered frame is delivered")
+        .expect("buffered gap frame reports a resync");
+    assert_eq!(resync.reason(), RunResyncReasonDto::CursorGap);
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(1))
+    );
+    subscription
+        .request_replay()
+        .await
+        .expect("recovery replay applies");
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(3))
+    );
+    server.await.expect("scripted peer completes");
+}
+
+#[tokio::test]
 async fn request_replay_rejects_mismatched_correlation_and_error_reply_without_mutating_state() {
-    for response in [
-        ProtocolResponsePayloadDto::RunSubscription(replay(SessionId::new(), RunId::new(), 0)),
-        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(
-            ErrorDto::validation("run_replay_rejected", "fixture replay rejected"),
-        )),
-    ] {
+    for is_error_reply in [false, true] {
         let endpoint = endpoint();
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
         let server = tokio::spawn(async move {
             let connection = listener.accept().await.expect("peer accepts");
-            let (_, mut requests, mut frames) = connection
-                .negotiate_daemon_frames(hello("scripted-daemon"))
+            let (_, mut requests, mut messages) = connection
+                .negotiate(hello("scripted-daemon"))
                 .await
                 .expect("peer negotiates");
-            let initial_request = requests
-                .receive_run_subscription()
-                .await
-                .expect("initial subscription arrives");
-            frames
-                .send(&ProtocolDaemonFrameDto::Response(
-                    ProtocolResponseEnvelopeDto::new(
-                        local_protocol_version(),
-                        initial_request.correlation_id(),
-                        ProtocolMessageDto::new(
-                            SCHEMA,
-                            ProtocolResponsePayloadDto::RunSubscription(replay(
-                                session_id, run_id, 0,
-                            )),
-                        ),
-                    ),
+            let (initial_id, _) = receive_run_subscription(&mut requests).await;
+            messages
+                .send_message(&encode_response(
+                    initial_id,
+                    ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
                 ))
                 .await
                 .expect("initial response sends");
-            let replay_request = requests
-                .receive_run_subscription()
-                .await
-                .expect("replay subscription arrives");
-            let correlation = if matches!(
-                &response,
-                ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Error(_))
-            ) {
-                replay_request.correlation_id()
-            } else {
-                CorrelationIdDto::new()
-            };
-            frames
-                .send(&ProtocolDaemonFrameDto::Response(
-                    ProtocolResponseEnvelopeDto::new(
-                        local_protocol_version(),
-                        correlation,
-                        ProtocolMessageDto::new(SCHEMA, response),
+            let (replay_id, _) = receive_run_subscription(&mut requests).await;
+            let reply = if is_error_reply {
+                JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
+                    Some(replay_id),
+                    JsonRpcErrorDto::from_error(
+                        intention_protocol::JSONRPC_INVALID_REQUEST,
+                        ErrorDto::validation("run_replay_rejected", "fixture replay rejected"),
                     ),
-                ))
+                )
+            } else {
+                encode_response(
+                    replay_id + 100,
+                    ProtocolResponsePayloadDto::RunSubscription(replay(
+                        SessionId::new(),
+                        RunId::new(),
+                        0,
+                    )),
+                )
+            };
+            messages
+                .send_message(&reply)
                 .await
                 .expect("invalid response sends");
         });
@@ -495,30 +589,22 @@ async fn scripted_async_peer_sends_correlated_replay_then_uncorrelated_live_fram
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("listener binds");
     let server = tokio::spawn(async move {
         let connection = listener.accept().await.expect("peer accepts");
-        let (_, mut requests, mut frames) = connection
-            .negotiate_daemon_frames(hello("scripted-daemon"))
+        let (_, mut requests, mut messages) = connection
+            .negotiate(hello("scripted-daemon"))
             .await
             .expect("peer negotiates");
-        let request = requests
-            .receive_run_subscription()
-            .await
-            .expect("subscription arrives");
-        let correlation = request.correlation_id();
-        assert_eq!(request.message().payload().session_id(), session_id);
-        let response = ProtocolResponseEnvelopeDto::new(
-            local_protocol_version(),
-            correlation,
-            ProtocolMessageDto::new(
-                SCHEMA,
+        let (request_id, request) = receive_run_subscription(&mut requests).await;
+        assert_eq!(request.session_id(), session_id);
+        assert_eq!(request.run_id(), run_id);
+        messages
+            .send_message(&encode_response(
+                request_id,
                 ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 0)),
-            ),
-        );
-        frames
-            .send(&ProtocolDaemonFrameDto::Response(response))
+            ))
             .await
             .expect("reply sends");
-        frames
-            .send(&ProtocolDaemonFrameDto::RunStream(
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
                 RunStreamFrameDto::LiveBatch(
                     RunLiveBatchDto::new(
                         session_id,

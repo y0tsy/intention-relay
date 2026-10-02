@@ -5,12 +5,14 @@
 
 use intention_domain::{RunModeDto, SessionProjectionDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolMessageDto, ProtocolRequestEnvelopeDto,
-    ProtocolRequestPayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionResyncDto,
-    SessionResyncReasonDto, SessionSnapshotDto, SubscribeSessionCommandDto,
+    CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto, ProtocolCommandDto,
+    ProtocolMethodDto, ProtocolQueryResultDto, ProtocolRequestPayloadDto,
+    ProtocolResponsePayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionResyncDto,
+    SessionResyncReasonDto, SessionSnapshotDto, SubscribeSessionCommandDto, decode_request_line,
+    decode_response, encode_request, encode_response,
 };
 use intention_types::{
-    CorrelationIdDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId, WorkspaceId,
+    ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId, WorkspaceId,
 };
 
 fn fixture_projection(
@@ -40,7 +42,7 @@ fn fixture_projection(
 #[test]
 fn public_protocol_accessors_preserve_typed_values() {
     let schema = SchemaVersionDto::new(1, 1);
-    let version = ProtocolVersionDto::new(1, 1);
+    let version = CURRENT_PROTOCOL_VERSION;
     let health = DaemonHealthDto::new(schema, version, DaemonReadinessDto::Starting);
     assert_eq!(health.schema_version(), schema);
     assert_eq!(health.protocol_version(), version);
@@ -68,19 +70,66 @@ fn public_protocol_accessors_preserve_typed_values() {
     assert_eq!(resync.reason(), SessionResyncReasonDto::InvalidPosition);
 
     let subscription = SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build);
-    let message = ProtocolMessageDto::new(
-        schema,
-        ProtocolRequestPayloadDto::Command(
-            intention_protocol::ProtocolCommandDto::SubscribeSession(subscription),
-        ),
+    assert_eq!(subscription.session_id(), session_id);
+    assert_eq!(subscription.requested_mode(), RunModeDto::Build);
+    assert_eq!(subscription.schema_version(), schema);
+}
+
+#[test]
+fn jsonrpc_envelope_accessors_preserve_typed_values() {
+    let schema = SchemaVersionDto::new(1, 1);
+    let session_id = SessionId::new();
+    let subscription = SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build);
+    let payload =
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(subscription));
+
+    let request = encode_request(9, payload.clone());
+    assert_eq!(request.id(), 9);
+    assert_eq!(
+        request.method(),
+        ProtocolMethodDto::SessionSubscribe.as_str()
     );
-    assert_eq!(message.schema_version(), schema);
-    let envelope = ProtocolRequestEnvelopeDto::new(version, CorrelationIdDto::new(), message);
-    assert_eq!(envelope.protocol_version(), version);
+    assert_eq!(request.params(), &payload);
+
+    let line = serde_json::to_string(&request).expect("request serializes");
+    let decoded = decode_request_line(&line).expect("request decodes");
+    assert_eq!(decoded.id(), 9);
+    assert_eq!(decoded.payload(), &payload);
+    let decoded_payload = decoded.into_payload();
     assert!(matches!(
-        envelope.message().payload(),
-        ProtocolRequestPayloadDto::Command(_)
+        &decoded_payload,
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(command))
+            if command == &subscription
     ));
-    let payload = envelope.message().clone().into_payload();
-    assert!(matches!(payload, ProtocolRequestPayloadDto::Command(_)));
+
+    let health = DaemonHealthDto::new(
+        schema,
+        ProtocolVersionDto::new(2, 0),
+        DaemonReadinessDto::Ready,
+    );
+    let response = encode_response(
+        9,
+        ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)),
+    );
+    assert_eq!(response.id(), Some(9));
+    assert_eq!(
+        response.result_value(),
+        Some(&ProtocolResponsePayloadDto::QueryResult(
+            ProtocolQueryResultDto::DaemonHealth(health)
+        ))
+    );
+    assert!(response.error_value().is_none());
+    let encoded = encode_response(
+        9,
+        ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health)),
+    );
+    assert!(matches!(
+        decode_response(
+            &serde_json::to_string(&encoded).expect("response serializes"),
+            ProtocolMethodDto::DaemonHealth,
+            9,
+        )
+        .expect("response decodes"),
+        ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(_))
+    ));
 }

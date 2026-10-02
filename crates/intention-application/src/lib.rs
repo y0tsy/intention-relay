@@ -13,8 +13,9 @@ use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
 };
 use intention_protocol::{
-    CreateSessionAcceptedDto, ProtocolAcceptedResultDto, RemoveQueuedTurnAcceptedDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto, StopRunAcceptedDto,
+    CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedResultDto,
+    RemoveQueuedTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionSnapshotDto, StopRunAcceptedDto,
 };
 use intention_runtime::{
     ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, RuntimeService,
@@ -27,7 +28,7 @@ use intention_storage::{
 };
 use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::ToolCallId;
-use intention_types::{DtoResult, ErrorDto, RunId, SchemaVersionDto, SessionId, TimestampDto};
+use intention_types::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 
 /// Explicit durable values selected for a create-session workflow.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1019,7 +1020,7 @@ where
     ) -> DtoResult<SessionSnapshotDto> {
         let projection = self.repository.load_session_snapshot(query.session_id())?;
         SessionSnapshotDto::with_projection(
-            SchemaVersionDto::new(1, 0),
+            CURRENT_DTO_SCHEMA_VERSION,
             query.session_id(),
             projection.at_sequence(),
             projection,
@@ -1661,8 +1662,8 @@ mod tests {
     #[test]
     fn failure_documents_carry_the_terminal_discriminator_and_code() {
         assert_eq!(
-            canonical_failure_document("failed", "workspace_path_unavailable"),
-            "{\"result\":\"failed\",\"value\":{\"code\":\"workspace_path_unavailable\"}}"
+            canonical_failure_document("failed", "tool_read_failed"),
+            "{\"result\":\"failed\",\"value\":{\"code\":\"tool_read_failed\"}}"
         );
         assert_eq!(
             terminal_error_tag(&ErrorDto::validation("tool_cancelled", "x")),

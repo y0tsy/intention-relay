@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted as the Slice 1 activating specification required by [ADR 0035](0035-m5plus-complete-foundation-activation.md).
+Superseded by [ADR 0046](0046-typed-serde-json-contracts.md): the canonical
+codec, the numeric tag registry, digests and identity, and the contract-family
+tables no longer exist, and typed serde JSON contracts replace this ledger. Its
+capability clauses are superseded by
+[ADR 0045](0045-local-json-rpc-2-0-transport.md) and its fixed-limit clauses by
+[ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md). The record was
+the Slice 1 activating specification required by
+[ADR 0035](0035-m5plus-complete-foundation-activation.md); it remains on disk
+as historical text.
 
 ## Scope and supersession
 

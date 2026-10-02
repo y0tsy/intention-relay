@@ -5,13 +5,12 @@
 Compatibility-only M3/M4 activity projections, where supported, are read-only
 views computed without synthetic activity identity, journal, message,
 notification, or acknowledgement state. Numeric values retained in research are
-not implementation limits for this package until an activating M6 specification
-classifies them as intrinsic bounds, capacity availability, or ordinary policy.
-Activity numeric limit classification is an accepted post-M5 future direction
-under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md):
-the numeric values require intrinsic/capacity/ordinary classification at M5+
-activation, never Mandate quotas or child-graph limits; it is not activated
-here.
+not implementation limits for this package: under
+[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) a
+numeric bound exists only with a recorded precedent naming the failure mode it
+prevents, and the former intrinsic/capacity/ordinary classification direction of
+[ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) is
+superseded. No numeric activity bound is activated here.
 
 
 ## Status and scope
@@ -20,7 +19,7 @@ here.
 
 - Normative owner: architecture 24.
 - Decision record: [`0016`](../decisions/0016-activity-ui-and-adapters.md).
-- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (export), [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (activity numeric limit classification).
+- Detail decisions: [`0029`](../decisions/0029-activity-and-notification-detail-directions.md) (activity and notification detail), [`0032`](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) (tree-level metadata direction), [`0033`](../decisions/0033-accepted-m5plus-execution-directions.md) (export), [`0034`](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) (activity numeric limit classification, superseded by [`0048`](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)).
 - Reconciliation topics: `ACT-001..019`.
 - Research provenance: [`m4plus_concept.md`](../m4plus_concept.md).
 - Status: documentation-approved; implementation-authorized work requires a later activating specification.
@@ -45,8 +44,10 @@ and acknowledgement state, ordering, recovery, and publication. `intention-clien
 remains the only adapter ingress. Tauri, TUI, and REPL own presentation, typed
 user input, local display state, and reconnect UX only.
 
-Architecture 13 owns lifecycle/admission/reconciliation; 14 owns canonical
-meaning and decoding; 15 owns tool effects; 16 owns scheduling; 17 owns child
+Architecture 13 owns lifecycle and admission; 14 owns run-execution meaning and
+historical compatibility (its canonical codec was removed by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns tool
+effects; 16 owns scheduling; 17 owns child
 edges and verifier authority; 18--20 own MCP, bridge, and kernel; 21 owns
 context; 22 owns provider/reasoning; and 23 owns Session fork lineage. Activity,
 notifications, acknowledgements, adapters, and UI never grant or infer any of
@@ -63,10 +64,13 @@ notification cursor.
 Every new root run receives its `AgentActivityTreeId` in the same durable
 admission transaction as its immutable run selection. Every root tree begins
 with one durable `RootActivityTreeBound` journal record even when it has no
-child or message. Historical M4 and post-M4 v1/v2/v3 selections stay
-byte-for-byte readable with no synthetic identity.
+child or message. Historical M4 records stay readable with no synthetic
+identity; the removed post-M4 selection versions gain no replacement state.
 
-`run-execution-meaning-v4` carries the credential-free `AgentActivitySelectionV1`:
+The credential-free `AgentActivitySelectionV1` is a typed serde JSON selection
+record; the former `run-execution-meaning-v4` carrier was removed with the
+canonical codec by
+[ADR 0046](../decisions/0046-typed-serde-json-contracts.md):
 
 ```text
 AgentActivitySelectionV1
@@ -76,7 +80,6 @@ AgentActivitySelectionV1
     activity_exchange_revision
     activity_journal_revision
     user_projection_revision
-    fixed_activity_limits
   }
   Descendant {
     activity_tree_id
@@ -84,7 +87,6 @@ AgentActivitySelectionV1
     activity_exchange_revision
     activity_journal_revision
     user_projection_revision
-    fixed_activity_limits
   }
 ```
 
@@ -117,7 +119,8 @@ flowchart LR
 
 A message has typed identity, tree/pair/order/direction/kind, sender/recipient
 provenance, bounded redacted safe text, closed typed references, delivery state,
-and canonical digest. References carry identity, revision/cursor, visibility,
+and a typed record identity. References carry identity, revision/cursor,
+visibility,
 and provenance only. They never embed prompt, provider/reasoning, tool/MCP,
 path, command, credential, grant, Python/Jupyter, raw result, or diagnostic
 bodies. Retained content requires separately authorized retrieval.
@@ -146,7 +149,7 @@ AgentMessageDto
   safe_text
   typed_references
   delivery_state
-  canonical_message_digest
+  message_record_identity
 
 AgentMessageReferenceDto
   TerminalChildResult
@@ -186,7 +189,7 @@ AgentActivityJournalRecordDto
   record_kind
   safe_user_projection
   typed_references
-  canonical_record_digest
+  record_identity
 ```
 
 The 17 closed record kinds are:
@@ -223,19 +226,20 @@ values, transcripts, or diagnostics. `DirectChildStatusDto` reports one child;
 counts, marked incomplete when a projection is unreadable, built from durable
 safe projections only.
 
-The first-scope fixed activity bounds are:
+The research values below are not activated limits
+([ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)):
 
-| Subject | Selected limit |
+| Subject | Research value |
 | --- | ---: |
 | Inter-agent messages in one activity tree | 1,024 |
-| Aggregate canonical message content | 4 MiB |
+| Aggregate message content | 4 MiB |
 | Activity-journal records | 4,096 |
-| One canonical message or activity record | 64 KiB |
+| One message or activity record | 64 KiB |
 | Activity-journal page | 256 records and 512 KiB |
 | Typed references in one message | 16 |
 | Clarification wait | 60 minutes |
 
-A limit failure is checked before a partial durable record exists; it never
+A bound failure is checked before a partial durable record exists; it never
 truncates, evicts, synthesizes, or starts external work. Archive is accepted only
 after the root and every descendant are terminal; it is read-only, retains
 everything, and physical deletion, compaction, export, and garbage collection
@@ -245,7 +249,8 @@ remain out of scope.
 
 The daemon-internal RLM child operation is closed and bound to the child's
 immutable `RlmParentLinkDto`, current `ModelStepId`, daemon-assigned
-`RlmMessageId`, message kind, pair order, and canonical payload digest:
+`RlmMessageId`, message kind, pair order, and the typed message payload
+reference:
 
 ```text
 RlmChildMessageOperation
@@ -315,7 +320,7 @@ One daemon-owned `AgentNotificationJournal` serves the local OS user. Its
 independent `AgentNotificationCursorDto` is an observation position, never a
 read, seen, dismissed, or accepted claim. Records contain only activity tree and
 record references, closed `Urgent` or `Ordinary` level/reason, safe counts/states,
-time, and digest. They exclude message text and all sensitive content/resources.
+time, and record identity. They exclude message text and all sensitive content/resources.
 
 ```text
 AgentNotificationLevelDto
@@ -359,18 +364,19 @@ inbox semantics are excluded.
 
 ## Protocol, adapters, and recovery
 
-`agent_activity_v1` and `user_notifications_v1` are additive negotiated families
-over the existing local endpoint and daemon-frame transport. Activity replay
-captures one upper journal sequence, sends a safe snapshot and bounded ascending
+Activity and notification projections ride the single JSON-RPC 2.0 connection
+over the existing private Unix-socket/Windows-named-pipe endpoint
+([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed
+subscription methods and notification frames replace the former
+`agent_activity_v1` and `user_notifications_v1` negotiated families and their
+capability gates. Activity replay captures one upper journal sequence, sends a
+safe snapshot and bounded ascending
 pages through that bound, sends completion, then emits only later live frames.
 Notification reconnect accepts an observation cursor and returns bounded current
 safe summaries. Unsupported, corrupt, unavailable, gapped, slow, or detached
 peers fail closed or resynchronize without blocking durable work or healthy
-peers. A peer lacking the capability receives no partially understood frame and
-the subscription fails with `agent_activity_capability_required` or
-`user_notifications_capability_required` as applicable. There is no second
-listener; the families reuse the existing private Unix-socket/Windows-named-pipe
-endpoint and `ProtocolDaemonFrameDto` transport.
+peers; a peer that cannot decode a typed frame receives no partially understood
+frame. There is no second listener.
 
 Adapters render daemon-owned typed projections and use `intention-client` for
 all activity, notification, acknowledgement, Session, Run, and fork commands or
@@ -405,10 +411,8 @@ agent_message_recipient_terminal
 agent_message_order_invalid
 agent_activity_history_unavailable
 agent_activity_snapshot_too_large
-agent_activity_capability_required
 agent_notification_history_unavailable
 agent_notification_summary_too_large
-user_notifications_capability_required
 ```
 
 They disclose no message or reference body, tool/MCP data, prompt, path,
@@ -433,10 +437,10 @@ compaction, retention clocks, provider UI/control planes, or final visual design
 
 A later M6 activating specification must declare exact crate owners, test
 targets, coverage tiers, feature profiles, storage/wire versions, and expected-
-failure architecture fixtures. It must cover canonical identity/message/journal/
-notification/acknowledgement vectors; direct-pair/order/clarification failures;
+failure architecture fixtures. It must cover typed identity/message/journal/
+notification/acknowledgement fixtures; direct-pair/order/clarification failures;
 atomic fault injection; separate sequence domains; historical compatibility
-projections; negotiated snapshot/page/completion/live/resync; urgent priority and
+projections; snapshot/page/completion/live/resync; urgent priority and
 acknowledgement independence; restart/no-resume; redaction; adapter parity; and
 Linux/Windows socket/named-pipe outcome scenarios. It must run `make quick`,
 `make docs-check`, `make architecture`, `make verify`, and required CI.

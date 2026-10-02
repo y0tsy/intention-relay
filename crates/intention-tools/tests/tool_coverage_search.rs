@@ -95,7 +95,7 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
 }
 
 #[test]
-fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
+fn scoped_search_handles_invalid_utf8_long_fragments_and_full_directory_scans() {
     let (dir, service) = service();
     let mut bytes = b"needle ".to_vec();
     bytes.extend(std::iter::repeat_n(b'x', 65_600));
@@ -138,33 +138,44 @@ fn scoped_search_handles_invalid_utf8_long_fragments_and_limit() {
     let ToolResult::Grep(result) = result else {
         return;
     };
-    assert_eq!(result.matches.len(), 10_000);
+    // No file-count or match-count cap drops results; the serialized search
+    // window is the only bound, and it reports the cut.
+    assert!(result.matches.len() < 10_001);
     assert!(result.truncated);
 }
 
 #[test]
-fn glob_skips_filtered_entries_and_truncates_matches() {
+fn glob_addresses_the_workspace_root_and_returns_every_match() {
     let (dir, service) = service();
-    std::fs::create_dir(dir.path().join("real")).unwrap();
-    std::fs::write(dir.path().join("real/ok.txt"), "x").unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("linked")).unwrap();
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: text("**/*.txt"),
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
-    let ToolResult::Glob(result) = result else {
-        return;
-    };
-    assert_eq!(
-        result.paths.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
-        vec!["real/ok.txt"]
-    );
+    std::fs::create_dir_all(dir.path().join("real/deep")).unwrap();
+    std::fs::write(dir.path().join("root.txt"), "x").unwrap();
+    std::fs::write(dir.path().join("real/other.txt"), "x").unwrap();
+    std::fs::write(dir.path().join("real/deep/ok.txt"), "x").unwrap();
+    // A pathless pattern addresses the workspace root; nested patterns address
+    // the same root, and reported paths are workspace-relative.
+    for (pattern, expected) in [
+        ("*.txt", vec!["root.txt"]),
+        ("real/*.txt", vec!["real/other.txt"]),
+        ("real/deep/*.txt", vec!["real/deep/ok.txt"]),
+    ] {
+        let result = service
+            .dispatch_with_cancellation(
+                ToolCallId::new(),
+                ToolInput::Glob(GlobInput {
+                    pattern: text(pattern),
+                }),
+                CancellationSignal::new(),
+            )
+            .unwrap();
+        let ToolResult::Glob(result) = result else {
+            return;
+        };
+        assert_eq!(
+            result.paths.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+            expected,
+            "pattern: {pattern}"
+        );
+    }
 
     std::fs::create_dir(dir.path().join("many")).unwrap();
     for i in 0..10_001 {
@@ -182,6 +193,8 @@ fn glob_skips_filtered_entries_and_truncates_matches() {
     let ToolResult::Glob(result) = result else {
         return;
     };
-    assert_eq!(result.paths.len(), 10_000);
+    // Every match is reported until the serialized search window is full; no
+    // match-count cap truncates the path list.
+    assert!(result.paths.len() < 10_001);
     assert!(result.truncated);
 }

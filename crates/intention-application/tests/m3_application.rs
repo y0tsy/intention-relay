@@ -596,7 +596,7 @@ fn lifecycle_events_preserve_exact_correlation_identity_across_terminal_outcome(
             fixture_time(),
         ))
         .expect_err("missing file fails");
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_read_failed");
     let events = repository.tool_events.borrow();
     assert!(events.len() >= 3);
     assert!(events.iter().all(|event| {
@@ -2493,7 +2493,7 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
             &publisher,
         )
         .expect_err("missing file fails");
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_read_failed");
     assert_single_terminal_event(
         &repository,
         session_id,
@@ -2675,7 +2675,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
             &publisher,
         )
         .expect_err("missing file fails");
-    assert_eq!(error.code(), "workspace_path_unavailable");
+    assert_eq!(error.code(), "tool_read_failed");
     let evidence = repository.result_evidence.borrow();
     assert!(evidence[..2].iter().all(Option::is_none));
     let failed = evidence[2]
@@ -2684,7 +2684,7 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     assert_eq!(failed.kind(), ToolResultKindDto::Read);
     assert_eq!(
         failed.content(),
-        "{\"result\":\"failed\",\"value\":{\"code\":\"workspace_path_unavailable\"}}"
+        "{\"result\":\"failed\",\"value\":{\"code\":\"tool_read_failed\"}}"
     );
     drop(evidence);
     assert!(publisher.publications.borrow().is_empty());

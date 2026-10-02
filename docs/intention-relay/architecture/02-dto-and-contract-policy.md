@@ -39,8 +39,7 @@ operation, or diagnostic domains.
 Deterministic UUIDv5 is permitted only where the owner freezes its namespace and
 name derivation. Daemon-assigned/random UUIDs and deterministic UUIDv5 values are
 not interchangeable. Historical UUID bytes and meanings remain unchanged and
-cannot be normalized into future records. UUIDs, canonical semantic digests,
-operation identities, sequences, and diagnostic correlation IDs are distinct
+cannot be normalized into future records. UUIDs, operation identities, sequences, and diagnostic correlation IDs are distinct
 classes and must not be converted or used as authority substitutes.
 
 ### IDs
@@ -119,22 +118,13 @@ M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-s
 
 ## Validation ownership
 
-Public DTO deserialization is a validation boundary. Structural shape is always established on decode: required fields, field types, and closed enum variants are validated at the wire boundary and cannot be bypassed by a decoder.
+Contracts are typed serde JSON DTOs. Public DTO deserialization is the structural validation boundary: required fields, field types, and closed enum variants are established on decode and cannot be bypassed by a decoder. Semantic invariants are enforced at the boundary that owns them and again at admission before any effect, because an admitting authority cannot assume the producer decoded through the same boundary.
 
-The semantic half of the boundary rule was scoped to the Slice 2 control-plane command, query, projection, and event DTO families that declare invariants beyond those field types. [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) reverted Slice 2 and removed those DTO families, so no control-plane DTO family currently exercises the rule; it remains the decode-time enforcement policy for any future family that declares invariants beyond its field types. For such a family, semantic invariants are enforced on decode and again at admission: a decoder must not produce a structurally valid but semantically invalid DTO, and the admitting authority re-runs the same `validate()` before any effect because it cannot assume the producer decoded through the same boundary. The mechanism for DTOs with public fields is a private raw shape plus a manual `Deserialize` that builds the value, calls `validate()`, and maps the typed error through `de::Error::custom`, so the rejection surfaces as a typed decode error; DTOs with private fields use a validating constructor instead, including any future `schema_version` text family, whose value must equal the current DTO schema version exactly.
+There is no binary canonical form: the wire and domain contracts are the serde JSON DTOs themselves, and no tag registry, canonical digest, or identity layer exists (ADR 0046). Canonicalization is introduced only when a first real consumer needs canonical bytes, and then only as RFC 8785 JSON Canonicalization (`serde_json_canonicalizer`); no canonicalization dependency is added before that consumer exists. The public DTOs that declare invariants beyond their field types are validated at admission; extending decode-time enforcement to them remains a recorded follow-up card.
 
-The 31 pre-Slice-2 public DTOs that declare invariants beyond their field types are not yet covered by decode-time enforcement: they still rely on admission-time validation. Extending decode-time enforcement to them is recorded as a follow-up card and is not claimed by this rule; the card covers the 31 pre-Slice-2 invariant DTOs.
+Validation occurs at the boundary that has the necessary context.
 
-The error category follows the boundary that detected a version mismatch: the transport handshake fails an incompatible major protocol version as `incompatible_protocol_version` with `ErrorDto { category: unavailable }` (architecture 03, "Protocol lifecycle"), while the same code is a `validation` failure at a public DTO decode boundary. The difference is intentional and is not an open gap; a caller that needs one category per code would require a new decision.
-
-Validation occurs at the earliest boundary that has the necessary context:
-
-1. transport validates schema version, framing, and basic DTO shape;
-2. application validates command intent and authorization assumptions;
-3. domain validates invariants and value objects;
-4. runtime validates lifecycle preconditions;
-5. tools validate tool-specific input and policy;
-6. persistence validates storage constraints and maps failures to `ErrorDto`.
+The error category follows the boundary that detected a version mismatch: the JSON-RPC 2.0 handshake fails an incompatible protocol version as the typed `-32001` error with `ErrorDto { category: unavailable }` (architecture 03, "Protocol lifecycle"; ADR 0045), while an `incompatible_protocol_version` decode rejection at a public DTO boundary is a `validation` failure. The difference is intentional.
 
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is authoritative.
 
@@ -149,7 +139,7 @@ sequenceDiagram
   participant S as Storage
 
   A->>C: Command DTO
-  C->>D: Framed command
+  C->>D: JSON-RPC request
   D->>U: Application DTO
   U->>S: State and event DTO
   S-->>U: Commit outcome DTO
@@ -170,9 +160,10 @@ A live event is emitted only after the storage commit succeeds. The command resu
   configuration schema explicitly documents `deny_unknown_fields`. Required
   fields, invalid types, invalid IDs, unknown closed variants, and any
   schema/protocol version other than the current one always fail safely.
-- Daemon/client protocol negotiation accepts only the exact current protocol
-  version (1.1) and rejects any other version with a typed error; the public
-  DTO schema compares by exact equality (no same-major tolerance).
+- The daemon/client JSON-RPC 2.0 handshake accepts only the exact current
+  protocol version (2.0) and rejects any other version with the typed `-32001`
+  version error before closing the connection (ADR 0045); the public DTO
+  schema compares by exact equality (no same-major tolerance).
 - SQLite storage is the single live schema (logical version 1) created
   directly on open; there is no migration chain, no version gate, and no
   opening of older schemas, and persisted rows keep their recorded bytes and
@@ -201,33 +192,21 @@ See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) fo
 
 ## Post-M4 execution and compatibility boundary
 
-Future M4+ packages use closed, typed families rather than widening historical
-records by implication.
-
-### Execution-kind envelope
-
-A future admitted execution meaning has a closed envelope conceptually
-containing:
-
-```text
-RunExecutionMeaningEnvelopeDto
-  execution_kind: Ordinary | Mandate | VerifierMandate
-  meaning_version: explicit version
-  canonical_meaning_digest: credential-free digest
-  meaning_payload: kind-specific typed payload
-```
-
-The exact field table, tag registry, canonical encoding, digest algorithm,
-decoder retention schedule, and nested selections belong to later owner
-packages. The envelope rule is already fixed: kind/version/payload mismatch
-blocks dependent external work, and live availability does not silently mutate
-a persisted meaning.
+Future M4+ packages use closed, typed serde JSON families rather than widening
+historical records by implication. The binary canonical codec, execution-meaning
+envelope, tag registry, and digest/identity layer were deleted by ADR 0046:
+there is no `RunExecutionMeaningEnvelopeDto`, no canonical tag or digest, no
+canonical encoding, and no decoder retention schedule. If a future
+execution-kind record is ever needed, it is a typed serde JSON contract declared
+by its own activating specification; kind/version/payload mismatch blocks
+dependent external work, and live availability never silently mutates a
+persisted meaning.
 
 ### Future DTO families
 
 The Plan/Build Autopilot transition adds versioned typed families for plan
 approval, same-Session Build continuation, and optional implementation
-handoff. Approval binds an exact plan revision and digest; same-Session
+handoff. Approval binds an exact plan revision; same-Session
 continuation preserves `SessionId` but creates a fresh `RunId`; handoff creates
 an independent Session from a bounded safe snapshot. These DTOs must not carry
 credentials, raw transcripts, provider continuation state, live handles,
@@ -243,8 +222,9 @@ The future tool-loop families include `ToolRegistryEntryDto`,
 `ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, `DirectToolSelectionV1`,
 `ModelStepId`, `ToolGroupId`, model-step/group facts, typed direct-admission
 outcomes, safe workspace-path observations, output fragments, terminal results,
-and `ModelToolExchangeDto`. Architecture 15 owns their semantics; architecture
-14 owns canonical framing, digest, decoder, and compatibility rules. They cannot
+and `ModelToolExchangeDto`. Architecture 15 owns their semantics; every family
+is typed serde JSON, and any canonicalization requires a first real consumer and
+RFC 8785 (ADR 0046). They cannot
 widen historical M4 tool facts, expose provider-native IDs, raw paths, secrets,
 SDK resources, or recreate stored selection from a current registry.
 
@@ -253,11 +233,10 @@ The future instruction-source families include `InstructionSourceV1`,
 ([architecture 30](30-instruction-sources-and-system-context.md),
 [ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). They
 carry bounded credential-free instruction text with its declared kind, scope,
-order, audience, and canonical digests; they carry no tool, policy, admission,
+order, and audience; they carry no tool, policy, admission,
 provider, or other authority, and no untrusted material may enter them.
-Architecture 30 owns their semantics, architecture 14 owns canonical framing,
-digest, decoder, and compatibility rules, and the Slice 5 activating ledger
-assigns their contract versions and tags.
+Architecture 30 owns their semantics, and the Slice 5 activating specification
+assigns their typed serde JSON contract versions (ADR 0046).
 
 ### Historical compatibility classes
 
@@ -272,12 +251,12 @@ assigns their contract versions and tags.
 Historical M3/M4 and ordinary records must not receive synthetic Mandate,
 verifier, Skill, MCP, child, activity, policy, profile, or execution-kind
 fields. The single live storage schema may evolve in place to add tables,
-bridges, or projections but may not rewrite old payload bytes, IDs, digests,
+bridges, or projections but may not rewrite old payload bytes, IDs,
 cursors, snapshots, or event envelopes. Unknown or
 corrupt future meaning blocks dependent work before an effect and must not fall
 back to current TOML, registry, model name, provider, or live resource state.
 
-Mandate lifecycle DTO families, validation and revision/sequence rules are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md). Detailed envelope, canonicalization, digest and decoder rules are owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
+Mandate lifecycle DTO families, validation and revision/sequence rules are owned by [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md). Historical compatibility rules are owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md).
 
 Registry, direct-admission, WorkspaceRoot, and tool-loop DTO semantics are owned
 by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md).
@@ -296,8 +275,7 @@ authority/revision, immutable target-set, audit baseline/evidence/verdict,
 target-mutation, and reconciliation values. They are credential-free, closed,
 versioned families that neither widen historical records nor grant authority by
 relationship, prompt, evidence, or current state. Architecture 17 owns their
-semantics; architecture 14 retains canonical framing, digest, decoder, and
-compatibility ownership.
+semantics; architecture 14 retains historical compatibility ownership.
 
 Future MCP families include typed capability source, discovery, server
 observation, normalized capability revision, accumulated run-local selection,
@@ -305,7 +283,7 @@ model-step selection binding, invocation selection, safe capability/result
 projection, and attempt/recovery values. They are closed, credential-free, and
 cannot expose raw endpoint, command, header, token, frame, server error, SDK,
 socket, or process resource. Architecture 18 owns their semantics; architecture
-14 retains canonical framing, digest, decoder, and compatibility ownership.
+14 retains historical compatibility ownership.
 
 See [decision 0003](../decisions/0003-run-execution-meaning-and-historical-compatibility.md)
 and the [compatibility register](../reconciliation/compatibility-register.md).
@@ -317,8 +295,9 @@ safe output chunk, checkpoint metadata, restoration outcome, and host-request
 references. They are closed, credential-free families: Python/Jupyter objects,
 raw frames, checkpoint payloads, grants, credentials, endpoints, handles,
 process resources, raw tracebacks, and caller-selected application identities
-never cross a public boundary. Architecture 20 owns their semantics; architecture
-14 owns canonical framing, digest, decoder, and compatibility.
+never cross a public boundary. Architecture 20 owns their semantics; every
+family is typed serde JSON with any canonicalization deferred to a first real
+consumer (ADR 0046).
 
 ## Post-M4 provider evolution DTO boundary
 
@@ -326,13 +305,8 @@ Future provider DTOs are closed, credential-free kind/descriptor/profile/catalog
 selection/capability/driver-contract and normalized-reasoning families. They
 cannot expose raw TOML, credentials, arbitrary maps, provider-native IDs or
 payloads, SDK/client resources, remote continuation state, or private endpoint
-input. Architecture 22 owns their semantics; architecture 14 retains canonical
-framing, digest, decoding, and compatibility ownership.
-
-The provider identifier fields `profile_id`, `revision_id`, `provider_kind_id`,
-and `model_id` are bounded at 256 characters, not bytes, at both the public wire
-boundary and the canonical identity record, so one value cannot pass one
-boundary and fail the other.
+input. Architecture 22 owns their semantics; every family is typed serde JSON,
+and no canonical identity record or digest layer exists (ADR 0046).
 
 ## Post-M4 session branching DTO boundary
 
@@ -340,11 +314,11 @@ Future fork DTOs are closed, versioned, credential-free command/query/result,
 lineage, boundary, snapshot, preview, and safe branch-summary families. They
 never carry a client-selected child ID, raw snapshot/event, credential, path,
 resource, provider payload, or authority. Architecture 23 owns their semantics;
-architecture 14 retains canonical framing and compatibility ownership.
+every family is typed serde JSON (ADR 0046).
 ## Post-M4 activity and adapter DTO boundary
 
 Future activity, notification, acknowledgement, snapshot, page, completion, live,
 and resync DTO families are closed, versioned, credential-free safe projections.
 They expose no raw prompt, provider/tool/MCP data, path, credential, grant,
-resource, or implementation value. Architecture 24 owns semantics; architecture
-14 retains canonical compatibility ownership.
+resource, or implementation value. Architecture 24 owns semantics; every family
+is typed serde JSON (ADR 0046).

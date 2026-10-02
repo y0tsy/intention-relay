@@ -1776,6 +1776,23 @@ def test_adr_0043_instruction_sources_record_exists_and_is_indexed(root: Path) -
         raise RuntimeError("roadmap must reference architecture 30 by filename")
 
 
+def test_adr_0044_to_0048_records_exist_and_are_indexed(root: Path) -> None:
+    readme = root / "docs/intention-relay/decisions/README.md"
+    text = readme.read_text(encoding="utf-8")
+    records = {
+        "0044": "0044-revert-of-m5plus-slice2-control-plane.md",
+        "0045": "0045-local-json-rpc-2-0-transport.md",
+        "0046": "0046-typed-serde-json-contracts.md",
+        "0047": "0047-workspace-root-addressing-anchor.md",
+        "0048": "0048-limits-by-precedent-and-no-content-scanning.md",
+    }
+    for number, filename in records.items():
+        if not (root / "docs/intention-relay/decisions" / filename).is_file():
+            raise RuntimeError(f"ADR {number} must exist as an accepted record")
+        if f"[{number}]({filename})" not in text:
+            raise RuntimeError(f"decisions/README.md must index ADR {number}")
+
+
 def test_every_adr_number_is_referenced_by_the_roadmap(root: Path) -> None:
     decisions = root / "docs/intention-relay/decisions/README.md"
     roadmap = root / "docs/intention-relay/architecture/11-implementation-roadmap.md"
@@ -2124,91 +2141,6 @@ def test_real_api_e2e_budget_matches_workflow_timeouts(root: Path) -> None:
             raise RuntimeError(f"the budget check must fail when {description}")
 
 
-def test_slice2_tag_registry_parity(root: Path) -> None:
-    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
-    text = adr.read_text(encoding="utf-8")
-    wired_slice2 = [
-        "| `model-capability-taxonomy-v1` | `0x0206` | Wired (Slice 2) |",
-        "| `provider-profile-revision-v1` | `0x0207` | Wired (Slice 2) |",
-        "| `provider-selection-v1` | `0x0208` | Wired (Slice 2) |",
-        "| `reasoning-history-manifest-v1` | `0x0209` | Wired (Slice 2) |",
-        "| `context-source-manifest-v1` | `0x020A` | Wired (Slice 2) |",
-        "| `model-context-projection-v1` | `0x020B` | Wired (Slice 2) |",
-    ]
-    for row in wired_slice2:
-        if row not in text:
-            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
-    for row in (
-        "| `run-execution-meaning` | `0x0101` | Wired |",
-        "| `programmatic-caller-policy-selection-v1` | `0x0201` | Wired |",
-        "| `agent-activity-selection-v1` | `0x0202` | Wired |",
-        "| `goal-run-selection-v1` | `0x0203` | ReservedForSlice3 |",
-        "| `fork-base-snapshot-v1/v2` | `0x0401` | ReservedForSlice4 |",
-        "| `agent-notification-record-v1` | `0x0505` | ReservedForSlice4 |",
-    ):
-        if row not in text:
-            raise RuntimeError(f"ADR 0037 tag registry must contain row {row!r}")
-
-
-def test_slice2_storage_schema_declared_single_live(root: Path) -> None:
-    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
-    text = adr.read_text(encoding="utf-8")
-    if "SQLite storage schema | Logical version 1" not in text:
-        raise RuntimeError(
-            "ADR 0037 must declare the single live SQLite storage schema (logical version 1)"
-        )
-
-
-def test_slice2_protocol_versions_declared(root: Path) -> None:
-    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
-    text = adr.read_text(encoding="utf-8")
-    if "Local protocol | 1.1, unchanged" not in text:
-        raise RuntimeError("ADR 0037 must declare local protocol 1.1 unchanged")
-    if "Public DTO schema | 1.1, additive, unchanged" not in text:
-        raise RuntimeError("ADR 0037 must declare public DTO schema 1.1 unchanged")
-
-
-def test_slice2_test_targets_declared(root: Path) -> None:
-    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
-    text = adr.read_text(encoding="utf-8")
-    for target in (
-        "m5_control_plane_canonical",
-        "m5_control_plane_rejections",
-        "m5_session_selection_overrides",
-        "control_plane_contracts",
-        "m5_control_plane_config",
-        "m5_catalog_runtime",
-        "m5_control_plane_runtime",
-        "m5_session_selection",
-        "control_plane_client",
-        "session_selection_client",
-        "m6_reasoning_surface",
-        "sqlite_contracts",
-    ):
-        if f"tests/{target}.rs" not in text:
-            raise RuntimeError(f"ADR 0037 must declare the test target {target!r}")
-
-
-def test_slice2_no_new_crate(root: Path) -> None:
-    adr = root / "docs/intention-relay/decisions/0037-m5plus-slice2-control-plane.md"
-    text = adr.read_text(encoding="utf-8")
-    if "No new crate, dependency, feature, coverage tier, or exclusion is introduced." not in text:
-        raise RuntimeError("ADR 0037 must declare that no new crate is introduced")
-
-
-def test_slice2_reconciliation_rows_exist(root: Path) -> None:
-    matrix = root / "docs/intention-relay/reconciliation/source-of-truth-matrix.md"
-    matrix_text = matrix.read_text(encoding="utf-8")
-    if "| SL2-001 |" not in matrix_text or "| SL2-009 |" not in matrix_text:
-        raise RuntimeError("source-of-truth matrix must carry SL2-001..009 rows")
-    evidence = root / "docs/intention-relay/reconciliation/evidence-register.md"
-    evidence_text = evidence.read_text(encoding="utf-8")
-    if "| EVD-047 |" not in evidence_text or "| EVD-060 |" not in evidence_text:
-        raise RuntimeError("evidence register must carry EVD-047..060 rows")
-    if "0037-m5plus-slice2-control-plane.md" not in evidence_text:
-        raise RuntimeError("evidence register must reference ADR 0037")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true")
@@ -2286,12 +2218,7 @@ def main() -> None:
         test_real_api_e2e_workflow_is_manual_only,
         test_real_api_e2e_target_is_opt_in_only,
         test_real_api_e2e_budget_matches_workflow_timeouts,
-        test_slice2_tag_registry_parity,
-        test_slice2_storage_schema_declared_single_live,
-        test_slice2_protocol_versions_declared,
-        test_slice2_test_targets_declared,
-        test_slice2_no_new_crate,
-        test_slice2_reconciliation_rows_exist,
+        test_adr_0044_to_0048_records_exist_and_are_indexed,
     ]
     standalone_tests = [
         test_unused_dependency,

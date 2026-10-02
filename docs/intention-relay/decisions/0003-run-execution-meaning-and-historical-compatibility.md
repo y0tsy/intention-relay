@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0046](0046-typed-serde-json-contracts.md): the canonical
+execution-meaning envelope, its canonical bytes, and its digest no longer
+exist, and the binary codec is removed. The historical-compatibility rules
+that no recorded run gains synthetic meaning and that missing meaning is never
+reconstructed from current state are not superseded; they remain owned by
+[architecture 14](../architecture/14-run-execution-meaning-and-historical-compatibility.md)
+and [ADR 0038](0038-no-backward-compatibility-and-legacy-removal.md).
 
 ## Decision
 

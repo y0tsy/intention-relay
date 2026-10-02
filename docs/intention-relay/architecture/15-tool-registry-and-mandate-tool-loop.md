@@ -24,7 +24,7 @@ non-sandboxed.
 
 ## Ownership and one capability path
 
-`intention-tools` owns registry form, common typed contracts, the fixed slot list, revision validation, and duplicate rejection. Primitive owners own descriptor semantics. The composition root alone assembles active descriptors. The daemon owns active-run binding, durable orchestration, and post-commit publication. Domain/execution-meaning owns canonical records and compatibility, not concrete implementation selection.
+`intention-tools` owns registry form, common typed contracts, the fixed slot list, revision validation, and duplicate rejection. Primitive owners own descriptor semantics. The composition root alone assembles active descriptors. The daemon owns active-run binding, durable orchestration, and post-commit publication. Domain owns typed JSON record shapes, not concrete implementation selection.
 
 Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a second registry, private model-function collection, direct primitive path, persistence authority, or publication authority. Every invocation reaches the one daemon-owned, Rust-owned capability path required by [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md).
 
@@ -100,7 +100,7 @@ require a typed URL, question, todo, retained-content, plan, child-agent, or
 MCP-method reference. In Plan mode, ordinary
 `write`/`edit` are denied; plan mutation remains plan-policy work.
 
-`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and nested selection records use the `IRCR` / `typed-tlv-v1` / SHA-256 policy owned by [Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md). They must not define a competing codec. Semantic changes require a new record version or tag; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
+`ToolDescriptorRevisionId`, `ToolRegistryRevisionId`, and nested selection records are typed serde JSON values (ADR 0046); the removed `IRCR` / `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic changes require a new record version; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
 
 ## Base-tool initial contracts
 
@@ -153,23 +153,24 @@ audit trail as OS-level isolation.
 - the hook-pipeline revision; and
 - an ordered list of only the active descriptors actually supplied to the model, each binding `ToolId`, intended owner, descriptor revision, input/result schema references, required-capability binding, mode relation, model-function-schema revision, safe-result-projection revision, observation-contract revision, and stream shape.
 
-The selection excludes all unexposed slots, credentials, raw schemas/JSON, executor handles, readiness, current registry state, provider-native IDs, confirmation, corridors, quotas, root-origin rules, and mutable policy state. Ordering is digest-significant and duplicate semantic keys are rejected.
+The selection excludes all unexposed slots, credentials, raw schemas/JSON, executor handles, readiness, current registry state, provider-native IDs, confirmation, quotas, root-origin rules, and mutable policy state. Ordering is semantic and preserved by the typed record; duplicate semantic keys are rejected.
 
 An admission, replay, retry, recovery, fork, audit, or later package may not rebuild a missing selection from current registry/descriptors, configuration, model/provider name, driver availability, hook pipeline, workspace, ancestry, MCP discovery, bridge/kernel state, logs, or UI state. Unknown, corrupt, or unsupported nested selections block dependent work before effect while unrelated readable history remains available.
 
 ## Validation ownership and limit classification
 
-Validation is layered: transport owns wire shape and negotiation; this package
-owns fixed slots, descriptor revisions, selection ordering, and direct admission;
-architecture 14 owns canonical bytes and semantic digests; runtime/application
-owns live readiness and mode preconditions; each primitive owner validates typed
-inputs/outputs; storage owns persistence constraints. No layer may bypass or
-replace another layer's authority.
+Validation is layered: transport owns wire shape and protocol version
+equality; this package owns fixed slots, descriptor revisions, selection
+ordering, and direct admission; typed serde JSON records own their own shape
+(ADR 0046); runtime/application owns live readiness and mode preconditions; each
+primitive owner validates typed inputs/outputs; storage owns persistence
+constraints. No layer may bypass or replace another layer's authority.
 
-Every numeric value is classified before activation as an intrinsic
-representation/protocol bound, typed capacity availability, ordinary/historical
-product policy, or deferred. A future Mandate product ceiling, retry budget,
-reservation, or successful-result truncation is not permitted.
+Every numeric value is classified before activation against the precedent-based
+limit policy (ADR 0048): an intrinsic representation/protocol bound, typed
+capacity availability, or a liveness safeguard with a recorded rationale. A
+future Mandate product ceiling, retry budget, or successful-result truncation is
+not permitted.
 
 ## Mandate direct admission and WorkspaceRoot
 
@@ -177,16 +178,18 @@ For a future Mandate call, direct admission is legal only when the run's frozen 
 
 The only Mandate admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers invalid input, selection/revision or capability mismatch, reserved/inactive descriptor, mode mismatch, malformed meaning, and intrinsic representation failure. `Unavailable` covers actual registry, implementation, workspace context, runtime, provider, storage, or capacity unavailability. Both are known pre-effect outcomes.
 
-No Mandate call may enter `AwaitingConfirmation`. A compatible selected active descriptor is not gated by confirmation, risk selector, corridor, root-origin, parent, Goal, Skill, provider, MCP, prompt, model, reservation, quota, or product ceiling. Hooks remain mandatory for typed normalization, observation, redaction, mode enforcement, and lifecycle preparation, but cannot recreate a discretionary Mandate authorization layer.
+No Mandate call may enter `AwaitingConfirmation`. A compatible selected active descriptor is not gated by confirmation, risk selector, root-origin, parent, Goal, Skill, provider, MCP, prompt, model, quota, or product ceiling. Hooks remain mandatory for typed normalization, observation, redaction, mode enforcement, and lifecycle preparation, but cannot recreate a discretionary Mandate authorization layer.
 
-The workspace rule is execution-kind-specific:
+The workspace rule is the same for every execution kind:
 
-| Execution | `WorkspaceRoot` meaning |
+| Item | `WorkspaceRoot` meaning |
 | --- | --- |
-| Existing ordinary/M3/M4 | Current containment remains authoritative. Outside-root absolute/traversal/symlink escape is rejected; process-CWD fallback is prohibited. |
-| Future Mandate | Mandatory default relative base and `execute` initial CWD, not an access boundary. Absolute paths and `..` paths are not denied solely for their location. |
+| Relative paths | Default base: `workspace_root.join(path)`. |
+| `execute` | Initial CWD; the child process starts in the root. |
+| glob/grep | Default scope root when no path is supplied. |
+| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary (ADR 0047). |
 
-For Mandate path-bearing calls, typed safe observation records path form, base reference, effective path/CWD subject to redaction, inside/outside relationship, available symlink/reparse observation, and observation completeness. It is audit evidence, not authorization, and does not claim complete descendant-process tracking. Non-path tools receive no fictional workspace path. Plan artifacts remain outside `WorkspaceRoot` and require their own typed plan authorization.
+For Mandate path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to redaction, and observation completeness. It is audit evidence, not authorization, and does not claim complete descendant-process tracking or a security boundary. Non-path tools receive no fictional workspace path. Plan artifacts remain outside `WorkspaceRoot` and require their own typed plan authorization.
 
 Build admits otherwise compatible selected descriptors. In Plan mode, ordinary project `write` and `edit` remain incompatible, while physical-plan mutation remains a plan-owner operation. `execute` is directly admissible when otherwise compatible but is not a sandbox. `ask_user` is a normal `user_interaction` tool, not confirmation transport; after it starts, the Mandate run remains `Running`.
 
@@ -241,11 +244,11 @@ after the whole group completes.
 
 The first-scope bounds are:
 
-- the existing **512 KiB** individual canonical-fact bound applies to every
+- the existing **512 KiB** individual durable-fact bound applies to every
   fragment;
 - all output fragments and successful result content in one group share a
-  **4 MiB** combined canonical-content limit, consumed in actual durable commit
-  order, with no equal reservation by call and no dependence on later scheduler
+  **4 MiB** combined content limit, consumed in actual durable commit
+  order, with no equal per-call allocation and no dependence on later scheduler
   reconstruction;
 - content is never truncated or partly committed; if the next fragment cannot
   fit, it is not written and only its call receives the terminal
@@ -262,7 +265,7 @@ approved typed metadata; no value silently changes category during replay.
 outcome may enter the next typed exchange; an `ExternalEffectUnknown` result
 never permits another model step.
 
-### Tool history replay and negotiation
+### Tool history replay and subscription
 
 Run snapshots contain only a compact safe summary of active step/group/call
 state; no tool-output text, full terminal content, raw tool results,
@@ -270,27 +273,28 @@ model-visible projection text, provider-native correlation data, or
 implementation resources. Tool facts retain the shared run cursor and are
 available for bounded tail replay.
 
-`model_tool_loop_v1` is a separately negotiated protocol and descriptor/model
-capability. After the correlated `RunReplayDto`, a subscribing negotiated client
-receives uncorrelated `RunToolHistoryPageDto` frames: one fixed session/run
+`model_tool_loop_v1` is a descriptor/model capability, not a wire capability:
+there is no protocol capability negotiation or family gate (ADR 0045). After the
+correlated `RunReplayDto` result of a run subscription, the subscriber receives
+`RunToolHistoryPageDto` notifications: one fixed session/run
 identity, a captured upper cursor, non-empty ascending tool facts, bounded by
 the existing **256 facts and 512 KiB per page**. The final
 `RunToolHistoryCompletedDto` repeats the identity and upper cursor. The
 publication gate serializes `RunReplayDto`, tool-history pages, completion, then
-live frames. When the same subscription also negotiates the normalized
-reasoning stream, the combined gate serializes `RunReplayDto`, reasoning pages
-and completion, tool-history pages and completion, then live frames; if either
-history class is absent, its pages and completion frame are omitted and the
-remaining frames retain this order. Sparse shared cursors are valid. Missing or
-incomplete history requires typed resynchronization and never causes a live-tool
-retry.
+live `run.frame` notifications. When the same subscription also carries the
+normalized reasoning stream, the combined gate serializes `RunReplayDto`,
+reasoning pages and completion, tool-history pages and completion, then live
+frames; if either history class is absent, its pages and completion frame are
+omitted and the remaining frames retain this order. Sparse shared cursors are
+valid. Missing or incomplete history requires typed resynchronization and never
+causes a live-tool retry.
 
-An unnegotiated client subscribing to a run containing post-M4 model-tool-loop
-facts fails closed with `model_tool_loop_required`, never a partially understood
-snapshot or live stream. Historical M4 runs retain old replay behavior and
+A subscriber to a run containing post-M4 model-tool-loop
+facts receives the complete typed history or a typed error, never a partially
+understood snapshot or live stream. Historical M4 runs retain old replay behavior and
 `tool_execution_unavailable` semantics byte-for-byte. New run-selection
-provenance records the negotiated `model_tool_loop_v1` capability and the
-descriptor/model support needed to reconstruct local exchanges.
+provenance records the descriptor/model `model_tool_loop_v1` support needed to
+reconstruct local exchanges.
 
 ## Model progress deadline
 
@@ -334,7 +338,7 @@ Recovery completes before readiness. It classifies unfinished calls from durable
 
 ## Compatibility and protocol boundary
 
-`model_tool_loop_v1` is a future separately negotiated capability. Negotiated clients receive an authoritative replay, bounded ordered tool-history pages and completion, then live frames under one publication gate. Missing/incomplete history yields resync/history-unavailable; an unnegotiated client encountering future loop facts fails closed without partial snapshot, history, or live data.
+`model_tool_loop_v1` is a descriptor/model capability delivered through JSON-RPC 2.0 run subscriptions (ADR 0045). A subscriber receives an authoritative replay, bounded ordered tool-history pages and completion, then live notifications under one publication gate. Missing or incomplete history yields resync/history-unavailable; a client that cannot represent future loop facts receives a typed error without partial snapshot, history, or live data.
 
 Future compact snapshots contain only safe step/group/call state, never raw output, provider-native IDs, resources, or credentials. Exact wire tags, pages, and storage schema remain deferred.
 
@@ -342,21 +346,21 @@ M3 session replay and M4 run streaming remain unchanged. An M4 `ToolCallRecorded
 
 ## Dependencies and non-goals
 
-This document depends on Mandate lifecycle, immutable execution meaning, external-attempt evidence, and the one-capability-path decisions. Scheduler work may consume only typed live readiness of a frozen selection; it cannot select, bypass, or retry tools. Scheduler semantics are owned by architecture 16. Architecture 17 owns child creation/control/result semantics and verifier authority; this document retains only the `sub_agent` slot, descriptor, admission, and generic tool-effect boundary. Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation semantics; this document retains fixed-slot, descriptor, direct-admission, and generic loop ownership. Architecture 19 owns Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this document's frozen descriptor selection, admission, `ToolCallId`, start/result facts, and post-commit reread publication without bypass or duplication. Tool admission never grants target-mutation authority. This document does not define bridge/IPython/kernel, Skills/Goals/context, scheduler topology, provider evolution, UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
+This document depends on Mandate lifecycle, external-attempt evidence, and the one-capability-path decisions. Scheduler work may consume only typed live readiness of a frozen selection; it cannot select, bypass, or retry tools. Scheduler semantics are owned by architecture 16. Architecture 17 owns child creation/control/result semantics and verifier authority; this document retains only the `sub_agent` slot, descriptor, admission, and generic tool-effect boundary. Architecture 18 owns the `mcp` descriptor's source/discovery/capability/invocation semantics; this document retains fixed-slot, descriptor, direct-admission, and generic loop ownership. Architecture 19 owns Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this document's frozen descriptor selection, admission, `ToolCallId`, start/result facts, and post-commit reread publication without bypass or duplication. Tool admission never grants target-mutation authority. This document does not define bridge/IPython/kernel, Skills/Goals/context, scheduler topology, provider evolution, UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
 
 ## Required evidence before implementation
 
 A later activating specification must define exact crate owners, test targets, coverage tiers, feature profiles, and architecture fixtures, then pass `make quick`, `make verify`, and Linux/Windows CI. It must cover:
 
-- canonical registry/descriptor/selection golden bytes and cross-platform digests, plus missing/reordered/duplicate slot and owner/revision negatives;
+- typed JSON registry/descriptor/selection fixtures, plus missing/reordered/duplicate slot and owner/revision negatives;
 - reserved-slot non-visibility/non-execution, composition-only assembly, and no-bypass fixtures;
 - frozen selection and no-current-state reconstruction across registry, configuration, providers, hooks, policy, workspace, MCP, bridge, and UI;
-- ordinary containment preservation versus Mandate default-base/CWD, explicit path, symlink/reparse, observation, and no-CWD-fallback outcomes;
+- addressing-anchor semantics: relative join, `execute` CWD, accepted absolute/`..` paths with no containment check, observation, and no-CWD-fallback outcomes;
 - direct Mandate admission, impossible confirmation state, Plan-mode incompatibility, `ask_user`, hook non-authority, and typed availability;
 - atomic step/group/admission/start/fragment/result fault injection, no effect before commit, post-commit reread publication, and concurrent completion ordering;
 - fragment/terminal integrity, partial-result exclusion from model context, and intrinsic/capacity bound behavior;
 - before-start/started/known/unknown cancellation, crash and restart outcomes, no retries/reattach/resume, Mandate uncertainty pause, and exact fresh reconciliation;
-- negotiated/unnegotiated replay, paging, cursor capture, live-frame gating, resync, and historical M4 denial preservation; and
+- replay, paging, cursor capture, live-frame gating, resync, and historical M4 denial preservation; and
 - fake-secret, unsafe-path, raw-corrupt-byte, SDK-resource, and provider-native identifier absence from identities, persistence, protocol, logs, diagnostics, adapters, and model projections.
 
 Architecture 20 kernel host requests consume this document's frozen descriptor

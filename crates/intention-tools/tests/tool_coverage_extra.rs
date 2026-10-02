@@ -2,9 +2,8 @@ use intention_tools::{BoundedText, TOOL_SCHEMA_VERSION, ToolContext, ToolInput, 
 use intention_types::{RunId, SessionId, ToolCallId};
 
 #[test]
-fn bounded_text_rejects_nul_and_oversized_values() {
+fn bounded_text_rejects_nul_values() {
     assert!(BoundedText::new("a\0b").is_err());
-    assert!(BoundedText::new("x".repeat(1_048_577)).is_err());
 }
 
 #[test]

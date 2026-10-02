@@ -88,9 +88,12 @@ change is made.
 
 ## Compatibility
 
-- Local protocol 1.1 and public DTO schema 1.1 are unchanged. The
-  provider-neutral request is not a public wire family, and the SQLite
-  storage schema and canonical records are untouched: no migration, no
+- Public DTO schema 1.1 is unchanged; the local protocol version clause of
+  this bullet is superseded by
+  [ADR 0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON
+  at protocol version 2.0, no capability plane), and the record otherwise
+  stands. The provider-neutral request is not a public wire family, and the
+  SQLite storage schema and canonical records are untouched: no migration, no
   version change, and no persisted advertisement state.
 - M3/M4 recorded history, replay, and evidence remain unchanged. The M4
   no-port denial fallback was already superseded by

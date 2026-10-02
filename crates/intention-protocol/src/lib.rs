@@ -42,60 +42,48 @@ impl ProtocolVersionDto {
     }
 }
 
-/// A feature the local adapter and daemon both understand.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProtocolCapabilityDto {
-    /// The peer can subscribe to ordered session snapshots and event tails.
-    SessionSubscriptions,
-    /// The peer can exchange correlation-bound request and response envelopes.
-    CorrelatedRequests,
-    /// The peer can obtain daemon health and readiness projections.
-    DaemonHealth,
-    /// The peer can subscribe to dedicated persistent run streams.
-    RunStreamSubscriptions,
-    ProviderProfilesV1,
-    SessionForkV1,
-    NormalizedReasoningStreamV1,
-    AgentActivityV1,
-    UserNotificationsV1,
-    DaemonToolGatewayV1,
-    ModelToolLoopV1,
-}
-
 /// The currently activated local protocol version.
 ///
-/// Slice 2 stays on protocol 1.1 and DTO schema 1.1 under the ADR 0038
-/// single-version policy: negotiation accepts only the exact current 1.1
-/// versions, previously required fields stay required, and fields that became
-/// mandatory are mandatory on the wire. Decoding tolerates unknown additive
-/// fields (forward compatibility) but no longer accepts older shapes as if
-/// they were current; prior same-major (1.0-to-1.1) compatibility and 1.0
-/// fixtures were removed with that machinery.
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(1, 1);
+/// The wire speaks JSON-RPC 2.0 over NDJSON under the single-version policy:
+/// hello accepts only the exact current version, previously required fields
+/// stay required, and decoding tolerates unknown additive fields. There is no
+/// capability negotiation; a differing version is answered with a typed
+/// JSON-RPC mismatch error before the daemon closes the connection.
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersionDto = ProtocolVersionDto::new(2, 0);
 /// The currently activated public DTO schema version.
 pub const CURRENT_DTO_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 1);
 
-/// Capabilities introduced after the M4 protocol surface.
-pub const POST_M5_CAPABILITIES: [ProtocolCapabilityDto; 7] = [
-    ProtocolCapabilityDto::ProviderProfilesV1,
-    ProtocolCapabilityDto::SessionForkV1,
-    ProtocolCapabilityDto::NormalizedReasoningStreamV1,
-    ProtocolCapabilityDto::AgentActivityV1,
-    ProtocolCapabilityDto::UserNotificationsV1,
-    ProtocolCapabilityDto::DaemonToolGatewayV1,
-    ProtocolCapabilityDto::ModelToolLoopV1,
-];
+/// Decodes one payload `schema_version` that must equal the current version.
+///
+/// The public DTO schema compares by exact equality, with no same-major
+/// tolerance, so a received payload that declares any other version fails at
+/// the decode boundary with the typed `incompatible_dto_schema_version` error.
+fn current_schema_version<'de, D>(deserializer: D) -> Result<SchemaVersionDto, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let version = SchemaVersionDto::deserialize(deserializer)?;
+    if version == CURRENT_DTO_SCHEMA_VERSION {
+        Ok(version)
+    } else {
+        Err(de::Error::custom(ErrorDto::validation(
+            "incompatible_dto_schema_version",
+            "the DTO schema version must equal the current version",
+        )))
+    }
+}
 
-pub mod contract_families;
-pub mod negotiation;
-pub use negotiation::ProtocolNegotiationResultDto;
+pub mod jsonrpc;
+pub use jsonrpc::{
+    JSONRPC_INVALID_PARAMS, JSONRPC_INVALID_REQUEST, JSONRPC_METHOD_NOT_FOUND, JSONRPC_PARSE_ERROR,
+    JSONRPC_VERSION, JSONRPC_VERSION_MISMATCH, JsonRpcErrorDto, JsonRpcNotificationDto,
+    JsonRpcRequestDto, JsonRpcRequestFailure, JsonRpcResponseDto, is_notification_line,
+};
 
 /// A safe metadata handshake exchanged before any protocol command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProtocolHelloDto {
     version: ProtocolVersionDto,
-    capabilities: Vec<ProtocolCapabilityDto>,
     adapter_name: String,
 }
 
@@ -107,12 +95,11 @@ impl<'de> Deserialize<'de> for ProtocolHelloDto {
         #[derive(Deserialize)]
         struct RawProtocolHelloDto {
             version: ProtocolVersionDto,
-            capabilities: Vec<ProtocolCapabilityDto>,
             adapter_name: String,
         }
 
         let raw = RawProtocolHelloDto::deserialize(deserializer)?;
-        Self::new(raw.version, raw.capabilities, raw.adapter_name).map_err(de::Error::custom)
+        Self::new(raw.version, raw.adapter_name).map_err(de::Error::custom)
     }
 }
 
@@ -122,11 +109,7 @@ impl ProtocolHelloDto {
     /// # Errors
     ///
     /// Returns a validation error when the adapter name is blank.
-    pub fn new(
-        version: ProtocolVersionDto,
-        capabilities: Vec<ProtocolCapabilityDto>,
-        adapter_name: impl Into<String>,
-    ) -> DtoResult<Self> {
+    pub fn new(version: ProtocolVersionDto, adapter_name: impl Into<String>) -> DtoResult<Self> {
         let adapter_name = adapter_name.into();
         if adapter_name.trim().is_empty() {
             Err(ErrorDto::validation(
@@ -136,7 +119,6 @@ impl ProtocolHelloDto {
         } else {
             Ok(Self {
                 version,
-                capabilities,
                 adapter_name,
             })
         }
@@ -146,12 +128,6 @@ impl ProtocolHelloDto {
     #[must_use]
     pub const fn version(&self) -> ProtocolVersionDto {
         self.version
-    }
-
-    /// Returns the peer's explicitly declared capabilities.
-    #[must_use]
-    pub fn capabilities(&self) -> &[ProtocolCapabilityDto] {
-        &self.capabilities
     }
 
     /// Returns the safe local adapter metadata name.
@@ -178,6 +154,7 @@ pub enum DaemonReadinessDto {
 /// A versioned, credential-free health projection from the daemon authority.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DaemonHealthDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     protocol_version: ProtocolVersionDto,
     readiness: DaemonReadinessDto,
@@ -220,6 +197,7 @@ impl DaemonHealthDto {
 /// A subscription request scoped to one durable session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscribeSessionCommandDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -301,6 +279,7 @@ impl SubscribeSessionCommandDto {
 /// A dedicated run-stream subscription request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscribeRunCommandDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     run_id: RunId,
@@ -929,6 +908,7 @@ impl<'de> Deserialize<'de> for SessionSnapshotDto {
     {
         #[derive(Deserialize)]
         struct RawSessionSnapshotDto {
+            #[serde(deserialize_with = "current_schema_version")]
             schema_version: SchemaVersionDto,
             session_id: SessionId,
             at_sequence: SessionEventSequenceDto,
@@ -1014,6 +994,7 @@ impl<'de> Deserialize<'de> for SessionEventTailBatchDto {
     {
         #[derive(Deserialize)]
         struct RawSessionEventTailBatchDto {
+            #[serde(deserialize_with = "current_schema_version")]
             schema_version: SchemaVersionDto,
             session_id: SessionId,
             after_sequence: SessionEventSequenceDto,
@@ -1113,6 +1094,7 @@ pub enum SessionResyncReasonDto {
 /// A typed instruction to discard local subscription state and resynchronize.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionResyncDto {
+    #[serde(deserialize_with = "current_schema_version")]
     schema_version: SchemaVersionDto,
     session_id: SessionId,
     reason: SessionResyncReasonDto,
@@ -1246,7 +1228,7 @@ pub enum ProtocolQueryResultDto {
     Rejected(ErrorDto),
 }
 
-/// A request payload carried in a correlated wire message.
+/// A typed request payload carried by one JSON-RPC request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolRequestPayloadDto {
@@ -1254,9 +1236,11 @@ pub enum ProtocolRequestPayloadDto {
     Command(ProtocolCommandDto),
     /// A daemon query.
     Query(ProtocolQueryDto),
+    /// A dedicated run-stream subscription request.
+    RunSubscription(SubscribeRunCommandDto),
 }
 
-/// A response payload carried in a correlated wire message.
+/// A typed response payload carried by one JSON-RPC response.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolResponsePayloadDto {
@@ -1270,174 +1254,393 @@ pub enum ProtocolResponsePayloadDto {
     RunSubscription(RunSubscriptionResponseDto),
 }
 
-/// A correlated initial run-stream subscription request envelope.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunSubscriptionRequestEnvelopeDto {
-    protocol_version: ProtocolVersionDto,
-    correlation_id: CorrelationIdDto,
-    message: ProtocolMessageDto<SubscribeRunCommandDto>,
+/// The method name of the mandatory version handshake.
+pub const PROTOCOL_HELLO_METHOD: &str = "hello";
+/// The notification method carrying one run-stream frame.
+pub const RUN_FRAME_METHOD: &str = "run.frame";
+
+/// One implemented JSON-RPC method of the local protocol.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtocolMethodDto {
+    /// Durable session creation.
+    SessionCreate,
+    /// User-turn delivery to the daemon authority.
+    TurnSend,
+    /// Removal of an unstarted queued user turn.
+    TurnRemove,
+    /// Cancellation of an active daemon-owned run.
+    RunStop,
+    /// Session event subscription.
+    SessionSubscribe,
+    /// Dedicated run-stream subscription.
+    RunSubscribe,
+    /// Daemon health and readiness projection.
+    DaemonHealth,
+    /// Durable session snapshot projection.
+    SessionSnapshot,
 }
 
-impl RunSubscriptionRequestEnvelopeDto {
-    /// Creates a correlated, schema-versioned run subscription request.
+impl ProtocolMethodDto {
+    /// Every implemented method.
+    ///
+    /// The wire-name table has exactly one source, [`Self::as_str`], and the
+    /// one-to-one coverage of this list is pinned by a wildcard-free
+    /// conformance test, so a method name and a variant can never drift.
+    const ALL: [Self; 8] = [
+        Self::SessionCreate,
+        Self::TurnSend,
+        Self::TurnRemove,
+        Self::RunStop,
+        Self::SessionSubscribe,
+        Self::RunSubscribe,
+        Self::DaemonHealth,
+        Self::SessionSnapshot,
+    ];
+
+    /// Returns the wire method name.
     #[must_use]
-    pub const fn new(
-        protocol_version: ProtocolVersionDto,
-        correlation_id: CorrelationIdDto,
-        message: ProtocolMessageDto<SubscribeRunCommandDto>,
-    ) -> Self {
-        Self {
-            protocol_version,
-            correlation_id,
-            message,
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionCreate => "session.create",
+            Self::TurnSend => "turn.send",
+            Self::TurnRemove => "turn.remove",
+            Self::RunStop => "run.stop",
+            Self::SessionSubscribe => "session.subscribe",
+            Self::RunSubscribe => "run.subscribe",
+            Self::DaemonHealth => "daemon.health",
+            Self::SessionSnapshot => "session.snapshot",
         }
     }
 
-    /// Returns the negotiated protocol version.
+    /// Returns the unique method that carries a typed request payload.
     #[must_use]
-    pub const fn protocol_version(&self) -> ProtocolVersionDto {
-        self.protocol_version
-    }
-    /// Returns the request correlation identity.
-    #[must_use]
-    pub const fn correlation_id(&self) -> CorrelationIdDto {
-        self.correlation_id
-    }
-    /// Returns the versioned subscription command.
-    #[must_use]
-    pub const fn message(&self) -> &ProtocolMessageDto<SubscribeRunCommandDto> {
-        &self.message
-    }
-}
-
-/// A daemon-to-client frame that distinguishes correlated replies from stream frames.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-pub enum ProtocolDaemonFrameDto {
-    /// A correlation-bound response envelope.
-    Response(ProtocolResponseEnvelopeDto),
-    /// An uncorrelated run-stream frame.
-    RunStream(RunStreamFrameDto),
-}
-
-/// A schema-versioned typed message payload suitable for a local wire codec.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProtocolMessageDto<T> {
-    schema_version: SchemaVersionDto,
-    payload: T,
-}
-
-impl<T> ProtocolMessageDto<T> {
-    /// Creates a versioned typed protocol message.
-    #[must_use]
-    pub const fn new(schema_version: SchemaVersionDto, payload: T) -> Self {
-        Self {
-            schema_version,
-            payload,
+    pub const fn for_payload(payload: &ProtocolRequestPayloadDto) -> Self {
+        match payload {
+            ProtocolRequestPayloadDto::Command(command) => match command {
+                ProtocolCommandDto::CreateSession(_) => Self::SessionCreate,
+                ProtocolCommandDto::SendUserTurn(_) => Self::TurnSend,
+                ProtocolCommandDto::RemoveQueuedTurn(_) => Self::TurnRemove,
+                ProtocolCommandDto::StopRun(_) => Self::RunStop,
+                ProtocolCommandDto::SubscribeSession(_) => Self::SessionSubscribe,
+            },
+            ProtocolRequestPayloadDto::Query(query) => match query {
+                ProtocolQueryDto::GetDaemonHealth => Self::DaemonHealth,
+                ProtocolQueryDto::GetSessionSnapshot(_) => Self::SessionSnapshot,
+            },
+            ProtocolRequestPayloadDto::RunSubscription(_) => Self::RunSubscribe,
         }
     }
 
-    /// Returns the message schema version.
+    /// Reports whether this method carries the given request payload.
     #[must_use]
-    pub const fn schema_version(&self) -> SchemaVersionDto {
-        self.schema_version
+    pub const fn accepts_request(self, payload: &ProtocolRequestPayloadDto) -> bool {
+        matches!(
+            (self, payload),
+            (
+                Self::SessionCreate,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(_))
+            ) | (
+                Self::TurnSend,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(_))
+            ) | (
+                Self::TurnRemove,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(_))
+            ) | (
+                Self::RunStop,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(_))
+            ) | (
+                Self::SessionSubscribe,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(_))
+            ) | (
+                Self::RunSubscribe,
+                ProtocolRequestPayloadDto::RunSubscription(_)
+            ) | (
+                Self::DaemonHealth,
+                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth)
+            ) | (
+                Self::SessionSnapshot,
+                ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(_))
+            )
+        )
     }
 
-    /// Returns the typed message payload.
+    /// Reports whether this method carries the given response payload.
     #[must_use]
-    pub const fn payload(&self) -> &T {
+    pub const fn accepts_response(self, payload: &ProtocolResponsePayloadDto) -> bool {
+        match self {
+            Self::SessionCreate | Self::TurnSend | Self::TurnRemove | Self::RunStop => {
+                matches!(payload, ProtocolResponsePayloadDto::CommandResult(_))
+            }
+            Self::DaemonHealth | Self::SessionSnapshot => {
+                matches!(payload, ProtocolResponsePayloadDto::QueryResult(_))
+            }
+            Self::SessionSubscribe => {
+                matches!(payload, ProtocolResponsePayloadDto::Subscription(_))
+            }
+            Self::RunSubscribe => matches!(payload, ProtocolResponsePayloadDto::RunSubscription(_)),
+        }
+    }
+
+    /// Returns the payload a parameterless request of this method carries.
+    ///
+    /// Only `daemon.health` is genuinely parameterless (ADR 0045); every other
+    /// method requires its typed payload, so an absent `params` member stays an
+    /// invalid-params failure.
+    const fn empty_payload(self) -> Option<ProtocolRequestPayloadDto> {
+        match self {
+            Self::DaemonHealth => Some(ProtocolRequestPayloadDto::Query(
+                ProtocolQueryDto::GetDaemonHealth,
+            )),
+            Self::SessionCreate
+            | Self::TurnSend
+            | Self::TurnRemove
+            | Self::RunStop
+            | Self::SessionSubscribe
+            | Self::RunSubscribe
+            | Self::SessionSnapshot => None,
+        }
+    }
+
+    fn parse_with_id(method: &str, id: u64) -> Result<Self, JsonRpcRequestFailure> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == method)
+            .ok_or_else(|| {
+                JsonRpcRequestFailure::new(Some(id), JsonRpcErrorDto::method_not_found(method))
+            })
+    }
+}
+
+/// A decoded client request with its JSON-RPC identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolRequestDto {
+    id: u64,
+    payload: ProtocolRequestPayloadDto,
+}
+
+impl ProtocolRequestDto {
+    /// Creates a decoded request from its wire identity and typed payload.
+    #[must_use]
+    pub const fn new(id: u64, payload: ProtocolRequestPayloadDto) -> Self {
+        Self { id, payload }
+    }
+
+    /// Returns the request identity that responses must echo.
+    #[must_use]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns the typed request payload.
+    #[must_use]
+    pub const fn payload(&self) -> &ProtocolRequestPayloadDto {
         &self.payload
     }
 
-    /// Consumes the message and returns its typed payload.
+    /// Consumes the request and returns its typed payload.
     #[must_use]
-    pub fn into_payload(self) -> T {
+    pub fn into_payload(self) -> ProtocolRequestPayloadDto {
         self.payload
     }
 }
 
-/// A correlated client-to-daemon local protocol request envelope.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProtocolRequestEnvelopeDto {
-    protocol_version: ProtocolVersionDto,
-    correlation_id: CorrelationIdDto,
-    message: ProtocolMessageDto<ProtocolRequestPayloadDto>,
+/// A daemon-to-client message: either a response or a stream notification.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProtocolDaemonMessageDto {
+    /// A response to one client request.
+    Response(JsonRpcResponseDto<ProtocolResponsePayloadDto>),
+    /// A `run.frame` notification carrying one run-stream frame.
+    Notification(JsonRpcNotificationDto<RunStreamFrameDto>),
 }
 
-impl ProtocolRequestEnvelopeDto {
-    /// Creates a versioned request envelope with a canonical correlation ID.
+impl ProtocolDaemonMessageDto {
+    /// Creates the notification carrying one run-stream frame.
     #[must_use]
-    pub const fn new(
-        protocol_version: ProtocolVersionDto,
-        correlation_id: CorrelationIdDto,
-        message: ProtocolMessageDto<ProtocolRequestPayloadDto>,
-    ) -> Self {
-        Self {
-            protocol_version,
-            correlation_id,
-            message,
+    pub fn run_frame(frame: RunStreamFrameDto) -> Self {
+        Self::Notification(JsonRpcNotificationDto::new(RUN_FRAME_METHOD, frame))
+    }
+}
+
+impl Serialize for ProtocolDaemonMessageDto {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Response(response) => response.serialize(serializer),
+            Self::Notification(notification) => notification.serialize(serializer),
         }
     }
-
-    /// Returns the negotiated wire protocol version.
-    #[must_use]
-    pub const fn protocol_version(&self) -> ProtocolVersionDto {
-        self.protocol_version
-    }
-
-    /// Returns the request-response correlation identifier.
-    #[must_use]
-    pub const fn correlation_id(&self) -> CorrelationIdDto {
-        self.correlation_id
-    }
-
-    /// Returns the schema-versioned request message.
-    #[must_use]
-    pub const fn message(&self) -> &ProtocolMessageDto<ProtocolRequestPayloadDto> {
-        &self.message
-    }
 }
 
-/// A correlated daemon-to-client local protocol response envelope.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProtocolResponseEnvelopeDto {
-    protocol_version: ProtocolVersionDto,
-    correlation_id: CorrelationIdDto,
-    message: ProtocolMessageDto<ProtocolResponsePayloadDto>,
+/// Encodes one typed request payload into a JSON-RPC request envelope.
+#[must_use]
+pub fn encode_request(
+    id: u64,
+    payload: ProtocolRequestPayloadDto,
+) -> JsonRpcRequestDto<ProtocolRequestPayloadDto> {
+    let method = ProtocolMethodDto::for_payload(&payload);
+    JsonRpcRequestDto::new(id, method.as_str(), payload)
 }
 
-impl ProtocolResponseEnvelopeDto {
-    /// Creates a versioned response envelope echoing a request correlation ID.
-    #[must_use]
-    pub const fn new(
-        protocol_version: ProtocolVersionDto,
-        correlation_id: CorrelationIdDto,
-        message: ProtocolMessageDto<ProtocolResponsePayloadDto>,
-    ) -> Self {
-        Self {
-            protocol_version,
-            correlation_id,
-            message,
-        }
+/// Parses one wire line into a decoded client request.
+///
+/// A line whose request envelope omits the `id` member is a notification, not a
+/// request: [`jsonrpc::is_notification_line`] classifies it, and a server must
+/// not answer it.
+///
+/// # Errors
+///
+/// Returns a parse error for invalid JSON, an invalid-request error for a
+/// non-conformant envelope, a method-not-found error for an unknown method,
+/// and an invalid-params error when the payload or its method pairing fails.
+pub fn decode_request_line(line: &str) -> Result<ProtocolRequestDto, JsonRpcRequestFailure> {
+    let header = jsonrpc::JsonRpcRequestHeader::parse(line)?;
+    let method = ProtocolMethodDto::parse_with_id(header.method(), header.id())?;
+    let request: JsonRpcRequestDto<ProtocolRequestPayloadDto> = match method.empty_payload() {
+        Some(empty) => JsonRpcRequestDto::parse_allowing_absent_params(line, empty)?,
+        None => JsonRpcRequestDto::parse(line)?,
+    };
+    if !method.accepts_request(request.params()) {
+        return Err(JsonRpcRequestFailure::new(
+            Some(request.id()),
+            JsonRpcErrorDto::invalid_params(),
+        ));
     }
+    Ok(ProtocolRequestDto::new(request.id(), request.into_params()))
+}
 
-    /// Returns the negotiated wire protocol version.
-    #[must_use]
-    pub const fn protocol_version(&self) -> ProtocolVersionDto {
-        self.protocol_version
+/// Decodes the response to one known request from a wire line.
+///
+/// # Errors
+///
+/// Returns the typed daemon error carried by an error response, or an
+/// invalid-response error when the identity or payload family differs.
+pub fn decode_response(
+    line: &str,
+    method: ProtocolMethodDto,
+    id: u64,
+) -> DtoResult<ProtocolResponsePayloadDto> {
+    let response: JsonRpcResponseDto<ProtocolResponsePayloadDto> =
+        JsonRpcResponseDto::parse(line).map_err(|_| invalid_wire_response())?;
+    if response.id() != Some(id) {
+        return Err(invalid_wire_response());
     }
+    if let Some(error) = response.error_value() {
+        return Err(error.to_error());
+    }
+    let payload = response.into_result().ok_or_else(invalid_wire_response)?;
+    if !method.accepts_response(&payload) {
+        return Err(invalid_wire_response());
+    }
+    Ok(payload)
+}
 
-    /// Returns the echoed request-response correlation identifier.
-    #[must_use]
-    pub const fn correlation_id(&self) -> CorrelationIdDto {
-        self.correlation_id
-    }
+/// Encodes one typed response payload into a JSON-RPC response envelope.
+#[must_use]
+pub fn encode_response(
+    id: u64,
+    payload: ProtocolResponsePayloadDto,
+) -> JsonRpcResponseDto<ProtocolResponsePayloadDto> {
+    JsonRpcResponseDto::result(id, payload)
+}
 
-    /// Returns the schema-versioned response message.
-    #[must_use]
-    pub const fn message(&self) -> &ProtocolMessageDto<ProtocolResponsePayloadDto> {
-        &self.message
+/// Parses one `run.frame` notification line.
+///
+/// # Errors
+///
+/// Returns an invalid-response error when the line is not a `run.frame`
+/// notification.
+pub fn parse_run_frame_notification(line: &str) -> DtoResult<RunStreamFrameDto> {
+    let notification: JsonRpcNotificationDto<RunStreamFrameDto> =
+        JsonRpcNotificationDto::parse(line).map_err(|_| invalid_wire_response())?;
+    if notification.method() != RUN_FRAME_METHOD {
+        return Err(invalid_wire_response());
     }
+    Ok(notification.into_params())
+}
+
+fn invalid_wire_response() -> ErrorDto {
+    ErrorDto::validation(
+        "invalid_local_protocol_response",
+        "the local daemon returned an unexpected protocol response",
+    )
+}
+
+/// Encodes the mandatory client hello request.
+#[must_use]
+pub fn encode_hello_request(
+    id: u64,
+    hello: ProtocolHelloDto,
+) -> JsonRpcRequestDto<ProtocolHelloDto> {
+    JsonRpcRequestDto::new(id, PROTOCOL_HELLO_METHOD, hello)
+}
+
+/// Validates one hello request and returns the peer handshake.
+///
+/// # Errors
+///
+/// Returns an invalid-request error when the first request is not `hello`,
+/// and a protocol-version mismatch error when the peer version differs.
+pub fn decode_hello_request(
+    request: &JsonRpcRequestDto<ProtocolHelloDto>,
+) -> Result<ProtocolHelloDto, JsonRpcErrorDto> {
+    if request.method() != PROTOCOL_HELLO_METHOD {
+        return Err(JsonRpcErrorDto::new(
+            JSONRPC_INVALID_REQUEST,
+            "the first request on a connection must be hello",
+            Some(ErrorDto::validation(
+                "jsonrpc_hello_required",
+                "the first request on a connection must be hello",
+            )),
+        ));
+    }
+    let hello = request.params();
+    if hello.version() != CURRENT_PROTOCOL_VERSION {
+        return Err(JsonRpcErrorDto::from_error(
+            JSONRPC_VERSION_MISMATCH,
+            ErrorDto::unavailable(
+                "incompatible_protocol_version",
+                "protocol version must equal the current version",
+            ),
+        ));
+    }
+    Ok(hello.clone())
+}
+
+/// Encodes one hello response carrying the daemon handshake.
+#[must_use]
+pub fn encode_hello_response(
+    id: u64,
+    hello: ProtocolHelloDto,
+) -> JsonRpcResponseDto<ProtocolHelloDto> {
+    JsonRpcResponseDto::result(id, hello)
+}
+
+/// Decodes one hello response into the daemon handshake.
+///
+/// # Errors
+///
+/// Returns the typed daemon error carried by an error response, and a
+/// protocol-version mismatch error when the daemon version differs.
+pub fn decode_hello_response(
+    response: &JsonRpcResponseDto<ProtocolHelloDto>,
+) -> DtoResult<ProtocolHelloDto> {
+    if let Some(error) = response.error_value() {
+        return Err(error.to_error());
+    }
+    let hello = response
+        .result_value()
+        .cloned()
+        .ok_or_else(invalid_wire_response)?;
+    if hello.version() != CURRENT_PROTOCOL_VERSION {
+        return Err(ErrorDto::unavailable(
+            "incompatible_protocol_version",
+            "protocol version must equal the current version",
+        ));
+    }
+    Ok(hello)
 }
 
 #[cfg(test)]
@@ -1501,27 +1704,19 @@ mod tests {
 
     #[test]
     fn protocol_versions_and_hello_validate_all_paths() {
-        let version = ProtocolVersionDto::new(1, 2);
-        assert_eq!(version.major(), 1);
-        assert_eq!(version.minor(), 2);
-        // Negotiation accepts only the exact current version: a differing
-        // minor is rejected exactly like a differing major (no same-major
-        // tolerance remains).
-        assert_ne!(version, crate::CURRENT_PROTOCOL_VERSION);
+        let version = ProtocolVersionDto::new(2, 0);
+        assert_eq!(version.major(), 2);
+        assert_eq!(version.minor(), 0);
+        assert_eq!(version, crate::CURRENT_PROTOCOL_VERSION);
         assert_ne!(
-            ProtocolVersionDto::new(2, 0),
+            ProtocolVersionDto::new(1, 1),
             crate::CURRENT_PROTOCOL_VERSION
         );
-        let hello = ProtocolHelloDto::new(
-            version,
-            vec![ProtocolCapabilityDto::SessionSubscriptions],
-            "fixture",
-        )
-        .expect("fixture hello is valid");
+        let hello = ProtocolHelloDto::new(version, "fixture").expect("fixture hello is valid");
         assert_eq!(hello.version(), version);
         assert_eq!(hello.adapter_name(), "fixture");
         assert_eq!(
-            ProtocolHelloDto::new(version, Vec::new(), " ")
+            ProtocolHelloDto::new(version, " ")
                 .expect_err("blank adapter must fail")
                 .code(),
             "invalid_adapter_name"
@@ -1529,8 +1724,8 @@ mod tests {
     }
 
     #[test]
-    fn current_versions_are_protocol_and_dto_schema_1_1() {
-        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(1, 1));
+    fn current_versions_are_protocol_2_0_and_dto_schema_1_1() {
+        assert_eq!(CURRENT_PROTOCOL_VERSION, ProtocolVersionDto::new(2, 0));
         assert_eq!(CURRENT_DTO_SCHEMA_VERSION, SchemaVersionDto::new(1, 1));
     }
 
@@ -1608,9 +1803,8 @@ mod tests {
     }
 
     #[test]
-    fn all_protocol_accessors_and_envelope_variants_are_exercised() {
+    fn method_table_covers_every_request_variant_exactly_once() {
         let schema = SchemaVersionDto::new(1, 1);
-        let version = ProtocolVersionDto::new(3, 4);
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let cursor = RunEventCursorDto::new(9);
@@ -1620,60 +1814,148 @@ mod tests {
         assert_eq!(run_sub.run_id(), run_id);
         assert_eq!(run_sub.after_cursor(), Some(cursor));
 
-        let resync = RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap);
-        assert_eq!(resync.session_id(), session_id);
-        assert_eq!(resync.run_id(), run_id);
-        assert_eq!(resync.reason(), RunResyncReasonDto::CursorGap);
+        let payloads = [
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::CreateSession(
+                CreateSessionCommandDto::new(
+                    ProjectId::new(),
+                    session_id,
+                    WorkspaceId::new(),
+                    fixture_workspace_root(),
+                    RunModeDto::Build,
+                ),
+            )),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
+                SendUserTurnCommandDto::new(session_id, TurnId::new(), "hello")
+                    .expect("fixture turn is valid"),
+            )),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(
+                RemoveQueuedTurnCommandDto::new(session_id, TurnId::new()),
+            )),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
+                StopRunCommandDto::new(session_id, run_id),
+            )),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(
+                SubscribeSessionCommandDto::new(schema, session_id, None, RunModeDto::Build),
+            )),
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetDaemonHealth),
+            ProtocolRequestPayloadDto::Query(ProtocolQueryDto::GetSessionSnapshot(
+                GetSessionSnapshotQueryDto::new(session_id),
+            )),
+            ProtocolRequestPayloadDto::RunSubscription(run_sub),
+        ];
+        let mut methods = std::collections::BTreeSet::new();
+        for (index, payload) in payloads.into_iter().enumerate() {
+            let id = index as u64 + 1;
+            let method = ProtocolMethodDto::for_payload(&payload);
+            assert!(
+                method.accepts_request(&payload),
+                "the method must accept its own payload"
+            );
+            assert!(methods.insert(method.as_str()), "each method appears once");
 
-        let frame = RunStreamFrameDto::Resync(resync);
-        let response = RunSubscriptionResponseDto::Resync(resync);
-        let request = RunSubscriptionRequestEnvelopeDto::new(
-            version,
-            CorrelationIdDto::new(),
-            ProtocolMessageDto::new(schema, run_sub),
-        );
-        assert_eq!(request.protocol_version(), version);
-        assert!(request.correlation_id() == request.correlation_id());
-        assert_eq!(request.message().schema_version(), schema);
-        assert_eq!(request.message().payload().run_id(), run_id);
-        let decoded_frame: RunStreamFrameDto =
-            serde_json::from_value(serde_json::to_value(frame).expect("frame serializes"))
-                .expect("frame decodes");
-        let decoded_response: RunSubscriptionResponseDto =
-            serde_json::from_value(serde_json::to_value(response).expect("response serializes"))
-                .expect("response decodes");
-        assert!(matches!(decoded_frame, RunStreamFrameDto::Resync(_)));
-        assert!(matches!(
-            decoded_response,
-            RunSubscriptionResponseDto::Resync(_)
-        ));
-
-        let query = ProtocolQueryDto::GetDaemonHealth;
-        let response_payload =
-            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(resync));
-        let envelope = ProtocolResponseEnvelopeDto::new(
-            version,
-            CorrelationIdDto::new(),
-            ProtocolMessageDto::new(schema, response_payload),
-        );
-        assert_eq!(envelope.protocol_version(), version);
-        assert_eq!(envelope.message().schema_version(), schema);
-        assert!(matches!(query, ProtocolQueryDto::GetDaemonHealth));
-        let _ = envelope.message().payload();
+            let request = encode_request(id, payload);
+            let line = serde_json::to_string(&request).expect("request serializes");
+            let decoded = decode_request_line(&line).expect("request decodes");
+            assert_eq!(decoded.id(), id);
+            assert_eq!(decoded.payload(), request.params());
+        }
     }
 
     #[test]
-    fn protocol_capabilities_readiness_and_acceptance_accessors_cover_all_variants() {
-        let version = ProtocolVersionDto::new(1, 1);
-        let capabilities = [
-            ProtocolCapabilityDto::SessionSubscriptions,
-            ProtocolCapabilityDto::CorrelatedRequests,
-            ProtocolCapabilityDto::DaemonHealth,
-            ProtocolCapabilityDto::RunStreamSubscriptions,
-        ];
-        let hello =
-            ProtocolHelloDto::new(version, capabilities.to_vec(), "adapter").expect("valid hello");
-        assert_eq!(hello.capabilities(), capabilities);
+    fn wire_helpers_round_trip_responses_notifications_and_hello() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let resync = RunResyncDto::new(session_id, run_id, RunResyncReasonDto::CursorGap);
+        let frame = RunStreamFrameDto::Resync(resync);
+        let notification = ProtocolDaemonMessageDto::run_frame(frame.clone());
+        let line = serde_json::to_string(&notification).expect("notification serializes");
+        assert_eq!(
+            parse_run_frame_notification(&line).expect("frame parses"),
+            frame
+        );
+
+        let response_payload =
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(resync));
+        let response = encode_response(7, response_payload);
+        let line = serde_json::to_string(&response).expect("response serializes");
+        let decoded =
+            decode_response(&line, ProtocolMethodDto::RunSubscribe, 7).expect("response decodes");
+        assert!(matches!(
+            decoded,
+            ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Resync(_))
+        ));
+        assert!(
+            decode_response(&line, ProtocolMethodDto::DaemonHealth, 7).is_err(),
+            "a response family mismatch fails closed"
+        );
+
+        let failure = JsonRpcResponseDto::<ProtocolResponsePayloadDto>::error(
+            Some(7),
+            JsonRpcErrorDto::from_error(
+                JSONRPC_VERSION_MISMATCH,
+                ErrorDto::unavailable(
+                    "incompatible_protocol_version",
+                    "protocol version must equal the current version",
+                ),
+            ),
+        );
+        let line = serde_json::to_string(&failure).expect("error serializes");
+        let error = decode_response(&line, ProtocolMethodDto::DaemonHealth, 7)
+            .expect_err("error responses surface the typed error");
+        assert_eq!(error.code(), "incompatible_protocol_version");
+
+        let unknown = r#"{"jsonrpc":"2.0","id":5,"method":"fixture.unknown","params":null}"#;
+        let failure = decode_request_line(unknown).expect_err("unknown methods fail");
+        assert_eq!(failure.error().code(), JSONRPC_METHOD_NOT_FOUND);
+        assert_eq!(failure.id(), Some(5));
+
+        let mismatched = JsonRpcRequestDto::new(
+            6,
+            ProtocolMethodDto::DaemonHealth.as_str(),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
+                StopRunCommandDto::new(session_id, run_id),
+            )),
+        );
+        let line = serde_json::to_string(&mismatched).expect("mismatched request serializes");
+        let failure = decode_request_line(&line).expect_err("method and payload must match");
+        assert_eq!(failure.error().code(), jsonrpc::JSONRPC_INVALID_PARAMS);
+        assert_eq!(failure.id(), Some(6));
+
+        let hello = ProtocolHelloDto::new(CURRENT_PROTOCOL_VERSION, "fixture").expect("hello");
+        let request = encode_hello_request(1, hello.clone());
+        let line = serde_json::to_string(&request).expect("hello request serializes");
+        let decoded: JsonRpcRequestDto<ProtocolHelloDto> =
+            JsonRpcRequestDto::parse(&line).expect("hello parses");
+        assert_eq!(
+            decode_hello_request(&decoded).expect("hello accepted"),
+            hello
+        );
+        let response = encode_hello_response(1, hello.clone());
+        let line = serde_json::to_string(&response).expect("hello response serializes");
+        let decoded: JsonRpcResponseDto<ProtocolHelloDto> =
+            JsonRpcResponseDto::parse(&line).expect("hello response parses");
+        assert_eq!(
+            decode_hello_response(&decoded).expect("hello accepted"),
+            hello
+        );
+
+        let stale = ProtocolHelloDto::new(ProtocolVersionDto::new(1, 1), "fixture")
+            .expect("stale hello is well-formed");
+        let request = encode_hello_request(1, stale);
+        let line = serde_json::to_string(&request).expect("stale hello serializes");
+        let decoded: JsonRpcRequestDto<ProtocolHelloDto> =
+            JsonRpcRequestDto::parse(&line).expect("stale hello parses");
+        let mismatch = decode_hello_request(&decoded).expect_err("version mismatch is typed");
+        assert_eq!(mismatch.code(), JSONRPC_VERSION_MISMATCH);
+        assert_eq!(
+            mismatch.data().map(ErrorDto::code),
+            Some("incompatible_protocol_version")
+        );
+    }
+
+    #[test]
+    fn readiness_and_acceptance_accessors_cover_all_variants() {
+        let version = ProtocolVersionDto::new(2, 0);
 
         for readiness in [
             DaemonReadinessDto::Starting,

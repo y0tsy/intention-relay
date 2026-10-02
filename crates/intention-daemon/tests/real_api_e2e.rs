@@ -67,19 +67,17 @@ use intention_domain::{
     RunSnapshotDto, RunStatusDto, SendUserTurnCommandDto, ToolResultOutcomeDto, WorkspaceRootDto,
 };
 use intention_protocol::{
-    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCapabilityDto, ProtocolCommandDto,
-    ProtocolCommandResultDto, ProtocolDaemonFrameDto, ProtocolHelloDto, ProtocolMessageDto,
-    ProtocolRequestEnvelopeDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
-    RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionRequestEnvelopeDto,
-    RunSubscriptionResponseDto, SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeRunCommandDto,
+    DaemonReadinessDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
+    ProtocolHelloDto, ProtocolMethodDto, ProtocolRequestPayloadDto, ProtocolResponsePayloadDto,
+    RunResyncReasonDto, RunStreamFrameDto, RunSubscriptionResponseDto, SendUserTurnOutcomeDto,
+    SessionSnapshotDto, SubscribeRunCommandDto, decode_response, encode_request,
+    parse_run_frame_notification,
 };
 use intention_transport::{
     AsyncLocalClientConnection, LocalConnection, LocalEndpoint, local_protocol_version,
     negotiate_client,
 };
-use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId,
-};
+use intention_types::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, TurnId, WorkspaceId};
 use tempfile::TempDir;
 
 /// The generic-chat endpoint used when the operator does not override it.
@@ -672,28 +670,9 @@ fn bounded_session_snapshot(
     }
 }
 
-/// The exact capability list the fixture command client needs from the daemon.
-fn command_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![
-            ProtocolCapabilityDto::SessionSubscriptions,
-            ProtocolCapabilityDto::CorrelatedRequests,
-            ProtocolCapabilityDto::DaemonHealth,
-        ],
-        "real-api-e2e",
-    )
-    .expect("fixture command hello is valid")
-}
-
-/// The exact capability list the fixture run-stream client needs from the daemon.
-fn stream_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![ProtocolCapabilityDto::RunStreamSubscriptions],
-        "real-api-e2e",
-    )
-    .expect("fixture stream hello is valid")
+/// The exact hello the fixture clients exchange with the daemon.
+fn fixture_hello() -> ProtocolHelloDto {
+    ProtocolHelloDto::new(local_protocol_version(), "real-api-e2e").expect("fixture hello is valid")
 }
 
 fn invalid_response() -> ErrorDto {
@@ -710,22 +689,13 @@ fn send_command(
     endpoint: &LocalEndpoint,
     payload: ProtocolRequestPayloadDto,
 ) -> DtoResult<ProtocolCommandResultDto> {
+    let method = ProtocolMethodDto::for_payload(&payload);
     let mut connection = LocalConnection::connect(endpoint)?;
-    let remote = negotiate_client(&mut connection, command_hello())?;
-    let correlation_id = CorrelationIdDto::new();
-    connection.send_request(&ProtocolRequestEnvelopeDto::new(
-        local_protocol_version(),
-        correlation_id,
-        ProtocolMessageDto::new(intention_protocol::CURRENT_DTO_SCHEMA_VERSION, payload),
-    ))?;
-    let response = connection.receive_response()?;
-    if response.correlation_id() != correlation_id
-        || response.protocol_version() != remote.version()
-    {
-        return Err(invalid_response());
-    }
-    match response.message().payload() {
-        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result.clone()),
+    negotiate_client(&mut connection, fixture_hello())?;
+    connection.send_message(&encode_request(1, payload))?;
+    let line = connection.receive_line()?;
+    match decode_response(&line, method, 1)? {
+        ProtocolResponsePayloadDto::CommandResult(result) => Ok(result),
         _ => Err(invalid_response()),
     }
 }
@@ -964,68 +934,63 @@ async fn collect_run_frames(
     let Ok(connection) = AsyncLocalClientConnection::connect(endpoint).await else {
         return RunObservation::Lost("the run stream connection is unavailable".to_owned());
     };
-    let Ok((_remote, mut requests, mut frames)) =
-        connection.negotiate_daemon_frames(stream_hello()).await
+    let Ok((_remote, mut requests, mut messages)) = connection.negotiate(fixture_hello()).await
     else {
         return RunObservation::Lost("the run stream negotiation failed".to_owned());
     };
-    let correlation_id = CorrelationIdDto::new();
     if requests
-        .send_run_subscription(&RunSubscriptionRequestEnvelopeDto::new(
-            local_protocol_version(),
-            correlation_id,
-            ProtocolMessageDto::new(
+        .send_message(&encode_request(
+            1,
+            ProtocolRequestPayloadDto::RunSubscription(SubscribeRunCommandDto::new(
                 intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                SubscribeRunCommandDto::new(
-                    intention_protocol::CURRENT_DTO_SCHEMA_VERSION,
-                    session_id,
-                    run_id,
-                    None,
-                ),
-            ),
+                session_id,
+                run_id,
+                None,
+            )),
         ))
         .await
         .is_err()
     {
         return RunObservation::Lost("the run subscription request failed".to_owned());
     }
+    let Ok(reply) = messages.receive_line().await else {
+        return RunObservation::Lost("the run subscription reply failed".to_owned());
+    };
+    let Ok(reply) = decode_response(&reply, ProtocolMethodDto::RunSubscribe, 1) else {
+        return RunObservation::Lost("the run subscription reply is invalid".to_owned());
+    };
     let mut facts = Vec::new();
+    match reply {
+        ProtocolResponsePayloadDto::RunSubscription(RunSubscriptionResponseDto::Replay(replay)) => {
+            facts.extend(replay.tail().facts().iter().cloned());
+            let snapshot = replay.snapshot().clone();
+            if snapshot.run_projection().status().is_terminal() {
+                return RunObservation::Terminal(Box::new(ObservedRun { facts, snapshot }));
+            }
+        }
+        _ => panic!("run subscription reply must be a replay"),
+    }
     loop {
-        let Ok(frame) = frames.receive().await else {
+        let Ok(line) = messages.receive_line().await else {
             return RunObservation::Lost(format!(
                 "the run stream closed after {} facts",
                 facts.len()
             ));
         };
+        let Ok(frame) = parse_run_frame_notification(&line) else {
+            return RunObservation::Lost("the run stream frame is invalid".to_owned());
+        };
         match frame {
-            ProtocolDaemonFrameDto::Response(response) => {
-                assert_eq!(response.correlation_id(), correlation_id);
-                match response.message().payload() {
-                    ProtocolResponsePayloadDto::RunSubscription(
-                        RunSubscriptionResponseDto::Replay(replay),
-                    ) => {
-                        facts.extend(replay.tail().facts().iter().cloned());
-                        let snapshot = replay.snapshot().clone();
-                        if snapshot.run_projection().status().is_terminal() {
-                            return RunObservation::Terminal(Box::new(ObservedRun {
-                                facts,
-                                snapshot,
-                            }));
-                        }
-                    }
-                    _ => panic!("run subscription reply must be a replay"),
-                }
-            }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::LiveBatch(batch)) => {
+            RunStreamFrameDto::LiveBatch(batch) => {
                 facts.extend(batch.facts().iter().cloned());
             }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Snapshot(frame)) => {
+            RunStreamFrameDto::Snapshot(frame) => {
                 let snapshot = frame.snapshot().clone();
                 if snapshot.run_projection().status().is_terminal() {
                     return RunObservation::Terminal(Box::new(ObservedRun { facts, snapshot }));
                 }
             }
-            ProtocolDaemonFrameDto::RunStream(RunStreamFrameDto::Resync(resync)) => {
+            RunStreamFrameDto::Resync(resync) => {
                 // The daemon bounds every subscriber queue and evicts one that
                 // cannot keep up; a long provider reasoning burst can exceed
                 // that bound. The caller observes again instead of failing.

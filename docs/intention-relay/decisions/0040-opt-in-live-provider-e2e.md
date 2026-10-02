@@ -113,9 +113,12 @@ blocking and hermetic suites.
 
 ## Compatibility
 
-- Local protocol 1.1, public DTO schema 1.1, TOML configuration schema 1, and
-  the single live SQLite schema are unchanged. The channel is test-side
-  verification, not a contract change.
+- Public DTO schema 1.1, TOML configuration schema 1, and the single live
+  SQLite schema are unchanged; the local protocol version clause of this
+  bullet is superseded by
+  [ADR 0045](0045-local-json-rpc-2-0-transport.md) (JSON-RPC 2.0 over NDJSON
+  at protocol version 2.0, no capability plane), and the record otherwise
+  stands. The channel is test-side verification, not a contract change.
 - M3/M4/M5 recorded history, replay, durable facts, snapshots, and evidence are
   unchanged, and a live run creates only ordinary current-version run state in
   its disposable test database.

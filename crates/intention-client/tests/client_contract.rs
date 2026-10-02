@@ -11,15 +11,16 @@ use std::thread;
 use intention_client::{DaemonLauncher, IntentionClient, ProcessDaemonLauncher};
 use intention_domain::{RunModeDto, SessionProjectionDto};
 use intention_protocol::{
-    DaemonHealthDto, DaemonReadinessDto, ProtocolCapabilityDto, ProtocolHelloDto,
-    ProtocolMessageDto, ProtocolQueryResultDto, ProtocolResponseEnvelopeDto,
-    ProtocolResponsePayloadDto, ProtocolVersionDto, SessionEventTailBatchDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    DaemonHealthDto, DaemonReadinessDto, JsonRpcErrorDto, JsonRpcRequestDto, JsonRpcResponseDto,
+    PROTOCOL_HELLO_METHOD, ProtocolHelloDto, ProtocolQueryResultDto, ProtocolResponsePayloadDto,
+    ProtocolVersionDto, SessionEventTailBatchDto, SessionSnapshotDto,
+    SessionSubscriptionResponseDto, SubscribeSessionCommandDto, decode_request_line,
+    encode_hello_response, encode_response,
 };
 use intention_transport::{LocalEndpoint, LocalListener, local_protocol_version, negotiate_daemon};
 use intention_types::{
-    CorrelationIdDto, DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto,
-    SessionId, WorkspaceId,
+    DtoResult, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
+    WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -57,14 +58,10 @@ enum FixtureResponse {
     Subscription(SessionSubscriptionResponseDto),
     Invalid,
     CorrelationMismatch,
+    /// The fixture daemon answers the hello with the typed version-mismatch error.
     ProtocolMismatch,
     /// The fixture daemon replies with a same-major minor-mismatched hello.
     MinorProtocolMismatch,
-    MissingCapabilities,
-    ResponseVersionMismatch,
-    /// The fixture daemon replies with a response whose message schema
-    /// version differs from the current DTO schema.
-    SchemaMismatch,
     Disconnect,
 }
 
@@ -123,16 +120,8 @@ fn client(
 }
 
 fn daemon_hello() -> ProtocolHelloDto {
-    ProtocolHelloDto::new(
-        local_protocol_version(),
-        vec![
-            ProtocolCapabilityDto::SessionSubscriptions,
-            ProtocolCapabilityDto::CorrelatedRequests,
-            ProtocolCapabilityDto::DaemonHealth,
-        ],
-        "fixture-daemon",
-    )
-    .expect("fixture daemon hello is valid")
+    ProtocolHelloDto::new(local_protocol_version(), "fixture-daemon")
+        .expect("fixture daemon hello is valid")
 }
 
 fn start_fixture_server(
@@ -155,60 +144,57 @@ fn serve_fixture_connection(
     if matches!(response, FixtureResponse::ProtocolMismatch)
         || matches!(response, FixtureResponse::MinorProtocolMismatch)
     {
-        connection
-            .receive_hello()
+        let line = connection
+            .receive_line()
             .expect("fixture client hello arrives");
-        let version = if matches!(response, FixtureResponse::MinorProtocolMismatch) {
-            ProtocolVersionDto::new(1, 2)
+        let request: JsonRpcRequestDto<ProtocolHelloDto> =
+            JsonRpcRequestDto::parse(&line).expect("fixture client hello parses");
+        assert_eq!(request.method(), PROTOCOL_HELLO_METHOD);
+        if matches!(response, FixtureResponse::ProtocolMismatch) {
+            let error = JsonRpcErrorDto::from_error(
+                intention_protocol::JSONRPC_VERSION_MISMATCH,
+                ErrorDto::unavailable(
+                    "incompatible_protocol_version",
+                    "protocol version must equal the current version",
+                ),
+            );
+            connection
+                .send_message(&JsonRpcResponseDto::<ProtocolHelloDto>::error(
+                    Some(request.id()),
+                    error,
+                ))
+                .expect("fixture version-mismatch error sends");
         } else {
-            ProtocolVersionDto::new(2, 0)
-        };
-        let incompatible =
-            ProtocolHelloDto::new(version, Vec::new(), "incompatible-fixture-daemon")
-                .expect("fixture mismatch hello is valid");
-        connection
-            .send_hello(&incompatible)
-            .expect("fixture mismatch hello sends");
+            let incompatible =
+                ProtocolHelloDto::new(ProtocolVersionDto::new(2, 1), "minor-mismatched-daemon")
+                    .expect("fixture mismatch hello is valid");
+            connection
+                .send_message(&encode_hello_response(request.id(), incompatible))
+                .expect("fixture mismatch hello sends");
+        }
         return;
     }
-    let capabilities = if matches!(response, FixtureResponse::MissingCapabilities) {
-        vec![ProtocolCapabilityDto::DaemonHealth]
-    } else {
-        daemon_hello().capabilities().to_vec()
-    };
-    let hello = ProtocolHelloDto::new(local_protocol_version(), capabilities, "fixture-daemon")
-        .expect("fixture daemon hello is valid");
-    negotiate_daemon(&mut connection, hello).expect("fixture hello negotiates");
-    if matches!(response, FixtureResponse::MissingCapabilities) {
-        return;
-    }
+    negotiate_daemon(&mut connection, daemon_hello()).expect("fixture hello negotiates");
     if matches!(response, FixtureResponse::Disconnect) {
         return;
     }
-    let request = connection
-        .receive_request()
-        .expect("fixture request arrives");
-    let is_correlation_mismatch = matches!(response, FixtureResponse::CorrelationMismatch);
-    let is_response_version_mismatch = matches!(response, FixtureResponse::ResponseVersionMismatch);
-    let is_schema_mismatch = matches!(response, FixtureResponse::SchemaMismatch);
-    let payload = match response {
+    let line = connection.receive_line().expect("fixture request arrives");
+    let request = decode_request_line(&line).expect("fixture request decodes");
+    let payload = match &response {
         FixtureResponse::Health(health) => {
-            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(health))
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::DaemonHealth(*health))
         }
         FixtureResponse::Rejected(error) => {
-            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error))
+            ProtocolResponsePayloadDto::QueryResult(ProtocolQueryResultDto::Rejected(error.clone()))
         }
         FixtureResponse::Snapshot(snapshot) => ProtocolResponsePayloadDto::QueryResult(
-            ProtocolQueryResultDto::SessionSnapshot(snapshot),
+            ProtocolQueryResultDto::SessionSnapshot(snapshot.clone()),
         ),
         FixtureResponse::Subscription(subscription) => {
-            ProtocolResponsePayloadDto::Subscription(subscription)
+            ProtocolResponsePayloadDto::Subscription(subscription.clone())
         }
         FixtureResponse::Invalid
         | FixtureResponse::CorrelationMismatch
-        | FixtureResponse::MissingCapabilities
-        | FixtureResponse::ResponseVersionMismatch
-        | FixtureResponse::SchemaMismatch
         | FixtureResponse::Disconnect => ProtocolResponsePayloadDto::CommandResult(
             intention_protocol::ProtocolCommandResultDto::Rejected(ErrorDto::validation(
                 "fixture_invalid_response",
@@ -217,27 +203,13 @@ fn serve_fixture_connection(
         ),
         FixtureResponse::ProtocolMismatch | FixtureResponse::MinorProtocolMismatch => return,
     };
-    let correlation_id = if is_correlation_mismatch {
-        CorrelationIdDto::new()
+    let id = if matches!(response, FixtureResponse::CorrelationMismatch) {
+        request.id() + 100
     } else {
-        request.correlation_id()
-    };
-    let response_version = if is_response_version_mismatch {
-        ProtocolVersionDto::new(1, 1)
-    } else {
-        local_protocol_version()
-    };
-    let schema_version = if is_schema_mismatch {
-        SchemaVersionDto::new(1, 2)
-    } else {
-        SCHEMA_VERSION
+        request.id()
     };
     connection
-        .send_response(&ProtocolResponseEnvelopeDto::new(
-            response_version,
-            correlation_id,
-            ProtocolMessageDto::new(schema_version, payload),
-        ))
+        .send_message(&encode_response(id, payload))
         .expect("fixture response sends");
 }
 
@@ -356,18 +328,6 @@ fn health_rejection_invalid_response_correlation_and_protocol_mismatch_are_typed
         (
             FixtureResponse::MinorProtocolMismatch,
             "incompatible_protocol_version",
-        ),
-        (
-            FixtureResponse::SchemaMismatch,
-            "invalid_local_protocol_response",
-        ),
-        (
-            FixtureResponse::MissingCapabilities,
-            "incompatible_protocol_capabilities",
-        ),
-        (
-            FixtureResponse::ResponseVersionMismatch,
-            "invalid_local_protocol_response",
         ),
         (
             FixtureResponse::Disconnect,

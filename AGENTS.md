@@ -27,6 +27,7 @@
 - Do not refactor unrelated code, comments, formatting, or pre-existing dead code.
 - Remove imports, variables, functions, or tests only when the current change makes them unused or obsolete.
 - Fix issues introduced by the current change, but do not use a task as an excuse for unrelated cleanup.
+- Never add speculative limits, quotas, caps, or bureaucratic bounds without a real, demonstrated precedent. Liveness safeguards are the only exception.
 
 ### No backward compatibility
 
@@ -75,6 +76,7 @@
 
 - Use English for code, comments, documentation, variable names, commit messages, and pull-request descriptions. Non-English text is allowed only when it is intentional test data, fixture data, or user-facing content being tested.
 - Never commit or expose secrets. API keys, tokens, passwords, and other credentials must not appear in code, configuration, logs, fixtures, or commit history.
+- Never scan or filter user, model, or tool content for credential-shaped strings at runtime. Content scanning is banned; secrets are protected structurally.
 
 ## Git discipline
 
