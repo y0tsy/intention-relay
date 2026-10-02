@@ -358,11 +358,10 @@ evidence. No current mutable state may reconstruct missing future context meanin
 ## Dependencies, non-goals, and evidence
 
 This document depends on architectures 13--20 and decisions 0001--0012. It does not define actual Goal persistence,
-search/index/vector retrieval, instruction assembly (owned by
-[architecture 30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations,
-retention/deletion/encryption, source-page sizes, resource values, provider evolution, architecture-23 session
-branching, activity/UI, physical Plan artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo,
-Makefile/CI, or production activation.
+search/index/vector retrieval, instruction assembly (owned by [architecture
+30](30-instruction-sources-and-system-context.md)), SQL/wire tags, migrations, retention/deletion/encryption,
+source-page sizes, resource values, provider evolution, architecture-23 session branching, activity/UI, physical Plan
+artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 

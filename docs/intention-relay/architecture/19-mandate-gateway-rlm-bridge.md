@@ -6,9 +6,9 @@ Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032. Research: m4plu
 
 This document owns future Mandate Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future Mandate execution; M3/M4 bytes, IDs, UUIDs,
-cursors, events, snapshots, queue tickets, provider behavior, replay, recovery, and M4
-`ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics. Retained RLM bridge, child,
-and activity material remains research provenance and historical-only where it conflicts with architectures 13--18.
+cursors, events, snapshots, queue tickets, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
+tool_execution_unavailable` retain their recorded ordinary semantics. Retained RLM bridge, child, and activity material
+remains research provenance and historical-only where it conflicts with architectures 13--18.
 
 ## Ownership and one capability path
 
@@ -214,9 +214,9 @@ correlated responses and uncorrelated `RunStreamFrameDto` values over the same p
 first-scope limits are:
 
 - at most **sixteen** independently admitted bridge operations may be unfinished on one attached peer; a seventeenth
-  request receives the known pre-effect `bridge_concurrency_limit_exceeded` and starts no external action (a transport
-  limit only, not a caller permission to invoke a tool, and not a change to the group limit, policy quotas, or
-  tool-effect serialization);
+request receives the known pre-effect `bridge_concurrency_limit_exceeded` and starts no external action (a transport
+limit only, not a caller permission to invoke a tool, and not a change to the group limit, policy quotas, or tool-effect
+serialization);
 - **1 MiB** per local frame;
 - a **64-frame, 10-second** bounded slow-peer subscription path;
 - **512 KiB** per durable fact;

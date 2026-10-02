@@ -2,11 +2,15 @@
 
 **Current policy.**
 
-This document defines the local single-user daemon, the typed local process protocol, bootstrap and reconnect behavior, and the responsibilities of Tauri, TUI, and REPL adapters. Web, Telegram, HTTP, WebSocket, remote authentication, and multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-principles-and-scope.md)).
+This document defines the local single-user daemon, the typed local process protocol, bootstrap and reconnect behavior,
+and the responsibilities of Tauri, TUI, and REPL adapters. Web, Telegram, HTTP, WebSocket, remote authentication, and
+multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-principles-and-scope.md)).
 
 ## Ownership
 
-The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks, VFR, Headroom, and plan policies; and event publication and subscription source.
+The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
+transactions; active sessions and runs; provider drivers and model streams; the tool registry, workspace policy, hooks,
+VFR, Headroom, and plan policies; and event publication and subscription source.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
 
@@ -15,17 +19,26 @@ Tauri, TUI, and REPL own only presentation, user input adaptation, local display
 v1 uses:
 
 - Unix domain sockets on supported Unix platforms and named pipes on Windows;
-- logical safe endpoint identifiers resolved under the current user's platform runtime or application-configuration location, never exposed in public DTOs or safe errors;
-- Unix endpoint-parent mode `0700` and listener-socket mode `0600`; Windows relies on named-pipe local-user access semantics and is verified by the required Windows CI named-pipe fixture;
-- JSON-RPC 2.0 over NDJSON framing: one typed message per `\n`-terminated UTF-8 JSON line, with a 1 MiB transport message cap (`MAX_MESSAGE_BYTES`);
+-  logical safe endpoint identifiers resolved under the current user's platform runtime or application-configuration
+  location, never exposed in public DTOs or safe errors;
+-  Unix endpoint-parent mode `0700` and listener-socket mode `0600`; Windows relies on named-pipe local-user access
+  semantics and is verified by the required Windows CI named-pipe fixture;
+-  JSON-RPC 2.0 over NDJSON framing: one typed message per `\n`-terminated UTF-8 JSON line, with a 1 MiB transport
+  message cap (`MAX_MESSAGE_BYTES`);
 - a versioned JSON-RPC protocol carrying only `intention-protocol` DTOs;
 - OS-user filesystem permissions as the local access boundary.
 
-No TCP listener is opened in v1. This avoids treating localhost as an authentication boundary and keeps remote API design out of the initial product.
+No TCP listener is opened in v1. This avoids treating localhost as an authentication boundary and keeps remote API
+design out of the initial product.
 
 ### JSON-RPC 2.0 protocol
 
-The wire is JSON-RPC 2.0 ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): every message is one UTF-8 JSON line terminated by a newline. A request carries `"jsonrpc":"2.0"`, a numeric `id`, a `method`, and typed `params`; a response echoes the `id` and carries exactly one of `result` or `error`; a notification carries `"jsonrpc":"2.0"`, a `method`, and `params` with no `id`. The envelopes are `JsonRpcRequest<T>`, `JsonRpcResponse<T>`, `JsonRpcError`, and `JsonRpcNotification<T>`; `params` and `result` are the existing typed `intention-protocol` DTOs, and no untyped `serde_json::Value` crosses the boundary.
+The wire is JSON-RPC 2.0 ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): every message is one UTF-8
+JSON line terminated by a newline. A request carries `"jsonrpc":"2.0"`, a numeric `id`, a `method`, and typed `params`;
+a response echoes the `id` and carries exactly one of `result` or `error`; a notification carries `"jsonrpc":"2.0"`, a
+`method`, and `params` with no `id`. The envelopes are `JsonRpcRequest<T>`, `JsonRpcResponse<T>`, `JsonRpcError`, and
+`JsonRpcNotification<T>`; `params` and `result` are the existing typed `intention-protocol` DTOs, and no untyped
+`serde_json::Value` crosses the boundary.
 
 | Method | Params DTO | Result |
 | --- | --- | --- |
@@ -38,34 +51,70 @@ The wire is JSON-RPC 2.0 ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transp
 | `daemon.health` | none | daemon health/readiness projection |
 | `session.snapshot` | `GetSessionSnapshotQueryDto` | durable session snapshot |
 
-The method table is one-to-one with the `ProtocolCommandDto` and `ProtocolQueryDto` variants, plus the dedicated `run.subscribe` request that replaced the former run-stream connection role. `run.frame`, carrying `RunStreamFrameDto`, is the only notification; `session.subscribe` and `session.snapshot` return snapshot-and-tail results, and there is no session push channel.
+The method table is one-to-one with the `ProtocolCommandDto` and `ProtocolQueryDto` variants, plus the dedicated
+`run.subscribe` request that replaced the former run-stream connection role. `run.frame`, carrying `RunStreamFrameDto`,
+is the only notification; `session.subscribe` and `session.snapshot` return snapshot-and-tail results, and there is no
+session push channel.
 
-Errors follow JSON-RPC 2.0: `-32700` parse error, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, and the application-defined `-32001` incompatible protocol version. The structured `ErrorDto` travels in `error.data`, so the stable `data.code`, category, retry guidance, and safe message remain available to clients without changing the JSON-RPC error shape.
+Errors follow JSON-RPC 2.0: `-32700` parse error, `-32600` invalid request, `-32601` method not found, `-32602` invalid
+params, and the application-defined `-32001` incompatible protocol version. The structured `ErrorDto` travels in
+`error.data`, so the stable `data.code`, category, retry guidance, and safe message remain available to clients without
+changing the JSON-RPC error shape.
 
 ### Serving and liveness bounds
 
-The daemon host accepts each local connection, completes the JSON-RPC 2.0 `hello` handshake, and serves typed requests. A one-shot connection reads one request, writes the correlated response, and closes; a long-lived connection may send further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not contract bureaucracy (ADR 0048):
+The daemon host accepts each local connection, completes the JSON-RPC 2.0 `hello` handshake, and serves typed requests.
+A one-shot connection reads one request, writes the correlated response, and closes; a long-lived connection may send
+further requests and receive subscription notifications. Each connection carries bounded liveness safeguards, not
+contract bureaucracy (ADR 0048):
 
 - `MAX_MESSAGE_BYTES` (1 MiB) rejects an over-size message before unbounded allocation;
 - `CONNECT_TIMEOUT` (500 ms) bounds the connect wait;
-- `SYNC_IO_TIMEOUT` (ten seconds) bounds read and write deadlines, applied to client connect and listener accept on Unix-domain sockets;
+-  `SYNC_IO_TIMEOUT` (ten seconds) bounds read and write deadlines, applied to client connect and listener accept on
+  Unix-domain sockets;
 - a stale-socket probe reclaims an abandoned Unix endpoint only after proving no live listener owns it.
 
-Windows named pipes keep their documented blocking behavior, a recorded limitation rather than a second bound (the locked `interprocess` transport exposes no per-call named-pipe timeout, so only the bounded connect wait applies there), anchored at `apply_sync_io_timeout` in `crates/intention-transport/src/lib.rs`. A peer that accepts a connection and never answers therefore fails with a typed unavailable error instead of blocking its thread indefinitely.
+Windows named pipes keep their documented blocking behavior, a recorded limitation rather than a second bound (the
+locked `interprocess` transport exposes no per-call named-pipe timeout, so only the bounded connect wait applies there),
+anchored at `apply_sync_io_timeout` in `crates/intention-transport/src/lib.rs`. A peer that accepts a connection and
+never answers therefore fails with a typed unavailable error instead of blocking its thread indefinitely.
 
 ### Asynchronous transport
 
-The asynchronous implementation binds the same private `LocalEndpoint` mapping and endpoint ownership policy and uses the locked `interprocess` Tokio feature with its private local Unix-socket / Windows-named-pipe mapping. After the typed `hello` handshake succeeds, the connection exchanges typed JSON-RPC requests, responses, and notifications; Tokio, interprocess, socket, endpoint-path, and I/O-half resources remain private to `intention-transport`. There are no direction-specific connection roles and no feature negotiation: one connection speaks JSON-RPC 2.0 for commands, queries, subscriptions, and notifications alike.
+The asynchronous implementation binds the same private `LocalEndpoint` mapping and endpoint ownership policy and uses
+the locked `interprocess` Tokio feature with its private local Unix-socket / Windows-named-pipe mapping. After the typed
+`hello` handshake succeeds, the connection exchanges typed JSON-RPC requests, responses, and notifications; Tokio,
+interprocess, socket, endpoint-path, and I/O-half resources remain private to `intention-transport`. There are no
+direction-specific connection roles and no feature negotiation: one connection speaks JSON-RPC 2.0 for commands,
+queries, subscriptions, and notifications alike.
 
-Oversize messages are rejected before payload allocation or write; malformed JSON produces the JSON-RPC parse error `-32700`; an incomplete or closed message stream is `local_daemon_connection_unavailable`. The transport preserves the Unix modes and endpoint-reclaim rules above; an identity-verified probe at bind is the only stale-endpoint-removal path, and a dropped listener never unlinks its endpoint. Its required transport test target exercises real endpoint hello handshake, ordered correlated request/response exchanges, concurrent reader/writer use, notification delivery, framing safety outcomes, retained M3 synchronous behavior, and Windows named-pipe multi-message fixtures under `cfg(windows)`.
+Oversize messages are rejected before payload allocation or write; malformed JSON produces the JSON-RPC parse error
+`-32700`; an incomplete or closed message stream is `local_daemon_connection_unavailable`. The transport preserves the
+Unix modes and endpoint-reclaim rules above; an identity-verified probe at bind is the only stale-endpoint-removal path,
+and a dropped listener never unlinks its endpoint. Its required transport test target exercises real endpoint hello
+handshake, ordered correlated request/response exchanges, concurrent reader/writer use, notification delivery, framing
+safety outcomes, retained M3 synchronous behavior, and Windows named-pipe multi-message fixtures under `cfg(windows)`.
 
 ### Persistent subscriptions and the run stream
 
-A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the initial authoritative `RunReplayDto` (or a typed resync or error) as its correlated response result, and later committed state arrives as `run.frame` notifications carrying the existing run replay/live/snapshot/resync payloads. Unknown or cross-session runs are safe errors; future cursors are `InvalidCursor`; unavailable history is `HistoryUnavailable`. A run stream never uses a filtered `SessionSnapshotDto`.
+A subscription is an ordinary JSON-RPC method call. `run.subscribe` returns the initial authoritative `RunReplayDto` (or
+a typed resync or error) as its correlated response result, and later committed state arrives as `run.frame`
+notifications carrying the existing run replay/live/snapshot/resync payloads. Unknown or cross-session runs are safe
+errors; future cursors are `InvalidCursor`; unavailable history is `HistoryUnavailable`. A run stream never uses a
+filtered `SessionSnapshotDto`.
 
-`intention-daemon` owns one private Tokio runtime and serves the JSON-RPC surface from one `AsyncLocalListener`. Each subscriber has a private bounded outgoing queue, its own writer path, and a bounded write deadline; an overflowing, closed, or timed-out subscriber is removed without awaiting it from execution, persistence, or healthy subscriber delivery, and the host attempts a typed `SubscriberTooSlow` resync where queue capacity permits before it closes that peer. Queue-capacity isolation and the paused-clock deadline are daemon-host unit evidence; the persistent-host outcome fixture proves a real healthy local peer's replay/live/replay lifecycle rather than OS-buffer timing. The transport message bound and local Unix-socket/Windows-pipe permissions are unchanged.
+`intention-daemon` owns one private Tokio runtime and serves the JSON-RPC surface from one `AsyncLocalListener`. Each
+subscriber has a private bounded outgoing queue, its own writer path, and a bounded write deadline; an overflowing,
+closed, or timed-out subscriber is removed without awaiting it from execution, persistence, or healthy subscriber
+delivery, and the host attempts a typed `SubscriberTooSlow` resync where queue capacity permits before it closes that
+peer. Queue-capacity isolation and the paused-clock deadline are daemon-host unit evidence; the persistent-host outcome
+fixture proves a real healthy local peer's replay/live/replay lifecycle rather than OS-buffer timing. The transport
+message bound and local Unix-socket/Windows-pipe permissions are unchanged.
 
-Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every first-host facade clone and reopening the database; this is deterministic fixture lifecycle ownership, not a production signal-handling claim. Admission, `StopRun`, and terminal-promotion semantics are owned by [architecture 04](04-sessions-runs-events-and-storage.md).
+Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every
+first-host facade clone and reopening the database; this is deterministic fixture lifecycle ownership, not a production
+signal-handling claim. Admission, `StopRun`, and terminal-promotion semantics are owned by [architecture
+04](04-sessions-runs-events-and-storage.md).
 
 ## Shared client
 
@@ -116,28 +165,51 @@ sequenceDiagram
 2. A cross-platform `fs4` advisory startup lock prevents duplicate daemon launches.
 3. The lock holder rechecks availability before creating a daemon.
 4. It launches the daemon process only when the recheck still finds no daemon.
-5. Readiness requires a successful JSON-RPC `hello` handshake with the exact current protocol version (2.0), a correlated `daemon.health` request, and `DaemonReadinessDto::Ready`, not merely process existence.
+5.  Readiness requires a successful JSON-RPC `hello` handshake with the exact current protocol version (2.0), a
+   correlated `daemon.health` request, and `DaemonReadinessDto::Ready`, not merely process existence.
 6. Startup errors are typed and safe to render.
 7. Closing one adapter never terminates a healthy shared daemon.
-8. Idle shutdown, explicit stop, and connected-adapter upgrade coordination are deferred; the M2 default is daemon persistence until process termination or OS shutdown.
+8.  Idle shutdown, explicit stop, and connected-adapter upgrade coordination are deferred; the M2 default is daemon
+   persistence until process termination or OS shutdown.
 
 ## Protocol lifecycle
 
-At connection time the client sends `hello` carrying exactly the protocol version and the local adapter name, never an application account. The daemon accepts only the exact current protocol version, 2.0, and answers `hello` before serving any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0045).
+At connection time the client sends `hello` carrying exactly the protocol version and the local adapter name, never an
+application account. The daemon accepts only the exact current protocol version, 2.0, and answers `hello` before serving
+any other method; there are no capability DTOs, feature flags, family gates, or connection modes (ADR 0045).
 
-An incompatible protocol version fails closed with the typed JSON-RPC error `-32001`, carrying `ErrorDto { category: unavailable }` in `error.data`, before the daemon closes the connection. The adapter should offer a safe reconnect/restart action, never silently reinterpret mismatched payloads. This is the transport-handshake category only; a decode-time schema-version rejection at a public DTO boundary is a `validation` failure (architecture 02, "Validation ownership").
+An incompatible protocol version fails closed with the typed JSON-RPC error `-32001`, carrying `ErrorDto { category:
+unavailable }` in `error.data`, before the daemon closes the connection. The adapter should offer a safe
+reconnect/restart action, never silently reinterpret mismatched payloads. This is the transport-handshake category only;
+a decode-time schema-version rejection at a public DTO boundary is a `validation` failure (architecture 02, "Validation
+ownership").
 
-After the handshake, the client sends typed commands and queries as JSON-RPC requests, and `run.frame` notifications arrive on the same connection after a `run.subscribe`. A subscription request carries the last observed session event sequence and optional run scope when available. The client reducer accepts ordered events, ignores duplicate or stale delivery, and requires snapshot recovery for a forward sequence gap.
+After the handshake, the client sends typed commands and queries as JSON-RPC requests, and `run.frame` notifications
+arrive on the same connection after a `run.subscribe`. A subscription request carries the last observed session event
+sequence and optional run scope when available. The client reducer accepts ordered events, ignores duplicate or stale
+delivery, and requires snapshot recovery for a forward sequence gap.
 
 ### M3 durable replay-only subscriptions
 
-M3 serves sessions from durable SQLite projections and append-only event envelopes. A session subscription is still a one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot** and an empty contiguous tail at that snapshot's included sequence, or a typed resync when the session cannot be supplied. It is **replay-only**, not a retained connection and not a live event feed, and historical projection reconstruction is not represented in M3. The post-commit publication seam is removed (ADR 0038 Wave 7): committed evidence is published only through the daemon host's commit-observation path, never through a no-op session seam. M3 durability, unscoped snapshot/tail replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4 run-scoped DTOs, never for filtered M3 session state.
+M3 serves sessions from durable SQLite projections and append-only event envelopes. A session subscription is still a
+one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot** and an empty
+contiguous tail at that snapshot's included sequence, or a typed resync when the session cannot be supplied. It is
+**replay-only**, not a retained connection and not a live event feed, and historical projection reconstruction is not
+represented in M3. The post-commit publication seam is removed (ADR 0038 Wave 7): committed evidence is published only
+through the daemon host's commit-observation path, never through a no-op session seam. M3 durability, unscoped
+snapshot/tail replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4
+run-scoped DTOs, never for filtered M3 session state.
 
-M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely express filtered run state. Therefore every subscription with `run_id: Some` returns typed `HistoryUnavailable` resync **before any session or cursor validation**, whether the run matches, does not exist, belongs to another session, or has an invalid cursor. It must never fall back to an unfiltered session snapshot or tail. Correctly scoped replay is delivered separately by the M4 run-stream subscription contract; this M3 safe resync remains distinct and is not a live stream.
+M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely express filtered run state. Therefore
+every subscription with `run_id: Some` returns typed `HistoryUnavailable` resync **before any session or cursor
+validation**, whether the run matches, does not exist, belongs to another session, or has an invalid cursor. It must
+never fall back to an unfiltered session snapshot or tail. Correctly scoped replay is delivered separately by the M4
+run-stream subscription contract; this M3 safe resync remains distinct and is not a live stream.
 
 ## Subscription and reconnect
 
-A subscription is associated with a session and optional run scope. The client records the latest applied event sequence.
+A subscription is associated with a session and optional run scope. The client records the latest applied event
+sequence.
 
 ```mermaid
 sequenceDiagram
@@ -166,9 +238,18 @@ sequenceDiagram
 
 ## M3 durable authority
 
-The M3 composition facade is daemon-owned durable state: it opens the platform state database, records a safe configuration snapshot, completes recovery before reporting ready, and serves the typed command/query contract from SQLite. The facade uses the platform application-state location (`XDG_STATE_HOME` or `~/.local/state` on Linux, Application Support on macOS, and `LOCALAPPDATA` on Windows); it returns a typed unavailable error when no absolute platform location is available and never falls back to process CWD.
+The M3 composition facade is daemon-owned durable state: it opens the platform state database, records a safe
+configuration snapshot, completes recovery before reporting ready, and serves the typed command/query contract from
+SQLite. The facade uses the platform application-state location (`XDG_STATE_HOME` or `~/.local/state` on Linux,
+Application Support on macOS, and `LOCALAPPDATA` on Windows); it returns a typed unavailable error when no absolute
+platform location is available and never falls back to process CWD.
 
-`intention-test-support` owns durable fixture construction and bounded listener orchestration. It constructs credential-free snapshots, platform-native temporary workspace roots, `TempDir`-backed databases, and known sessions, then calls only the hidden facade injection seam and the daemon's hidden one-connection dispatch seam. TUI and daemon binary tests do not own a parallel fixture protocol or a fixture startup CLI mode. M3 does not implement idle shutdown, an explicit daemon-stop command, or model or provider execution; M4 persistent delivery is provided through the separate run-scoped subscription contract.
+`intention-test-support` owns durable fixture construction and bounded listener orchestration. It constructs
+credential-free snapshots, platform-native temporary workspace roots, `TempDir`-backed databases, and known sessions,
+then calls only the hidden facade injection seam and the daemon's hidden one-connection dispatch seam. TUI and daemon
+binary tests do not own a parallel fixture protocol or a fixture startup CLI mode. M3 does not implement idle shutdown,
+an explicit daemon-stop command, or model or provider execution; M4 persistent delivery is provided through the separate
+run-scoped subscription contract.
 
 ## Tauri bridge
 
@@ -178,13 +259,19 @@ Tauri is a bootstrap/native bridge, not a domain host.
 Svelte UI → Tauri invoke/event bridge → intention-client → local daemon
 ```
 
-The Rust bridge may initialize `intention-client`; dispatch protocol command/query DTOs; forward typed event DTOs; map explicit presentation DTOs when necessary for JavaScript ergonomics; and manage window, native dialog, notification, and app lifecycle details.
+The Rust bridge may initialize `intention-client`; dispatch protocol command/query DTOs; forward typed event DTOs; map
+explicit presentation DTOs when necessary for JavaScript ergonomics; and manage window, native dialog, notification, and
+app lifecycle details.
 
-The bridge must not import application use-case services directly; create a competing SQLite connection or run actor; invoke provider SDKs or tools; reimplement persistence, permission, plan, workspace, VFR, or Headroom policy; or introduce a parallel Tauri-only command contract.
+The bridge must not import application use-case services directly; create a competing SQLite connection or run actor;
+invoke provider SDKs or tools; reimplement persistence, permission, plan, workspace, VFR, or Headroom policy; or
+introduce a parallel Tauri-only command contract.
 
 ## TUI and REPL
 
-TUI and REPL connect directly through `intention-client`. They are equal presentation adapters, not special daemon modes, and must use the same command, query, snapshot, and event DTOs as the Tauri bridge. This is an intentional architectural proof that presentation logic is isolated.
+TUI and REPL connect directly through `intention-client`. They are equal presentation adapters, not special daemon
+modes, and must use the same command, query, snapshot, and event DTOs as the Tauri bridge. This is an intentional
+architectural proof that presentation logic is isolated.
 
 ## Daemon restart semantics
 
@@ -192,11 +279,15 @@ On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 
 1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
-3. snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's mandatory terminal-promotion transaction, with durable state-change event and snapshots;
-4. do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass; and
+3.  snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's
+   mandatory terminal-promotion transaction, with durable state-change event and snapshots;
+4.  do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly
+   promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass;
+   and
 5. make the recovered state available through later one-shot snapshot/tail replay.
 
-This policy is honest about unknown external side effects. A user may initiate a new retry or manually reconciled follow-up run.
+This policy is honest about unknown external side effects. A user may initiate a new retry or manually reconciled
+follow-up run.
 
 ## Required tests and observable outcomes
 
@@ -214,7 +305,10 @@ This policy is honest about unknown external side effects. A user may initiate a
 
 ## Quality-gate integration
 
-The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)). Tauri and TUI are accepted through mapping contracts and fixture-daemon outcome scenarios, not a misleading aggregate UI line-coverage target.
+The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold and designated files,
+[ADR 0049](../decisions/0049-base-coverage-threshold.md)). Tauri and TUI are accepted through mapping contracts and
+fixture-daemon outcome scenarios, not a misleading aggregate UI line-coverage target.
 
 ## Open implementation decisions
 
@@ -224,12 +318,19 @@ The daemon, transport, client, and adapter tests in this document are blocking `
 
 ## Post-M4 session branching transport boundary
 
-`session_fork_v1` is a future additive typed JSON-RPC DTO family. It cannot widen M3 session replay or M4 run streams: bounded tree reads remain separate, read-only projections and no tree-wide event stream is introduced. Adapters render daemon-owned results and cannot infer lineage, authority, or rollback.
+`session_fork_v1` is a future additive typed JSON-RPC DTO family. It cannot widen M3 session replay or M4 run streams:
+bounded tree reads remain separate, read-only projections and no tree-wide event stream is introduced. Adapters render
+daemon-owned results and cannot infer lineage, authority, or rollback.
 
 ## Post-M4 activity and notification transport boundary
 
-Architecture 24 owns additive typed JSON-RPC `agent_activity_v1` and `user_notifications_v1` DTO families on the existing local endpoint. They are separate from M3 session replay and M4 run streams, use daemon-owned cursors and resync, and never create a second listener or adapter-owned authority.
+Architecture 24 owns additive typed JSON-RPC `agent_activity_v1` and `user_notifications_v1` DTO families on the
+existing local endpoint. They are separate from M3 session replay and M4 run streams, use daemon-owned cursors and
+resync, and never create a second listener or adapter-owned authority.
 
 ## Post-M5 supervision topology direction
 
-Worker and process supervision topology is an accepted post-M5 future direction under [ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as a production supervision topology for long-lived workers and processes. It never becomes a second runtime, registry, scheduler, persistence authority, or sandbox.
+Worker and process supervision topology is an accepted post-M5 future direction under [ADR
+0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as a production
+supervision topology for long-lived workers and processes. It never becomes a second runtime, registry, scheduler,
+persistence authority, or sandbox.

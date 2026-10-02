@@ -55,9 +55,9 @@ unsupported, or mismatched selection blocks dependent kernel work before process
 back to current state.
 
 One additive bounded reference joins the selection: `script_library_reference` points at a `KernelScriptLibraryV1` value
-(contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`,
-[ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)). It is credential-free and content-free,
-carries no absolute or symlink-target path, and its absence means an empty import surface.
+(contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`, [ADR
+0042](../decisions/0042-project-script-library-for-kernel-cells.md)). It is credential-free and content-free, carries no
+absolute or symlink-target path, and its absence means an empty import surface.
 
 A `KernelEpochId` is created lazily only after recovery completes, a supported active Mandate run is reread, the exact
 kernel/bridge/tool selections validate, required live capacity exists, and no cancellation or uncertainty gate applies.
@@ -259,7 +259,7 @@ are:
 
 - an idle kernel is retained at most **60 minutes**;
 - the daemon retains at most **16 live session kernels**; exceeding this fails before Python execution with
-  `kernel_concurrency_limit_exceeded`; and
+`kernel_concurrency_limit_exceeded`; and
 - a foreground cell has a hard **ten-minute** execution bound, after which the daemon does not wait indefinitely.
 
 The ten-minute bound is a kernel-execution policy limit, not a replacement for the existing 1-MiB frame, 512-KiB fact,

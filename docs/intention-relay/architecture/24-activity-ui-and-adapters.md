@@ -9,11 +9,11 @@ This document owns future activity trees, direct-pair communication, activity an
 projections, safe UI projections, and adapter delivery. It applies to future ordinary, Mandate, and VerifierMandate
 projections; compatibility-only M3/M4 activity projections, where supported, are read-only views computed without
 synthetic activity identity, journal, message, notification, or acknowledgement state, and M3/M4 records gain no such
-state. Numeric values retained in research are not implementation limits for this package: under
-[ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) a numeric bound exists only with a recorded
-precedent naming the failure mode it prevents, the former intrinsic/capacity/ordinary classification direction of
-[ADR 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) is superseded, and no numeric activity
-bound is activated here.
+state. Numeric values retained in research are not implementation limits for this package: under [ADR
+0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md) a numeric bound exists only with a recorded
+precedent naming the failure mode it prevents, the former intrinsic/capacity/ordinary classification direction of [ADR
+0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md) is superseded, and no numeric activity bound is
+activated here.
 
 ## Ownership and non-authorities
 
@@ -39,8 +39,8 @@ message. Historical M4 records stay readable with no synthetic identity; the rem
 replacement state.
 
 The credential-free `AgentActivitySelectionV1` is a typed serde JSON selection record; the former
-`run-execution-meaning-v4` carrier was removed with the canonical codec by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md):
+`run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md):
 
 ```text
 AgentActivitySelectionV1
@@ -184,8 +184,8 @@ provider/reasoning data, prompts, paths, commands, grants, credentials, Python v
 `DirectChildStatusDto` reports one child; `DescendantSummaryDto` reports a subtree with one journal sequence and bounded
 counts, marked incomplete when a projection is unreadable, built from durable safe projections only.
 
-The research values below are not activated limits
-([ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)):
+The research values below are not activated limits ([ADR
+0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)):
 
 | Subject | Research value |
 | --- | ---: |
@@ -247,12 +247,12 @@ parent terminalization. If a parent is already cancelling or terminal when no el
 reference remains readable through the direct-child result/status evidence and activity journal without inventing a
 model delivery.
 
-Tree-level metadata is an accepted post-M5 future direction under
-[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md):
-a future bounded, credential-free metadata surface on activity trees, distinct from journal records and notification
+Tree-level metadata is an accepted post-M5 future direction under [ADR
+0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md): a
+future bounded, credential-free metadata surface on activity trees, distinct from journal records and notification
 state, that never becomes activity, authority, or a second sequence. It is not activated here. Export of activity
-records is an accepted post-M5 future direction under
-[ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+ as a bounded,
+records is an accepted post-M5 future direction under [ADR
+0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+ as a bounded,
 credential-free surface that never rewrites history and is never destructive; it is not activated here.
 
 ## Notifications and acknowledgement

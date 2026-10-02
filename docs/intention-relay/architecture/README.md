@@ -1,12 +1,12 @@
 # Intention Relay Architecture Plan
 
-**Planning reference, approved direction.** This directory defines the target architecture and delivery constraints for Intention Relay. It is an implementation plan, not application code and not a migration plan for Antibusy.
+**Planning reference, approved direction.** This directory defines the target architecture and delivery constraints for
+Intention Relay. It is an implementation plan, not application code and not a migration plan for Antibusy.
 
 ## Purpose and precedence
 
-This directory defines the implementation architecture for Intention Relay. The
-legacy-derived baseline the rewrite started from is retired and remains in git
-history.
+This directory defines the implementation architecture for Intention Relay. The legacy-derived baseline the rewrite
+started from is retired and remains in git history.
 
 When the documents differ:
 
@@ -16,7 +16,8 @@ When the documents differ:
 
 ## Architectural summary
 
-Intention Relay is a local-first, single-user system. A standalone daemon owns the application runtime and state. Desktop Tauri and TUI/REPL are presentation adapters over one typed local protocol and one shared Rust client.
+Intention Relay is a local-first, single-user system. A standalone daemon owns the application runtime and state.
+Desktop Tauri and TUI/REPL are presentation adapters over one typed local protocol and one shared Rust client.
 
 ```mermaid
 flowchart TD
@@ -147,38 +148,90 @@ Every plan in this directory must:
 - identify required tests and their blocking quality gates before implementation work begins;
 - link quality requirements to [Quality gates and Makefile](12-quality-gates-and-makefile.md);
 - use Mermaid only for architecture, state, relationship, or lifecycle clarity;
-- keep Mermaid labels short enough for terminal rendering.
+- keep Mermaid labels short enough for terminal rendering;
+- wrap prose at 120 columns; tables, code fences, and Mermaid blocks keep their own layout.
 
 ## v1 boundary
 
-v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon, SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot addressing, Plan/Build modes, Build Autopilot, VFR, and Headroom/CCR.
+v1 includes Tauri as the primary adapter, TUI/REPL as proof of adapter isolation, a local single-user daemon,
+SQLite-first persistence, OpenRouter and generic Chat Completion drivers, typed built-in tools, WorkspaceRoot
+addressing, Plan/Build modes, Build Autopilot, VFR, and Headroom/CCR.
 
-v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container execution, automatic run resumption, and a direct MCP administration interface. Build Autopilot is trusted-local and does not claim shell isolation; Plan `execute` is advisory-guided rather than technically read-only.
+v1 excludes Web, Telegram, remote transport, multi-user access, parallel runs in one session, sandbox/container
+execution, automatic run resumption, and a direct MCP administration interface. Build Autopilot is trusted-local and
+does not claim shell isolation; Plan `execute` is advisory-guided rather than technically read-only.
 
 ## Post-M4 authority foundation
 
-The closed M4 baseline remains authoritative for implemented behavior. The post-M4 direction is recorded in the [accepted decision records](../decisions/README.md); those records establish the authority, compatibility, ownership, and dependency boundary that later authoritative packages must satisfy, and the [implementation roadmap](11-implementation-roadmap.md) owns activation order and status.
+The closed M4 baseline remains authoritative for implemented behavior. The post-M4 direction is recorded in the
+[accepted decision records](../decisions/README.md); those records establish the authority, compatibility, ownership,
+and dependency boundary that later authoritative packages must satisfy, and the [implementation
+roadmap](11-implementation-roadmap.md) owns activation order and status.
 
 ### Owner documents
 
-- [13 Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md): future Mandate lifecycle and admission; it does not amend M4 or ordinary v1 behavior.
-- [14 Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md): the historical compatibility semantics that remain after the binary canonical codec and digest layer were deleted by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
-- [15 Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md): future fixed registry identity, frozen tool selection, Mandate direct admission and WorkspaceRoot semantics, tool-loop facts, and tool-effect recovery.
-- [16 Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md): future durable candidate reevaluation, readiness/capacity evidence, scheduler handoff, and recovery admission gating; [architecture 13](13-mandate-domain-and-durable-lifecycle.md) keeps Mandate lifecycle, reason validity/order, and atomic fresh admission.
-- [17 Mandate child graph and delegated verifier authority](17-mandate-child-graph-and-delegated-verifier-authority.md): future immutable child edges, direct-parent controls, graph terminalization, and target-scoped verifier authority.
-- [18 Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md): future typed MCP source acquisition, discovery normalization, run-local capability selections, invocation, disposal, and MCP recovery.
-- [19 Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md): future bridge attachment, ephemeral grants, operation correlation, safe replay, cancellation propagation, and bridge recovery; typed ingress to the one capability path.
-- [20 Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md): future private kernel epochs, cells, namespace checkpoints, safe projections, and kernel recovery, plus the kernel-side import surface and script-import evidence of the project script library (`.ir/scripts`, [decision 0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the library's path convention and tools stay with architectures 05 and 15.
-- [21 Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md): future non-authorizing Goal scope/evidence, Skill disclosure, context manifests/projections, typed memory, and immutable compaction; project Goals bind to sessions only through explicit applicability links.
-- [22 Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md): future provider kinds, profiles/catalogs, immutable provider and capability selections, driver compatibility, and normalized reasoning.
-- [23 Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md): future ordinary Session lineage, frozen fork context, regeneration, and bounded lineage projections.
-- [24 Activity, UI, and adapters](24-activity-ui-and-adapters.md): future activity trees, safe projections, direct-pair messages, notifications, acknowledgement projections, and shared-client adapter behavior.
-- [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5 directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the profile UI/control plane ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)); the Slice 2 activation was reverted and re-introduction requires a new activating specification.
-- [26 Continual harness](26-continual-harness.md): the accepted post-M5 continual-harness model — durable user-managed rules, trigger capture, schedule/time semantics, dossiers, verified checkpoints, read-and-delegate execution classes, and harness recovery ([ADR 0021](../decisions/0021-continual-harness-directions.md)); activated under Milestone 5+.
-- [27 Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md): the accepted post-M5 programmatic-caller policy — root origins, durable provenance, policy scope/narrowing, admission decisions, confirmation, lifecycle, and run-selection compatibility ([ADR 0022](../decisions/0022-programmatic-caller-policy-directions.md)); activated under Milestone 5+.
-- [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain — Goal identity/scope/tree, lifecycle/readiness/user decision, leading-goal run selection, delegated Verification Mandates, verification gates, working memory/roles/templates, model proposals, and the conversation-compaction working form ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)); Goals remain acceptance/evidence records, not the work-authorization plane.
-- [29 Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md): the accepted post-M5 provider session-selection layer — session defaults, per-turn/fork overrides, profile-keyed usage, the provider profiles protocol, and pending-removal/degraded recovery ([ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)); the Slice 2 activation was reverted and re-introduction requires a new activating specification.
-- [30 Instruction sources and system context](30-instruction-sources-and-system-context.md): the instruction channel of a model request — closed instruction source kinds and scopes, the deployment profile, workspace `AGENTS.md` project instructions read through the `WorkspaceRoot` anchor, the `Mode` and `Vfr` contributions of architectures 07 and 06, deterministic assembly, the immutable effective instruction projection with its typed identity, closed failures, and safe observability ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)); activated under Milestone 5+ as the fifth slice.
+-  [13 Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md): future Mandate lifecycle and
+  admission; it does not amend M4 or ordinary v1 behavior.
+-  [14 Run execution meaning and historical compatibility](14-run-execution-meaning-and-historical-compatibility.md):
+  the historical compatibility semantics that remain after the binary canonical codec and digest layer were deleted by
+  [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
+-  [15 Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md): future fixed registry
+  identity, frozen tool selection, Mandate direct admission and WorkspaceRoot semantics, tool-loop facts, and
+  tool-effect recovery.
+-  [16 Mandate scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md): future
+  durable candidate reevaluation, readiness/capacity evidence, scheduler handoff, and recovery admission gating;
+  [architecture 13](13-mandate-domain-and-durable-lifecycle.md) keeps Mandate lifecycle, reason validity/order, and
+  atomic fresh admission.
+-  [17 Mandate child graph and delegated verifier
+  authority](17-mandate-child-graph-and-delegated-verifier-authority.md): future immutable child edges, direct-parent
+  controls, graph terminalization, and target-scoped verifier authority.
+-  [18 Mandate MCP capability lifecycle](18-mandate-mcp-capability-lifecycle.md): future typed MCP source acquisition,
+  discovery normalization, run-local capability selections, invocation, disposal, and MCP recovery.
+-  [19 Mandate Gateway/RLM bridge](19-mandate-gateway-rlm-bridge.md): future bridge attachment, ephemeral grants,
+  operation correlation, safe replay, cancellation propagation, and bridge recovery; typed ingress to the one capability
+  path.
+-  [20 Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md): future private kernel epochs, cells,
+  namespace checkpoints, safe projections, and kernel recovery, plus the kernel-side import surface and script-import
+  evidence of the project script library (`.ir/scripts`, [decision
+  0042](../decisions/0042-project-script-library-for-kernel-cells.md)); the library's path convention and tools stay
+  with architectures 05 and 15.
+-  [21 Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md): future
+  non-authorizing Goal scope/evidence, Skill disclosure, context manifests/projections, typed memory, and immutable
+  compaction; project Goals bind to sessions only through explicit applicability links.
+-  [22 Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md): future provider
+  kinds, profiles/catalogs, immutable provider and capability selections, driver compatibility, and normalized
+  reasoning.
+-  [23 Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md):
+  future ordinary Session lineage, frozen fork context, regeneration, and bounded lineage projections.
+-  [24 Activity, UI, and adapters](24-activity-ui-and-adapters.md): future activity trees, safe projections, direct-pair
+  messages, notifications, acknowledgement projections, and shared-client adapter behavior.
+-  [25 Configuration and provider control plane](25-configuration-provider-control-plane.md): accepted post-M5
+  directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the
+  profile UI/control plane ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)); the Slice
+  2 activation was reverted and re-introduction requires a new activating specification.
+-  [26 Continual harness](26-continual-harness.md): the accepted post-M5 continual-harness model — durable user-managed
+  rules, trigger capture, schedule/time semantics, dossiers, verified checkpoints, read-and-delegate execution classes,
+  and harness recovery ([ADR 0021](../decisions/0021-continual-harness-directions.md)); activated under Milestone 5+.
+-  [27 Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md): the accepted post-M5
+  programmatic-caller policy — root origins, durable provenance, policy scope/narrowing, admission decisions,
+  confirmation, lifecycle, and run-selection compatibility ([ADR
+  0022](../decisions/0022-programmatic-caller-policy-directions.md)); activated under Milestone 5+.
+-  [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain —
+  Goal identity/scope/tree, lifecycle/readiness/user decision, leading-goal run selection, delegated Verification
+  Mandates, verification gates, working memory/roles/templates, model proposals, and the conversation-compaction working
+  form ([ADR 0023](../decisions/0023-goal-domain-and-verification-directions.md)); Goals remain acceptance/evidence
+  records, not the work-authorization plane.
+-  [29 Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md): the accepted
+  post-M5 provider session-selection layer — session defaults, per-turn/fork overrides, profile-keyed usage, the
+  provider profiles protocol, and pending-removal/degraded recovery ([ADR
+  0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md)); the Slice 2 activation was reverted
+  and re-introduction requires a new activating specification.
+-  [30 Instruction sources and system context](30-instruction-sources-and-system-context.md): the instruction channel of
+  a model request — closed instruction source kinds and scopes, the deployment profile, workspace `AGENTS.md` project
+  instructions read through the `WorkspaceRoot` anchor, the `Mode` and `Vfr` contributions of architectures 07 and 06,
+  deterministic assembly, the immutable effective instruction projection with its typed identity, closed failures, and
+  safe observability ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)); activated under
+  Milestone 5+ as the fifth slice.
 
 ### Foundation terms
 
@@ -194,14 +247,16 @@ The closed M4 baseline remains authoritative for implemented behavior. The post-
 | **Capacity availability** | Observable temporary resource availability, not a product quota. |
 | **Product ceiling** | A policy quota that requires a recorded precedent; it cannot silently govern future Mandate admission. |
 
-A state name is always qualified by its owner, for example Mandate `Active` or
-Run `Running`. WorkspaceRoot, modes, hooks, gateways, and audit are logical
-product controls in a trusted-local process, not OS sandbox or privilege
+A state name is always qualified by its owner, for example Mandate `Active` or Run `Running`. WorkspaceRoot, modes,
+hooks, gateways, and audit are logical product controls in a trusted-local process, not OS sandbox or privilege
 boundaries.
 
 ### Cross-domain identity and sequencing invariants
 
-The following table is normative at the role level. [Architecture 14](14-run-execution-meaning-and-historical-compatibility.md) remains the owner of historical compatibility semantics; owner documents define only their domain-specific semantic payloads, and every new family is typed serde JSON ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)).
+The following table is normative at the role level. [Architecture
+14](14-run-execution-meaning-and-historical-compatibility.md) remains the owner of historical compatibility semantics;
+owner documents define only their domain-specific semantic payloads, and every new family is typed serde JSON ([ADR
+0046](../decisions/0046-typed-serde-json-contracts.md)).
 
 | Value | Owner | Scope | Representation/ordering | Reconstruction rule |
 | --- | --- | --- | --- | --- |
@@ -227,8 +282,7 @@ Sequences and cursors are independent authorities and are never interchangeable:
 | notification cursor | architecture 24 | local-user observation | notification facts or acknowledgements |
 | scheduler observation order | architecture 16 | live readiness evidence | semantic identity or admission order |
 
-Semantic/frozen metadata includes identities, revisions, selection references,
-and baselines. Operational/live metadata includes readiness, capacity,
-processes, handles, endpoints, current catalogs, wakeups, grants, and
-publication state. Operational data may defer or reject fresh work, but never
-repairs, reroutes, reinterprets, or replaces frozen semantic data.
+Semantic/frozen metadata includes identities, revisions, selection references, and baselines. Operational/live metadata
+includes readiness, capacity, processes, handles, endpoints, current catalogs, wakeups, grants, and publication state.
+Operational data may defer or reject fresh work, but never repairs, reroutes, reinterprets, or replaces frozen semantic
+data.

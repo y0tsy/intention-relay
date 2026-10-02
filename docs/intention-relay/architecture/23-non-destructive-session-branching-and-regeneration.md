@@ -56,9 +56,9 @@ Mandate creation, trigger capture, or fresh admission. A failed start leaves the
 `ForkBoundaryDto` has exactly these variants:
 
 - `CommittedUserTurn`: a non-queued committed user turn with `RunStarted`. The child receives that validated user text
-  once through a new child anchor and receives no response fact from that run.
+once through a new child anchor and receives no response fact from that run.
 - `CompletedAssistantTurn`: a genuinely completed run with one valid terminal `Finished` fact, no terminal failure,
-  pending interaction, or unfinished external action. A valid empty response adds no synthetic assistant message.
+pending interaction, or unfinished external action. A valid empty response adds no synthetic assistant message.
 
 Queued turns, arbitrary events/cursors, partial assistant batches, failed, cancelled, interrupted, incomplete, waiting,
 or unfinished work are ineligible; source activity does not block an eligible fork, but source queues, active runs,
@@ -79,12 +79,12 @@ Missing, corrupt, unknown, or incompatible data blocks dependent work before an 
 source, current catalog, provider, file, index, memory, registry, bridge, kernel, MCP, or UI state.
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
-canonicalization-version byte, and SHA-256 digest construction were removed by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md), and under the single-version policy
-([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) there is one live shape per record,
-carrying the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity,
-cursor, category, and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns
-only the immutable fork-reference transfer.
+canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md), and under the single-version policy ([ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) there is one live shape per record, carrying
+the typed, ordered, compatibility-bound inherited reasoning references. References carry source identity, cursor,
+category, and size and never reasoning text. Architecture 22 owns reasoning compatibility; this document owns only the
+immutable fork-reference transfer.
 
 `WorkspaceStateDto::Unverified` is the only initial workspace-state value. It makes no claim about files, processes,
 repositories, remote systems, or effects. A fork never clones or rolls back machine state.
@@ -186,25 +186,25 @@ stored title and uses only the stable presentation fallback until renamed. Renam
 ### Field tables
 
 Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing, type tags,
-length encoding, canonicalization-version byte, and SHA-256 digest construction were removed by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md). Under the single-version policy
-([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) each record keeps exactly one live
-shape, which carries the typed, ordered, compatibility-bound inherited reasoning references.
+length encoding, canonicalization-version byte, and SHA-256 digest construction were removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md). Under the single-version policy ([ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)) each record keeps exactly one live shape,
+which carries the typed, ordered, compatibility-bound inherited reasoning references.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
-  `4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 source_run_cursors`,
-  `8 effective_instruction_projection`, `9 materialized_model_messages`, `10 inherited_future_defaults`,
-  `11 historical_config_policy_references`, `12 inherited_reasoning_history_references`, `13 safe_usage_provenance`,
-  `14 terminal_tool_result_references`, `15 policy_decision_references`, `16 terminal_child_result_references`,
-  `17 workspace_state`.
+`4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 source_run_cursors`, `8
+effective_instruction_projection`, `9 materialized_model_messages`, `10 inherited_future_defaults`, `11
+historical_config_policy_references`, `12 inherited_reasoning_history_references`, `13 safe_usage_provenance`, `14
+terminal_tool_result_references`, `15 policy_decision_references`, `16 terminal_child_result_references`, `17
+workspace_state`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 conversation_tree_id`, `4 boundary`,
-  `5 source_head_sequence`, `6 materialized_effective_instruction_projection`, `7 materialized_model_messages`,
-  `8 inherited_future_defaults`, `9 historical_config_policy_references`, `10 inherited_reasoning_history_references`,
-  `11 safe_usage_provenance`, `12 terminal_tool_result_references`, `13 policy_decision_references`,
-  `14 terminal_child_result_references`, `15 workspace_state`. Field 6 is the selected boundary sequence, not the
-  current source head observed during the fork operation.
+`5 source_head_sequence`, `6 materialized_effective_instruction_projection`, `7 materialized_model_messages`, `8
+inherited_future_defaults`, `9 historical_config_policy_references`, `10 inherited_reasoning_history_references`, `11
+safe_usage_provenance`, `12 terminal_tool_result_references`, `13 policy_decision_references`, `14
+terminal_child_result_references`, `15 workspace_state`. Field 6 is the selected boundary sequence, not the current
+source head observed during the fork operation.
 - `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 expected_preview_binding`,
-  `5 title_present`, `6 requested_title`, `7 future_profile_override_present`, `8 future_profile_override`.
+`5 title_present`, `6 requested_title`, `7 future_profile_override_present`, `8 future_profile_override`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
 the codec ([ADR 0046](../decisions/0046-typed-serde-json-contracts.md)). A command binds to the exact source state the
@@ -213,11 +213,11 @@ define a canonical binding for the preview together with its first real consumer
 and no canonical digest is part of the current contract.
 
 `effective_instruction_projection` and `materialized_effective_instruction_projection` carry the typed
-`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md)
-([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)): the exact ordered contributions with their
-source revisions, the declared audience, and the projection revision identity, materialized when the fork is created. A
-child inherits the projection verbatim; no fork, regeneration, replay, or later run re-derives it from current
-configuration, current project instructions, or current session state.
+`InstructionProjectionV1` of [architecture 30](30-instruction-sources-and-system-context.md) ([ADR
+0043](../decisions/0043-instruction-sources-and-system-context.md)): the exact ordered contributions with their source
+revisions, the declared audience, and the projection revision identity, materialized when the fork is created. A child
+inherits the projection verbatim; no fork, regeneration, replay, or later run re-derives it from current configuration,
+current project instructions, or current session state.
 
 ### Fixed limits and audit taxonomy
 
@@ -291,11 +291,11 @@ Tool-result execution, child-agent execution, export, and cross-workspace clone/
 directions under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md), to be executed in Milestone 5+:
 
 - tool-result execution and child-agent execution are separately admitted ordinary fork actions from frozen references,
-  never silent re-execution, never Mandate child edges, and never verifier authority;
+never silent re-execution, never Mandate child edges, and never verifier authority;
 - export is a bounded, credential-free surface for fork lineage and activity records, never a history rewrite and never
-  destructive deletion;
+destructive deletion;
 - cross-workspace clone/rebind is explicit user-authorized only, never implicit, and never transfers live state or
-  authority.
+authority.
 
 ## Required evidence before implementation
 

@@ -14,9 +14,9 @@ values, provider kinds, configuration snapshots, retries, model facts, cursors, 
 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics, and `openrouter` and
 `generic-chat-completion-api` remain the only M4 kinds. Retained provider/profile/reasoning material is research
 provenance where it conflicts with architectures 13--21. The configuration/provider control-plane cluster (profile
-UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by
-[architecture 25](25-configuration-provider-control-plane.md) under
-[ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md).
+UI/control plane, live reload, credential rotation, discovery, pricing, health checks) is owned by [architecture
+25](25-configuration-provider-control-plane.md) under [ADR
+0020](../decisions/0020-configuration-provider-control-plane-directions.md).
 
 ## Ownership and non-authorities
 
@@ -37,8 +37,8 @@ profile UI, or sandbox.
 ## Immutable provider and capability selections
 
 Architecture 14's canonical bytes, tags, field framing, digest validation, `IRCR`/`typed-tlv-v1` framing, SHA-256
-policy, and the research-only `IRCD` framing were removed by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
+policy, and the research-only `IRCD` framing were removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md): wire and durable contracts are typed serde JSON, and no
 canonical digest or identity layer exists. This document owns the provider-selection and model-capability selection
 semantics that a future typed run record would carry under the former `MandateRunExecutionMeaningV1` fields 2 and 3.
 
@@ -123,10 +123,10 @@ from a model ID, including `gpt-*`, `o*`, or `codex*`.
 ## Provider kinds, profiles, credentials, and endpoints
 
 Future first-party kinds are `openrouter`, `generic-chat-completion-api`, and `responses`. `responses` is a distinct
-Responses wire/semantic contract, never a generic Chat Completion variant. In a future catalog parser only, input
-`kind = "openai"` normalizes immediately to `responses`; it never enters a DTO, durable fact, diagnostic, or M3/M4
-record. An input that cannot be represented by the Responses descriptor fails
-`legacy_config_cannot_represent_active_catalog` and never falls back to Generic Chat.
+Responses wire/semantic contract, never a generic Chat Completion variant. In a future catalog parser only, input `kind
+= "openai"` normalizes immediately to `responses`; it never enters a DTO, durable fact, diagnostic, or M3/M4 record. An
+input that cannot be represented by the Responses descriptor fails `legacy_config_cannot_represent_active_catalog` and
+never falls back to Generic Chat.
 
 Generic Chat remains narrow. A divergent reasoning protocol requires a separate first-party descriptor or user-declared
 typed kind. For the ordinary production path, the current `generic-chat-completion-api` adapter consumes the pinned
@@ -241,11 +241,11 @@ round's own accepted reasoning to the assistant tool-call message of that in-fli
 (ADR 0041); prior-run, cross-turn, and fork reasoning injection remains forbidden.
 
 The future normalized stream uses one `RunEventCursorDto` for text, reasoning, summaries, tool calls, usage, and
-terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model`
-([ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md)) and was removed by
-[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md): the closed fragment category and the summary
-delta no longer exist, and the live normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`.
-The reverted shape was:
+terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model` ([ADR
+0037](../decisions/0037-m5plus-slice2-control-plane.md)) and was removed by [ADR
+0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md): the closed fragment category and the summary delta no
+longer exist, and the live normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The
+reverted shape was:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -275,8 +275,8 @@ The future provider/model, domain, and durable representations are closed and co
 provider input; `ModelRunFactInputDto::ReasoningDeltaRecorded { category, content }` and
 `ModelRunFactInputDto::ReasoningSummaryDeltaRecorded { content }` persist it; and the domain taxonomy has matching
 `ReasoningDeltaRecorded` and `ReasoningSummaryDeltaRecorded` event variants. `ReasoningHistoryBound` is a separate
-closed durable fact, never a provider stream event. Per
-[ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), `category` is required on the wire in the
+closed durable fact, never a provider stream event. Per [ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md), `category` is required on the wire in the
 model and domain reasoning representations with no defaulting to `Primary` and no historical decode class; reasoning
 never synthesizes a summary or history manifest.
 
@@ -286,9 +286,9 @@ fragment that would exceed the combined bound fails with `reasoning_output_limit
 partially writes the fragment. This contract does not add content inspection, secret substitution, or a new reasoning
 redaction algorithm; existing central redaction and credential, provider-payload, SDK-resource, and diagnostic exclusion
 rules remain in force. Semantic content inspection of reasoning or provider content is an accepted future direction
-under
-[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md);
-it is not activated here and never substitutes for central redaction.
+under [ADR
+0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md); it
+is not activated here and never substitutes for central redaction.
 
 `responses` is local-history-first. Every request uses `store: false`; Conversations, `previous_response_id`, remote
 continuation, encrypted/opaque reasoning, provider-managed history, persisted opaque response items, and
@@ -413,12 +413,12 @@ The initial user-kind catalog is broad in typed stateless textual coverage but c
 matrix and the profile's declared model subset:
 
 - Chat Completions SSE and explicitly supported native streaming framing, including Ollama-native framing where a
-  dedicated descriptor owns it;
+dedicated descriptor owns it;
 - textual reasoning fields `reasoning_content`, `reasoning`, `reasoning_details[].text`, and `message.thinking`;
 - thinking activation as `thinking` with closed `enabled`/`adaptive`, `enable_thinking`, or `think` with a closed
-  boolean or supported closed effort string, or no activation field; and
+boolean or supported closed effort string, or no activation field; and
 - closed `reasoning_effort`, `thinking_budget`, and `thinking_token_budget` request fields only where a descriptor
-  declares each field and its allowed values.
+declares each field and its allowed values.
 
 Each accepted fragment maps to the future normalized reasoning path. No encrypted/opaque provider payloads, server-side
 vLLM/SGLang parser config, raw provider JSON, or generic request templates. Cross-turn policy is limited to the explicit
@@ -427,9 +427,9 @@ and non-fitting assistant-history requirements are excluded. Arbitrary authentic
 direction under [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) and were activated for M5+ Slice 2
 by [ADR 0037](../decisions/0037-m5plus-slice2-control-plane.md) as a closed code-owned typed header policy (the
 `intention-model` `AuthenticationHeaderPolicyV1` consumed by both provider adapters; the protocol-only duplicate was
-removed by the unconsumed-surface audit (2026-09)).
-[ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) removed that policy with the rest of Slice 2, so
-the direction is again documentation-only until a new activating specification. The typed provider-native
+removed by the unconsumed-surface audit (2026-09)). [ADR
+0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md) removed that policy with the rest of Slice 2, so the
+direction is again documentation-only until a new activating specification. The typed provider-native
 preservation-control and server-side-parser contracts were removed by the unconsumed-surface audit (2026-09): no
 preservation-control or parser-configuration surface is activated. Live wire header injection (`SafeHeader`) and
 provider-native live extraction beyond the declared paths remain not activated. The current `async-openai` core Chat
@@ -476,24 +476,24 @@ Ordering: every successful preparation appends `ProviderCatalogCandidatePrepared
 never emit acceptance/activation; a crash after acceptance orders `ProviderCatalogActivationRecoveryRequired`,
 replacement `ProviderCatalogActivated`, and `ProviderCatalogRecoveryCompleted` only when the exact accepted registry is
 active. The gate serializes catalog acceptance, session default changes, turn/fork admission, and registry lookups and
-never blocks active model tasks. Private enabled entries are keyed by the exact
-`(ProviderProfileId, ProviderProfileRevisionId, ProviderKindDescriptorRevisionId, ProviderDriverContractRevisionDto)`;
-each profile owns an independent private client/driver entry, and no SDK/credential/ client/handle crosses a DTO,
-persistence, protocol, runtime public API, or adapter boundary.
+never blocks active model tasks. Private enabled entries are keyed by the exact `(ProviderProfileId,
+ProviderProfileRevisionId, ProviderKindDescriptorRevisionId, ProviderDriverContractRevisionDto)`; each profile owns an
+independent private client/driver entry, and no SDK/credential/ client/handle crosses a DTO, persistence, protocol,
+runtime public API, or adapter boundary.
 
 ## Legacy M4 selection bridge (removed)
 
-The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) was removed by
-[ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md): no `LegacyM4SelectionBindingDto` is
+The legacy M4 selection bridge (tag `legacy-m4-selection-binding` 0x020C) was removed by [ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md): no `LegacyM4SelectionBindingDto` is
 materialized, no `legacy_m4_selection_bindings` table exists, and provider binding identity is owned by the provider
 catalog runtime and resolved through the catalog admission port.
 
 ## Session selection, degraded recovery, and protocol
 
 The provider session-selection layer (session default, per-turn/fork overrides, profile-keyed usage, and pending-removal
-accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md) under
-[ADR 0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md); it was activated under Milestone 5+
-and reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md).
+accept/reject) is owned by [architecture 29](29-provider-session-and-profiles-protocol.md) under [ADR
+0024](../decisions/0024-provider-session-and-profiles-protocol-directions.md); it was activated under Milestone 5+ and
+reverted by [ADR 0044](../decisions/0044-revert-of-m5plus-slice2-control-plane.md).
 
 ## Child, verifier, MCP, bridge, kernel, context, and compatibility boundaries
 
@@ -517,16 +517,16 @@ structured output, plugin drivers, or remote continuation. The catalog database,
 policy were activated by Slice 2 (ADR 0037) and removed by ADR 0044; the typed preservation-control and
 server-side-parser contracts were removed as unconsumed by the unconsumed-surface audit (2026-09), and no
 parser-configuration surface is activated. Semantic content inspection of reasoning or provider content is an accepted
-post-M5 future direction under
-[ADR 0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
+post-M5 future direction under [ADR
+0032](../decisions/0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md),
 bound to Milestone 5+; it is not activated here, never substitutes for central redaction, and never rewrites stored
 facts. The profile picker/editor, credential rotation, health test, discovery, pricing, telemetry, and live reload items
-are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under
-[Milestone 5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and were activated for Slice 2
-by ADR 0037 and reverted by ADR 0044, so they are again documentation-only; the profile picker/editor presentation and
-telemetry remain not activated. Architecture 23 owns forks and lineage and architecture 29 owns session
-defaults/overrides and the profiles protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted
-directions remain outside this document.
+are accepted post-M5 directions owned by [architecture 25](25-configuration-provider-control-plane.md) under [Milestone
+5+](11-implementation-roadmap.md#milestone-5-post-m5-retrospective-alignment) and were activated for Slice 2 by ADR 0037
+and reverted by ADR 0044, so they are again documentation-only; the profile picker/editor presentation and telemetry
+remain not activated. Architecture 23 owns forks and lineage and architecture 29 owns session defaults/overrides and the
+profiles protocol. UI, Cargo, Makefile/CI, or production activation beyond the accepted directions remain outside this
+document.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 

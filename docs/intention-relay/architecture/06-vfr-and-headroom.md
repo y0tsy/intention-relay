@@ -1,6 +1,8 @@
 # VFR and Headroom
 
-**Approved future design. Not implemented; activation requires an activating specification.** Virtual File Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached through the typed tool hook system, not hard-coded dependencies of base tools.
+**Approved future design. Not implemented; activation requires an activating specification.** Virtual File
+Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached through the typed
+tool hook system, not hard-coded dependencies of base tools.
 
 ## Design principle
 
@@ -19,11 +21,16 @@ flowchart LR
   EX[Expand or raw tool] --> WS
 ```
 
-VFR changes a suitable source-file read into a structured virtual representation. Headroom changes suitable retained model context into a compressed representation with retrievable originals. They solve different problems and must not be conflated.
+VFR changes a suitable source-file read into a structured virtual representation. Headroom changes suitable retained
+model context into a compressed representation with retrievable originals. They solve different problems and must not be
+conflated.
 
 ## Ownership and non-authorities
 
-Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no assembly order ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
+Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VFR and Headroom attach only through
+declared hook APIs and base tools never import or link either extension implementation crate. Architecture 30 owns the
+effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract and no
+assembly order ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)).
 
 ## `intention-vfr`
 
@@ -36,9 +43,9 @@ Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VF
 - source map/hidden segment metadata;
 - expansion and raw-read tool contracts;
 - a VFR-specific typed instruction contribution with its own revision
-  identity, assembled into the effective instruction projection by
-  [architecture 30](30-instruction-sources-and-system-context.md)
-  ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md));
+identity, assembled into the effective instruction projection by [architecture
+30](30-instruction-sources-and-system-context.md) ([ADR
+0043](../decisions/0043-instruction-sources-and-system-context.md));
 - tests proving loss-aware, deterministic transformations.
 
 ### Required behavior
@@ -47,13 +54,15 @@ Architecture 05 owns the tool pipeline, hook phases, and workspace policy, so VF
 - It transforms only eligible source files according to resolved configuration.
 - It creates a virtual representation that preserves enough stable reference data for later expansion.
 - It does not mutate the physical file or base `read` tool semantics.
-- The model receives explicit instructions describing placeholders and the `expand`/raw path, delivered only as the declared `Vfr` contribution of architecture 30's instruction projection.
+-  The model receives explicit instructions describing placeholders and the `expand`/raw path, delivered only as the
+  declared `Vfr` contribution of architecture 30's instruction projection.
 - A user-visible tool result remains traceable to the physical normalized file path and VFR transform decision.
 
 ### Supporting tools
 
 - `expand`: obtains requested represented sections through a typed VFR reference.
-- raw-read path: reads the full allowed source without applying the presentation transform, subject to WorkspaceRoot and normal policy.
+-  raw-read path: reads the full allowed source without applying the presentation transform, subject to WorkspaceRoot
+  and normal policy.
 
 The final user-facing tool names and DTO fields may differ, but they must retain these semantics.
 
@@ -72,7 +81,8 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 ### Required behavior
 
 - Headroom runs after a normalized tool result is available.
-- Original or normalized source content is retained according to CCR policy before a compressed model-context representation relies on it.
+-  Original or normalized source content is retained according to CCR policy before a compressed model-context
+  representation relies on it.
 - The model receives a typed reference when recovery is available.
 - `retrieve` resolves one or more references, or returns a typed missing/expired error.
 - Headroom does not erase the audit trail of the pre-compression result.
@@ -89,7 +99,10 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 | 5 | Compress model context | `intention-headroom` | Model-specific compressed/reference value. |
 | 6 | Publish adapter event | Runtime/transport | Agreed human-readable result and metadata. |
 
-The v1 default presentation policy: adapters receive the normalized result, including VFR representation where applicable; the model may receive a further Headroom-compressed representation; event metadata exposes that compression occurred without leaking CCR internals or secrets; a future product decision may add an explicit UI affordance for original/retrieved content.
+The v1 default presentation policy: adapters receive the normalized result, including VFR representation where
+applicable; the model may receive a further Headroom-compressed representation; event metadata exposes that compression
+occurred without leaking CCR internals or secrets; a future product decision may add an explicit UI affordance for
+original/retrieved content.
 
 ## Data boundaries
 
@@ -102,7 +115,8 @@ The v1 default presentation policy: adapters receive the normalized result, incl
 
 ## Failure behavior
 
-- An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail policy; it never emits an unresolvable placeholder.
+-  An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail
+  policy; it never emits an unresolvable placeholder.
 - Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
 - An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
 - A hook failure records which extension phase failed without exposing source content or secrets in normal diagnostics.
@@ -122,11 +136,17 @@ The v1 default presentation policy: adapters receive the normalized result, incl
 
 ## Quality-gate integration
 
-Both crates are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)); their transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove base tools do not import either extension implementation crate. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Both crates are subject to the base 80% line-coverage threshold ([ADR
+0049](../decisions/0049-base-coverage-threshold.md)); their transform, retrieval, expiry, ordering, and adapter/model
+distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove
+base tools do not import either extension implementation crate. See [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md).
 
 ## Dependencies and non-goals
 
-Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md) and [architecture 30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to an extension implementation crate.
+Depends on [Tools, Workspace, and Hooks](05-tools-workspace-and-hooks.md) and [architecture
+30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to
+an extension implementation crate.
 
 ## Open decisions
 
