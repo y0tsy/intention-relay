@@ -1,69 +1,43 @@
 # Instruction Sources and System Context
 
-## Status and scope
+**Approved future design. Not implemented; activation requires an activating
+specification.** Architecture 30 owns the instruction channel of a model
+request: instruction sources, profile revisions, canonical assembly, the
+effective instruction projection, its bounds, failures, and observability. It
+preserves M3/M4 bytes and meanings and the current single-version model
+contract ([ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md));
+delivery belongs to the fifth activating slice of Milestone 5+.
 
-**Approved future architecture, documentation-only.** This document is the sole
-detailed owner for the instruction channel of a model request: instruction
-sources, profile revisions, canonical assembly, the effective instruction
-projection, its bounds, failures, and observability. It is adopted by
-[ADR 0043](../decisions/0043-instruction-sources-and-system-context.md) and
-preserves M3/M4 bytes, meanings, and the current single-version model contract
-([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
-
-It authorizes no crate, DTO, wire, storage schema, configuration field, UI
-page, feature profile, quality-policy target, or production behavior. Delivery
-belongs to the fifth activating slice of Milestone 5+; a later activating
-specification must declare crates, contract versions, tests, coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md),
-and evidence before any of it is implemented.
-
-The instruction channel applies to newly admitted runs only. Historical M3/M4
-requests, runs, events, snapshots, replay, recovery, and retained records keep
-their recorded meaning and gain no instruction state.
-
-## Traceability
-
-- Normative owner: architecture 30.
-- Decision record: [`0043`](../decisions/0043-instruction-sources-and-system-context.md).
-- Reconciliation topics: `INS-001..012`.
-- Related owner documents: [architecture 21](21-goals-skills-context-memory-and-compaction.md)
-  (Skill, context-manifest, memory, and compaction boundary),
-  [architecture 23](23-non-destructive-session-branching-and-regeneration.md)
-  (fork projection fields), [architecture 07](07-plan-and-build-modes.md)
-  (`Mode` contribution), [architecture 06](06-vfr-and-headroom.md) (`Vfr`
-  contribution), [architecture 08](08-model-protocol-and-providers.md) (request
-  system-context semantics), [architecture 09](09-configuration-security-and-observability.md)
-  (configuration, classification, observability), and
-  [architecture 25](25-configuration-provider-control-plane.md) (editing and
-  preview surface).
-- Research provenance: `legacy-antibusy-prompts/`,
-  `legacy-baseline/02-capability-catalog.md`,
-  `legacy-baseline/04-agent-behavior.md`,
-  [ADR 0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md),
-  and [ADR 0019](../decisions/0019-production-model-tool-loop.md).
-- Status: documentation-approved; implementation-authorized work requires a
-  later activating specification.
+Owner: architecture 30. Decisions: ADR 0043. Research:
+`legacy-antibusy-prompts/`, `legacy-baseline/02-capability-catalog.md`,
+`legacy-baseline/04-agent-behavior.md`, [ADR
+0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md), [ADR
+0019](../decisions/0019-production-model-tool-loop.md).
 
 ## Ownership and non-authorities
 
 This document owns the source model, the profile revision identity, the
 canonical assembly order and separators, the effective instruction projection,
 its intrinsic bounds, its closed failures, and its observability rules.
-
 Architecture 21 owns Goal, Skill, context-manifest, projection, memory, and
 compaction semantics; instruction sources are not a context source and never
 enter a context manifest, a Skill disclosure, or a model-step projection.
 Architecture 23 owns fork lineage and the frozen records that carry the
 materialized projection. Architecture 07 owns the `Mode` contribution text;
 architecture 06 owns the `Vfr` contribution content and its configuration
-dependency. Architecture 08 owns the request contract and driver translation.
-Architecture 09 owns classification and redaction; architecture 25 owns the
+dependency; architecture 08 owns the request contract and driver translation;
+architecture 09 owns classification and redaction; architecture 25 owns the
 control-plane commands that edit and preview instructions.
 
-Nothing here is authority. Instruction text cannot create, widen, or remove a
-tool permission, provider selection, admission decision, Mandate, child edge,
+Instruction text is not authority: it cannot create, widen, or remove a tool
+permission, provider selection, admission decision, Mandate, child edge,
 verifier target, MCP capability, bridge grant, kernel epoch, scheduler reason,
 confirmation requirement, or reconciliation outcome, and it cannot prove that
-an external effect did or did not happen.
+an external effect did or did not happen. The channel applies to newly admitted
+runs only; historical M3/M4 requests, runs, events, snapshots, replay,
+recovery, and retained records keep their recorded meaning and gain no
+instruction state.
 
 ## Instruction source model
 
@@ -105,11 +79,11 @@ UTF-8 configuration content; a source that is not representable as bounded text
 fails closed.
 
 The records in this document are typed serde JSON; the former `typed-tlv`
-framing, canonical bytes, SHA-256 digests, and goldens were removed by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md), and no canonical
-digest or identity layer exists. Any content addressing or canonicalization is
-introduced only with its first real consumer under the RFC 8785 policy
-(ADR 0046).
+framing, canonical bytes, SHA-256 digests, and goldens were removed by [ADR
+0046](../decisions/0046-typed-serde-json-contracts.md), and no canonical digest
+or identity layer exists. Any content addressing or canonicalization is
+introduced only with its first real consumer under the RFC 8785 policy (ADR
+0046).
 
 ## Profile revisions and immutable configuration
 
@@ -126,9 +100,9 @@ InstructionProfileRevisionV1
 ```
 
 The profile is durable configuration with exactly one live format version; no
-migration, no second format, and no compatibility layer exists
-([ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)).
-The profile revision identity is the only profile data that may leave the
+migration, no second format, and no compatibility layer exists ([ADR
+0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md)). The
+profile revision identity is the only profile data that may leave the
 configuration surface; fragments themselves stay readable only where the user
 edits them.
 
@@ -147,11 +121,10 @@ resolved VFR configuration:
 7. `Vfr`.
 
 Fragments of one scope are ordered by `declared_order` with `source_identity`
-as the deterministic tie-break. Contributions are joined by a fixed
-separator whose bytes are part of the projection identity; the initial
-separator is the legacy `\n\n---\n\n` join. The order, the separators, and the
-canonicalization are fixed by this document and can only change by a new
-decision.
+as the deterministic tie-break. Contributions are joined by a fixed separator
+whose bytes are part of the projection identity; the initial separator is the
+legacy `\n\n---\n\n` join. The order, the separators, and the canonicalization
+are fixed by this document and can only change by a new decision.
 
 ```text
 InstructionProjectionV1
@@ -183,8 +156,9 @@ re-derive instructions from current configuration, current `AGENTS.md` content,
 current session state, or a live ancestor. The projection is the contents of
 the `effective_instruction_projection` and
 `materialized_effective_instruction_projection` fields of the fork base and
-preview records ([architecture 23](23-non-destructive-session-branching-and-regeneration.md)),
-and its revision identity is recorded as safe usage provenance. It adds no event
+preview records ([architecture
+23](23-non-destructive-session-branching-and-regeneration.md)), and its
+revision identity is recorded as safe usage provenance. It adds no event
 sequence, no lifecycle transition, and no authority.
 
 ## Workspace project instructions
@@ -194,12 +168,12 @@ source and the only part of the projection that comes from project material.
 
 - The file is addressed by joining its path onto the session's `WorkspaceRoot`;
   the root is an addressing anchor, not a security boundary, and no symlink or
-  containment check exists
-  ([ADR 0047](../decisions/0047-workspace-root-addressing-anchor.md)). An
-  unreadable or non-regular file fails closed.
-- The file is read as bounded UTF-8 text. Its
-  content is never executed, never parsed as configuration, and never treated
-  as a hook, tool definition, or policy input.
+  containment check exists ([ADR
+  0047](../decisions/0047-workspace-root-addressing-anchor.md)); an unreadable
+  or non-regular file fails closed.
+- The file is read as bounded UTF-8 text; its content is never executed, never
+  parsed as configuration, and never treated as a hook, tool definition, or
+  policy input.
 - An absent file contributes nothing and is not a failure; a project without
   instructions behaves exactly as a project with an empty source.
 - The file is project content, not authority: it cannot widen tool policy,
@@ -210,8 +184,9 @@ source and the only part of the projection that comes from project material.
 
 ## Editing surface and preview
 
-The control plane ([architecture 25](25-configuration-provider-control-plane.md))
-exposes the instruction configuration surface:
+The control plane ([architecture
+25](25-configuration-provider-control-plane.md)) exposes the instruction
+configuration surface:
 
 - list, create, edit, duplicate, enable, disable, reorder, and re-scope
   fragments;
@@ -259,15 +234,9 @@ Intrinsic bounds are:
 
 Assembly is deterministic: the same profile revision, project instruction
 content, mode, and configuration must produce the same ordered contribution
-list and the same rendered projection on every platform. The former
-`typed-tlv-v1` framing, canonical bytes, and SHA-256 digest policy of the owning
-records were removed by
-[ADR 0046](../decisions/0046-typed-serde-json-contracts.md); the records are
-typed serde JSON, and any canonical serialization or digest is introduced only
-with its first real consumer under the RFC 8785 policy (ADR 0046). A future
-projection identity must cover content, kind, scope, order, enabled state, and
-audience, and exclude credentials, absolute paths, current state, and display
-data.
+list and the same rendered projection on every platform. A future projection
+identity must cover content, kind, scope, order, enabled state, and audience,
+and exclude credentials, absolute paths, current state, and display data.
 
 ## Failure behavior
 
@@ -286,9 +255,9 @@ instruction_source_unavailable
 - `instruction_source_unavailable`: a workspace instruction source is
   unreadable, is not bounded text, or exceeds its own bound.
 
-Each failure is a typed known pre-effect rejection at admission. It discloses no
-credential, absolute path, file content, raw payload, or implementation detail.
-No fallback revision, partial projection, silent omission, truncation,
+Each failure is a typed known pre-effect rejection at admission. It discloses
+no credential, absolute path, file content, raw payload, or implementation
+detail. No fallback revision, partial projection, silent omission, truncation,
 sampling, or historical substitution is permitted, and none of these failures
 may be repaired by current state.
 
@@ -297,68 +266,40 @@ may be repaired by current state.
 Instruction text is durable configuration content, not a secret and not an
 activity fact. Logs, activity records, notification projections, and audit
 records carry the profile revision identity and the workspace instruction
-reference only; they never carry fragment text,
-`AGENTS.md` content, or the assembled projection. Fake-secret regression covers
-every public, durable, log, and activity surface.
+reference only; they never carry fragment text, `AGENTS.md` content, or the
+assembled projection, and fake-secret regression covers every public, durable,
+log, and activity surface.
 
 The control-plane configuration surface displays fragment text because the user
 edits it there; that surface is not an activity, notification, audit, or
 diagnostics channel, and it crosses no public or durable safe-projection
-boundary. Classification and redaction rules of
-[architecture 09](09-configuration-security-and-observability.md) apply
-unchanged.
+boundary. Classification and redaction rules of [architecture
+09](09-configuration-security-and-observability.md) apply unchanged.
 
 ## Compatibility and historical preservation
 
 M3/M4 requests keep the optional system context absent, and M3/M4 runs carry no
 instruction state. Historical records never gain a reconstructed instruction
 projection, and a missing or unreadable materialized projection leaves the
-dependent fork or handoff blocked while unrelated history remains readable.
-The mechanism adds no second model protocol, no second storage schema, no new
+dependent fork or handoff blocked while unrelated history remains readable. The
+mechanism adds no second model protocol, no second storage schema, no new
 sequence, and no migration; it is part of the single live first-scope
 instruction contract.
 
 ## Dependencies and non-goals
 
 This document depends on architectures 04, 06, 07, 08, 09, 14, 21, 23, and 25
-and on decision 0043. It does not define Goal, Skill, context-manifest, memory,
-or compaction semantics; fork lineage or lineage projection rules; the model
+and on decision 0043. Non-goals: Goal, Skill, context-manifest, memory, or
+compaction semantics; fork lineage or lineage projection rules; the model
 request contract or driver translation; configuration storage, reload, or
-credential handling; activity, notification, or adapter behavior; and it does
-not activate any crate, schema, wire, UI, or production behavior.
+credential handling; activity, notification, or adapter behavior; few-shot
+example selection, memory-derived prompt material, MCP-provided prompts,
+date/time/Git/session-derived context injection, provider-native prompt framing
+or caching directives, model-specific templates, prompt tuning, telemetry, A/B
+evaluation, automatic instruction generation, cross-project instruction
+sharing, executable or scripted instructions, and sandbox or privilege claims.
+Deferred items are recorded with reconsideration owners in the deferred and
+excluded register.
 
-Few-shot example selection, memory-derived prompt material, MCP-provided
-prompts, date/time/Git/session-derived context injection, provider-native prompt
-framing or caching directives, model-specific templates, prompt tuning,
-telemetry, A/B evaluation, automatic instruction generation, cross-project
-instruction sharing, executable or scripted instructions, and sandbox or
-privilege claims are explicit non-goals; deferred items are recorded with
-reconsideration owners in the deferred and excluded register.
-
-## Required evidence before implementation
-
-A later activating specification must declare exact crate owners, test targets,
-coverage declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), feature profiles, storage/wire versions, and fixtures, then pass
-`make quick`, `make verify`, docs-check, and Linux/Windows CI. It must cover:
-
-- deterministic assembly, ordering, separators, and projection identity
-  stability across repeated admissions and across platforms;
-- profile revision immutability for every edit operation, with typed validation
-  failures;
-- intrinsic-bound rejection for the total projection, one fragment, the
-  fragment count, and workspace instructions, without truncation or sampling;
-- an absent `AGENTS.md` contributing nothing, and an unreadable, non-text, or
-  oversized one failing closed with `instruction_source_unavailable`;
-- `instruction_profile_unavailable` and `instruction_projection_too_large`
-  failing closed with no fallback or partial projection;
-- projection freeze at admission, reuse across later steps, verbatim fork and
-  plan-handoff inheritance, and proof of no current-state re-derivation;
-- channel closure: Skill bodies, memory records, tool output, repository
-  content, and provider output never entering the instruction channel;
-- credential-free, path-free, raw-payload-free, and activity-free public,
-  durable, log, and audit surfaces, including fake-secret regression;
-- preview non-authority and non-admission, with no durable instruction state
-  created by a preview;
-- the control-plane editing and preview contract and its TUI/REPL equivalence;
-- M3/M4 and retained-history byte, meaning, replay, recovery, and tool-denial
-  preservation.
+Evidence: activating specification per [architecture
+12](12-quality-gates-and-makefile.md).
