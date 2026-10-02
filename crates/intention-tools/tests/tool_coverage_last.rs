@@ -1,3 +1,10 @@
+#![cfg(unix)]
+
+//! The remaining contract in this file addresses a symbolic link, which the
+//! Windows test environment cannot create without elevation. The whole file
+//! is Unix-only so the declared test target stays valid on both platforms
+//! instead of leaving its fixture helpers unused under `-D warnings`.
+
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{BoundedText, CancellationSignal, ToolInput, ToolResult, ToolService};
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
