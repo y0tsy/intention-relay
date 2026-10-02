@@ -104,9 +104,9 @@ the reasoning and catalog detail. The closed M4 baseline, M3/M4 bytes, and exist
 code changes are authorized by this decision.
 
 A Responses SDK or driver, user-kind parser, catalog database, wire tags, migrations, profile picker or editor,
-credential entry, health test, discovery, pricing, telemetry, live reload, multimodal or structured output, arbitrary
-headers, plugin drivers, remote continuation, provider-side parser administration, and production activation remain
-outside this decision. M5-M9 are not renumbered.
+credential entry, keychain, or rotation, health test, discovery, pricing, telemetry, live reload, multimodal or
+structured output, arbitrary headers, plugin drivers, remote continuation, provider-side parser administration, and
+production activation remain outside this decision. M5-M9 are not renumbered.
 
 Owner: architecture 22. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).

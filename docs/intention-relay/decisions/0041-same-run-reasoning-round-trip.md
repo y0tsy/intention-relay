@@ -21,7 +21,9 @@ This record supersedes, in place and only for this scope, the [ADR 0039](0039-re
 Decision 5 sentence "Result continuation is unchanged: assistant tool-call messages and tool-role result messages
 already flow through the runtime loop activated by [ADR 0019](0019-production-model-tool-loop.md)." Continuation now
 also carries the same round's accepted reasoning when the selected model produced it. Everything else in ADR 0039
-Decision 5 remains true. The rest of the reasoning contract surface is unchanged: the dialect direction is owned by [ADR
+Decision 5 remains true. ADR 0039's body is unchanged, and the supersession is recorded only in this record. The record
+claims no date, commit, or run identifier of its own; dates and commits stay in the evidence section. The rest of the
+reasoning contract surface is unchanged: the dialect direction is owned by [ADR
 0028](0028-provider-reasoning-and-catalog-detail-directions.md) and the provider evolution decision by [ADR
 0014](0014-provider-evolution-profiles-and-reasoning.md). The M5+ Slice 3 reservations (`tool-descriptor-revision`
 `0x0301`, `tool-registry-revision` `0x0302`, `model-tool-loop-v1` `0x0303`) remain `ReservedForSlice3`, and the [ADR

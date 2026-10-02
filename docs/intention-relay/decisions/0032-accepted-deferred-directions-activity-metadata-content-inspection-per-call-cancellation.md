@@ -44,7 +44,7 @@ three directions.
 
 Tree-level metadata, content inspection, and per-call cancellation never expose credentials, provider payloads, prompts,
 paths, grants, or raw transcripts; redaction stays central and every activating specification must pass the fake-secret
-regression suite. The directions remain non-authorizing.
+regression suite. The directions remain trusted-local and non-authorizing.
 
 ## Rationale
 

@@ -34,9 +34,11 @@ digests are removed by those records.
 (architectures 25/29/22): controlled live reload, credential rotation, provider health checks, model discovery, pricing
 policy, profile UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and
 per-turn/fork overrides, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The Slice 2
-activation is reverted and can return only through a new activating specification. The unconsumed-surface audit
-(2026-09) removed the unconsumed provider-native preservation-control and server-side-parser contracts, the Responses
-reasoning-mode projection, the reasoning-usage DTOs, and the model-capability envelope.
+activation is reverted and can return only through a new activating specification; the queue-audit, queue-promotion,
+reconciliation, and held-run admission wording is removed by [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
+unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
+projection, the reasoning-usage DTOs, and the model-capability envelope.
 3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
 and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/ 0030/0031/0033): durable harness rules and
 triggers, dossiers and checkpoints, execution classes, the 15 closed `harness_*` safe failures, the two closed root

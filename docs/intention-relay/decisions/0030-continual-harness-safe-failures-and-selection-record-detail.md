@@ -19,6 +19,7 @@ nested content of `ContinualHarnessSelectionV1` formerly carried by the `run-exe
 field (harness identity, active rule revision, durable trigger reason, class resolution, dossier digest, checkpoint
 reference, time-zone application, and immutable bounds). The former carrier is removed with the canonical codec by [ADR
 0046](0046-typed-serde-json-contracts.md); the selection record survives as a typed serde JSON record owned by
+architecture 26 (selection record and closed safe failures), carried by the run's immutable selection records owned by
 architecture 28.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and

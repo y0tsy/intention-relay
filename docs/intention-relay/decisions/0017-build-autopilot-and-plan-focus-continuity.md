@@ -27,9 +27,9 @@ transfers no live runtime state, credentials, grants, queues, or unfinished effe
 
 The product should remove repetitive permission prompts and giant user-authored policy prompts while retaining a clear
 Plan-to-Build decision. Plan is useful because it focuses the model and produces a durable specification, not because it
-contains shell execution. Build Autopilot is the explicit trust boundary at which the user delegates the configured
-Build surface. Same-Session continuity preserves user intent and avoids forcing users to restate a large plan; the new
-Run identity still preserves lifecycle, persistence, recovery, and no-resume correctness.
+can guarantee shell containment. Build Autopilot is the explicit trust boundary at which the user delegates the
+configured Build surface. Same-Session continuity preserves user intent and avoids forcing users to restate a large
+plan; the new Run identity still preserves lifecycle, persistence, recovery, and no-resume correctness.
 
 ## Normative invariants
 

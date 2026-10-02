@@ -107,7 +107,8 @@ provider round preserves the advertised definitions); `crates/intention-daemon/t
 `daemon_tool_executor_executes_real_read_tool_through_loop` (every model-visible definition is observed in registry
 order); `crates/intention-daemon/tests/facade_e2e.rs`: `real_daemon_tool_loop_executes_read_and_replays_after_restart`
 (the captured first provider request body advertises tools including `read`). Reconciliation evidence: EVD-062
-(`reconciliation/evidence-register.md`). Gates: `make quick`, `make verify`, `docs-check`, Linux/Windows CI.
+(`reconciliation/evidence-register.md`; `Verified` by the recorded `make verify` and CI results). Gates: `make quick`,
+`make verify`, `docs-check`, Linux/Windows CI.
 
 ## Research provenance
 

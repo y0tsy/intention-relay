@@ -110,7 +110,8 @@ No required or scheduled live-provider check and no live work in `make quick`, `
 or a `ci-*` alias; no new provider driver, OpenAI Responses driver, or adapter behavior beyond the ADR 0039
 advertisement translation; no credential persistence, keychain integration, rotation, or controlled reload; no recording
 of prompts, completions, tool content, provider traffic, or credentials (only the run summary metadata: date, commit,
-provider, model, and workflow run URL); no coverage credit; no change to the hermetic acceptance gates.
+provider, model, and workflow run URL); no coverage credit and no coverage exclusion justified by a live run; no change
+to the hermetic acceptance gates.
 
 ## Affected documents
 
