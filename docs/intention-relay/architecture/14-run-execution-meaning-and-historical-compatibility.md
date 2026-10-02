@@ -66,7 +66,7 @@ No replacement codec was introduced: domain and wire records are typed serde JSO
 anywhere in the project. RFC 8785 canonicalization is adopted only together with a first real consumer, and no
 canonicalization crate is added before then. Historical compatibility remains banned (ADR 0038): no legacy bridge,
 old-version decoder, migration or byte-preservation fixture exists, and no historical record gains synthetic future
-state.
+state, and missing meaning is never reconstructed from current state.
 
 ## What remains
 
