@@ -37,15 +37,8 @@ M4 tool-call denial, and recovery behavior remain unchanged. This decision does
 not define child, MCP, verifier, bridge, kernel, scheduler, provider evolution,
 SQL, protocol implementation, crates, or runtime activation.
 
-## Primary owner and evidence
+Owner: architecture 15. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
 
-[Tool Registry and Direct Mandate Tool Loop](../architecture/15-tool-registry-and-mandate-tool-loop.md)
-owns detailed rules. A later implementation requires registry/selection golden
-vectors, no-bypass and no-current-state-reconstruction fixtures, direct-admission
-and workspace matrices, transaction/effect/recovery fixtures, negotiated replay,
-historical M4 preservation, redaction evidence, and full quality-gate acceptance.
-
-## Provenance
-
-`m4plus_concept.md`, unified registry, direct active-descriptor admission,
-WorkspaceRoot, and model-tool-loop sections.
+Provenance: `m4plus_concept.md`, unified registry, direct active-descriptor
+admission, WorkspaceRoot, and model-tool-loop sections.

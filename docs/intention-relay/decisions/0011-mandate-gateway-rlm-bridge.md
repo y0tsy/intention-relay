@@ -33,24 +33,16 @@ operations return durable evidence; changed reuse fails before effect.
 
 ## Compatibility and non-goals
 
-M3/M4 bytes and ordinary behavior remain unchanged. M4 tool calls remain denial
-evidence. Retained RLM bridge/child/activity semantics remain historical where
-they conflict with the Mandate graph and direct-admission model. The bridge is a
-trusted-local product control, not a sandbox or privilege boundary.
+M3/M4 bytes and ordinary behavior remain unchanged, and M4 tool calls remain
+denial evidence. Retained RLM bridge/child/activity semantics remain historical
+where they conflict with the Mandate graph and direct-admission model. The
+bridge is a trusted-local product control, not a sandbox or privilege boundary;
+kernel lifecycle, RLM executor topology, provider evolution, Skills/Goals,
+context, session branching, activity/UI, and MCP administration remain
+separate.
 
-This decision does not activate a crate, Python dependency, protocol, listener,
-kernel, storage schema, migration, runtime, quality policy, or production work.
-Kernel lifecycle, RLM executor topology, provider evolution, Skills/Goals,
-context, session branching, activity/UI, and MCP administration remain separate.
+Owner: architecture 19. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
 
-## Primary owner and evidence
-
-[Mandate Gateway/RLM Bridge](../architecture/19-mandate-gateway-rlm-bridge.md)
-owns detailed behavior. A later implementation requires canonical, authority,
-idempotency, fault/recovery, protocol, compatibility, redaction, cross-platform,
-and outcome evidence through the standard quality gate.
-
-## Provenance
-
-`m4plus_concept.md`, selected typed daemon host bridge and gateway protocol,
-Mandate bridge supersession, and retained RLM material.
+Provenance: `m4plus_concept.md`, selected typed daemon host bridge and gateway
+protocol, Mandate bridge supersession, and retained RLM material.

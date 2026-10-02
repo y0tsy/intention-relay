@@ -20,8 +20,8 @@ explicit-user-first, then `first_observed_at`, `MandateId`, and `ReasonId`.
 
 - scheduler wakeups and task state are non-authoritative hints; durable reread
   is the correctness boundary;
-- only the lifecycle-owned transaction can consume/hold a reason, create a RunId,
-  bind meaning, and transition `Active -> Working`;
+- only the lifecycle-owned transaction can consume/hold a reason, create a
+  RunId, bind meaning, and transition `Active -> Working`;
 - user lifecycle/revision changes retain optimistic-conflict precedence;
 - no scheduler/provider/tool/process/network effect occurs in a durable
   transition transaction;
@@ -37,15 +37,8 @@ semantics, worker topology, child/verifier, MCP, bridge/IPython, Skills/Goals,
 provider evolution, UI, SQL, protocol implementation, crates, or runtime
 activation.
 
-## Primary owner and evidence
+Owner: architecture 16. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
 
-[Mandate scheduler and readiness-driven admission](../architecture/16-mandate-scheduler-and-readiness-driven-admission.md)
-owns detailed rules. A later implementation requires deterministic ordering,
-readiness/unavailability, conflict, fault-injection, recovery, compatibility,
-redaction, protocol, and end-to-end fresh-admission fixtures through the standard
-quality gate.
-
-## Provenance
-
-`m4plus_concept.md`, Mandate trigger/recovery/limit sections and retained
-continual-harness scheduling research.
+Provenance: `m4plus_concept.md`, Mandate trigger/recovery/limit sections and
+retained continual-harness scheduling research.

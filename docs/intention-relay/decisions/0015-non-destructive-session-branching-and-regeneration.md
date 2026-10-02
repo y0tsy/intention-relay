@@ -27,24 +27,17 @@ for this regeneration flow and remains a future default proposal.
 - workspace/external state is explicitly `Unverified`, never rollback evidence;
 - ordinary fork policy ceilings never become Mandate admission or child-graph
   quotas; and
-- M3/M4 bytes, selections, events, cursors, snapshots, replay, recovery, and
-  M4 tool denial retain their recorded meaning.
+- M3/M4 bytes, selections, events, cursors, snapshots, replay, recovery, and M4
+  tool denial retain their recorded meaning.
 
 ## Compatibility and non-goals
 
-This decision is documentation-only. It activates no crate, migration, protocol,
-UI, schema, provider behavior, or quality-policy change. Mandate association,
-activity/UI implementation, workspace clone/rebind, autonomous branching,
-destructive retention, and implementation activation remain separate.
+Mandate association, activity/UI implementation, workspace clone/rebind,
+autonomous branching, destructive retention, and implementation activation
+remain separate.
 
-## Primary owner and evidence
+Owner: architecture 23. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
 
-[Non-destructive session branching and regeneration](../architecture/23-non-destructive-session-branching-and-regeneration.md)
-owns detailed behavior. A later implementation requires canonical, transaction,
-migration, protocol, recovery, isolation, redaction, cross-platform, and outcome
-evidence through the standard quality gate.
-
-## Provenance
-
-`m4plus_concept.md`, selected session-branching and regeneration material,
-reconciled against architectures 04 and 13--22.
+Provenance: `m4plus_concept.md`, selected session-branching and regeneration
+material, reconciled against architectures 04 and 13--22.

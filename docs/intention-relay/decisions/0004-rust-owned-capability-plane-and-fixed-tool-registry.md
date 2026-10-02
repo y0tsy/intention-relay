@@ -22,12 +22,8 @@ owner packages.
 - providers, bridges, Skills, MCP sources, and kernels are not authority;
 - product controls are not OS sandboxing.
 
-## Evidence
+Owner: architecture 15. Evidence: activating specification per
+[architecture 12](../architecture/12-quality-gates-and-makefile.md).
 
-Future work requires dependency/API architecture fixtures, registry ownership
-fixtures, and outcome paths proving calls cannot bypass the gateway.
-
-## Provenance
-
-`m4plus_concept.md`, unified registry, model-tool loop, bridge, kernel, Skill,
-and MCP sections.
+Provenance: `m4plus_concept.md`, unified registry, model-tool loop, bridge,
+kernel, Skill, and MCP sections.
