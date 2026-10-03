@@ -1,8 +1,9 @@
 # Tools, Workspace, and Hooks
 
-## Scope
+**Current policy.**
 
-This document specifies typed core tools, `WorkspaceRoot` addressing semantics, tool execution policy, and the hook system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
+This document specifies typed core tools, `WorkspaceRoot` addressing semantics, tool execution policy, and the hook
+system used by WorkspaceRoot, VFR, Headroom, and Plan mode.
 
 ## Tool ownership
 
@@ -18,9 +19,8 @@ Tools are domain/runtime capabilities, not UI commands. An adapter only renders 
 
 ## Core tool contract
 
-M5 activates six executable registry entries: `read`, `write`, `edit`,
-`execute`, `glob`, and `grep`. `fetch_url`, `ask_user`, `todo`, `retrieve`,
-`plan_submit`, `sub_agent`, `expand`, and `mcp` remain reserved slots with no
+M5 activates six executable registry entries: `read`, `write`, `edit`, `execute`, `glob`, and `grep`. `fetch_url`,
+`ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, `expand`, and `mcp` remain reserved slots with no
 input/output contract or executor and are not active tools.
 
 Every tool has:
@@ -53,75 +53,71 @@ ToolResultDto
   timing
 ```
 
-Every active descriptor also declares `model_parameters_schema`: the code-owned
-JSON Schema text for its typed model parameters. `intention_tools::model_visible_descriptors()`
-returns exactly the active descriptors that expose such a schema, in registry
-order; the current model-visible set is `read`, `write`, `edit`, `execute`,
-`glob`, and `grep`, and reserved slots are never included. Ordinary model
-requests advertise that set as typed tool definitions (ADR 0039).
+Every active descriptor also declares `model_parameters_schema`: the code-owned JSON Schema text for its typed model
+parameters. `intention_tools::model_visible_descriptors()` returns exactly the active descriptors that expose such a
+schema, in registry order; the current model-visible set is `read`, `write`, `edit`, `execute`, `glob`, and `grep`, and
+reserved slots are never included. Ordinary model requests advertise that set as typed tool definitions (ADR 0039).
 
-The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or results.
+The concrete Rust API can use traits and generic DTOs, but the runtime registry must not accept untyped tool inputs or
+results.
 
 ### Execution-kind scope
 
-The addressing rules in this document apply to ordinary M3/M4 and ordinary v1
-execution. Future Mandate WorkspaceRoot semantics are owned by architecture 15:
-WorkspaceRoot supplies the default relative base, the `execute` CWD, and the
-default search scope, while absolute or parent paths are addressed as given.
-Hooks remain typed and mandatory in both modes, but future Mandate hooks
-cannot add discretionary confirmation, risk, or root-origin authorization.
+The addressing rules in this document apply to ordinary M3/M4 and ordinary v1 execution. Future Mandate WorkspaceRoot
+semantics are owned by architecture 15: WorkspaceRoot supplies the default relative base, the `execute` CWD, and the
+default search scope, while absolute or parent paths are addressed as given. Hooks remain typed and mandatory in both
+modes, but future Mandate hooks cannot add discretionary confirmation, risk, or root-origin authorization.
 
 ## WorkspaceRoot is a required addressing anchor
 
-A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searches, expands, or executes against a local path/process.
+A session's `WorkspaceRootDto` is passed to every tool that reads, writes, searches, expands, or executes against a
+local path/process.
 
 ### Required behavior
 
 - `resolve_path(relative) = workspace_root.join(relative)`: exactly one
-  resolution rule, no per-path canonicalization, and no per-tool alias;
+resolution rule, no per-path canonicalization, and no per-tool alias;
 - tools must not use process `pwd` as a fallback;
 - absolute paths and `..` are not contained; they are addressed as given, and
-  this is deliberate (ADR 0047);
+this is deliberate (ADR 0047);
 - symbolic links are ordinary filesystem material: no lexical symlink parser,
-  no containment check, and no fail-closed path rejection exists;
+no containment check, and no fail-closed path rejection exists;
 - `glob` and `grep` with no explicit path search from `workspace_root`; the
-  default scope decides what a pathless call addresses, not what the process
-  may read;
+default scope decides what a pathless call addresses, not what the process may read;
 - `execute` always starts with `cwd = workspace_root` and inherits the
-  invoking process environment without name-based filtering. WorkspaceRoot is
-  an addressing anchor and default CWD, not a security, environment, or
-  privilege boundary.
+invoking process environment without name-based filtering. WorkspaceRoot is an addressing anchor and default CWD, not a
+security, environment, or privilege boundary.
 - a tool result identifies the path/CWD used, with safe redaction as necessary;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 ### Project script library
 
-The project script library is the logical, slash-separated, workspace-relative
-path `.ir/scripts` under `workspace_root`, with `.ir` as the project-local hidden
-root for agent-authored reusable material
-([ADR 0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
+The project script library is the logical, slash-separated, workspace-relative path `.ir/scripts` under
+`workspace_root`, with `.ir` as the project-local hidden root for agent-authored reusable material ([ADR
+0042](../decisions/0042-project-script-library-for-kernel-cells.md)):
 
 - the convention names a location only; the library is not implicitly included
-  in, or excluded from, any other policy, and no plan artifact, daemon state,
-  checkpoint, or configuration lives there;
+in, or excluded from, any other policy, and no plan artifact, daemon state, checkpoint, or configuration lives there;
 - modules are created and edited only through `write` and `edit`, read through
-  `read`, `glob`, and `grep`, and run through `execute`; the relative-path
-  addressing rules above apply unchanged;
+`read`, `glob`, and `grep`, and run through `execute`; the relative-path addressing rules above apply unchanged;
 - a tool result or error identifies a module by its logical relative path, with
-  the same redaction as every other workspace path; and
+the same redaction as every other workspace path; and
 - `write` and `edit` remain incompatible in Plan mode, so library mutation stays
-  Build activity.
+Build activity.
 
-A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the workspace hook.
+A raw `PathBuf` alone is not a workspace contract. It must be wrapped in an input DTO with semantic intent and pass the
+workspace hook.
 
-WorkspaceRoot is an anchor for addressing, not a security boundary: the daemon
-and its child processes run with the user's ordinary OS authority. Real
-isolation, if it is ever required, must be an OS-level boundary such as a
-sandbox, container, or ACL, never a lexical path check.
+WorkspaceRoot is an anchor for addressing, not a security boundary: the daemon and its child processes run with the
+user's ordinary OS authority. Real isolation, if it is ever required, must be an OS-level boundary such as a sandbox,
+container, or ACL, never a lexical path check.
 
 ### Safe missing-path outcome
 
-When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath { path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the session workspace, such as `src/missing.rs`. The tool must not disclose the absolute workspace root, a resolved symlink target, an OS error string, command details, or file content in the error message, detail, or display form.
+When M5 implements a file-oriented `not_found` outcome, it uses `ErrorDto` with `ErrorDetailDto::MissingWorkspacePath {
+path: WorkspaceRelativePathDto }`. `path` is the logical relative path supplied under the session workspace, such as
+`src/missing.rs`. The tool must not disclose the absolute workspace root, a resolved symlink target, an OS error string,
+command details, or file content in the error message, detail, or display form.
 
 ## Tool pipeline
 
@@ -142,29 +138,22 @@ flowchart LR
 
 <!-- The phases map to the typed hook lifecycle. Base tools do primitive work only. -->
 
-Ordinary model requests advertise the model-visible descriptor set as typed
-tool definitions. The model-tool loop feeds this pipeline: a provider-emitted
-tool call becomes a typed invocation built by the application, executes through
-the daemon-owned registry, and its durable result is persisted before
-publication and returned to the provider exchange as a tool-role message.
-Provider adapters never execute local tools. The runtime owns the provider
-continuation until the provider finishes.
+Ordinary model requests advertise the model-visible descriptor set as typed tool definitions. The model-tool loop feeds
+this pipeline: a provider-emitted tool call becomes a typed invocation built by the application, executes through the
+daemon-owned registry, and its durable result is persisted before publication and returned to the provider exchange as a
+tool-role message. Provider adapters never execute local tools. The runtime owns the provider continuation until the
+provider finishes.
 
 ### Tooling execution API and status rendering
 
-`intention-tools` exposes exactly one current execution surface: the
-cancellation-aware bare-result dispatch (`dispatch_with_cancellation`) and the
-envelope entry (`invoke_enveloped` / `invoke_enveloped_with_cancellation`) that
-returns the result-boundary envelope with observability and execution
-metadata. There are no compatibility wrappers without cancellation, and no
-caller-facing path that bypasses the typed invocation envelope when invocation
-identity and durable metadata are required. Every executed program is
-classified by a typed `ToolProcessStatus` (`success`, `non_zero` with its
-numeric code, or `signal` with its recorded signal); the classification is
-carried on the durable execution metadata. The execute result's text rendering
-is derived from that same typed status, so the text and the typed
-classification can never disagree and no arbitrary sentinel exit code is
-invented for signal termination.
+`intention-tools` exposes exactly one current execution surface: the cancellation-aware bare-result dispatch
+(`dispatch_with_cancellation`) and the envelope entry (`invoke_enveloped` / `invoke_enveloped_with_cancellation`) that
+returns the result-boundary envelope with observability and execution metadata. There are no compatibility wrappers
+without cancellation, and no caller-facing path that bypasses the typed invocation envelope when invocation identity and
+durable metadata are required. Every executed program is classified by a typed `ToolProcessStatus` (`success`,
+`non_zero` with its numeric code, or `signal` with its recorded signal); the classification is carried on the durable
+execution metadata. The execute result's text rendering is derived from that same typed status, so the text and the
+typed classification can never disagree and no arbitrary sentinel exit code is invented for signal termination.
 
 ## Hook system
 
@@ -196,11 +185,9 @@ AfterToolResultPublished
 
 ### M5 ownership and execution order
 
-The composition root registers the workspace and hook services. The
-application owns the pipeline and durable lifecycle/result persistence; the
-dispatcher owns typed ordering and short-circuit outcomes; base tools perform
-only primitive work. VFR, Headroom, and Plan owners are not active M5
-implementations merely because their hook phases exist.
+The composition root registers the workspace and hook services. The application owns the pipeline and durable
+lifecycle/result persistence; the dispatcher owns typed ordering and short-circuit outcomes; base tools perform only
+primitive work. VFR, Headroom, and Plan owners are not active M5 implementations merely because their hook phases exist.
 
 ### Required initial hooks
 
@@ -228,12 +215,10 @@ The following must remain distinct:
 
 ## Trusted workspace boundary
 
-v1 does not sandbox tools or containerize processes. `WorkspaceRoot` anchors
-relative addressing, starts `execute` at the root, and scopes pathless
-`glob`/`grep`; it does not contain absolute paths, parent paths, or symbolic
-links, and a shell command can still interact with the wider user environment.
-This limitation is explicit in Plan and Build Autopilot. Plan's advisory
-instruction is not a technical boundary.
+v1 does not sandbox tools or containerize processes. `WorkspaceRoot` anchors relative addressing, starts `execute` at
+the root, and scopes pathless `glob`/`grep`; it does not contain absolute paths, parent paths, or symbolic links, and a
+shell command can still interact with the wider user environment. This limitation is explicit in Plan and Build
+Autopilot. Plan's advisory instruction is not a technical boundary.
 
 ## Required tests and outcomes
 
@@ -248,25 +233,25 @@ instruction is not a technical boundary.
 
 ## Quality-gate integration
 
-Tool, WorkspaceRoot, and hook enforcement are subject to the base 80% line-coverage threshold ([ADR 0049](../decisions/0049-base-coverage-threshold.md)) and are blocking `make verify` inputs. Architecture checks must reject direct process-CWD fallback and VFR/Headroom coupling inside base tools. Line coverage cannot replace the explicit relative-addressing, search-scope, execute-CWD, hook-order, and policy-denial scenarios above. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
+Tool, WorkspaceRoot, and hook tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md) (base 80% threshold, [ADR
+0049](../decisions/0049-base-coverage-threshold.md)). Architecture checks must reject direct process-CWD fallback and
+VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope,
+execute-CWD, hook-order, and policy-denial scenarios above.
 
 ## Open decisions
 
 - exact capability taxonomy and audit policy for `execute`, network, and
-  destructive file actions. Build Autopilot does not use per-action
-  confirmation; Plan `execute` is advisory-guided and trusted-local.
+destructive file actions. Build Autopilot does not use per-action confirmation; Plan `execute` is advisory-guided and
+trusted-local.
 
 ## Autopilot and Mandate tool boundary
 
-Existing M3/M4 path-handling and confirmation behavior remains historical. The
-accepted Build Autopilot policy intentionally removes per-action confirmation
-for the configured Build surface. Future Mandate execution also differs:
-WorkspaceRoot is a required default base/CWD with safe observation, not a path
-containment authority, and compatible frozen active descriptors admit without
-ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
-recreate discretionary Mandate authorization. The fixed registry, descriptor
-revisions, direct admission, and loop details are owned by [Tool registry and
-direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
-not create a second registry or bypass path. Plan `execute` remains available
-under advisory focus guidance and is not a sandbox; ordinary Plan `write` and
-`edit` remain denied.
+Existing M3/M4 path-handling and confirmation behavior remains historical. The accepted Build Autopilot policy
+intentionally removes per-action confirmation for the configured Build surface. Future Mandate execution also differs:
+WorkspaceRoot is a required default base/CWD with safe observation, not a path containment authority, and compatible
+frozen active descriptors admit without ordinary confirmation or risk gates. Hooks remain typed and mandatory but cannot
+recreate discretionary Mandate authorization. The fixed registry, descriptor revisions, direct admission, and loop
+details are owned by [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md). This does
+not create a second registry or bypass path. Plan `execute` remains available under advisory focus guidance and is not a
+sandbox; ordinary Plan `write` and `edit` remain denied.
