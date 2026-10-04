@@ -1,4 +1,4 @@
-# 0033: Post-M5 Accepted Directions — Control-Plane Editing, Provider-Native Controls, Fork Execution, Harness Autonomy, and RLM Packaging
+# 0033: Post-M5 Accepted Directions — Control-Plane Editing, Provider-Native Controls, Fork Execution, and RLM Packaging
 
 ## Status
 
@@ -7,7 +7,7 @@ Accepted 2026-08-30. Not implemented; activation requires an activating specific
 Amended 2026-09-30: the capability families, the binary canonical codec, the corridor and reservation model, and the
 fixed numeric contract limits named by the owning packages are removed by [ADR
 0045](0045-local-json-rpc-2-0-transport.md), [ADR 0046](0046-typed-serde-json-contracts.md), and [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md), and by the Slice 2 revert. The thirteen directions otherwise
+0048](0048-limits-by-precedent-and-no-content-scanning.md), and by the Slice 2 revert. The twelve directions otherwise
 stand, non-authorizing as before.
 
 ## Decision
@@ -44,18 +44,16 @@ Mandate authority.
 8. **Child-agent execution** — a future fork/regeneration mode that may start
 a child-agent execution from frozen fork references, never Mandate child edges and never verifier authority.
 
-**Activity, harness, and MCP boundaries (owners: architectures 23/24/26/28/18):**
+**Activity and MCP boundaries (owners: architectures 23/24/28/18):**
 9. **Export** — a bounded, credential-free export surface for fork lineage,
-activity, and harness records, never raw history rewrite and never destructive deletion.
+activity records, never raw history rewrite and never destructive deletion.
 10. **Cross-workspace clone/rebind** — an explicit user-authorized future
 direction for cloning or rebinding a fork tree to another `WorkspaceRoot`, never implicit and never transferring live
 state or authority.
-11. **Autonomous harness goal mode** — a future harness mode where a
-goal-directed rule may continue against an active goal, separately admitted and never an autonomous free-running agent.
-12. **Work/requeue after client disconnection** — a future explicit contract
+11. **Work/requeue after client disconnection** — a future explicit contract
 for durable work, continuation, or requeue after client disconnection, never silent automatic resumption of old external
 work.
-13. **Delivery of all RLM capabilities in one package** — the packaging
+12. **Delivery of all RLM capabilities in one package** — the packaging
 direction that a later M5+ activating specification may consolidate all RLM capabilities (child graph, sub-agent
 classes, direct-pair messaging, activity identity) into one implementation package, preserving the existing
 documentation package boundaries.
@@ -77,8 +75,8 @@ variant, or reconstructs missing meaning from current state.
 credentials, private endpoint material, SDK objects, or raw provider payloads on durable or public surfaces.
 6. Tool-result and child-agent execution in forks are separately admitted
 ordinary actions and never Mandate child edges, verifier authority, or silent re-execution.
-7. Autonomous harness goal mode and post-disconnect work are separately
-admitted and never resume, retry, reattach, or rerun old external work.
+7. Post-disconnect work is separately admitted and never resumes, retries,
+reattaches, or reruns old external work.
 8. Export and cross-workspace clone/rebind are bounded, credential-free, and
 never destructive; clone/rebind is explicit user-authorized only.
 9. RLM packaging consolidates implementation delivery only; it preserves the
@@ -89,22 +87,22 @@ documentation package boundaries and the one-capability-path law.
 - Each direction fails closed before effect when its future contract is
 unsupported or inconsistent; no partial projection, export, or rebind is delivered.
 - Recovery never resumes, retries, reattaches, or reruns work under any of the
-thirteen directions.
+twelve directions.
 - Configuration or TOML edits that cannot be applied atomically fail closed
 and leave the running daemon on its recorded snapshot.
 
 ## Rationale
 
-The thirteen items were named in `m4plus_concept.md` as deferred or excluded but appeared in the authoritative
+The twelve items were named in `m4plus_concept.md` as deferred or excluded but appeared in the authoritative
 documentation only inside non-goals, without a Milestone 5+ delivery home. Adopting them schedules the directions for
 execution in Milestone 5+ rather than permanent exclusion, without documenting any feature as implemented.
 
 ## Compatibility and non-goals
 
-This decision supersedes the "excluded"/"deferred" wording for the thirteen items in the non-goals of ADR
-0020/0021/0028/0031 and architectures 22/23/25/26/28/29/18. The closed M4 baseline, M3/M4 bytes, and existing behavior
+This decision supersedes the "excluded"/"deferred" wording for the twelve items in the non-goals of ADR
+0020/0028/0031 and architectures 22/23/25/28/29/18. The closed M4 baseline, M3/M4 bytes, and existing behavior
 remain unchanged, and no code changes are authorized by this decision. The directions remain non-authorizing until their
 M5+ activating specifications; M5-M9 are not renumbered.
 
-Owner: architectures 25, 22, 23, 18, 24, 26, and 28. Evidence: activating specification per [architecture
+Owner: architectures 25, 22, 23, 18, 24, and 28. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).

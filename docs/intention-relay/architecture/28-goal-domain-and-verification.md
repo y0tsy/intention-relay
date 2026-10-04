@@ -6,7 +6,7 @@ run selection; delegated Verification Mandates; verification gates and evidence;
 model proposals and user confirmation; the conversation-compaction working form; and Goal-domain bounds and closed safe
 failures.
 
-Owner: architecture 28. Decisions: ADR 0023, ADR 0030, ADR 0033. Research: `m4plus_concept.md`.
+Owner: architecture 28. Decisions: ADR 0023, ADR 0033. Research: `m4plus_concept.md`.
 
 ## Ownership and non-authorities
 
@@ -117,11 +117,8 @@ alter Goal, memory, Skill, role, template, or connection state.
 A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
 former `run-execution-meaning-v4` carrier was removed with the canonical codec by [ADR
 0046](../decisions/0046-typed-serde-json-contracts.md). The applicable records are `GoalRunSelectionV1`,
-`ContinualHarnessSelectionV1`, `McpMethodCatalogSelectionV1`, `ProgrammaticCallerPolicySelectionV1`, and
-`AgentActivitySelectionV1`; an absent record means the feature does not apply, and historical M4 records gain nothing.
-
-The `ContinualHarnessSelectionV1` record itself is owned by [architecture
-26](26-continual-harness.md#selection-record-and-closed-safe-failures).
+`McpMethodCatalogSelectionV1`, `ProgrammaticCallerPolicySelectionV1`, and `AgentActivitySelectionV1`; an absent record
+means the feature does not apply, and historical M4 records gain nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, exact revision, scope/session-link provenance, ordered parent
 revision chain, effective obligatory-component references, selected gate/template revisions and valid evidence
@@ -290,7 +287,7 @@ scope and record kind: technical readiness; user acceptance, acceptance with exc
 or a terminal outcome of an obligatory child. `RefinementDraftDto` contains a daemon-assigned identity, selected source
 run/Goal and milestone, exact base revisions, bounded typed edit set, evidence references, safe rationale, and a typed
 record identity. It is not a current record, does not appear in cards or model context, cannot be used by a
-child/Skill/role/gate/harness/MCP method, and grants no execution authority. A later equal proposal adds evidence to the
+child/Skill/role/gate/MCP method, and grants no execution authority. A later equal proposal adds evidence to the
 one pending draft rather than producing an unbounded queue. The daemon records the proposal durably before asking the
 user; via the normal `ask_user` path the user may accept, edit-and-accept, or reject, and the draft remains pending
 until an explicit decision. Acceptance validates the exact base revision and creates a new immutable record revision; a
@@ -301,7 +298,7 @@ user-confirmed flow for its separate inactive policy drafts under [architecture
 ## Conversation compaction and progressive context disclosure
 
 Compaction is a versioned model-context projection, not a replacement for the source transcript, model facts, tool
-facts, reasoning, kernel checkpoint, harness checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`
+facts, reasoning, kernel checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`
 covers one continuous completed durable-history range and contains schema/contract version, start/end references, a
 previous-summary reference when present, bounded safe content, identity, and provenance; original facts remain readable.
 The working form is one cumulative current summary plus the later uncompacted suffix. A new revision made inside an

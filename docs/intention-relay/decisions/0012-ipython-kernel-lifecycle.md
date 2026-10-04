@@ -33,7 +33,7 @@ kernel/cell/task/grant/operation/external work.
 M3/M4 bytes and ordinary behavior remain unchanged, and historical M4 tool calls remain denial evidence. Retained
 session-scoped IPython/RLM material remains historical where it conflicts with run-scoped Mandate isolation. The kernel
 is a trusted-local convenience sidecar, not a sandbox or privilege boundary; resource-limit values, process supervision
-implementation, RLM executor topology, continual harness, Skills/Goals/context, provider evolution, session forks,
+implementation, RLM executor topology, Skills/Goals/context, provider evolution, session forks,
 activity/UI, and MCP administration remain separate.
 
 Owner: architecture 20. Evidence: activating specification per [architecture

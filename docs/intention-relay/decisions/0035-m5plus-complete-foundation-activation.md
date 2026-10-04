@@ -16,9 +16,10 @@ ADR 0035).
 
 ## Decision
 
-Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25-29, ADR 0021-0034, and all
-detail packages) and the hard prerequisite of Milestones 6-9 in the roadmap dependency graph (`K[M5+] --> F/G/H/I`). The
-post-M4 Mandate packages (architectures 13-21) are delivered by the separate Mandate-track milestones 10-12, which
+Milestone 5+ is the single activation home for the full post-M5 stack (architectures 25 and 27-29, ADR 0022-0034, and
+all detail packages) and the hard prerequisite of Milestones 6-9 in the roadmap dependency graph (`K[M5+] -->
+F/G/H/I`). The post-M4 Mandate packages (architectures 13-21) are delivered by the separate Mandate-track milestones
+10-12, which
 consume this milestone's foundation and whose contract records the five slices below name; the Mandate track does not
 extend the slice sequence or renumber M6-M9.
 
@@ -39,10 +40,9 @@ reconciliation, and held-run admission wording is removed by [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md). The unconsumed-surface audit (2026-09) removed the
 unconsumed provider-native preservation-control and server-side-parser contracts, the Responses reasoning-mode
 projection, the reasoning-usage DTOs, and the model-capability envelope.
-3. **Harness** — continual harness, programmatic-caller policy, Goal domain,
-and autonomous continuation (architectures 26/27/28, ADR 0021/0022/0023/ 0030/0031/0033): durable harness rules and
-triggers, dossiers and checkpoints, execution classes, the 15 closed `harness_*` safe failures, the two closed root
-origins, the Goal tree and Verification Mandates, and Build-mode autonomous continuation.
+3. **Caller policy, Goal domain, and autonomous continuation** —
+programmatic-caller policy, Goal domain, and autonomous continuation (architectures 27/28, ADR 0022/0023/0031/0033):
+the single closed root origin, the Goal tree and Verification Mandates, and Build-mode autonomous continuation.
 4. **UI foundation** — session branching, activity/notification, reasoning
 and catalog delivery, and adapter boundaries (architectures 23/24/22, ADR 0026/0028/0029/0032/0033/0034):
 `session_fork_v1`, activity journal and notification projections, normalized reasoning delivery, RLM packaging and
@@ -73,7 +73,7 @@ schema, crate-boundary, migration, or quality-policy changes.
 carries `K[M5+] --> F/G/H/I` and no "parallel/non-blocking" wording.
 2. M5+ activates only preparatory foundation work; it never implements M6-M9
 milestone behavior (Tauri bridge/desktop UI, Plan/Build, VFR/Headroom, or M9 acceptance closure).
-3. Contracts and versions precede control plane, harness, and UI foundation;
+3. Contracts and versions precede control plane and UI foundation;
 later slices consume only contracts activated by earlier slices.
 4. No slice ships half-ready: every activated contract ships with its version,
 owner, tests, policy mapping, migration behavior, and evidence together.
@@ -97,7 +97,7 @@ evidence together) is not accepted; the milestone remains on the prior accepted 
 
 ## Compatibility and non-goals
 
-This decision extends and operationalizes ADR 0020 and ADR 0030-0034: their domain decisions remain authoritative, and
+This decision extends and operationalizes ADR 0020 and ADR 0031-0034: their domain decisions remain authoritative, and
 this decision supersedes only conflicting activation and dependency wording (the "may run in parallel with M6-M9" and
 "does not block their activation" clauses, and the per-direction activation wording replaced by the pre-approved slice
 sequence). The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged.

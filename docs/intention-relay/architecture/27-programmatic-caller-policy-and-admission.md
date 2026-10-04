@@ -1,7 +1,7 @@
 # Programmatic Caller Policy and Admission
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 27 owns the
-future programmatic-caller policy and admission model: root origins and durable provenance, durable policy
+future programmatic-caller policy and admission model: the root origin and durable provenance, durable policy
 identity/scope/narrowing, admission decisions and typed input constraints, exact user confirmation, policy lifecycle and
 live tightening, and run-selection compatibility. The corridor, reservation, and run/calendar-limit clauses were removed
 by [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md). This policy is logical product control
@@ -14,8 +14,7 @@ Owner: architecture 27. Decisions: ADR 0022, ADR 0048. Research: `m4plus_concept
 Architecture 13 owns Mandate lifecycle and fresh admission; architecture 15 the registry, frozen direct-tool selection,
 tool admission, and the model tool loop; architecture 17 child creation and verifier authority; architecture 18 MCP
 lifecycle; architecture 19 bridge grants and ingress; architecture 22 provider selection; architecture 24 activity/UI
-projections. Architecture 26 owns the continual-harness model, whose `sub_agent` use is gated by the exact confirmation
-defined here.
+projections.
 
 A root origin, provenance record, policy, revision, confirmation, counter, draft, or snapshot is not a second runtime,
 registry, scheduler, persistence authority, or sandbox, and creates no `RunId`, Mandate reason, lifecycle transition,
@@ -30,14 +29,12 @@ Every programmatic action has one daemon-assigned root origin:
 ```text
 ProgrammaticCallerRootOriginDto
   InteractiveUser { originating_turn_id }
-  ContinualHarness { harness_id, rule_revision, trigger_reason_id }
 ```
 
-`InteractiveUser` is the root of an ordinary user-admitted run and all of its descendants; `ContinualHarness` is the
-root of one separately admitted harness launch and all of its descendants. These values are not account identities,
-credentials, operating-system identities, or user-supplied input. No third root exists in this first scope: a protocol
-peer, detached Python task, child agent, MCP service, provider, bridge channel, queued item, replay, and daemon recovery
-cannot become an independent root.
+`InteractiveUser` is the root of an ordinary user-admitted run and all of its descendants. These values are not
+account identities, credentials, operating-system identities, or user-supplied input. No second root exists in this
+first scope: a protocol peer, detached Python task, child agent, MCP service, provider, bridge channel, queued item,
+replay, and daemon recovery cannot become an independent root.
 
 The policy distinguishes only the root origin, but the daemon retains the exact internal calling path as immutable audit
 provenance:
@@ -82,7 +79,7 @@ context fails before a primitive, provider, kernel, process, network call, or ch
 ## Durable policy identity, scope, and narrowing
 
 Programmatic policy is a first-class durable record, separate from a goal, memory card, skill, role, gate template,
-harness rule, or MCP connection. The daemon assigns `ProgrammaticCallerPolicyId` and immutable revisions:
+or MCP connection. The daemon assigns `ProgrammaticCallerPolicyId` and immutable revisions:
 
 ```text
 ProgrammaticCallerPolicyDto
@@ -106,8 +103,8 @@ ProgrammaticCallerPolicyScopeDto
   Session { project_id, policy_owner_session_id }
 ```
 
-A project policy applies to every current and future session in its project, including ordinary, child, branch, and
-harness service sessions; this is intentionally different from a project goal, which remains applicable only through its
+A project policy applies to every current and future session in its project, including ordinary, child, and branch
+service sessions; this is intentionally different from a project goal, which remains applicable only through its
 selected explicit goal-to-session link. A goal policy is applicable only when that goal is the leading goal or an
 ancestor in its frozen effective goal chain. A session policy applies to its owner session and to a fork only through
 the explicit immutable inherited-policy reference recorded by that fork; it never crosses a project or `WorkspaceId`.
@@ -126,10 +123,10 @@ where the tool is `mcp`.
 
 An effect selector alone cannot admit a different tool, and an exact tool or MCP method selector cannot escape a
 stricter applicable effect selector. The most restrictive decision, smallest bound, and narrowest input constraint win.
-A child goal, session policy, role, child-agent selection, or harness class may only add a restriction: it cannot add a
-tool, remove an effect condition, broaden a method, increase a class, extend a scope, enlarge a limit, or weaken a
-confirmation requirement, and a nominally stronger child class is valid only if the resulting effective policy still
-narrows the parent selection.
+A child goal, session policy, role, or child-agent selection may only add a restriction: it cannot add a tool, remove
+an effect condition, broaden a method, increase a class, extend a scope, enlarge a limit, or weaken a confirmation
+requirement, and a nominally stronger child class is valid only if the resulting effective policy still narrows the
+parent selection.
 
 A session fork stores immutable references to the source session policies and their `ProgrammaticCallerPolicyId` values
 rather than copies, and a branch can add only a new policy that narrows the inherited intersection. Thus a fork cannot
@@ -159,9 +156,8 @@ file is safe, current, or free of sensitive content. A direct policy never admit
 `execute`, `plan_submit`, `sub_agent`, `mcp`, user interaction, a network call, a process, or a state mutation.
 
 When no durable policy is applicable, an `InteractiveUser` root receives the same narrow direct-local-read baseline, but
-only for the root run itself, not automatically for a Python facade, child agent, or any descendant. A
-`ContinualHarness` root has no such baseline: its selected read-and-delegate tool subset and separately selected policy
-must admit each action. Every other call requires an exact confirmation.
+only for the root run itself, not automatically for a Python facade, child agent, or any descendant. Every other call
+requires an exact confirmation.
 
 The baseline itself is a code-owned `InteractiveLocalReadBaselineV1` selection, frozen into the current typed run
 selection like every other selected rule. Its former numeric bounds (256 root-run actions and 16 concurrent actions) and
@@ -196,9 +192,8 @@ its selectors, shared counts, expiry record, and digest.
 
 `ask_user` remains a normal long-running registered tool rather than a policy outcome, and only an `InteractiveUser`
 root may start it. When a descendant needs an exact confirmation, the daemon records the descendant's safe provenance
-but creates the typed question only for the root run; the child, Python facade, role, harness, and MCP service never
-directly start `ask_user`. A harness cannot await user interaction: its `sub_agent` use must be admitted by an exact
-confirmation that already exists for the call, or it fails before child admission.
+but creates the typed question only for the root run; the child, Python facade, role, and MCP service never directly
+start `ask_user`.
 
 ## Policy lifecycle, live tightening, and drafts
 
@@ -233,18 +228,14 @@ archive, or by replay.
 is reversible presentation retention only: it never grants authority or removes readable revisions, counters,
 confirmations, provenance, or audit, and physical deletion and counter erasure are excluded.
 
-`AutomationPaused` for a continual harness remains distinct from a suspended policy: the former coalesces automatic
-triggers while retaining explicit user launch as defined by the harness model, while the latter blocks both automatic
-and explicit admissions that depend on that policy.
-
 The model may prepare one inactive `ProgrammaticCallerPolicyDraftDto` for any applicable project, goal, or session
 scope. The draft always displays its proposed scope, root-origin applicability, selected rules, evidence references,
 base revisions, safe rationale, and a typed record identity; it may arise after the selected goal milestones or a policy
 denial, and an equal later proposal coalesces evidence into that one pending draft. The draft is not a policy, card,
 target-snapshot input, confirmation, tool selection, or authority. The daemon records it before the root-only user
 question, and the user may accept, edit and accept, or reject it; acceptance checks the exact base state and creates an
-immutable policy or policy revision, and rejection changes no policy. No harness rule, policy, or policy revision exists
-because a model merely proposed it.
+immutable policy or policy revision, and rejection changes no policy. No policy or policy revision exists because a
+model merely proposed it.
 
 ## Admission transaction and recovery
 
@@ -285,16 +276,15 @@ ProgrammaticCallerPolicySelectionV1
   inherited_scope_provenance
 ```
 
-The selection is `Disabled` only for historical M4 records; every new ordinary, goal-directed, verification, child, and
-harness run carries this selection, including a selection that contains only the narrow interactive direct-local-read
-baseline.
+The selection is `Disabled` only for historical M4 records; every new ordinary, goal-directed, verification, and child
+run carries this selection, including a selection that contains only the narrow interactive direct-local-read baseline.
 
-`GoalRunSelectionV1`, `SubAgentDelegationSnapshotDto`, `GoalDelegationSnapshotV1`, `ContinualHarnessSelectionV1`, and
-`McpMethodCatalogSelectionV1` retain only safe typed references to it and to any later admission evidence. No historical
-M4 snapshot, event, `RunId`, replay, or `tool_execution_unavailable` result is rewritten or given a synthetic policy
-record. Live suspension, revocation, registry availability, and daemon readiness remain outside the immutable selection:
-they may impose a stricter present-time denial, but never rewrite historical semantics, reroute a call, substitute a
-current policy snapshot, or resume external work.
+`GoalRunSelectionV1`, `SubAgentDelegationSnapshotDto`, `GoalDelegationSnapshotV1`, and `McpMethodCatalogSelectionV1`
+retain only safe typed references to it and to any later admission evidence. No historical M4 snapshot, event, `RunId`,
+replay, or `tool_execution_unavailable` result is rewritten or given a synthetic policy record. Live suspension,
+revocation, registry availability, and daemon readiness remain outside the immutable selection: they may impose a
+stricter present-time denial, but never rewrite historical semantics, reroute a call, substitute a current policy
+snapshot, or resume external work.
 
 At a minimum, the policy adds these closed safe failures through `ErrorDto`:
 
@@ -311,7 +301,6 @@ programmatic_policy_confirmation_required
 programmatic_policy_confirmation_expired
 programmatic_policy_root_only_interaction
 programmatic_policy_input_constraint_mismatch
-programmatic_policy_harness_delegation_forbidden
 programmatic_policy_draft_conflict
 programmatic_policy_draft_too_large
 ```
@@ -332,8 +321,8 @@ fresh runs. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
-This document depends on architectures 13, 15, 17, 18, 19, 22, 24, and 26 plus decisions 0001, 0004, 0007, 0009, 0010,
-0011, 0014, 0021, and 0022. Non-goals: a durable autonomous actor, a second daemon, a second tool registry, a remote
+This document depends on architectures 13, 15, 17, 18, 19, 22, and 24 plus decisions 0001, 0004, 0007, 0009, 0010,
+0011, 0014, and 0022. Non-goals: a durable autonomous actor, a second daemon, a second tool registry, a remote
 identity, an OS security boundary, a typed command-template direction, a new policy decoder, and production activation.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
