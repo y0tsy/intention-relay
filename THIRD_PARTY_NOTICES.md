@@ -2663,7 +2663,7 @@ limitations under the License.
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
 - [unicase 2.9.0](https://github.com/seanmonstar/unicase)
 - [url 2.5.8](https://github.com/servo/rust-url)
-- [uuid 1.26.1](https://github.com/uuid-rs/uuid)
+- [uuid 1.27.0](https://github.com/uuid-rs/uuid)
 
 ```text
                               Apache License
@@ -4872,7 +4872,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 - [tokio-stream 0.1.19](https://github.com/tokio-rs/tokio)
 - [tokio-util 0.7.19](https://github.com/tokio-rs/tokio)
-- [tokio 1.53.1](https://github.com/tokio-rs/tokio)
+- [tokio 1.53.2](https://github.com/tokio-rs/tokio)
 
 ```text
 MIT License
