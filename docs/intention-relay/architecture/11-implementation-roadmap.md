@@ -188,20 +188,19 @@ targets, goldens, and control-plane tables are removed. The unconsumed-surface a
 typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
 contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
 the `provider_profile_tombstoned` wire code; that removal is not reverted.
-3.  **Harness — not activated.** Continual harness, programmatic-caller policy, Goal domain, and autonomous continuation
-(architectures 26/27/28, ADR 0021/0022/0023/0030/0031/0033), including durable harness rules and triggers,
-dossiers/checkpoints, execution classes, the 15 closed `harness_*` safe failures, the two closed root origins, the Goal
-tree and Verification Mandates, and Build-mode autonomous continuation. The slice also activates the tool-descriptor,
-tool-registry, and model-tool-loop contracts ([ADR 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md)
-as amended by [ADR 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), architecture 15), the
-bridge-invocation and MCP-method-catalog selections ([ADR
-0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md), architectures 19/18), and the harness-side
-accepted directions of [ADR 0033](../decisions/0033-accepted-m5plus-execution-directions.md) (autonomous harness goal
-mode and work/requeue after client disconnection).
+3.  **Caller policy, Goal domain, and autonomous continuation — not activated.** Programmatic-caller policy, Goal
+domain, and autonomous continuation (architectures 27/28, ADR 0022/0023/0031/0033), including the single closed root
+origin, the Goal tree and Verification Mandates, and Build-mode autonomous continuation. The slice also activates the
+tool-descriptor, tool-registry, and model-tool-loop contracts ([ADR
+0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) as amended by [ADR
+0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), architecture 15), the bridge-invocation and
+MCP-method-catalog selections ([ADR 0027](../decisions/0027-child-kernel-bridge-mcp-detail-directions.md),
+architectures 19/18), and the accepted directions of [ADR
+0033](../decisions/0033-accepted-m5plus-execution-directions.md) (work/requeue after client disconnection).
 4.  **UI foundation — not activated.** Session branching, activity/notification delivery, reasoning/catalog delivery,
 and adapter boundaries (architectures 23/24/22, ADR 0026/0028/0029/0032/0033/0034): `session_fork_v1`; activity journal
 and notification projections; normalized reasoning delivery; RLM packaging and export; and the exact typed
-client/protocol surface M6 consumes. It also carries export of fork/activity/harness records and cross-workspace
+client/protocol surface M6 consumes. It also carries export of fork/activity records and cross-workspace
 clone/rebind (architecture 23), activity numeric-limit classification (architecture 24), and the physical deletion/GC
 retention policy for historical work under architecture 04's retention rules.
 5.  **Instruction sources and system context — fifth and last slice; not activated.** The instruction channel of
@@ -657,8 +656,7 @@ profiles, and evidence. This roadmap owns sequencing and milestone acceptance on
 | Provider evolution, profiles, and reasoning | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the remaining provider work (`responses` driver, `SafeHeader` live wire injection, user-kind parser) is delivered by Milestone 12. | execution meaning |
 | Non-destructive session branching and regeneration | [architecture 23](23-non-destructive-session-branching-and-regeneration.md) | Documentation-approved; not activated; activating slice 4 (`session_fork_v1`). | ordinary Session/storage compatibility; Mandate lifecycle boundaries; execution meaning; context; provider evolution |
 | Activity, UI, and adapters | [architecture 24](24-activity-ui-and-adapters.md) | Documentation-approved; not activated; activating slice 4; extends M6 planning. | transport; execution meaning; child/verifier; MCP; bridge; kernel; context; provider evolution; session branching |
-| Continual harness | [architecture 26](26-continual-harness.md) | Documentation-approved; not activated; activating slice 3. | Mandate lifecycle boundaries; execution meaning; fixed tool loop; scheduler readiness; provider evolution; activity/UI; programmatic-caller policy |
-| Programmatic-caller policy and admission | [architecture 27](27-programmatic-caller-policy-and-admission.md) | Documentation-approved; not activated; activating slice 3. | Mandate lifecycle boundaries; execution meaning; fixed tool registry/loop; child/verifier; MCP; bridge; provider evolution; activity/UI; continual harness |
+| Programmatic-caller policy and admission | [architecture 27](27-programmatic-caller-policy-and-admission.md) | Documentation-approved; not activated; activating slice 3. | Mandate lifecycle boundaries; execution meaning; fixed tool registry/loop; child/verifier; MCP; bridge; provider evolution; activity/UI |
 | Goal domain and verification | [architecture 28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; activating slice 3. | Mandate lifecycle boundaries; execution meaning; fixed tool loop; child/verifier; MCP; context; provider evolution; activity/UI; programmatic-caller policy |
 | Provider session selection and profiles protocol | [architecture 29](29-provider-session-and-profiles-protocol.md) | The Slice 2 activation was reverted and re-introduction requires a new activating specification; not activated. | provider evolution; execution meaning; session branching; configuration/provider control plane |
 | Base-tool contracts and tool-loop bounds | [architecture 15](15-tool-registry-and-mandate-tool-loop.md) | Documentation-approved; slice 3 activates the reserved contracts; Mandate tool-loop implementation is Milestone 11. | architecture 15; M5+ activation |
@@ -666,18 +664,17 @@ profiles, and evidence. This roadmap owns sequencing and milestone acceptance on
 | Child, kernel, bridge, and MCP detail | [architectures 17](17-mandate-child-graph-and-delegated-verifier-authority.md)/[18](18-mandate-mcp-capability-lifecycle.md)/[19](19-mandate-gateway-rlm-bridge.md)/[20](20-ipython-kernel-lifecycle.md) | Documentation-approved; slice 3 activates the bridge-invocation and MCP-method-catalog contracts; child and bridge implementation is Milestone 11, MCP and kernel implementation Milestone 12. | extends architectures 17/20/19/18 |
 | Provider reasoning and catalog detail | [architecture 22](22-provider-evolution-profiles-and-reasoning.md) | Documentation-approved; not activated; the typed `ReasoningUsageDto` was removed by the unconsumed-surface audit (2026-09). | extends architecture 22 |
 | Activity and notification detail | [architecture 24](24-activity-ui-and-adapters.md) | Documentation-approved; not activated; slice 4 carries activity numeric-limit classification. | extends architecture 24 |
-| Continual-harness closed safe failures and selection-record detail | [architectures 26](26-continual-harness.md)/[28](28-goal-domain-and-verification.md) | Documentation-approved; not activated; slice 3 carries the 15 closed `harness_*` safe failures. | extends architectures 26 and 28 |
 | Autonomous continuation direction | [architecture 13](13-mandate-domain-and-durable-lifecycle.md) | Documentation-approved; not activated; activating slice 3. | extends architecture 13 |
 | Accepted deferred directions | [architectures 24](24-activity-ui-and-adapters.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[19](19-mandate-gateway-rlm-bridge.md) | Documentation-approved; not activated; the directions are non-authorizing. | extends architectures 24, 22, and 19 |
-| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[26](26-continual-harness.md)/[28](28-goal-domain-and-verification.md)/[18](18-mandate-mcp-capability-lifecycle.md)/[24](24-activity-ui-and-adapters.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items were reverted with Slice 2 and require a new activating specification; the harness items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 26, 28, 18, 24, and 29 |
+| Accepted execution directions | [architectures 25](25-configuration-provider-control-plane.md)/[22](22-provider-evolution-profiles-and-reasoning.md)/[23](23-non-destructive-session-branching-and-regeneration.md)/[28](28-goal-domain-and-verification.md)/[18](18-mandate-mcp-capability-lifecycle.md)/[24](24-activity-ui-and-adapters.md)/[29](29-provider-session-and-profiles-protocol.md) | Documentation-approved; the control-plane items were reverted with Slice 2 and require a new activating specification; the autonomous-continuation and work/requeue items activate in slice 3, and export plus cross-workspace clone/rebind and RLM packaging in slice 4. | extends architectures 25, 22, 23, 28, 18, 24, and 29 |
 | Accepted retained-deferral directions | [architectures 20](20-ipython-kernel-lifecycle.md)/[04](04-sessions-runs-events-and-storage.md)/[03](03-daemon-transport-and-adapters.md)/[16](16-mandate-scheduler-and-readiness-driven-admission.md)/[24](24-activity-ui-and-adapters.md) | Documentation-approved; rich MIME/raw kernel output projection is Milestone 12, worker/process supervision topology is Milestone 11, calendar/interval/time-zone/DST semantics is Milestone 10, and the physical deletion/GC retention policy plus the activity limit classification are slice 4. | extends architectures 20, 04, 03, 16, and 24 |
 | Instruction sources and system context | [architecture 30](30-instruction-sources-and-system-context.md) | Documentation-approved; not activated; fifth and last slice ([ADR 0043](../decisions/0043-instruction-sources-and-system-context.md)). | extends architectures 30, 00, 02, 04, 06, 07, 08, 09, 14, 21, 23, and 25 |
 
 ### Activation-order notes
 
--  The slice order is fixed: 1 contracts and versions, 2 control plane, 3 harness, 4 UI foundation, 5 instruction
-sources. Later slices consume only contracts activated by earlier slices, and instruction sources is the fifth and last
-slice.
+-  The slice order is fixed: 1 contracts and versions, 2 control plane, 3 caller policy, Goal domain, and autonomous
+continuation, 4 UI foundation, 5 instruction sources. Later slices consume only contracts activated by earlier slices,
+and instruction sources is the fifth and last slice.
 -  Slice 3 additionally activates the tool-descriptor/tool-registry/model-tool-loop contracts reserved by [ADR
 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) as amended by [ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md), and the bridge-invocation and

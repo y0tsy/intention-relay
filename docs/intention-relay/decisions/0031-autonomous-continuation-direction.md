@@ -61,8 +61,8 @@ This decision supersedes the absence of the direction in architecture 13's princ
 0017/0018 or ordinary Plan/Build behavior. The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged,
 and no code changes are authorized by this decision.
 
-Automatic continuation after client disconnection, autonomous harness goal mode, and production activation remain
-outside this decision. M5-M9 are not renumbered.
+Automatic continuation after client disconnection and production activation remain outside this decision. M5-M9 are not
+renumbered.
 
 Owner: architecture 13. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).

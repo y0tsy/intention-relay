@@ -34,7 +34,7 @@ sandbox. No production supervisor is activated by documentation.
 **Calendar, interval, time-zone, and DST semantics (owner: architecture 16):**
 4. **Calendar/interval/time-zone/DST semantics** — a future typed
 calendar/interval/time-zone/DST semantics package for Mandate scheduler triggers, never a product ceiling and never a
-Mandate admission quota. Harness schedule/time semantics remain owned by architecture 26.
+Mandate admission quota.
 
 **Activity numeric limit classification (owner: architecture 24):**
 5. **Activity numeric product ceilings** — superseded by
@@ -61,7 +61,7 @@ descendants or audit dependencies; archive-only retention remains the first-scop
 7. Supervision topology never becomes a second runtime, registry, scheduler,
 persistence authority, or sandbox.
 8. Calendar/interval/time-zone/DST semantics are typed and never a Mandate
-admission quota; harness schedule/time semantics remain owned by architecture 26.
+admission quota.
 9. A numeric activity value requires a recorded precedent before it exists and
 never becomes a Mandate quota or child-graph limit.
 
@@ -84,8 +84,7 @@ rather than indefinite deferral, without documenting any feature as implemented.
 ## Compatibility and non-goals
 
 This decision supersedes the "Defer" wording for the five items (EXC-008, EXC-009, EXC-010, EXC-011, and EXC-015) and
-the corresponding deferral wording in architectures 03, 04, 16, 20, and 24 and in the non-goals of ADR 0021 and ADR 0030
-("process supervision, and deletion/GC remain excluded pending separate future decisions"). Item 5 is superseded by ADR
+the corresponding deferral wording in architectures 03, 04, 16, 20, and 24. Item 5 is superseded by ADR
 0048; the other four directions stand. The closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged, and
 no code changes are authorized by this decision. The directions remain non-authorizing until their M5+ activating
 specifications, and M5-M9 are not renumbered.

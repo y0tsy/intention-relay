@@ -318,11 +318,10 @@ permitted after `model_stream_progress_timeout`; after such a fact, no retry is 
 user cancellation wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and
 never claims success or resumes work after restart.
 
-The progress deadline is a model-step policy owned by this document, referenced by the continual-harness execution
-classes under [architecture 26](26-continual-harness.md) and by the programmatic-caller policy under [architecture
-27](27-programmatic-caller-policy-and-admission.md); neither may weaken it. A timeout outcome is a known typed failure
-before an external effect when no irreversible fact preceded it, and `ExternalEffectUnknown` when a started effect lacks
-durable terminal proof.
+The progress deadline is a model-step policy owned by this document, referenced by the programmatic-caller policy under
+[architecture 27](27-programmatic-caller-policy-and-admission.md); it may not weaken it. A timeout outcome is a known
+typed failure before an external effect when no irreversible fact preceded it, and `ExternalEffectUnknown` when a
+started effect lacks durable terminal proof.
 
 ## Effect evidence, cancellation, and recovery
 

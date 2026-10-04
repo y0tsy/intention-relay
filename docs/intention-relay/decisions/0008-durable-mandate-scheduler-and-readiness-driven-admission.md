@@ -36,5 +36,4 @@ provider evolution, UI, SQL, protocol implementation, crates, or runtime activat
 Owner: architecture 16. Evidence: activating specification per [architecture
 12](../architecture/12-quality-gates-and-makefile.md).
 
-Provenance: `m4plus_concept.md`, Mandate trigger/recovery/limit sections and retained continual-harness scheduling
-research.
+Provenance: `m4plus_concept.md`, Mandate trigger/recovery/limit sections.

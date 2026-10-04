@@ -109,7 +109,7 @@ numbers remain history.
 [Architecture 12](../architecture/12-quality-gates-and-makefile.md) owns the current coverage policy and the renamed
 policy section; [architecture 10](../architecture/10-test-driven-delivery-and-verification.md) keeps the TTD workflow
 with a history pointer; [architecture 11](../architecture/11-implementation-roadmap.md) records the policy change; and
-architectures 00-09 and 13-30 replace their current-policy and future-activation "coverage tier" references with
+architectures 00-09 and 13-25, 27-30 replace their current-policy and future-activation "coverage tier" references with
 coverage declarations under this record. The reconciliation ownership map records the replaced tier cells, and the
 source-of-truth matrix records the future requirement. [`AGENTS.md`](../../../AGENTS.md) records the declaration rule
 for new production crates.

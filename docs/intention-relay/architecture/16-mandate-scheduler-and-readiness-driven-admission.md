@@ -10,8 +10,8 @@ run recovery, provider behavior, tool-call denial, replay, bytes, and meaning. C
 time-zone/DST semantics, timer topology, and worker process topology remain later work: calendar/interval/time-zone/DST
 semantics are an accepted post-M5 future direction under [ADR
 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as typed
-semantics for Mandate scheduler triggers and never a Mandate admission quota, while harness schedule/time semantics
-remain owned by architecture 26 and worker topology by architecture 03.
+semantics for Mandate scheduler triggers and never a Mandate admission quota, while worker topology remains owned by
+architecture 03.
 
 ## Ownership and non-authorities
 

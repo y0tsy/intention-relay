@@ -287,7 +287,7 @@ implementation detail.
 
 This document depends on architectures 13--19, decisions 0001--0011, and decision 0042 for the project script library
 path, selection, and evidence contract. It does not define Python/Jupyter dependencies, process supervision,
-storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology, continual harness,
+storage/wire tags, migrations, retention, encryption, resource-limit values, RLM executor topology,
 Skills/Goals/context, provider evolution, session forks, activity/UI, direct MCP administration, Cargo, Makefile/CI, or
 production activation.
 

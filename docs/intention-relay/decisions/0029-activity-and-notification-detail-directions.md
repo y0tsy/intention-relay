@@ -13,7 +13,7 @@ owned by [architecture 24](../architecture/24-activity-ui-and-adapters.md):
 - `AgentActivityPairDto`, `AgentMessageDto`, `AgentMessageReferenceDto` (six
 closed variants), `AgentActivityJournalRecordDto`, `DirectChildStatusDto`, `DescendantSummaryDto`, and
 `AgentNotificationLevelDto`;
-- the 17 closed journal record kinds;
+- the 16 closed journal record kinds;
 - the fixed activity bounds (1,024 messages, 4 MiB aggregate, 4,096 journal
 records, 64 KiB record, 256/512-KiB page, 16 references, 60-minute clarification; 16/512-KiB per-direction with a
 1-slot/64-KiB clarification reserve);

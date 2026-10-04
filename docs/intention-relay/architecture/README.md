@@ -83,10 +83,9 @@ flowchart TD
 15. [Tools, workspace, and hooks](05-tools-workspace-and-hooks.md)
 16. [VFR and Headroom](06-vfr-and-headroom.md)
 17. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
-18. [Continual harness](26-continual-harness.md)
-19. [Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
-20. [Goal domain and verification](28-goal-domain-and-verification.md)
-21. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
+18. [Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md)
+19. [Goal domain and verification](28-goal-domain-and-verification.md)
+20. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
 
 ### Agent operation
 
@@ -209,11 +208,8 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
   directions — controlled live reload, credential rotation, provider health checks, discovery, pricing policy, and the
   profile UI/control plane ([ADR 0020](../decisions/0020-configuration-provider-control-plane-directions.md)); the Slice
   2 activation was reverted and re-introduction requires a new activating specification.
--  [26 Continual harness](26-continual-harness.md): the accepted post-M5 continual-harness model — durable user-managed
-  rules, trigger capture, schedule/time semantics, dossiers, verified checkpoints, read-and-delegate execution classes,
-  and harness recovery ([ADR 0021](../decisions/0021-continual-harness-directions.md)); activated under Milestone 5+.
 -  [27 Programmatic-caller policy and admission](27-programmatic-caller-policy-and-admission.md): the accepted post-M5
-  programmatic-caller policy — root origins, durable provenance, policy scope/narrowing, admission decisions,
+  programmatic-caller policy — the root origin, durable provenance, policy scope/narrowing, admission decisions,
   confirmation, lifecycle, and run-selection compatibility ([ADR
   0022](../decisions/0022-programmatic-caller-policy-directions.md)); activated under Milestone 5+.
 -  [28 Goal domain and verification](28-goal-domain-and-verification.md): the accepted post-M5 Goal aggregate domain —

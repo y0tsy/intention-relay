@@ -137,7 +137,7 @@ timeout, cancellation, terminalization, and restart never resume work.
 
 Each tree owns an append-only `AgentActivityJournalSequenceDto`, independent of all Session, Run, lineage, provider,
 tool, and notification sequences. Journal records safely describe root binding, child/message/clarification transitions,
-terminal child state, policy observation, Goal/harness milestone, and unknown effect observation. No global order across
+terminal child state, policy observation, Goal milestone, and unknown effect observation. No global order across
 trees exists.
 
 ```text
@@ -154,7 +154,7 @@ AgentActivityJournalRecordDto
   record_identity
 ```
 
-The 17 closed record kinds are:
+The 16 closed record kinds are:
 
 ```text
 RootActivityTreeBound
@@ -172,7 +172,6 @@ PolicySuspensionObserved
 PolicyRevocationCancellationStarted
 PolicyRevocationCancellationCompleted
 GoalActivityMilestone
-HarnessActivityMilestone
 ExternalEffectUnknownObserved
 ```
 
@@ -270,9 +269,8 @@ AgentNotificationLevelDto
 
 `Urgent` is used for user-decision-needing-attention, policy-revocation or cancellation safety, `ExternalEffectUnknown`,
 a terminal outcome leaving obligatory work unfinished, and `sub_agent_clarification_timeout`. `Ordinary` is used only
-for a stable awaiting state or terminal milestone; there are no periodic or every-N summaries. Continual-harness
-`journal-only` presentation suppresses ordinary linked-activity entries but never an `Urgent` safety record. At most one
-`Urgent` record exists per `(AgentActivityTreeId, cancellation reason)`, created atomically with the cascade-start
+for a stable awaiting state or terminal milestone; there are no periodic or every-N summaries. At most one `Urgent`
+record exists per `(AgentActivityTreeId, cancellation reason)`, created atomically with the cascade-start
 projection carrying the then-known safe counts; a later distinct `ExternalEffectUnknown` is its own urgent reason.
 Urgent safety records take precedence over ordinary summaries; ordinary summaries may coalesce to current safe per-tree
 state. Reconnect returns current redacted summaries for affected trees, not replayed alerts. Notification replay,

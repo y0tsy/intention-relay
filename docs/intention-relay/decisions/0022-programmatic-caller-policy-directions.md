@@ -11,8 +11,8 @@ admission direction stands, bound to Milestone 5+ as before.
 The programmatic-caller policy and admission model from `m4plus_concept.md` is adopted as an accepted future direction
 owned by architecture 27 (programmatic-caller policy and admission):
 
-- two closed root origins (`InteractiveUser`, `ContinualHarness`) with no
-third root, and immutable `ProgrammaticCallerProvenanceDto` audit records created before `ToolCallStarted`;
+- one closed root origin (`InteractiveUser`) with no
+second root, and immutable `ProgrammaticCallerProvenanceDto` audit records created before `ToolCallStarted`;
 - durable policy identity/scope/narrowing (`Project`/`Goal`/`Session`) with
 intersection of effect selectors and exact tool/MCP selectors, most-restrictive-wins, and child-narrowing-only;
 - closed admission decisions (`Prohibited`, `DirectLocalRead`,
@@ -31,13 +31,13 @@ remains bound to Milestone 5+.
 
 ## Normative invariants
 
-1. Every programmatic action has one daemon-assigned root origin; no third
+1. Every programmatic action has one daemon-assigned root origin; no second
 root exists in this first scope.
 2. The policy is logical product control and audit evidence, not an OS
 security boundary; it creates no durable autonomous actor, second daemon, second registry, remote identity, or authority
 surviving an active run.
 3. Effective policy is the most-restrictive intersection of effect selectors
-and exact tool/MCP selectors; children and harness classes may only narrow.
+and exact tool/MCP selectors; children may only narrow.
 4. `execute` never receives `DirectLocalRead` admission in this first scope;
 `fetch_url` and `mcp` never receive direct admission.
 5. Historical M4 and earlier selections retain `Disabled` policy selection
