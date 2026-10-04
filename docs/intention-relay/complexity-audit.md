@@ -41,18 +41,20 @@ Repository totals at baseline: **28,411 production Rust lines, 25,015 test Rust 
 The audit found a real, measurable over-engineering problem, and it is **not** where the surface
 area suggests.
 
-- **~16,000 lines can be removed for ≤2% real capability or protection loss.** That is ~3,570
-  production Rust lines (12.6% of production code), ~2,820 test lines (11.3%), and ~9,800
+- **~16,000 lines can be removed for ≤2% real capability or protection loss.** That is ~3,700
+  production Rust lines (13.0% of production code), ~2,830 test lines (11.3%), and ~9,800
   documentation lines. No reachable user capability is lost in the zero-loss subset.
-- **The removal is lopsided.** Documentation carries almost all of it: **~72% of the
-  architecture-and-decision corpus (9,800 of 13,710 lines) describes systems with zero
-  implementing code**, while only **~12.6% of production Rust is removable without losing
-  behaviour.**
+- **The removal is lopsided, and one file carries most of the documentation half.** Of the
+  ~9,800 removable documentation lines, 6,157 are a single orphaned audit file. Within the live
+  architecture-and-decision corpus (13,710 lines), ~3,650 lines (27%) are removable, and **57% of
+  the architecture corpus (5,607 of 9,873 lines) normatively describes systems with zero
+  implementing code** (Z6); counting the 33 unbuilt decision records, 7,855 lines describe
+  systems with no code. Only **~13% of production Rust is removable without losing behaviour.**
 - **The Pareto target inverts.** Cutting 80% of production code would destroy the durable-fact
   append authority, the decode-boundary validation, the transport liveness bounds, and the
-  commit-before-publication boundary. The honest result is: **~80% of the *documentation* and
-  ~13% of the *code* are removable at ~0 loss; the remaining code is load-bearing.** The document
-  that promises the largest reduction is the largest single item, and it is not code.
+  commit-before-publication boundary. The honest result is: **the removable fraction is large in
+  the documentation (~9,800 lines) and small in the code (~13% of production Rust)**, and the
+  largest single item is not code at all.
 - **The most expensive-looking code is the cheapest to keep.** 751 lines of hand-written
   `Deserialize` and 33 mirror structs (Z1), the stream-ordering validator, the two-step
   cancellation, and the typed error shape are the mechanisms the whole workspace depends on.
@@ -66,13 +68,13 @@ area suggests.
 
 | Measure | Value |
 | --- | ---: |
-| Production Rust removable, zero reachable loss | ~3,570 lines (12.6%) |
-| Test Rust removable, zero reachable loss | ~2,820 lines (11.3%) |
-| Documentation removable, zero reachable loss | ~9,800 lines |
+| Production Rust removable, zero reachable loss | ~3,700 lines (13.0%) |
+| Test Rust removable, zero reachable loss | ~2,830 lines (11.3%) |
+| Documentation removable, zero reachable loss | ~9,800 lines (6,157 in one orphaned file) |
 | **Total removable at ≤2% real loss** | **~16,000 lines** |
-| Production Rust where cutting stops paying | ~24,800 lines |
+| Production Rust where cutting stops paying | ~24,700 lines |
 | Distinct concepts (types, resolvers, registries, vocabularies) removed | ~120 |
-| Public types removed | ~55 |
+| Public types removed | ~65 |
 | Crates removed | 2 (`intention-test-support`, `quality/harness`) |
 | SQLite tables removed | 2 (`tool_results`, `session_snapshots`) |
 | False statements corrected | ~40 |
@@ -94,7 +96,7 @@ producer or reader. This is the dominant cost in Z1 and Z6 and reappears in Z2, 
   on 17 DTOs, validated nowhere), Z1-F07, Z1-F08, Z1-F09, Z1-F10.
 - Z2N-5 (`ToolResultKindDto` is a second tool-name vocabulary), Z2N-11 (error codes no production
   code branches on).
-- Z6-F04 (**120 closed failure codes specified; 6 appear anywhere in `crates/`**), Z7-01 (33
+- Z6-F04 (**121 closed failure codes specified; none appear anywhere in `crates/`**), Z7-01 (33
   "accepted future direction" ADRs with zero code).
 
 The counter-rule this violates already exists in the corpus: ADRs 0032/0033/0034 bundle many
@@ -198,7 +200,7 @@ Three phases. Phase 1 needs no product decision; phase 2 needs one named decisio
 | 15 | Z2 | Z2N-1 tool-result read path (step 1) | DELETE | ~90 | ~275 | — | 0% |
 | 16 | Z2 | Z2N-7 delete `opaque_json_guard.rs` | SIMPLIFY | — | ~450 | — | alias-evasion coverage only |
 | 17 | Z2 | Z2N-12 accessor tests driven by the coverage floor | SIMPLIFY | — | ~330 | — | 0% |
-| 18 | Z2 | Z2N-11/02/06/09/03/04 error boilerplate, duplicated query/loop, 512 KiB constants, queue fact, snapshot cache, false invariant | SIMPLIFY/MERGE | ~192 | ~30 | — | ~0% |
+| 18 | Z2 | Z2N-11/05/02/06/09/03/04/08 error boilerplate, second tool vocabulary, duplicated query/loop, 512 KiB constants, queue fact, snapshot cache, false invariant | SIMPLIFY/MERGE | ~260 | ~50 | — | ~0% |
 | 19 | Z4 | Z4-F01 delete `intention-test-support` crate | DELETE | 188 | 274 | — | 0% |
 | 20 | Z4 | Z4-F02 merge duplicated e2e harness into the fixture crate | MERGE | — | ~250 | — | 0% |
 | 21 | Z4 | Z4-F05/F06/F07/F08/F09/F10/F11 | SIMPLIFY/MERGE/DELETE | ~285 | ~100 | — | 0% |
@@ -206,7 +208,7 @@ Three phases. Phase 1 needs no product decision; phase 2 needs one named decisio
 | 23 | Z5 | Z5-2 merge duplicate provider-SDK check | MERGE | 17 | — | — | 0% |
 | 24 | Z5 | Z5-6 add negative proof for checkers; fix four false doc claims | SIMPLIFY | — | — | — | 0% |
 
-**Phase 1 total:** ~2,830 production lines, ~2,650 test lines, ~9,800 documentation lines.
+**Phase 1 total:** ~2,900 production lines, ~2,700 test lines, ~9,800 documentation lines.
 
 ### Phase 2 — needs one named decision (~1,500 lines)
 
@@ -217,8 +219,9 @@ Three phases. Phase 1 needs no product decision; phase 2 needs one named decisio
 | 3 | Z4 | Z4-F03 `RunStreamClient` (unreachable today) | Roadmap: is a streaming client surface still scheduled? | ~150 |
 | 4 | Z5 | Z5-7 second unreachable result path in `intention-tools` | Tool-contract: keep or delete the envelope family | ~250 |
 | 5 | Z5 | Z5-8 hook non-`Continue` surface | Docs: edit doc 05's fail-open bullet | ~180 |
-| 6 | Z6 | Z6-F03 remainder: owner documents 13/16/17/19/20/21/23/24/27 | Scope: keep or delete the design record for M10–M12 systems | ~4,000 |
-| 7 | Z7 | Z7-10 `docs/reference/prime-agent-research/` | Retention: keep as reference (KEEP-BUT-STOP-INVESTING) | 4,153 |
+| 6 | Z2 | Z2N-10 always-empty run replay tail | Wire contract: is a one-shot catch-up backend planned? | ~70 |
+| 7 | Z6 | Z6-F03 remainder: owner documents 13/16/17/19/20/21/23/24/27 | Scope: keep or delete the design record for M10–M12 systems | ~4,000 |
+| 8 | Z7 | Z7-10 `docs/reference/prime-agent-research/` | Retention: keep as reference (KEEP-BUT-STOP-INVESTING) | 4,153 |
 
 ### Phase 3 — never build (stop authoring ahead of consumers)
 
@@ -227,7 +230,7 @@ the mechanism that produced most of the removable material.
 
 - Do not declare closed failure-code sets, lifecycle sets, DTO families, or event variants before a
   consumer exists. Pre-named codes for unbuilt systems are the single largest documentation cost
-  (Z6-F04: 120 codes, 6 in use).
+  (Z6-F04: 121 codes, none in use).
 - Do not add `schema_version` (or equivalent) to a DTO under the single-version policy (Z1-F05,
   Z1-F13).
 - Do not carry the same identity or the same limit in two fields "for safety"; the second copy
@@ -340,9 +343,9 @@ in this document.
 | Zone | Findings | Estimated reduction | Stopping point |
 | --- | ---: | ---: | --- |
 | Z1 contracts | 13 | ~1,292 prod (22% of zone) | after tier 2 (F11 is the mechanism) |
-| Z2 storage | 13 | ~370 prod + ~1,085 test | after Z2N-1 step 1 |
+| Z2 storage | 13 | ~370 prod + ~1,085 test (top 8, zero loss); ~470 + ~1,150 with the first genuine losses | after Z2N-1 step 1 |
 | Z3 execution | 11 | ~785 prod + ~975 test | after rank 6 |
-| Z4 edges | 11 | ~550–760 prod + ~720 test | below the seams and the single transport |
+| Z4 edges | 11 | ~690–900 prod + ~725 test (~11% of zone) | below the seams and the single transport |
 | Z5 periphery | 17 | ~470 prod + 1 crate | after tier 2 |
 | Z6 architecture | 9 | ~1,300 doc (13% of zone) | at Z6-F07/F09 |
 | Z7 records and root docs | 11 | ~8,505 doc | at rank 9 |
@@ -373,12 +376,12 @@ in this document.
 | Z2N-2 | Duplicated run query + projection loop in two snapshot fan-outs | MERGE | ~25 | — | none |
 | Z2N-3 | `session_snapshots` materializes a recomputed projection | SIMPLIFY | ~26 | ~10 | small latency |
 | Z2N-4 | "Terminal result evidence is mandatory" enforced nowhere | THEATER | 2 | — | none |
-| Z2N-5 | `ToolResultKindDto` second tool-name vocabulary | MERGE | — | — | none |
+| Z2N-5 | `ToolResultKindDto` second tool-name vocabulary | MERGE | ~56 | ~20 | durable discriminator stability (unread) |
 | Z2N-6 | One number (512 KiB), three constants, three crates | MERGE | ~4 | — | none |
 | Z2N-7 | 528-line hand-written parser to enforce a doc rule | SIMPLIFY | — | ~450 | alias-evasion coverage |
-| Z2N-8 | `recover_unfinished_runs` returns evidence all callers discard | SIMPLIFY | — | — | none |
+| Z2N-8 | `recover_unfinished_runs` returns evidence all callers discard | SIMPLIFY | ~12 | — | none |
 | Z2N-9 | One queue fact in four places, already inconsistent | MERGE | ~25 | ~20 | none |
-| Z2N-10 | `RunReplayDto.tail` always empty, no production reader | SIMPLIFY | — | — | none |
+| Z2N-10 | `RunReplayDto.tail` always empty, no production reader | SIMPLIFY | ~30 | ~40 | a one-shot catch-up backend |
 | Z2N-11 | 9 error-constructor boilerplate fns + 3 synonymous codes | SIMPLIFY | ~110 | — | none |
 | Z2N-12 | ~330 lines of DTO accessor tests for the coverage floor | SIMPLIFY | — | ~330 | none |
 | Z2N-13 | Turn-acceptance idempotency: two mechanisms, no retry | KEEP-BUT-STOP-INVESTING | 0 | 0 | — |
@@ -444,7 +447,7 @@ in this document.
 | Z6-F01 | Architecture 14: 127 lines about deleted machinery | DELETE | ~127 | ~0% |
 | Z6-F02 | Restated facts are stale; no gate checks a claim | SIMPLIFY | ~25 | 0% |
 | Z6-F03 | Future mechanisms restated inside shipped documents | SIMPLIFY | ~500 | low |
-| Z6-F04 | 120 closed failure codes for zero code; 6 exist | DELETE | ~280 | 0% |
+| Z6-F04 | 121 closed failure codes for zero code; none exist | DELETE | ~280 | 0% |
 | Z6-F05 | Roadmap states the same mapping in four places | SIMPLIFY | ~100 | low |
 | Z6-F06 | Architecture 29 specifies a reverted surface | SIMPLIFY | ~70 | 0% |
 | Z6-F07 | README re-owns cross-domain invariants | SIMPLIFY | ~20 | low |
