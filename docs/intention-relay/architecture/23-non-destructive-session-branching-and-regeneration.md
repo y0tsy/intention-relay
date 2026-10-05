@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 23. Decisions: ADR 0015, ADR 0026, ADR 0033. Research: m4plus_concept.md.
+Owner: architecture 23. Decisions: ADR 0015, ADR 0026, ADR 0033, ADR 0053. Research: m4plus_concept.md.
 
 This document owns future ordinary Session branching, conversation lineage, frozen fork context, regeneration, lineage
 audit, and branch presentation. It applies to future ordinary Session branching only. M3/M4 Sessions, Runs, turns,
@@ -67,7 +67,7 @@ waiting interaction, admitted work, and external effects never cross it.
 `fork-model-context-v1` is a closed ordered text-only causal projection from committed source facts at the selected
 boundary. It includes validated user messages and only eligible final nonblank assistant messages. It excludes reasoning
 text/summaries, attempts, usage, tool calls/results, questions, permissions, child results, raw provider data, and
-opaque continuation state. Unsupported or oversized material rejects rather than truncates, omits, or uses current
+opaque continuation state. Unsupported material rejects rather than truncates, omits, or uses current
 state. A later implementation uses the stored compatible schema unchanged, defines a separately versioned compatible
 projection, or blocks the dependent operation (ADR 0026).
 
@@ -107,17 +107,18 @@ event is allowed.
 
 Equal operation identity and command semantics return the same child without new records. Changed reuse, stale source
 state, preview mismatch, ineligible boundary, unavailable history, unsupported snapshot, or unavailable reference fails
-closed before a side effect. A failed transaction leaves no partial child, lineage, event, snapshot, operation binding,
-or rate consumption.
+closed before a side effect. A failed transaction leaves no partial child, lineage, event, snapshot, or operation
+binding.
 
-## Presentation, limits, and protocol
+## Presentation and protocol
 
 Titles and reversible archive state belong only to their ordinary Session. They never rewrite lineage or base snapshots.
 Archive requires an idle session; archived sources remain readable and forkable.
 
-Tree depth, descendant count, and source-boundary rate limits are ordinary-session fork policy only. They never
-constrain Mandate admission, scheduler behavior, or Mandate-child creation. Snapshot, title, and page bounds remain
-intrinsic representation/protocol constraints where their owning field table requires them.
+Session lineage is ordinary-session structure only; it never constrains Mandate admission, scheduler behavior, or
+Mandate-child creation. A fork carries no depth, descendant-count, source-boundary rate, or base-snapshot size limit
+([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)). Title and page bounds remain intrinsic
+representation/protocol constraints where their owning field table requires them.
 
 The typed fork preview, fork, ordinary regeneration, tree page, rename, archive, and restore DTOs are exposed as
 ordinary JSON-RPC methods over the single local connection; the former `session_fork_v1` negotiated family and its
@@ -126,7 +127,7 @@ immediate-child projections with stable continuation order, and lineage facts or
 journal. They are not tree-wide event streams. Existing M3 session replay and M4 run streams remain unchanged; a peer
 that does not speak protocol 2.0 receives the typed version-mismatch error before any method is served.
 
-## Detailed protocol DTOs, field tables, and limits
+## Detailed protocol DTOs, field tables, and bounds
 
 The fork public DTOs are:
 
@@ -149,7 +150,7 @@ sequence, the expected preview binding, an optional validated title, and an opti
 never accepts a client-selected child ID, raw snapshot, raw event, configuration path, credential, workspace path, or
 opaque implementation value. `ForkSessionResultDto` is bounded and returns child and tree identities, immediate parent,
 accepted boundary, optional child-anchor `TurnId`, snapshot and context schema versions, inherited future defaults, and
-the closed `unverified` workspace notice; it does not return the up-to-1-MiB base snapshot inside a transport response.
+the closed `unverified` workspace notice; it does not return the base snapshot inside a transport response.
 
 `GetForkPreviewQueryDto` takes only a source session and a candidate typed boundary. `ForkPreviewDto` returns a fresh
 source sequence, accepted boundary data, safe inherited future defaults, the deterministic fallback title, counts and
@@ -223,24 +224,21 @@ revisions, the declared audience, and the projection revision identity, material
 inherits the projection verbatim; no fork, regeneration, replay, or later run re-derives it from current configuration,
 current project instructions, or current session state.
 
-### Fixed limits and audit taxonomy
+### Fixed bounds and audit taxonomy
 
-The first scope uses these fixed code-owned limits, enforced inside the fork transaction before any partial child record
-exists; every limit failure is a typed policy result rather than an oversized transport frame, partial branch, or
+The first scope uses these fixed representation bounds, enforced inside the fork transaction before any partial child
+record exists; a parameter failure is a typed policy result rather than an oversized transport frame, partial branch, or
 unstructured storage error:
 
-| Subject | Limit | Enforcement |
+| Subject | Bound | Enforcement |
 | --- | ---: | --- |
-| Root-to-child depth | 4,096 | A root has depth 0; reject a child at depth 4,097 with `fork_tree_depth_limit`. |
-| Descendants in one tree | 16,384 | Root is not counted; reject before a 16,385th child with `fork_tree_descendant_limit`. |
-| Forks from one source boundary | 16 in a rolling hour | Count accepted operations by exact source and boundary; reject with `fork_boundary_rate_limit`. |
-| Canonical `ForkBaseSnapshotDto` | 1 MiB | Reject before persistence with `fork_snapshot_too_large`; never truncate context or references. |
 | Tree query page | 64 summaries | Reject page sizes outside 1..=64 with `invalid_conversation_tree_page`. |
 | Session title | 128 NFC Unicode scalar values | Reject invalid title before the presentation event. |
 
-The source boundary rate window uses durable accepted timestamps; a rejected, expired, or rolled-back attempt consumes
-no quota. Boundaries, base snapshots, lineage, and idempotency records remain indefinitely readable under the initial
-archive-only retention policy.
+The conversation tree has no depth, descendant-count, or source-boundary rate limit, and a base snapshot has no
+canonical size limit ([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)): a fork is bounded only
+by the page and title representation bounds above. Boundaries, base snapshots, lineage, and idempotency records remain
+indefinitely readable under the initial archive-only retention policy.
 
 The ordinary-session taxonomy adds `SessionForked`, `ForkAnchorMaterialized`, `SessionRenamed`, `SessionArchived`, and
 `SessionRestored` to the existing `SessionCreated` and run taxonomy. The conversation-tree container journal carries the
@@ -255,7 +253,6 @@ The closed fork safe failures through `ErrorDto` are:
 
 ```text
 fork_context_schema_unsupported
-fork_snapshot_too_large
 reasoning_history_unavailable
 fork_history_unavailable
 fork_snapshot_unsupported
@@ -264,9 +261,6 @@ fork_operation_conflict
 fork_source_changed
 fork_preview_mismatch
 fork_boundary_ineligible
-fork_tree_depth_limit
-fork_tree_descendant_limit
-fork_boundary_rate_limit
 session_archive_not_idle
 session_presentation_operation_conflict
 session_changed

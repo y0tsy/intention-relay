@@ -104,12 +104,13 @@ errors; future cursors are `InvalidCursor`; unavailable history is `HistoryUnava
 filtered `SessionSnapshotDto`.
 
 `intention-daemon` owns one private Tokio runtime and serves the JSON-RPC surface from one `AsyncLocalListener`. Each
-subscriber has a private bounded outgoing queue, its own writer path, and a bounded write deadline; an overflowing,
-closed, or timed-out subscriber is removed without awaiting it from execution, persistence, or healthy subscriber
-delivery, and the host attempts a typed `SubscriberTooSlow` resync where queue capacity permits before it closes that
-peer. Queue-capacity isolation and the paused-clock deadline are daemon-host unit evidence; the persistent-host outcome
-fixture proves a real healthy local peer's replay/live/replay lifecycle rather than OS-buffer timing. The transport
-message bound and local Unix-socket/Windows-pipe permissions are unchanged.
+subscriber has a private bounded outgoing queue (`SUBSCRIBER_QUEUE_CAPACITY`, 64), its own writer path, and a bounded
+write deadline (`SUBSCRIBER_WRITE_DEADLINE`, 10 seconds); these are implementation safeguards owned by the host, not
+product ceilings. An overflowing, closed, or timed-out subscriber is removed without awaiting it from execution,
+persistence, or healthy subscriber delivery, and the host attempts a typed `SubscriberTooSlow` resync where queue
+capacity permits before it closes that peer. Queue-capacity isolation and the paused-clock deadline are daemon-host
+unit evidence; the persistent-host outcome fixture proves a real healthy local peer's replay/live/replay lifecycle
+rather than OS-buffer timing. The transport message bound and local Unix-socket/Windows-pipe permissions are unchanged.
 
 Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every
 first-host facade clone and reopening the database; this is deterministic fixture lifecycle ownership, not a production

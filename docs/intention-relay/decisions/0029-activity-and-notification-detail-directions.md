@@ -4,6 +4,10 @@
 
 Accepted 2026-08-30. Not implemented; activation requires an activating specification.
 
+Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the fixed activity message bounds and
+the research-value ledger are removed; the message ordering, terminal-recipient rejection, and urgent-notification
+semantics stay.
+
 ## Decision
 
 The agent-communication, activity-observation, and user-notification detail from `m4plus_concept.md` is adopted and
@@ -14,14 +18,16 @@ owned by [architecture 24](../architecture/24-activity-ui-and-adapters.md):
 closed variants), `AgentActivityJournalRecordDto`, `DirectChildStatusDto`, `DescendantSummaryDto`, and
 `AgentNotificationLevelDto`;
 - the 16 closed journal record kinds;
-- the fixed activity bounds (1,024 messages, 4 MiB aggregate, 4,096 journal
-records, 64 KiB record, 256/512-KiB page, 16 references, 60-minute clarification; 16/512-KiB per-direction with a
-1-slot/64-KiB clarification reserve);
+- the activity model without numeric bounds: the former
+1,024-message, 4-MiB-aggregate, 4,096-journal-record, 64-KiB-record, 256/512-KiB-page, 16-reference, and 16/512-KiB
+per-direction queue values, including their 1-slot/64-KiB clarification reserve, are removed by
+[ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md), and the child clarification deadline remains architecture
+17's deadline, a sublimit of the child lifetime;
 - urgent-notification conditions and one-`Urgent`-per-(tree, reason) dedup;
 - the archive terminality precondition and the 32-tree/64-KiB notification
 page bound;
-- the 18 closed `agent_activity_*`/`agent_message_*`/`agent_notification_*`/
-`user_notifications_*` safe failures; and
+- the closed `agent_activity_*`/`agent_message_*`/`agent_notification_*`/
+`user_notifications_*` safe failures, without the queue, tree-count, and size members; and
 - the child-operations, delivery, and model-exchange detail: the full
 `RlmMessageExchangeDto` field family (activity tree, recipient session/run, target model step, captured activity-journal
 sequence, ordered messages) and the provider-translation constraints (distinct from text-only `ModelMessageDto` and
@@ -37,8 +43,9 @@ The former `run-execution-meaning-v4` carrier is removed with the canonical code
 0046](0046-typed-serde-json-contracts.md); the selection records above are typed serde JSON records.
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and
-remains bound to Milestone 5+. The numeric values are first-scope limits adopted here and classified as
-intrinsic/capacity bounds, never Mandate quotas.
+remains bound to Milestone 5+. The former numeric values were first-scope limits classified as intrinsic/capacity
+bounds; they are removed by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md), and a future activity bound
+returns only with a recorded precedent, never as a Mandate quota.
 
 ## Normative invariants
 
@@ -69,25 +76,26 @@ with a typed durable delivery outcome; the original message and its reason remai
 
 ## Failure semantics
 
-- A limit failure is checked before a partial durable record and never
+- A rejection is checked before a partial durable record and never
 truncates, evicts, synthesizes, or starts external work.
 - Invalid direction, stale link, terminal endpoint, duplicate or skipped
-order, invalid reference, or limit failure rejects before publication.
+order, or invalid reference rejects before publication.
 - An unaccepting or non-negotiating peer fails closed or resynchronizes and
 never blocks durable work or healthy subscribers.
 
 ## Rationale
 
 The agent communication, observation, and notification detail was present in `m4plus_concept.md` but only at principle
-level in architecture 24, with the numeric values explicitly deferred. Adopting the detail makes the authoritative
+level in architecture 24, with the numeric values explicitly deferred and since removed by [ADR
+0053](0053-sub-agent-and-fork-limits-by-precedent.md). Adopting the semantic detail makes the authoritative
 documentation cover the feature without documenting any part of it as implemented.
 
 ## Compatibility and non-goals
 
-This decision supersedes the "numeric values retained in research are not implementation limits" wording in architecture
-24's historical-projections note for the adopted values, and the absence of the detail in the principle-level text. The
-closed M4 baseline, M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this
-decision.
+This decision superseded the "numeric values retained in research are not implementation limits" wording in architecture
+24's historical-projections note for the values it then adopted; [ADR
+0053](0053-sub-agent-and-fork-limits-by-precedent.md) removes those values, and the principle stands. The closed M4
+baseline, M3/M4 bytes, and existing behavior remain unchanged, and no code changes are authorized by this decision.
 
 Native OS notifications, remote push, accounts, inbox semantics, physical deletion, export, compaction, retention
 clocks, provider UI or control planes, and production activation remain outside this decision. M5-M9 are not renumbered.

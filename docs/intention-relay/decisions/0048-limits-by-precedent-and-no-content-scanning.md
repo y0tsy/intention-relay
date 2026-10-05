@@ -6,6 +6,10 @@ Accepted 2026-09-30. It fixes the numeric-limit policy, bans runtime content sca
 reservation model, the Day/Week/Month period engine, and the queue audits from the documentation because they never
 existed in code. It authorizes no new limit, scanner, corridor, period engine, or queue audit.
 
+Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the tool read and output window row
+records the explicit cut marker, and the child, bridge, activity, and fork bounds are resolved under this record's
+precedent rule.
+
 ## Scope and supersession
 
 In scope: numeric limits in contracts and runtime, the runtime credential-shaped content scanners, and the
@@ -43,7 +47,7 @@ families. They are deleted, not renumbered or relocated.
    | Connect and synchronous IO timeouts (`CONNECT_TIMEOUT`, `SYNC_IO_TIMEOUT`) | Bound a stalled socket or a peer that stops reading |
    | Stale-socket probe | Allows reclaim after a crashed daemon without manual cleanup |
    | Storage read bounds (`MAX_TAIL_FACTS`, `MAX_*_BYTES`) | Bound replay and page reads to what the storage can serve safely |
-   | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Bound one tool read or one rendered result so a single large file or match set cannot force unbounded allocation or a hang |
+   | Tool read and output windows (`MAX_TOOL_OUTPUT_BYTES`, `MAX_EDIT_TARGET_BYTES`, `MAX_GREP_AGGREGATE_BYTES`) | Bound one tool read or one rendered result so a single large file or match set cannot force unbounded allocation or a hang; a window that ends content reports the cut through the result's truncation flag and explicit marker and never refuses the result or presents it as complete |
    | Durable assistant-content bound (`MAX_ASSISTANT_CONTENT_BYTES`) | Bounds one durable fact and the runtime chunk that emits it; long assistant text is fragmented at this size |
    | Process timeout window (`EXECUTE_TIMEOUT`, 30 s) | Bounds a child process that stops producing progress or never exits |
    | Process drain window (`READER_DRAIN_GRACE`, 5 s) | Bounds draining a child's output after the timeout, so the loop cannot hang on a silent pipe |
