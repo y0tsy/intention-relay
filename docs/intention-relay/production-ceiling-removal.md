@@ -1,6 +1,7 @@
 # Limits by precedent
 
-**Status:** current policy, recorded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md). This document replaces the
+**Status:** current policy, recorded by [ADR 0048](decisions/0048-limits-by-precedent-and-no-content-scanning.md) and
+amended by [ADR 0053](decisions/0053-sub-agent-and-fork-limits-by-precedent.md). This document replaces the
 earlier product-ceiling audit scope. The PR #15 ceiling removal and the M5+
 Slice 1 cleanup are historical inputs, not open work items.
 
@@ -31,7 +32,9 @@ precedent is recorded, the limit does not ship. The following are forbidden:
   admission policy;
 - speculative contract-level shape caps (for example field-size or
   count-of-items validation) that reject otherwise valid typed content;
-- truncation markers that pretend a capped result is complete;
+- truncation markers that pretend a capped result is complete: where a read or
+  output window ends content, the cut is reported through an explicit
+  truncation flag and marker, never refused and never presented as complete;
 - calendar or period quotas (Day/Week/Month) and queue-admission audits or
   reconciliation machinery added without a demonstrated queue failure.
 
@@ -51,9 +54,10 @@ if any is ever revisited, its precedent and failure mode are recorded with it.
 | Connect and synchronous I/O timeouts | Local transport client/server | A dead or stalled peer could hang a caller indefinitely. |
 | Stale-socket probe and reclaim | Daemon socket lifecycle | A leftover socket file after a crash could block startup or connect. |
 | Storage read bounds (`MAX_TAIL_FACTS`, `MAX_*_BYTES`) | Storage reads/pages | An unbounded read could load unbounded history into memory. |
+| Tool read and output windows | Tool read and render path | A single large file, match set, or command stream could force unbounded allocation or a hang; the cut is reported explicitly. |
 | Model progress and retry timeouts | Model runtime | A provider stream that stops producing could hang a run forever. |
 
-These five safeguards are the only numeric safeguards retained; a new one or a
+These six safeguards are the only numeric safeguards retained; a new one or a
 changed value requires its recorded reason. Socket permissions (0700/0600) and
 boundary redaction are structural protections rather than numeric limits, and
 they stay. Everything outside this keep-list needs a precedent, and a removed

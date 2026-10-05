@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032. Research: m4plus_concept.md.
+Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032, ADR 0053. Research: m4plus_concept.md.
 
 This document owns future Mandate Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future Mandate execution; M3/M4 bytes, IDs, UUIDs,
@@ -213,19 +213,16 @@ BridgeInvocationAcceptedDto
 
 One attached peer sends correlated attachment, invocation, operation-read, and run-control commands; the daemon sends
 correlated responses and uncorrelated `RunStreamFrameDto` values over the same persistent local connection. The
-first-scope limits are:
+first-scope bounds are transport and liveness safeguards only:
 
-- at most **sixteen** independently admitted bridge operations may be unfinished on one attached peer; a seventeenth
-request receives the known pre-effect `bridge_concurrency_limit_exceeded` and starts no external action (a transport
-limit only, not a caller permission to invoke a tool, and not a change to the group limit, policy quotas, or tool-effect
-serialization);
 - **1 MiB** per local frame;
 - a **64-frame, 10-second** bounded slow-peer subscription path;
-- **512 KiB** per durable fact;
-- **4 MiB** of commit-order tool output and successful result content in one group; and
+- **512 KiB** per durable fact; and
 - **256 facts or 512 KiB** per initial-history page.
 
-There is no broader buffer, alternate deadline, truncation rule, or unbounded queue. The bounded slow-peer path never
+Bridge operations are admitted independently: the bridge keeps no unfinished-operation counter, and each invocation
+passes architecture 15's admission contract before any external action. There is no broader buffer, alternate deadline,
+truncation rule, or unbounded queue. The bounded slow-peer path never
 delays durable execution or healthy subscribers: a slow, resyncing, or detached peer receives typed resynchronization
 and is bounded by the 64-frame/10-second path without blocking execution, persistence, or healthy peers. A detached peer
 recovers only from durable history: reconnect and request the run from the last accepted cursor, and receive captured
@@ -241,7 +238,6 @@ bridge_authority_unavailable
 bridge_authority_expired
 bridge_operation_conflict
 bridge_operation_not_found
-bridge_concurrency_limit_exceeded
 ```
 
 They disclose no credential, path, grant value, raw input, Python/Jupyter value, provider resource, process topology, or

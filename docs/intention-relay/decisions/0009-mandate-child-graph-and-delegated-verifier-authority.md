@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the child graph carries
+only its recorded structure (class step budgets, a maximum depth of two, at most sixteen direct children per node, at
+most sixty-four descendants, and a 360-minute lifetime containing the 60-minute clarification deadline); queue, size,
+rate, and concurrency caps do not exist.
 
 ## Decision
 
@@ -16,6 +19,10 @@ revocation, and authority changes win conflicts.
 
 ## Invariants
 
+- the child graph is bounded only by its recorded structure: class
+step budgets, a maximum depth of two, at most sixteen direct children per node, at most
+sixty-four descendants in one root request, and a 360-minute child lifetime that contains the
+60-minute clarification deadline ([ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md));
 - each child has one immutable parent and root graph; self-links, cycles,
 reparenting, detaching, merging, and cross-graph links fail before mutation;
 - creation, controls, cascades, messages, and mutations are durable/idempotent,

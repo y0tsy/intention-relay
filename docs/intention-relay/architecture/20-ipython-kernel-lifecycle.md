@@ -265,7 +265,7 @@ are:
 - a foreground cell has a hard **ten-minute** execution bound, after which the daemon does not wait indefinitely.
 
 The ten-minute bound is a kernel-execution policy limit, not a replacement for the existing 1-MiB frame, 512-KiB fact,
-4-MiB group, 64-frame/10-second slow-peer, or 256-fact/512-KiB history limits. Idle lifetime measures the absence of a
+64-frame/10-second slow-peer, or 256-fact/512-KiB history limits. Idle lifetime measures the absence of a
 foreground cell and of tracked kernel-local background tasks. Kernel diagnostics contain only safe status, bounded
 sizes, failure codes, and correlation references; they never include raw output, Python values, tracebacks, frames, or
 implementation resources.

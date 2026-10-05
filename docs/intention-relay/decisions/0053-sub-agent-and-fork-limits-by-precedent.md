@@ -1,0 +1,177 @@
+# ADR 0053: Sub-agent and fork limits by precedent
+
+## Status
+
+Accepted 2026-10-05. It removes the numeric caps of the future child, bridge, activity, and fork surfaces that have no
+code and no recorded precedent, it records a precedent for every surviving numeric value, and it aligns the tool-loop
+output boundary with explicit truncation at the tool. It authorizes no new numeric bound, queue, reservation, refusal
+outcome, or error code.
+
+## Scope and supersession
+
+In scope: the child-graph message queue, clarification reserve, delegation-snapshot, child-result, and
+child-concurrency bounds; the bridge unfinished-operation bound; the activity message bounds, reference-count bound,
+and research-value ledger; the fork tree depth, descendant-count, boundary-rate, and base-snapshot bounds; the closed
+failure members that guarded those bounds; and the tool-loop output-limit outcome.
+
+Out of scope: the class step budgets, the depth-2/16-per-node/64-descendant topology, the 360-minute child lifetime and
+its 60-minute clarification deadline, pagination and representation bounds, transport and durable-content liveness
+safeguards, the kernel idle and model-progress deadlines, and every behavior of the ordinary runtime.
+
+| Record | Affected clause | Amended to |
+| --- | --- | --- |
+| [ADR 0009](0009-mandate-child-graph-and-delegated-verifier-authority.md) | The invariant list, which recorded no child-graph structure | The list opens with the surviving structure: class step budgets, a maximum depth of two, at most sixteen direct children per node, at most sixty-four descendants, and a 360-minute lifetime containing the 60-minute clarification deadline |
+| [ADR 0026](0026-session-branching-detail-directions.md) | The decision's fixed-limits bullet, the closed-failure bullet, the rationale's "limits" wording, normative invariant 5, and the "limit failures" failure-semantics clause | The tree keeps only the 64-summary page and the 128-scalar title bounds, the closed failure list drops its four removed members, and lineage is ordinary-session structure that never constrains Mandate admission |
+| [ADR 0027](0027-child-kernel-bridge-mcp-detail-directions.md) | The architecture-17 clause listing "the message queue, tree, class, delegation, and clarification limits" with its 17 closed safe failures, and the architecture-19 clause listing "16 unfinished operations, the 1-MiB frame / 64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds" with its 6 closed safe failures | The child structure is the class step budgets, the topology, and the lifetime deadlines; the bridge structure is the transport and liveness bounds only; the failure lists drop the queue, size, delegation, concurrency, and bridge-concurrency members |
+| [ADR 0029](0029-activity-and-notification-detail-directions.md) | The decision's fixed-activity-bounds bullet, the closed-failure bullet, the closing "numeric values are first-scope limits ... intrinsic/capacity bounds" clause, and the "limit failure" failure-semantics clause | No numeric activity bound is activated; delivery stays ordered by the container journal and `pair_order`, the closed failure list drops the queue, tree-count, and size members, and a future activity bound returns only with a recorded precedent |
+| [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) | The keep-list row for tool read and output windows | The row records the explicit cut: a window that ends content reports the cut through the result's truncation flag and marker and never refuses the result or presents it as complete |
+
+The named clause of each record is amended in place; every other clause of those records stays as written.
+
+## Decision
+
+### Surviving values and their recorded precedents
+
+Future child and fork work keeps only the values below. Each one records the failure mode it prevents, its unit, its
+bound, and the behavior at the bound, as [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) requires; the
+values are the delegation model's structure, not ceilings on otherwise valid work.
+
+| Surviving value | Unit | Bound | Recorded reason (failure mode it prevents) | Behavior at the bound |
+| --- | --- | ---: | --- | --- |
+| Class step budget | model steps in one child run | `Light` 64, `Medium` 256, `Heavy` 1,024 | A class is the user's selected delegation budget and nothing else: the delegating side chooses how much provider work a child may do under one objective | No further model step is admitted under that class |
+| Direct children of one node | children created by one parent Mandate | 16 | One parent model step addresses, messages, and terminalizes its direct children through one direct-pair protocol; unbounded fan-out outruns that single step | The 17th direct child fails before admission with `sub_agent_direct_child_limit_exceeded` |
+| Maximum child depth | edges from the root run | 2 | Parenthood is the only control authority and it reaches only the direct parent; depth bounds how far work can recurse away from the root that owns the user request | A child below depth 2 fails before admission with `sub_agent_depth_limit_exceeded` |
+| Total descendants in one RLM tree | child Mandates under one root run | 64 | One root user request owns the tree; the total bounds the durable child identities, delegation snapshots, terminal summaries, and usage aggregation that request accumulates | The 65th descendant fails before admission with `sub_agent_tree_descendant_limit_exceeded` |
+| Child lifetime | minutes from durable admission | 360 | A child that never reaches a terminal decision must not hold its durable child record and pending work indefinitely; the lifetime includes the delay before the first step | The child records `sub_agent_lifetime_exceeded` and starts no further model step |
+| Clarification deadline | minutes from durable request acceptance | 60 | A child in `AwaitingClarification` must not wait forever on a parent reply; the deadline is a sublimit of the lifetime, so a stuck question cannot outlive the child | The child records `sub_agent_clarification_timeout` and begins no further model step |
+| Kernel idle retention | minutes without a foreground cell or tracked kernel-local task | 60 | An idle kernel keeps a live process and its in-memory namespace; retaining it indefinitely leaks a process and memory | The daemon disposes of the idle kernel after recording only its existing safe checkpoint metadata; a later cell creates a fresh kernel |
+| Bounded slow-peer subscription path | frames and seconds | 64 frames in 10 seconds | A slow, resyncing, or detached peer could otherwise block durable execution, persistence, or healthy subscribers | The peer receives typed resynchronization and detach; durable execution and healthy subscribers continue |
+
+The unconstrained per-node product across the two child depths would be `16 x 16 = 256` slots, and the 64-descendant
+cap binds first. The child graph keeps the delegation protocol: `Instruction`, `Report`, `ClarificationRequest`, and
+`ClarificationReply` ordered by the monotonically increasing `pair_order` of the delegation-pair container journal.
+
+The remaining liveness safeguards are unchanged and keep their recorded precedents in [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md)'s keep-list and
+[`production-ceiling-removal.md`](../production-ceiling-removal.md): transport message size, connect and synchronous IO
+timeouts, the stale-socket probe, storage read bounds, tool read and output windows, the durable content bound, the
+process timeout and drain windows, and model progress and retry timeouts. Pagination and representation bounds stay as
+each owning document records them: the fork tree page, the session title, and the history and notification pages.
+
+### Removed values and their failure members
+
+The following values have no code (the child, bridge, activity, and fork surfaces are approved future design) and no
+recorded precedent. They are deleted, not renumbered, relocated, or replaced by a warning, soft cap, counter, or
+periodic audit:
+
+| Removed value | Where it was recorded | Why it is removed |
+| --- | --- | --- |
+| Per-direction message count and size (16 undelivered messages, 512 KiB content), the 1-slot/64-KiB clarification reserve, and the 15-slot/448-KiB ordinary allowance | architectures 17 and 24, ADRs 0027 and 0029 | No code; no recorded precedent; a bureaucratic message ceiling over an already-ordered, already-redacted pair journal |
+| Delegation snapshot 512 KiB and 4 MiB per root tree | architecture 17, ADR 0027 | No code; no recorded precedent; rejects valid typed content (ADR 0048 removes speculative shape caps) |
+| Child terminal result 512 KiB | architecture 17, ADR 0027 | No code; no recorded precedent; a refusal on valid terminal content |
+| Concurrent non-terminal children in one tree (16) | architecture 17, ADR 0027 | No code; no recorded precedent; duplicates the 64-descendant topology bound and turns capacity into admission policy |
+| Unfinished bridge operations per attached peer (16) | architecture 19, ADR 0027 | No code; no recorded precedent; a bridge counter over connection framing and architecture-15 admission |
+| Activity research values (1,024 messages, 4 MiB aggregate, 4,096 journal records, 64 KiB record, 256/512-KiB page, 16 references) | architecture 24, ADR 0029 | Never activated; no recorded precedent; the ledger itself classified them as research values |
+| Fork tree depth 4,096, descendants 16,384, source-boundary rate 16 per rolling hour, and base snapshot 1 MiB | architecture 23, ADR 0026 | No code; no recorded precedent; the rolling hour is a calendar/period quota of the kind ADR 0048 removes by name, and the snapshot cap rejects valid typed content |
+
+The matching failure members are deleted with their values:
+
+```text
+sub_agent_concurrency_limit_exceeded
+sub_agent_delegation_too_large
+sub_agent_follow_up_queue_full
+sub_agent_result_too_large
+bridge_concurrency_limit_exceeded
+agent_message_queue_full
+agent_message_tree_limit_exceeded
+agent_message_too_large
+agent_activity_snapshot_too_large
+fork_tree_depth_limit
+fork_tree_descendant_limit
+fork_boundary_rate_limit
+fork_snapshot_too_large
+```
+
+### Tool output boundary
+
+`tool_output_limit_exceeded` and `OutputLimitExceeded` are dead in code ([ADR
+0025](0025-base-tool-contracts-and-tool-loop-bounds.md), [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md)). The tool output boundary is explicit truncation instead of
+refusal: a tool renders its output within its own per-tool output window and reports a cut through the result's
+truncation flag and explicit marker, and that marked result commits as the call's ordinary result. The window stays a
+liveness safeguard in the ADR 0048 keep-list; no output-refusal outcome exists.
+
+## Rationale
+
+- The removed values were documentation-only product counters over surfaces with no code. Keeping them would ship
+  queues, reservations, rates, and size refusals that no failure history justifies and no implementation owes.
+- The surviving values are the delegation model itself: a user-selected step budget per class, a finite direct-pair tree
+  the root can address and terminalize, two deadlines that bound a delegated task's wait, and the liveness safeguards
+  that keep one peer, stream, or kernel from hanging or leaking.
+- Recording each surviving value with its failure mode converts the former unrecorded research numbers into the
+  precedent record [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) requires, so no reader has to guess
+  why a number exists.
+- The tool boundary already truncates with an explicit marker in code; the documentation now matches that behavior
+  instead of asserting a refusal outcome no code produces.
+
+## Invariants
+
+1. The child, bridge, activity, and fork surfaces carry exactly the values recorded above and the liveness safeguards;
+   a new value returns only with a precedent recorded in an ADR or architecture section.
+2. A surviving value is structure or a liveness safeguard, never a product ceiling: it never becomes a Mandate
+   admission quota, a scheduler gate, or a bridge counter.
+3. Removed values and their failure members have no producer, consumer, alias, or compatibility path.
+4. The delegation-pair container journal is the only message order; messages are never merged, overwritten, or silently
+   dropped, and no queue count, size, or clarification reservation exists.
+5. A tool that reaches its output window reports the cut explicitly; no output-refusal outcome exists.
+6. Pagination and representation bounds and the kernel idle and model-progress deadlines are unchanged.
+7. No new numeric value, error code, DTO family, storage mechanism, or wire version is introduced.
+
+## Compatibility
+
+This is a documentation-only change. The child, bridge, activity, and fork surfaces remain approved future design and
+are not implemented; removing their numeric caps changes no code and authorizes no implementation. Recorded M3/M4
+bytes, meanings, replay, and recovery are untouched. No protocol, DTO, configuration, or storage schema version changes.
+
+## Security and failure behavior
+
+- Removed caps protected nothing structural: messages stay typed, redacted, ordered by the delegation-pair journal, and
+  rejected only for direction, operation identity, order, or a terminal recipient.
+- A tool output window still bounds one read or rendered result so a large file or match set cannot force unbounded
+  allocation; the cut is explicit and never presented as complete.
+- No retained bound is loosened: the class budgets, topology, lifetimes, and liveness safeguards keep their recorded
+  values and reasons.
+- No runtime content scanning is introduced ([ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md)).
+
+## Non-goals
+
+No new numeric bound, queue, reservation, counter, rate window, or refusal outcome; no change to the surviving class,
+topology, or deadline values; no implementation of the child, bridge, activity, or fork surfaces; no change to M3/M4
+recorded behavior; no migration, version bump, or compatibility layer; no edit to closed milestone records.
+
+## Affected documents
+
+[Decisions index](README.md) lists this record. [ADR
+0009](0009-mandate-child-graph-and-delegated-verifier-authority.md), [ADR
+0026](0026-session-branching-detail-directions.md), [ADR
+0027](0027-child-kernel-bridge-mcp-detail-directions.md), [ADR
+0029](0029-activity-and-notification-detail-directions.md), and [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md) carry the amended clauses. [Architecture
+15](../architecture/15-tool-registry-and-mandate-tool-loop.md) owns the tool output boundary; [architecture
+17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md) owns the child structure and the
+surviving failure members; [architecture 19](../architecture/19-mandate-gateway-rlm-bridge.md) owns the bridge bounds;
+[architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md) owns fork lineage;
+[architecture 24](../architecture/24-activity-ui-and-adapters.md) owns activity messaging; and
+[`production-ceiling-removal.md`](../production-ceiling-removal.md) mirrors the policy and the explicit truncation
+marker. Secondary cleanup: [architecture
+20](../architecture/20-ipython-kernel-lifecycle.md) drops the stale 4-MiB group reference that ADR 0048 already
+superseded.
+
+## Evidence
+
+The change is accepted only together with: a documentation search receipt showing the removed cap values and failure
+names have no remaining hit in `docs/intention-relay/` outside the removal statements recorded here and the amended
+records, and that the remaining `4 MiB` occurrences belong to the provider-reasoning and Goal-domain bounds outside
+this record's scope; this record's surviving-value table with each recorded reason; no contradictory topology, class, or
+timeout value in architectures 17, 19, 23, and 24; and valid links and Mermaid with the documentation and architecture
+checks passing. Gates: `make quick`, `make verify`, `docs-check`, `make architecture`, Linux/Windows CI.

@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 15. Decisions: ADR 0007, ADR 0025. Research: m4plus_concept.md.
+Owner: architecture 15. Decisions: ADR 0007, ADR 0025, ADR 0053. Research: m4plus_concept.md.
 
 This document owns the unified tool registry, immutable tool selection, direct Mandate tool admission, Mandate
 `WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
@@ -159,8 +159,8 @@ descriptor revisions, selection ordering, and direct admission; typed serde JSON
 runtime/application owns live readiness and mode preconditions; primitive owners validate typed inputs/outputs; storage
 owns persistence constraints. No layer may bypass or replace another. Every numeric value is classified before
 activation as an intrinsic representation/protocol bound, typed capacity availability, or a liveness safeguard with
-recorded rationale (ADR 0048); future Mandate product ceilings, retry budgets, and successful-result truncation are not
-permitted.
+recorded rationale (ADR 0048); future Mandate product ceilings, retry budgets, and successful-result truncation to fit a
+ceiling are not permitted.
 
 ## Mandate direct admission and WorkspaceRoot
 
@@ -266,15 +266,15 @@ terminal safe result projection of every call becomes model context after the wh
 The first-scope bounds are:
 
 - the existing **512 KiB** individual durable-fact bound applies to every fragment; and
--  content is never truncated or partly committed; if a fragment cannot fit, it is not written and only its call
-  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue.
+-  a tool renders its output within its own output window and reports a cut through the result's truncation flag and
+  explicit marker before the result becomes a fragment; there is no output-refusal outcome, and an accepted fragment is
+  never truncated or partly committed.
 
 The closed initial terminal outcome taxonomy is: `Succeeded`, `DeniedBeforeExecution`, `FailedBeforeExternalEffect`,
-`CancelledBeforeStart`, `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and `Partial`. It
-carries only safe model-visible projection and approved typed metadata; no value silently changes category during
-replay. `Succeeded`, known denials, known pre-effect failures, the output-limit outcome, and `Partial` may enter the
-next typed exchange; a `Partial` result carries the bounded captured output with its interruption notice, never blocks
-another model step, and is never retried.
+`CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`. It carries only safe
+model-visible projection and approved typed metadata; no value silently changes category during replay. `Succeeded`,
+known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a `Partial` result carries
+the bounded captured output with its interruption notice, never blocks another model step, and is never retried.
 
 ### Tool history replay and subscription
 

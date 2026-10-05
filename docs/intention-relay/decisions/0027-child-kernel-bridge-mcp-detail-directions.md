@@ -4,6 +4,10 @@
 
 Accepted 2026-08-30. Not implemented; activation requires an activating specification.
 
+Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the child message queue, delegation
+size, result size, and child concurrency limits and the bridge unfinished-operation limit are removed; the class step
+budgets, the child topology and lifetime deadlines, and the bridge transport and liveness bounds stay.
+
 ## Decision
 
 The child-agent (RLM), kernel, bridge, and MCP detail from `m4plus_concept.md` is adopted and owned by the respective
@@ -11,9 +15,10 @@ authoritative packages:
 
 - **Architecture 17 (child/verifier)**: the child commands and messages
 (`ParentSubAgentCommandDto`, `SubAgentHandleDto`, `RlmChildMessageOperation`, `MandateChildMessageDto`,
-`MandateChildTerminalSummaryDto`, `RlmParentLinkDto`), the message queue, tree, class, delegation, and clarification
-limits, child kernel seeding, the 17 closed `sub_agent_*`/`model_stream_progress_timeout` safe failures, and the
-child-creation and delegation fields `child_provider_capability_selection`, `child_activity_graph_id`, and
+`MandateChildTerminalSummaryDto`, `RlmParentLinkDto`), the class step budgets, the depth-2/16-per-node/64-descendant
+topology, the 360-minute lifetime with its 60-minute clarification deadline, child kernel seeding, the 13 closed
+`sub_agent_*`/`model_stream_progress_timeout` safe failures, and the child-creation and delegation fields
+`child_provider_capability_selection`, `child_activity_graph_id`, and
 `required_evidence_contract_references`;
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family, the
 60-minute idle / 16 live kernel / 10-minute cell bounds, `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed
@@ -21,8 +26,8 @@ kinds, the 6 closed `kernel_*` safe failures, and the explicit negatives that `r
 (`InterruptRunCommandDto`) remains the only first-scope run interruption command and that the daemon does not wait for a
 cell to acknowledge an interrupt;
 - **Architecture 19 (bridge)**: `BridgeRunGrantDto`,
-`BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`, `BridgeInvocationAcceptedDto`, 16 unfinished operations,
-the 1-MiB frame / 64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds, the 6 closed
+`BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`, `BridgeInvocationAcceptedDto`, the 1-MiB frame /
+64-frame / 10-second / 512-KiB / 256-fact-512-KiB liveness bounds, the 5 closed
 `bridge_*`/`daemon_tool_gateway_required` safe failures, the explicit negative that the first bridge contract adds no
 per-`ToolCallId` cancellation command, and the slow-peer non-delay property of the bounded 64-frame/10-second path;
 - **Architecture 18 (MCP)**: the bounded `McpMethodDto` gateway, connection
@@ -43,7 +48,7 @@ where they conflict with Mandate child-graph semantics.
 
 1. `sub_agent` creates a durable child Mandate; the child model adds no
 `ToolId`, registry entry, or independent authority.
-2. Message queues are bounded and redacted; equal replay returns the stored
+2. Messages are durable redacted records; equal replay returns the stored
 message; changed reuse fails before publication.
 3. Tree bounds and classes are RLM-tree policy and never become Mandate
 admission quotas or child-graph limits.
@@ -59,7 +64,7 @@ local stdio process is run-owned, lazy, and never reattached.
 
 ## Failure semantics
 
-- Limit failures are known typed pre-effect rejections; no content is
+- Rejections are known typed pre-effect outcomes; no content is
 truncated or partly committed.
 - A started unproven effect yields a bounded `Partial` result with its notice and is never retried, reattached, or
 rerun; the next model step proceeds.

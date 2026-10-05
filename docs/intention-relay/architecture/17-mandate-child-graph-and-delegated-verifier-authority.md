@@ -2,7 +2,7 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 17. Decisions: ADR 0009, ADR 0027. Research: m4plus_concept.md.
+Owner: architecture 17. Decisions: ADR 0009, ADR 0027, ADR 0053. Research: m4plus_concept.md.
 
 This document owns future Mandate child-graph relations, immutable delegation, direct-parent controls, graph
 terminalization, and separately issued delegated verifier authority. It applies only to future `Mandate` and
@@ -335,44 +335,40 @@ components it reports, and no synthetic ceiling, price, or inferred cost is intr
 child work: the child's next model step proceeds with the bounded captured output and its notice, and the interruption
 is recorded as an urgent graph safety observation.
 
-**Queue limits.** Each parent-to-child and child-to-parent direction holds at most sixteen undelivered messages and 512
-KiB of safe message content. One slot and 64 KiB in each direction are set aside respectively for `ClarificationReply`
-and `ClarificationRequest`; ordinary `Instruction`/`Report` use at most fifteen slots and 448 KiB. A message is never
-merged, overwritten, or silently dropped. A message committed before a child's terminal decision is included only in its
-next fresh model request, and one to a terminal child is rejected. The parent cannot use a stale handle to revive a
-terminal child, and the child cannot autonomously request another parent authority context. The handle contains no
+**Message delivery.** A message is never merged, overwritten, or silently dropped, and there is no per-direction queue
+count, size cap, or clarification reservation. A message committed before a child's terminal decision is included only
+in its next fresh model request, and one to a terminal child is rejected. The parent cannot use a stale handle to revive
+a terminal child, and the child cannot autonomously request another parent authority context. The handle contains no
 credential, path, grant, kernel value, transcript, implementation resource, or raw child result.
 
-**Tree bounds and classes.** Code-owned limits per one root user request (root run at depth zero):
+**Tree bounds and classes.** Code-owned child-graph structure per one root user request (root run at depth zero):
 
-| Limit | Selected value |
+| Bound | Selected value |
 | --- | --- |
-| Direct children of the root run | 16 |
-| Direct children of a depth-one child | 3 |
-| Descendants of a depth-two child | 0 |
+| Direct children of one node | 16 |
 | Maximum child depth | 2 |
 | Total descendants in one RLM tree | 64 |
-| Concurrent non-terminal children in one RLM tree | 16 |
 | Full lifetime of one child | 360 minutes from durable admission |
 
-The tree is bounded by `16 + (16 x 3) = 64` children. A seventeenth concurrent child is not queued; it receives a known
-pre-effect terminal result. Child lifetime includes delay before work begins and never pauses for tools, confirmation,
+The unconstrained per-node product across the two child depths would be `16 x 16 = 256` slots, and the 64-descendant
+cap binds first. A direct child beyond either structure bound is not queued; it receives a known pre-effect terminal
+result. Child lifetime
+includes delay before work begins and never pauses for tools, confirmation,
 `ask_user`, kernel work, or descendants. The durable admission transaction validates the parent authority context,
 applicable policy, selected descriptor, selected class, tree counters, and delegation snapshot before it assigns child
 identities; it atomically records the child session and run, `RlmParentLinkDto`, immutable delegation snapshot, class
 resolution, idempotent operation binding, and audit evidence, or records none of them. `SubAgentClassDto` is closed as
-`Light`, `Medium`, `Heavy` with fixed maximum model-step counts of 64, 256, and 1,024 respectively; each class resolves
-to a complete typed profile (one permitted provider profile, lifetime up to 360 minutes, permitted registered tool
-subset, max depth up to 2, kernel rules, context/result limits). A nominally stronger class is valid only when every
-effective tool/input constraint/scope/class/quota/concurrency/lifetime limit remains narrowed. No class bypasses the
-one-daemon authority, WorkspaceRoot, Plan/Build mode, hooks, confirmation, redaction, or a stricter current admission
-decision. The daemon resolves and persists one immutable child selection and never accepts a raw model name, endpoint,
-or credential, nor falls back to a current default when a class is unavailable. Every child receives one immutable
+`Light`, `Medium`, `Heavy` with fixed maximum model-step counts of 64, 256, and 1,024 respectively; each class is a step
+budget only and resolves with a complete typed profile (one permitted provider profile, lifetime up to 360 minutes,
+permitted registered tool subset, max depth up to 2, kernel rules). A nominally stronger class is valid only when every
+effective tool/input constraint/scope/lifetime limit remains narrowed. No class bypasses the one-daemon authority,
+WorkspaceRoot, Plan/Build mode, hooks, confirmation, redaction, or a stricter current admission decision. The daemon
+resolves and persists one immutable child selection and never accepts a raw model name, endpoint, or credential, nor
+falls back to a current default when a class is unavailable. Every child receives one immutable
 `SubAgentDelegationSnapshotDto` (task, bounded safe textual projection, typed provenance references, parent provenance,
 selected effective programmatic-caller-policy snapshot reference, selected `AgentActivitySelectionV1` reference;
 excludes raw provider items, reasoning text, tool output, Python objects, live state, grants, credentials, paths, and
-implementation resources). One snapshot is at most 512 KiB; all snapshots in one root RLM tree total at most 4 MiB; the
-daemon rejects rather than truncates.
+implementation resources).
 
 **Child kernel state.** A child session may lazily create its own IPython kernel under the selected session-kernel
 lifecycle and the shared limit of sixteen live kernels; it never shares a process or live namespace with the parent. At
@@ -398,8 +394,8 @@ child run and the matching reply arrives before its deadline. On child lifetime 
 cancellation, kernel failure, executor loss, or daemon restart, no provider request, tool, process, kernel, bridge
 operation, or external action is resumed, reattached, retried, or rerun; an unfinished child run becomes `Interrupted`
 on daemon recovery, and a later retry creates a newly admitted child consuming new tree capacity. `AwaitResult` returns
-a closed terminal state, a safe conclusion of at most 512 KiB, and an immutable typed terminal-child-result reference
-(rejected rather than truncated above the bound). `model_stream_progress_timeout_v1` applies to every child step under
+a closed terminal state, a safe conclusion, and an immutable typed terminal-child-result reference.
+`model_stream_progress_timeout_v1` applies to every child step under
 [architecture 15](15-tool-registry-and-mandate-tool-loop.md#model-progress-deadline).
 
 **Closed safe failures.** At minimum the child model adds these `ErrorDto` codes:
@@ -408,14 +404,10 @@ a closed terminal state, a safe conclusion of at most 512 KiB, and an immutable 
 sub_agent_depth_limit_exceeded
 sub_agent_direct_child_limit_exceeded
 sub_agent_tree_descendant_limit_exceeded
-sub_agent_concurrency_limit_exceeded
 sub_agent_lifetime_exceeded
 sub_agent_class_unavailable
-sub_agent_delegation_too_large
 sub_agent_delegation_unavailable
-sub_agent_follow_up_queue_full
 sub_agent_not_active
-sub_agent_result_too_large
 sub_agent_message_operation_conflict
 sub_agent_message_direction_forbidden
 sub_agent_clarification_not_pending
@@ -425,16 +417,16 @@ model_stream_progress_timeout
 ```
 
 They disclose no credential, path, delegation content, Python value, grant, provider resource, process topology, or raw
-transcript. The bounds above are RLM-tree policy and never become Mandate admission quotas or child-graph limits.
+transcript. The structure above is RLM-tree policy and never becomes a Mandate admission quota or a scheduler gate.
 
 ## Compatibility, dependencies, and non-goals
 
 This document depends on architectures 13-16 and decisions 0001, 0004, 0006, 0007, 0008, and 0052. Architecture 18 owns
 MCP capability lifecycle; MCP evidence is non-authorizing and an interrupted MCP call's partial result stays local to
-its owning Mandate. This document defines no sub-agent executor, worker or recursion topology,
-product depth/count/concurrency/lifetime/message
-quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context semantics, provider evolution, session
-forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
+its owning Mandate. This document defines no sub-agent executor, worker or recursion topology, product concurrency,
+queue, size, or rate quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context semantics, provider
+evolution, session forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Makefile/CI, or
+production implementation.
 
 M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegation snapshot, activity, verifier
 authority, target set, audit, verdict, mutation, reconciliation, or execution-kind state; historical M4 tool calls

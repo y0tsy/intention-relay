@@ -2,8 +2,8 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 24. Decisions: ADR 0016, ADR 0029, ADR 0032, ADR 0033, ADR 0034 (superseded by ADR 0048). Research:
-`m4plus_concept.md`.
+Owner: architecture 24. Decisions: ADR 0016, ADR 0029, ADR 0032, ADR 0033, ADR 0034 (superseded by ADR 0048), ADR 0053.
+Research: `m4plus_concept.md`.
 
 This document owns future activity trees, direct-pair communication, activity and notification journals, acknowledgement
 projections, safe UI projections, and adapter delivery. It applies to future ordinary, Mandate, and VerifierMandate
@@ -72,8 +72,8 @@ for global event order. Only this pair may exchange the closed message kinds:
 | Child to parent | `Report`, `ClarificationRequest` |
 
 A sibling, indirect relative, root, adapter, bridge, kernel, MCP service, provider, or arbitrary caller cannot send a
-pair message. Invalid direction, stale link, terminal endpoint, duplicate or skipped `pair_order`, invalid reference, or
-limit failure rejects before publication.
+pair message. Invalid direction, stale link, terminal endpoint, duplicate or skipped `pair_order`, or invalid reference
+rejects before publication.
 
 ```mermaid
 flowchart LR
@@ -128,11 +128,10 @@ AgentMessageReferenceDto
   RetainedContent
 ```
 
-`safe_text` is bounded redacted presentation, never raw content; a message carries at most 16 typed references;
-`RetainedContent` is disclosed only via the separately admitted `retrieve` tool. Each direction holds at most 16
-undelivered messages and 512 KiB of canonical safe content, with one slot and 64 KiB in each direction reserved for
-`ClarificationReply` and `ClarificationRequest` respectively; ordinary `Instruction`/`Report` use at most 15 slots and
-448 KiB.
+`safe_text` is bounded redacted presentation, never raw content; a message carries closed typed references, and
+`RetainedContent` is disclosed only via the separately admitted `retrieve` tool. A message is never merged, overwritten,
+or silently dropped, and no per-direction queue count, size cap, or clarification reservation exists
+([ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)).
 
 Messages deliver only at the recipient's next fresh model request, in activity-tree container journal order. They cannot
 alter a sent provider request, interrupt a step, create a run, schedule work, or become a remote continuation.
@@ -190,22 +189,13 @@ provider/reasoning data, prompts, paths, commands, grants, credentials, Python v
 journal sequence and bounded counts, marked incomplete when a projection is unreadable, built from durable safe
 projections only.
 
-The research values below are not activated limits ([ADR
-0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)):
-
-| Subject | Research value |
-| --- | ---: |
-| Inter-agent messages in one activity tree | 1,024 |
-| Aggregate message content | 4 MiB |
-| Activity-journal records | 4,096 |
-| One message or activity record | 64 KiB |
-| Activity-journal page | 256 records and 512 KiB |
-| Typed references in one message | 16 |
-| Clarification wait | 60 minutes |
-
-A bound failure is checked before a partial durable record exists; it never truncates, evicts, synthesizes, or starts
-external work. Archive is accepted only after the root and every descendant are terminal; it is read-only, retains
-everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
+No numeric activity bound is activated here ([ADR
+0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)); the research values formerly listed in this
+section are removed by [ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md) because none had a
+recorded precedent, and the child clarification deadline remains architecture 17's 60-minute sublimit of the 360-minute
+child lifetime. A rejection is checked before a partial durable record exists; it never truncates, evicts, synthesizes,
+or starts external work. Archive is accepted only after the root and every descendant are terminal; it is read-only,
+retains everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
 
 ## Child operations, delivery, and model exchanges
 
@@ -331,15 +321,11 @@ agent_activity_tree_archived
 agent_activity_pair_invalid
 agent_message_direction_forbidden
 agent_message_operation_conflict
-agent_message_queue_full
-agent_message_tree_limit_exceeded
-agent_message_too_large
 agent_message_reference_invalid
 agent_message_reference_unavailable
 agent_message_recipient_terminal
 agent_message_order_invalid
 agent_activity_history_unavailable
-agent_activity_snapshot_too_large
 agent_notification_history_unavailable
 agent_notification_summary_too_large
 ```
