@@ -256,19 +256,18 @@ A kernel is session-scoped: one daemon-owned session actor owns at most one IPyt
 sessions/projects/users/daemon instances, inheriting the session's `WorkspaceRoot` as context metadata without owning
 it. It is created lazily on the first admitted IPython execution and disposed on archive, idle expiry, shutdown, or
 clean restart. Idle disposal discards the kernel's in-memory namespace after recording only the safe checkpoint metadata
-that already exists; it does not cancel or alter a durable run unrelated to that kernel. The first-scope kernel limits
-are:
+that already exists; it does not cancel or alter a durable run unrelated to that kernel. The first-scope kernel policy
+is:
 
-- an idle kernel is retained at most **60 minutes**;
-- the daemon retains at most **16 live session kernels**; exceeding this fails before Python execution with
+- an idle kernel is disposed of rather than retained indefinitely;
+- kernels consume finite runtime capacity, and unavailable capacity fails before Python execution with
 `kernel_concurrency_limit_exceeded`; and
-- a foreground cell has a hard **ten-minute** execution bound, after which the daemon does not wait indefinitely.
+- the daemon does not wait indefinitely for a foreground cell.
 
-The ten-minute bound is a kernel-execution policy limit, not a replacement for the existing 1-MiB frame, 512-KiB fact,
-64-frame/10-second slow-peer, or 256-fact/512-KiB history limits. Idle lifetime measures the absence of a
-foreground cell and of tracked kernel-local background tasks. Kernel diagnostics contain only safe status, bounded
-sizes, failure codes, and correlation references; they never include raw output, Python values, tracebacks, frames, or
-implementation resources.
+Kernel execution policy changes no transport, storage, or host-streaming safeguard owned by another document. Idle
+disposal measures the absence of a foreground cell and of tracked kernel-local background tasks. Kernel diagnostics
+contain only safe status, bounded sizes, failure codes, and correlation references; they never include raw output,
+Python values, tracebacks, frames, or implementation resources.
 
 The closed kernel safe failures through `ErrorDto` are:
 

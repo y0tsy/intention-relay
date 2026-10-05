@@ -341,37 +341,27 @@ in its next fresh model request, and one to a terminal child is rejected. The pa
 a terminal child, and the child cannot autonomously request another parent authority context. The handle contains no
 credential, path, grant, kernel value, transcript, implementation resource, or raw child result.
 
-**Tree bounds and classes.** Code-owned child-graph structure per one root user request (root run at depth zero):
-
-| Bound | Selected value |
-| --- | --- |
-| Direct children of one node | 16 |
-| Maximum child depth | 2 |
-| Total descendants in one RLM tree | 64 |
-| Full lifetime of one child | 360 minutes from durable admission |
-
-The unconstrained per-node product across the two child depths would be `16 x 16 = 256` slots, and the 64-descendant
-cap binds first. A direct child beyond either structure bound is not queued; it receives a known pre-effect terminal
-result. Child lifetime
-includes delay before work begins and never pauses for tools, confirmation,
-`ask_user`, kernel work, or descendants. The durable admission transaction validates the parent authority context,
-applicable policy, selected descriptor, selected class, tree counters, and delegation snapshot before it assigns child
-identities; it atomically records the child session and run, `RlmParentLinkDto`, immutable delegation snapshot, class
-resolution, idempotent operation binding, and audit evidence, or records none of them. `SubAgentClassDto` is closed as
-`Light`, `Medium`, `Heavy` with fixed maximum model-step counts of 64, 256, and 1,024 respectively; each class is a step
-budget only and resolves with a complete typed profile (one permitted provider profile, lifetime up to 360 minutes,
-permitted registered tool subset, max depth up to 2, kernel rules). A nominally stronger class is valid only when every
-effective tool/input constraint/scope/lifetime limit remains narrowed. No class bypasses the one-daemon authority,
-WorkspaceRoot, Plan/Build mode, hooks, confirmation, redaction, or a stricter current admission decision. The daemon
-resolves and persists one immutable child selection and never accepts a raw model name, endpoint, or credential, nor
-falls back to a current default when a class is unavailable. Every child receives one immutable
+**Tree shape and classes.** The child graph is a rooted directed tree: every non-root has exactly one immutable parent
+and one root, and the shape rules fix no numeric depth, direct-child, or descendant cap ([ADR
+0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md)). A child's lifetime runs from durable admission and
+includes the delay before work begins; it never pauses for tools, confirmation, `ask_user`, kernel work, or
+descendants. The durable admission transaction validates the parent authority context, applicable policy, selected
+descriptor, selected class, and delegation snapshot before it assigns child identities; it atomically records the child
+session and run, `RlmParentLinkDto`, immutable delegation snapshot, class resolution, idempotent operation binding, and
+audit evidence, or records none of them. `SubAgentClassDto` is closed as `Light`, `Medium`, `Heavy`; each class names a
+typed child profile (one permitted provider profile, permitted registered tool subset, kernel rules) and carries no step
+budget or other numeric bound. A nominally stronger class is valid only when every effective tool/input constraint and
+scope remains narrowed. No class bypasses the one-daemon authority, WorkspaceRoot, Plan/Build mode, hooks, confirmation,
+redaction, or a stricter current admission decision. The daemon resolves and persists one immutable child selection and
+never accepts a raw model name, endpoint, or credential, nor falls back to a current default when a class is
+unavailable. Every child receives one immutable
 `SubAgentDelegationSnapshotDto` (task, bounded safe textual projection, typed provenance references, parent provenance,
 selected effective programmatic-caller-policy snapshot reference, selected `AgentActivitySelectionV1` reference;
 excludes raw provider items, reasoning text, tool output, Python objects, live state, grants, credentials, paths, and
 implementation resources).
 
 **Child kernel state.** A child session may lazily create its own IPython kernel under the selected session-kernel
-lifecycle and the shared limit of sixteen live kernels; it never shares a process or live namespace with the parent. At
+lifecycle; it never shares a process or live namespace with the parent. At
 first child-kernel creation, the daemon may form an independent full copy of the latest verified parent
 `kernel-state-snapshot-v1` (supported serializable values only; excludes grants, tasks, handles, provider resources,
 credentials; no reverse sync). No parent checkpoint failure, failed transfer, or unavailability blocks child admission
@@ -379,8 +369,8 @@ credentials; no reverse sync). No parent checkpoint failure, failed transfer, or
 child copy.
 
 **Clarification and progress.** A child may enter `AwaitingClarification` only after its durable `ClarificationRequest`
-reaches the direct parent. The request has a fixed 60-minute deadline from durable acceptance, a sublimit of, and never
-pausing or extending, the child's 360-minute full lifetime. The direct parent may accept exactly one matching
+reaches the direct parent. The request has a deadline that is a sublimit of the child's full lifetime and never pauses
+or extends it. The direct parent may accept exactly one matching
 `ClarificationReply` before that deadline; the daemon then records delivery and creates the next fresh model step of
 that same active child run with the reply in the separate RLM message exchange. It does not create a new child, a new
 `RunId`, a new authority, or a new external action. A reply after the deadline, parent terminalization, cancellation,
@@ -401,9 +391,6 @@ a closed terminal state, a safe conclusion, and an immutable typed terminal-chil
 **Closed safe failures.** At minimum the child model adds these `ErrorDto` codes:
 
 ```text
-sub_agent_depth_limit_exceeded
-sub_agent_direct_child_limit_exceeded
-sub_agent_tree_descendant_limit_exceeded
 sub_agent_lifetime_exceeded
 sub_agent_class_unavailable
 sub_agent_delegation_unavailable

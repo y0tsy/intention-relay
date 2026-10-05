@@ -301,23 +301,23 @@ never a partially understood snapshot or live stream. Historical M4 runs retain 
 
 ## Model progress deadline
 
-`model_stream_progress_timeout_v1` is the selected future model-step policy for all post-M4 model-tool-loop steps,
-including roots and children. It does not reinterpret or alter M4's existing absolute provider-attempt deadline.
+`model_stream_progress_timeout_v1` is the selected model-step policy for all post-M4 model-tool-loop steps, including
+roots and children. Progress is content, not schedule: only non-empty `TextDelta` and `ReasoningDelta` facts count;
+`Started`, usage, and other non-content facts do not, and a continuously producing stream has no fixed step duration.
+The policy is active only while a provider stream for a model step is open; it is paused while a tool or foreground
+kernel cell runs, confirmation or `ask_user` awaits, `AwaitResult` waits for a child, a retry delay runs, or the run is
+completing or cancelling.
 
-After a future request is sent to a provider, the first non-empty `TextDelta` or `ReasoningDelta` must arrive within
-sixty seconds; the same sixty-second deadline applies between later such deltas. Only non-empty text and reasoning
-deltas reset the deadline; `Started`, usage, and other non-content facts do not. An accepted `ToolCall` or `Finished`
-before the deadline ends the provider phase normally. The progress deadline is active only while a provider stream for a
-model step is open; it is paused while a tool or foreground kernel cell runs, confirmation or `ask_user` awaits,
-`AwaitResult` waits for a child, a retry delay runs, or the run is completing or cancelling.
+A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
+fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
+an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
+09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
+it adds. Before the first durable content or other irreversible fact, exactly one retry is permitted after
+`model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
+wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and never claims success
+or resumes work after restart.
 
-For future post-M4 steps, this progress deadline replaces the absolute attempt deadline: a continuously producing stream
-has no additional fixed step duration. Before the first durable content or other irreversible fact, exactly one retry is
-permitted after `model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed
-user cancellation wins the race. A timeout otherwise produces a safe failed outcome, suppresses late fragments, and
-never claims success or resumes work after restart.
-
-The progress deadline is a model-step policy owned by this document, referenced by the programmatic-caller policy under
+The progress policy is a model-step policy owned by this document, referenced by the programmatic-caller policy under
 [architecture 27](27-programmatic-caller-policy-and-admission.md); it may not weaken it. A timeout outcome is a known
 typed failure before an external effect when no irreversible fact preceded it, and a bounded `Partial` result when a
 started effect lacks durable terminal proof; the next model step proceeds, and nothing pauses.

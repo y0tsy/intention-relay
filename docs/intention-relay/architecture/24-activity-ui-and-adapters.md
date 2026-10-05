@@ -192,8 +192,8 @@ projections only.
 No numeric activity bound is activated here ([ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)); the research values formerly listed in this
 section are removed by [ADR 0053](../decisions/0053-sub-agent-and-fork-limits-by-precedent.md) because none had a
-recorded precedent, and the child clarification deadline remains architecture 17's 60-minute sublimit of the 360-minute
-child lifetime. A rejection is checked before a partial durable record exists; it never truncates, evicts, synthesizes,
+recorded precedent, and the child clarification deadline remains architecture 17's deadline, a sublimit of the child
+lifetime. A rejection is checked before a partial durable record exists; it never truncates, evicts, synthesizes,
 or starts external work. Archive is accepted only after the root and every descendant are terminal; it is read-only,
 retains everything, and physical deletion, compaction, export, and garbage collection remain out of scope.
 

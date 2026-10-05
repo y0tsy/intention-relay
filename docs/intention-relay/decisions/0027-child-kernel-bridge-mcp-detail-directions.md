@@ -4,9 +4,11 @@
 
 Accepted 2026-08-30. Not implemented; activation requires an activating specification.
 
-Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): the child message queue, delegation
-size, result size, and child concurrency limits and the bridge unfinished-operation limit are removed; the class step
-budgets, the child topology and lifetime deadlines, and the bridge transport and liveness bounds stay.
+Amended 2026-10-05 by [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md): every numeric child, bridge, kernel,
+and progress bound is removed — queue, delegation size, result size, concurrency, topology counts, class step budgets,
+lifetime and clarification deadlines, kernel idle/live/cell durations, and the bridge slow-peer numbers; the
+qualitative child-graph shape, label-only classes, kernel policy, and the implemented transport, storage, and
+host-streaming safeguards stay.
 
 ## Decision
 
@@ -15,21 +17,22 @@ authoritative packages:
 
 - **Architecture 17 (child/verifier)**: the child commands and messages
 (`ParentSubAgentCommandDto`, `SubAgentHandleDto`, `RlmChildMessageOperation`, `MandateChildMessageDto`,
-`MandateChildTerminalSummaryDto`, `RlmParentLinkDto`), the class step budgets, the depth-2/16-per-node/64-descendant
-topology, the 360-minute lifetime with its 60-minute clarification deadline, child kernel seeding, the 13 closed
+`MandateChildTerminalSummaryDto`, `RlmParentLinkDto`), the child-graph shape with label-only classes and no numeric
+bounds, child kernel seeding, the 10 closed
 `sub_agent_*`/`model_stream_progress_timeout` safe failures, and the child-creation and delegation fields
 `child_provider_capability_selection`, `child_activity_graph_id`, and
 `required_evidence_contract_references`;
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family, the
-60-minute idle / 16 live kernel / 10-minute cell bounds, `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed
+idle-disposal, kernel-capacity, and foreground-cell execution policy without fixed durations,
+`kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed
 kinds, the 6 closed `kernel_*` safe failures, and the explicit negatives that `run.interrupt`
 (`InterruptRunCommandDto`) remains the only first-scope run interruption command and that the daemon does not wait for a
 cell to acknowledge an interrupt;
 - **Architecture 19 (bridge)**: `BridgeRunGrantDto`,
 `BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`, `BridgeInvocationAcceptedDto`, the 1-MiB frame /
-64-frame / 10-second / 512-KiB / 256-fact-512-KiB liveness bounds, the 5 closed
+512-KiB / 256-fact-512-KiB liveness bounds and the host's bounded slow-peer path, the 5 closed
 `bridge_*`/`daemon_tool_gateway_required` safe failures, the explicit negative that the first bridge contract adds no
-per-`ToolCallId` cancellation command, and the slow-peer non-delay property of the bounded 64-frame/10-second path;
+per-`ToolCallId` cancellation command, and the slow-peer non-delay property of that path;
 - **Architecture 18 (MCP)**: the bounded `McpMethodDto` gateway, connection
 scope and local-stdio process lifecycle, the 6 closed `mcp_*` safe failures, and the supersession of the concept2
 `MandateMcpCapabilitySourceDto`/ `DiscoveryDto`/`CapabilityRevisionDto` names by the authoritative
@@ -50,13 +53,13 @@ where they conflict with Mandate child-graph semantics.
 `ToolId`, registry entry, or independent authority.
 2. Messages are durable redacted records; equal replay returns the stored
 message; changed reuse fails before publication.
-3. Tree bounds and classes are RLM-tree policy and never become Mandate
-admission quotas or child-graph limits.
-4. A clarification request has a 60-minute deadline, a sublimit of the
-360-minute child lifetime; a late reply fails closed.
+3. The child-graph shape and its label-only classes are RLM-tree policy and
+never become a Mandate admission quota or a scheduler gate.
+4. A clarification request has a deadline that is a sublimit of the
+child lifetime; a late reply fails closed.
 5. One live kernel epoch belongs to exactly one admitted `RunId`; retained
-session-scoped idle/concurrency limits are historical provenance, while the first-scope 60-minute/16/10-minute limits
-are future policy.
+session-scoped idle/concurrency limits are historical provenance, and the first-scope kernel policy states no fixed
+idle, count, or cell duration.
 6. The bridge introduces no second start marker, result stream, or sequence; a
 grant is non-secret transport evidence.
 7. The MCP bounded gateway uses user-approved `McpMethodDto` records only; a

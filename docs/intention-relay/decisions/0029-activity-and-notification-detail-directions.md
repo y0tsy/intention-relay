@@ -22,7 +22,7 @@ closed variants), `AgentActivityJournalRecordDto`, `DirectChildStatusDto`, `Desc
 1,024-message, 4-MiB-aggregate, 4,096-journal-record, 64-KiB-record, 256/512-KiB-page, 16-reference, and 16/512-KiB
 per-direction queue values, including their 1-slot/64-KiB clarification reserve, are removed by
 [ADR 0053](0053-sub-agent-and-fork-limits-by-precedent.md), and the child clarification deadline remains architecture
-17's 60-minute sublimit of the 360-minute child lifetime;
+17's deadline, a sublimit of the child lifetime;
 - urgent-notification conditions and one-`Urgent`-per-(tree, reason) dedup;
 - the archive terminality precondition and the 32-tree/64-KiB notification
 page bound;

@@ -55,9 +55,10 @@ if any is ever revisited, its precedent and failure mode are recorded with it.
 | Stale-socket probe and reclaim | Daemon socket lifecycle | A leftover socket file after a crash could block startup or connect. |
 | Storage read bounds (`MAX_TAIL_FACTS`, `MAX_*_BYTES`) | Storage reads/pages | An unbounded read could load unbounded history into memory. |
 | Tool read and output windows | Tool read and render path | A single large file, match set, or command stream could force unbounded allocation or a hang; the cut is reported explicitly. |
+| Host subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY`, `SUBSCRIBER_WRITE_DEADLINE`) | Daemon run streaming | A peer that stops accepting frames could otherwise block execution, persistence, or healthy subscribers. |
 | Model progress and retry timeouts | Model runtime | A provider stream that stops producing could hang a run forever. |
 
-These six safeguards are the only numeric safeguards retained; a new one or a
+These seven safeguards are the only numeric safeguards retained; a new one or a
 changed value requires its recorded reason. Socket permissions (0700/0600) and
 boundary redaction are structural protections rather than numeric limits, and
 they stay. Everything outside this keep-list needs a precedent, and a removed

@@ -216,7 +216,8 @@ correlated responses and uncorrelated `RunStreamFrameDto` values over the same p
 first-scope bounds are transport and liveness safeguards only:
 
 - **1 MiB** per local frame;
-- a **64-frame, 10-second** bounded slow-peer subscription path;
+- a bounded slow-peer subscription path enforced by the host's subscriber queue and write deadline ([architecture
+03](03-daemon-transport-and-adapters.md));
 - **512 KiB** per durable fact; and
 - **256 facts or 512 KiB** per initial-history page.
 
@@ -224,7 +225,7 @@ Bridge operations are admitted independently: the bridge keeps no unfinished-ope
 passes architecture 15's admission contract before any external action. There is no broader buffer, alternate deadline,
 truncation rule, or unbounded queue. The bounded slow-peer path never
 delays durable execution or healthy subscribers: a slow, resyncing, or detached peer receives typed resynchronization
-and is bounded by the 64-frame/10-second path without blocking execution, persistence, or healthy peers. A detached peer
+and is bounded by the host's slow-peer path without blocking execution, persistence, or healthy peers. A detached peer
 recovers only from durable history: reconnect and request the run from the last accepted cursor, and receive captured
 replay, reasoning pages/completion, tool-history pages/completion, then later live frames in the selected order; if
 either history class is absent, its pages and completion frame are omitted and the remaining frames retain this order.
