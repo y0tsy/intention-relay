@@ -209,10 +209,9 @@ imported library modules publishes as run facts through this document's post-com
 The loop belongs to one daemon-owned active run. The daemon assigns `ModelStepId`, `ToolGroupId`, and canonical
 `ToolCallId`; providers, adapters, and tools assign none of them, and provider-native call IDs remain private. Runs have
 sequential model steps; this first scope adds no numeric step limit. A tool-calling completed step owns one non-empty
-ordered group; a `ToolCallId` is unique and never reused. A group holds at most **16 calls**; a provider step emitting
-more than 16 fails closed before any local effect with the typed `provider_tool_group_invalid` outcome. The same closed
-outcome applies to a step with calls but no `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate
-or malformed group, or later provider facts for an already closed step.
+ordered group; a `ToolCallId` is unique and never reused, and group validity is shape-only with no numeric call bound.
+A step with calls but no `ToolCalls` closing reason, a `ToolCalls` reason without calls, a duplicate or malformed group,
+or later provider facts for an already closed step fails closed before any local effect.
 
 ```mermaid
 sequenceDiagram
@@ -248,8 +247,9 @@ identifiers, and provider-owned tool execution are excluded, and a driver that c
 exchange cannot claim `model_tool_loop_v1` support.
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never
-Mandate product ceilings. Oversized or malformed groups fail before effects; output is never partially committed, and a
-call whose fragment cannot fit receives a known terminal outcome without changing other calls' order or meaning.
+Mandate product ceilings. Malformed or unrepresentable groups fail before effects; output is never partially committed,
+and a call whose output reaches its tool's output window commits the explicitly marked result without changing other
+calls' order or meaning.
 
 ### Fragment stream, terminal outcomes, and bounds
 

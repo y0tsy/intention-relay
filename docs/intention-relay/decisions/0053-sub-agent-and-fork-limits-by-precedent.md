@@ -4,15 +4,15 @@
 
 Accepted 2026-10-05. It removes the numeric caps of the future child, bridge, activity, and fork surfaces that have no
 code and no recorded precedent, it records a precedent for every surviving numeric value, and it aligns the tool-loop
-output boundary with explicit truncation at the tool. It authorizes no new numeric bound, queue, reservation, refusal
-outcome, or error code.
+output and tool-group boundaries, where output truncates with an explicit marker and group validity is shape-only with
+no call maximum. It authorizes no new numeric bound, queue, reservation, refusal outcome, or error code.
 
 ## Scope and supersession
 
 In scope: the child-graph message queue, clarification reserve, delegation-snapshot, child-result, and
 child-concurrency bounds; the bridge unfinished-operation bound; the activity message bounds, reference-count bound,
 and research-value ledger; the fork tree depth, descendant-count, boundary-rate, and base-snapshot bounds; the closed
-failure members that guarded those bounds; and the tool-loop output-limit outcome.
+failure members that guarded those bounds; and the tool-loop output-limit outcome and 16-call tool-group maximum.
 
 Out of scope: the class step budgets, the depth-2/16-per-node/64-descendant topology, the 360-minute child lifetime and
 its 60-minute clarification deadline, pagination and representation bounds, transport and durable-content liveness
@@ -92,7 +92,7 @@ fork_boundary_rate_limit
 fork_snapshot_too_large
 ```
 
-### Tool output boundary
+### Tool output and tool-group boundaries
 
 `tool_output_limit_exceeded` and `OutputLimitExceeded` are dead in code ([ADR
 0025](0025-base-tool-contracts-and-tool-loop-bounds.md), [ADR
@@ -100,6 +100,12 @@ fork_snapshot_too_large
 refusal: a tool renders its output within its own per-tool output window and reports a cut through the result's
 truncation flag and explicit marker, and that marked result commits as the call's ordinary result. The window stays a
 liveness safeguard in the ADR 0048 keep-list; no output-refusal outcome exists.
+
+The same alignment removes the dead 16-call tool-group maximum and its `provider_tool_group_invalid` outcome from
+[architecture 15](../architecture/15-tool-registry-and-mandate-tool-loop.md), which [ADR
+0048](0048-limits-by-precedent-and-no-content-scanning.md) already superseded: a completed tool-calling step still owns
+one non-empty ordered group of unique `ToolCallId` values, group validity is shape-only, and no numeric call or
+group-size bound exists.
 
 ## Rationale
 
@@ -157,7 +163,8 @@ recorded behavior; no migration, version bump, or compatibility layer; no edit t
 0027](0027-child-kernel-bridge-mcp-detail-directions.md), [ADR
 0029](0029-activity-and-notification-detail-directions.md), and [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md) carry the amended clauses. [Architecture
-15](../architecture/15-tool-registry-and-mandate-tool-loop.md) owns the tool output boundary; [architecture
+15](../architecture/15-tool-registry-and-mandate-tool-loop.md) owns the tool output boundary and the tool-group shape
+contract (the deleted 16-call maximum and `provider_tool_group_invalid`); [architecture
 17](../architecture/17-mandate-child-graph-and-delegated-verifier-authority.md) owns the child structure and the
 surviving failure members; [architecture 19](../architecture/19-mandate-gateway-rlm-bridge.md) owns the bridge bounds;
 [architecture 23](../architecture/23-non-destructive-session-branching-and-regeneration.md) owns fork lineage;
