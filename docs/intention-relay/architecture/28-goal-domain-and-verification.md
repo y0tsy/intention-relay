@@ -103,8 +103,8 @@ exception cannot omit, cancel, or bypass an active obligatory child.
 
 Required-gate failure moves the Goal to `NeedsRework` (retaining the gate result and prior evidence), and a successful
 gate is valid only until a new revision of the Goal, gate, template, or obligatory child invalidates it. `PauseGoal` and
-`StopGoal` prevent new ordinary and verification runs, cascade through the non-terminal subtree, cancel active runs via
-`Running -> Cancelling -> Cancelled`, and commit a bounded `Partial` result with its notice for a started external
+`StopGoal` prevent new ordinary and verification runs, cascade through the non-terminal subtree, interrupt active runs
+under the cooperative signal, and commit a bounded `Partial` result with its notice for a started external
 effect that cannot be proven terminal. Pause is reversible via explicit resume; stop is terminal. Archiving is explicit
 and reversible only for a terminal idle Goal; it retains all history as readable, and restore changes presentation only,
 never launching a run.
@@ -133,7 +133,7 @@ The admission transaction validates the Goal and session link, the complete targ
 provider selection, registry revision, and applicable policy, then atomically writes the run, selection, audit evidence,
 projections, and snapshots, or none; no external action occurs inside that transaction. An active run retains its frozen
 selection, and edits create newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or
-over-limit selected records block dependent operations before external work; queue promotion, replay, retry, child
+over-limit selected records block dependent operations before external work; replay, retry, child
 admission, fork, and recovery never substitute current state. `McpMethodCatalogSelectionV1` is `Disabled` when `mcp` is
 absent from the frozen model-tool selection; each `mcp` call records the exact one method reference and typed input
 identity before external action.
@@ -308,7 +308,7 @@ references, and the earlier summary remains historical evidence. Fork creation s
 summary references in the frozen projection and never reads a current ancestor or imports a future summary. Headroom,
 VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
 
-## Branches, children, cancellation, and recovery
+## Branches, children, interruption, and recovery
 
 A new session fork receives a frozen copy of applicable project-Goal links, session memory/Skill/role/template cards,
 exact revisions, and the selected current summary reference in an independent fork snapshot. It does not receive a new
@@ -324,11 +324,12 @@ any, selected effective programmatic-caller-policy snapshot reference, selected 
 and only the required safe references; not a full parent transcript or live target context. Later
 parent/Goal/memory/Skill/role/policy/activity edits do not change the child snapshot, though live suspension or
 revocation can impose a stricter present-time denial. A child uses independently assigned
-session/run/class/tool/provider selections and cancellation/no-resume rules. On cancellation, failure, or daemon
-restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external effect is retried,
-reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known pre-effect evidence or
-a bounded partial result. Goals, records, summaries, proposals, and readable history survive recovery; a later user
-attempt obtains a new run identity and target snapshot.
+session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops only the
+in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next model step.
+On failure or daemon restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external
+effect is retried, reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known
+pre-effect evidence or a bounded partial result. Goals, records, summaries, proposals, and readable history survive
+recovery; a later user attempt obtains a new run identity and target snapshot.
 
 ## Bounds and closed safe failures
 
@@ -388,7 +389,7 @@ memory/Skill/role/template content, model proposal text, provider resource, or i
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, queue tickets, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
+M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
 tool_execution_unavailable` remain authoritative and unchanged, and no historical record gains synthetic Goal, gate,
 memory, proposal, or compaction state. For new Mandate work, Goals are acceptance/evidence records, not the
 work-authorization plane; leading-goal, policy, confirmation, and bound semantics are historical-only where they

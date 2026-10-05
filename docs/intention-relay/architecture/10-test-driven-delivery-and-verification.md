@@ -37,7 +37,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 | Contract tests | Prove crate-to-crate and client-to-daemon contracts. | `intention-client` command/event fixtures. |
 | Architecture tests | Prevent prohibited dependency/import/API shapes. | Adapter cannot depend on SQLite/runtime; SDK types do not escape provider crate. |
 | Storage tests | Prove current-schema creation, transaction, projection, and recovery correctness. | Projection and event atomicity. |
-| Runtime tests | Prove actor lifecycle, cancellation, queue, stream ordering. | Queued turn starts after terminal run. |
+| Runtime tests | Prove actor lifecycle, interruption, pending input, stream ordering. | Pending turn joins the live run context at the next boundary. |
 | Tool/policy tests | Prove workspace addressing, hook order, Plan restrictions, VFR/Headroom behavior. | Relative addressing from the root, VFR then Headroom ordering. |
 | Provider tests | Normalize native streams/errors and protect credentials. | OpenRouter fixture conversion. |
 | Adapter integration tests | Prove Tauri bridge and TUI consume the same daemon contract. | Identical session event observed by both clients. |
@@ -140,7 +140,7 @@ M5's trusted-local `execute` environment, the six active tools (`read`, `write`,
 1. Approve a plan and request a new implementation Session.
 2.  Verify the target Session receives the full available safe context, plan revision, and execution prompt as a frozen
    snapshot.
-3.  Verify source history is unchanged and no live runtime resource, credential, grant, queue, or unfinished effect
+3.  Verify source history is unchanged and no live runtime resource, credential, grant, or unfinished effect
    transfers.
 4. Verify optional auto-start creates a fresh Build run or leaves an idle target on start failure.
 
@@ -307,7 +307,7 @@ registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md
 
 Before implementation, future scheduler work requires durable-reason versus observation/candidate/admission fixtures;
 deterministic ordering; unavailable reason preservation; duplicate wake/readiness idempotency; lifecycle/readiness
-races; transaction fault injection; recovery-before-scheduling; no-resume; ordinary queue and M4 preservation;
+races; transaction fault injection; recovery-before-scheduling; no-resume; ordinary turn input and M4 preservation;
 no-current-state reconstruction; typed protocol replay; and fake-secret/resource absence. These are future obligations,
 not current tests or targets. The detailed portfolio is owned by [Mandate scheduler and readiness-driven
 admission](16-mandate-scheduler-and-readiness-driven-admission.md).

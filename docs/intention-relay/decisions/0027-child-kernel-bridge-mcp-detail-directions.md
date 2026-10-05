@@ -17,8 +17,9 @@ child-creation and delegation fields `child_provider_capability_selection`, `chi
 `required_evidence_contract_references`;
 - **Architecture 20 (kernel)**: the `KernelExecutionRequestDto` family, the
 60-minute idle / 16 live kernel / 10-minute cell bounds, `kernel-state-snapshot-v1`, `KernelOutputChunkDto` closed
-kinds, the 6 closed `kernel_*` safe failures, and the explicit negatives that `StopRunCommandDto` remains the only
-first-scope run cancellation command and that the daemon does not wait for a cell to acknowledge an interrupt;
+kinds, the 6 closed `kernel_*` safe failures, and the explicit negatives that `run.interrupt`
+(`InterruptRunCommandDto`) remains the only first-scope run interruption command and that the daemon does not wait for a
+cell to acknowledge an interrupt;
 - **Architecture 19 (bridge)**: `BridgeRunGrantDto`,
 `BridgeAttachmentResponseDto`, `BridgeInvocationCommandDto`, `BridgeInvocationAcceptedDto`, 16 unfinished operations,
 the 1-MiB frame / 64-frame / 10-second / 512-KiB / 4-MiB / 256-fact-512-KiB bounds, the 6 closed

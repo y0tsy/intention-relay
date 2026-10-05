@@ -24,8 +24,9 @@ degraded read-only recovery.
 The reverted Slice 2 activation also carried unavailable-queue promotion (8 per terminal transition) and reconciliation
 (`ReconcileUnavailableQueueCommandDto`, 32 per page) plus held recovery-promoted run admission
 (`AdmitRecoveredRunCommandDto`); those surfaces were reverted and removed from the direction by [ADR
-0048](0048-limits-by-precedent-and-no-content-scanning.md), and the live M3 queue with its tickets and atomic promotion
-remains the queue authority.
+0048](0048-limits-by-precedent-and-no-content-scanning.md), and no M3 queue, ticket, or promotion remains: a user
+message accepted during an active run is a pending turn that joins that run's live context ([ADR
+0055](0055-pending-turns-and-cooperative-interruption.md)).
 
 Each direction keeps M3/M4 behavior authoritative, affects fresh runs only after its own activating specification, and
 remains bound to Milestone 5+.
@@ -40,9 +41,8 @@ fallback chain.
 double-counted; no price, currency, or inferred cost.
 4. Adapters never write TOML, edit profiles or kinds, enter credentials, or
 receive configuration paths.
-5. Profiles are startup-only; a recovery-promoted run is never
-auto-scheduled.
-6. M3/M4 bytes, queue tickets, sessions, runs, events, snapshots, replay, and
+5. Profiles are startup-only; recovery never auto-schedules a run.
+6. M3/M4 bytes, sessions, runs, events, snapshots, replay, and
 recovery remain authoritative and unchanged.
 
 ## Failure semantics

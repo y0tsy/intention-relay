@@ -37,7 +37,7 @@ linked architecture sections.
 | [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
 | [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |
 | [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
-| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation |
+| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation (the per-call cancellation direction is superseded by ADR 0055) |
 | [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, and RLM packaging |
 | [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |
 | [0035](0035-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, pre-approved five-slice activation sequence (the fifth slice is added by ADR 0043) |
@@ -55,3 +55,4 @@ linked architecture sections.
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
 | [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |
 | [0054](0054-dynamic-context-window-and-prompt-caching.md) | Accepted | Dynamic context window and prompt-cache breakpoints (provider context-window policy, calibrated token accounting, largest-first tool-result compression, capacity stub, and ephemeral cache markers) |
+| [0055](0055-pending-turns-and-cooperative-interruption.md) | Accepted | Pending turns and cooperative interruption (durable pending input joined to the live run context, `run.interrupt`, no `Cancelling`/`Cancelled` run status, and cooperative tool interruption with partial results) |

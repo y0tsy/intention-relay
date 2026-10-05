@@ -6,7 +6,7 @@ Owner: architecture 17. Decisions: ADR 0009, ADR 0027. Research: m4plus_concept.
 
 This document owns future Mandate child-graph relations, immutable delegation, direct-parent controls, graph
 terminalization, and separately issued delegated verifier authority. It applies only to future `Mandate` and
-`VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider selection, tool-call denial, replay,
+`VerifierMandate` execution. M3/M4 Sessions, Runs, provider selection, tool-call denial, replay,
 recovery, bytes, IDs, UUIDs, cursors, events, and snapshots retain their recorded ordinary semantics, and retained RLM
 child/activity material remains research and historical provenance, not future Mandate graph authority.
 
@@ -25,8 +25,8 @@ verdict never grants lifecycle, scheduling, tool, or target-mutation authority.
 
 ## Child graph identity and immutable delegation
 
-A `sub_agent` invocation creates a new durable **child Mandate**, not a child run, ordinary queued turn, session branch,
-process, provider continuation, or retained RLM task. A child has exactly one immutable `ParentMandateId` and one
+A `sub_agent` invocation creates a new durable **child Mandate**, not a child run, an ordinary pending turn, a session
+branch, process, provider continuation, or retained RLM task. A child has exactly one immutable `ParentMandateId` and one
 immutable root-graph identity; its authoritative relation is an append-only direct edge, and graph summaries and
 recursive indexes are rebuildable projections, not authority.
 
@@ -247,10 +247,11 @@ The following first-scope detail applies to future `sub_agent` child work under 
 one child-agent boundary exists (no alias, second `ToolId`, private Python function, or direct primitive path). The
 child-agent owner activates `sub_agent` only through the composition root. The direct effect profile flags are
 `child_agent_start` and `child_agent_control` (descriptive only). Each admitted child is a daemon-owned independent
-`SessionId` with its own `RunId`, queue, immutable run selection, model steps, bridge grants, durable facts, and at most
-one active run. The daemon assigns `SubAgentId`, child session identity, and child run identity only after successful
-admission; `ToolCallId` remains the canonical identity of the parent `sub_agent` call, and a child never reuses the
-parent's `RunId`, `ModelStepId`, grant, or operation identity. Every new root run receives one daemon-assigned
+`SessionId` with its own `RunId`, pending turns, immutable run selection, model steps, bridge grants, durable facts,
+and at most one active run. The daemon assigns `SubAgentId`, child session identity, and child run identity only after
+successful admission; `ToolCallId` remains the canonical identity of the parent `sub_agent` call, and a child never
+reuses the parent's `RunId`, `ModelStepId`, grant, or operation identity. Every new root run receives one
+daemon-assigned
 `AgentActivityTreeId`; every admitted child retains it with its direct-parent link (distinct from `ConversationTreeId`
 fork lineage). `RlmParentLinkDto` is a durable immutable runtime relationship containing parent `SessionId`, `RunId`,
 `TurnId`, `ModelStepId`, `ToolCallId`, plus child `SubAgentId`, `SessionId`, and initial `RunId`.
@@ -437,7 +438,7 @@ forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Mak
 
 M3/M4 and retained RLM records receive no synthetic Mandate child edge, delegation snapshot, activity, verifier
 authority, target set, audit, verdict, mutation, reconciliation, or execution-kind state; historical M4 tool calls
-remain denial evidence, ordinary queues never become child Mandates or Mandate reasons, and current ancestry or
+remain denial evidence, pending turns never become child Mandates or Mandate reasons, and current ancestry or
 historical RLM identity cannot reconstruct future child/verifier meaning. Architectures 19-24 own bridge projections,
 kernel seeding, Goal/Skill/context selection, provider selections, session forks, and activity projections; none may
 create an edge, widen parenthood, relay verifier authority, turn bridge-held evidence into target-mutation authority,

@@ -6,7 +6,7 @@ Owner: architecture 21. Decisions: ADR 0013. Research: m4plus_concept.md.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
 model-step projections, typed memory records, and immutable compaction. It applies only to future Mandate and
-VerifierMandate execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, queue tickets, provider behavior,
+VerifierMandate execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior,
 replay, recovery, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics.
 Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
 with architectures 13--20.
@@ -235,7 +235,7 @@ Selection is immutable before the next affected model step or external action. `
 selections; ordinary runs use a separately versioned optional selection; Mandate and VerifierMandate execution meaning
 carries the same non-authorizing frozen Skill context. A child Mandate receives only exact selected Skill/role/reference
 values explicitly placed in its delegation snapshot. A verifier Skill never derives authority. Forks retain the exact
-selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, queue promotion, and
+selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, and
 recovery validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke,
 replacement, or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork,
 verifier, historical selection, or body.

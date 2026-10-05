@@ -6,7 +6,7 @@ Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032. Research: m4plu
 
 This document owns future Mandate Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future Mandate execution; M3/M4 bytes, IDs, UUIDs,
-cursors, events, snapshots, queue tickets, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
+cursors, events, snapshots, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
 tool_execution_unavailable` retain their recorded ordinary semantics. Retained RLM bridge, child, and activity material
 remains research provenance and historical-only where it conflicts with architectures 13--18.
 
@@ -155,11 +155,11 @@ After start, a durably proven terminal result remains known; without terminal pr
 `Partial` result with its notice and pauses no Mandate, and the next model step proceeds. Known validation, denial,
 protocol, tool, or remote failures remain known when terminal effect proof exists.
 
-Channel close, slow-peer resync, and grant expiry do not cancel a run; run cancellation remains owner-controlled and the
-bridge only propagates it. The first bridge contract adds no per-`ToolCallId` cancellation command: run cancellation
-uses the existing `StopRunCommandDto` and `Running -> Cancelling -> Cancelled` lifecycle, and a valid durable
-cancellation/result race is decided by the first committing mutation, with the loser rereading and unable to overwrite.
-Cancellation blocks later admissions and model steps; late fragments/results after cancellation, terminalization, grant
+Channel close, slow-peer resync, and grant expiry do not interrupt a run; run interruption remains owner-controlled and
+the bridge only propagates it. The first bridge contract adds no per-`ToolCallId` interruption command: `run.interrupt`
+signals the registered execution, ends the in-flight operation with its bounded `Partial` result and notice, and keeps
+the run `Running`, and a valid durable interruption/result race is decided by the first committing mutation, with the
+loser rereading and unable to overwrite. Late fragments/results after interruption, terminalization, grant
 expiry, or restart are non-authoritative and cannot append durable facts.
 
 Recovery completes before attachment, readiness, scheduling, or fresh admission: it invalidates old grants, disposes

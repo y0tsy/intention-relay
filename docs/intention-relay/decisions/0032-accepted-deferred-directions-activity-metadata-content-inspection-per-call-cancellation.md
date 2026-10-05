@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted 2026-08-30. Not implemented; activation requires an activating specification.
+Accepted 2026-08-30. Not implemented; activation requires an activating specification. Its per-call cancellation
+direction is superseded by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md); the activity-tree metadata
+and semantic content inspection directions stand.
 
 ## Decision
 

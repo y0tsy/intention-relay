@@ -71,7 +71,7 @@ state, and missing meaning is never reconstructed from current state.
 ## What remains
 
 - The local protocol is JSON-RPC 2.0 over NDJSON (ADR 0045); domain and wire records are typed serde JSON DTOs.
--  M3/M4 sessions, runs, queue tickets, provider kinds, tool-call denial, replay, and recovery keep their ordinary
+-  M3/M4 sessions, runs, provider kinds, tool-call denial, replay, and recovery keep their ordinary
 current semantics under the single live schema and protocol version (ADR 0038). Transport and storage liveness
 safeguards are the limits kept by ADR 0048, not semantic limits.
 -  Provider selection for future work stays credential-free and non-authorizing: a model ID never selects provider kind,

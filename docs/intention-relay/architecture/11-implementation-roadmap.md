@@ -236,7 +236,7 @@ errors, snapshots, events, and adapter DTOs.
 
 -  M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts without any retroactive protocol, DTO,
 schema, crate-boundary, migration, or quality-policy change.
--  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, queue tickets, sessions, runs, events,
+-  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, sessions, runs, events,
 and bytes remain authoritative and unchanged; SQLite storage is the single live schema created directly on open.
 -  The reverted Slice 2 health, discovery, and pricing surfaces were non-authorizing: they create no RunId, reason,
 lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority, MCP capability, bridge
@@ -467,12 +467,12 @@ recovery-before-scheduling (architecture 16);
 
 ### Tests first
 
-- admission-transaction, conflict, capacity, and legacy-ticket separation fixtures;
+- admission-transaction, conflict, capacity, and pending-turn separation fixtures;
 - attempt-phase and partial-result matrix fixtures;
 - typed contract fixtures plus invalid vectors for both Mandate kinds;
 - reread, readiness, deterministic-selection, atomic-handoff, and recovery-before-scheduling fixtures;
 - calendar/interval/time-zone/DST fixtures over the scheduler reasons;
-- M3/M4 byte, run, queue, and history preservation fixtures.
+- M3/M4 byte, run, and history preservation fixtures.
 
 ### Acceptance outcomes
 
@@ -480,7 +480,7 @@ recovery-before-scheduling (architecture 16);
 earlier work;
 - an unknown external effect pauses the Mandate and produces no retry, resume, or rerun;
 - identical admitted inputs produce identical frozen typed payloads;
-- no ordinary M3/M4 run, queue ticket, or history changes meaning.
+- no ordinary M3/M4 run or history changes meaning.
 
 ### Exit criteria
 
@@ -645,9 +645,8 @@ Current ordering status: the durable ordering authorities were collapsed to two 
 (`SessionEventSequenceDto`) for every record committed in one session, and the container journal sequence (storage
 mechanism `container_journals`; the only container kind today is `run`, whose position type is `RunEventCursorDto`) —
 plus one observation position, the reserved observation cursor, which is a reader's resume position and never an
-authority. The collapsed set is closed: no record family introduces a further ordering sequence, and queue tickets and
-owner-local operational tuples (for example scheduler readiness observations) are queue-ordering or operational
-metadata, not ordering authorities.
+authority. The collapsed set is closed: no record family introduces a further ordering sequence, and owner-local
+operational tuples (for example scheduler readiness observations) are operational metadata, not ordering authorities.
 
 | Package | Owner document | Status | Depends on |
 | --- | --- | --- | --- |

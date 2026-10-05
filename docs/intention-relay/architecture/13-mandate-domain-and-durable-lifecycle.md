@@ -5,7 +5,7 @@
 Owner: architecture 13. Decisions: ADR 0001, ADR 0006, ADR 0031, ADR 0052. Research: m4plus_concept.md.
 
 This document owns the future Mandate aggregate, lifecycle, triggers, fresh-run admission, and recovery boundary. It
-applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider
+applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, provider
 selection, replay, tool denial, and recovery retain their recorded ordinary semantics.
 
 ## Ownership and non-authorities
@@ -36,8 +36,7 @@ aggregate", when that container is activated. That journal orders exactly the re
 aggregate and are not records of one session, is dense within the aggregate, and is its only gap-detection token; it is
 the authoritative optimistic-concurrency and event order for Mandate facts, never an identity and never an observation
 position. It is not `SessionEventSequenceDto`, which orders every record committed in a session, and it is not the run
-container journal, whose position type is `RunEventCursorDto`. M3 queue tickets are a queue-ordering mechanism, never an
-ordering authority, and are never merged, reused, or renumbered. The Mandate aggregate is not a session record, and one
+container journal, whose position type is `RunEventCursorDto`. The Mandate aggregate is not a session record, and one
 session may host more than one Mandate. Run and model facts keep their recorded session and run-container ordering and
 link to Mandates only through typed identities, with no arithmetic, offsets, or conversions across authorities.
 
@@ -152,8 +151,8 @@ reevaluation; they never create a reason, `RunId`, lease, retry counter, or disp
 
 ## Trigger reasons and eligibility
 
-`MandateTriggerReason` is durable causal evidence, not an M3 queued turn, a retry counter, a queue ticket, or a promise
-of immediate execution. Each reason records a typed idempotency identity, source kind, captured `triggering_revision`,
+`MandateTriggerReason` is durable causal evidence, not a pending turn, a retry counter, or a promise of immediate
+execution. Each reason records a typed idempotency identity, source kind, captured `triggering_revision`,
 first/last observation timestamps, coalesced count, and complete typed provenance. Equal delivery returns its existing
 binding; changed reuse fails before admission. A revision after capture cannot silently retarget a reason: an
 inadmissible captured revision yields a typed stale-reason result while remaining auditable.
@@ -319,9 +318,9 @@ crate activation, and protocol implementation are deliberately deferred.
 
 ## Compatibility, dependencies, and non-goals
 
-M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, queue tickets, provider selection, tool-call denial, replay, and
+M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider selection, tool-call denial, replay, and
 recovery remain unchanged. No historical record gains synthetic Mandate, verifier, Skill, MCP, child, activity, profile,
-policy, or execution-kind state; legacy queued turns never become Mandate reasons. This document resolves the aggregate
+policy, or execution-kind state; pending turns never become Mandate reasons. This document resolves the aggregate
 separation in `CON-004` and applies the Foundation limit taxonomy to Mandate lifecycle; architecture 15 resolves
 `CON-001` WorkspaceRoot and `CON-002` direct descriptor admission for future Mandate calls only.
 

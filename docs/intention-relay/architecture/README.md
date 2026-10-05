@@ -44,6 +44,7 @@ flowchart TD
 | **Project** | A logical user project associated with one or more sessions. |
 | **Session** | A durable project-backed conversation and work record. It has one `WorkspaceRoot` and at most one active run. |
 | **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
+| **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary and is removed only before it is seen. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
 | **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there (ADR 0047). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
@@ -280,8 +281,9 @@ Two durable ordering authorities exist, plus one observation position; together 
 3. The container-scoped optimistic append token stays container-local: a write to another container or to the session
    sequence must never invalidate it.
 4. Cross-authority correlation uses typed identity only, with no arithmetic, offsets, or conversions.
-5. Queue tickets are a queue-ordering mechanism, not an ordering authority: never merged, never reused, never
-   renumbered.
+5. No queue-ordering mechanism exists: pending turns are durable input joined to the live run context, and the M3
+   queue, its tickets, and their promotion were removed by [ADR
+   0055](../decisions/0055-pending-turns-and-cooperative-interruption.md).
 6. Scheduler readiness observations order by the owner-local operational tuple `(source_instance_id, source_epoch,
    source_sequence)`; that is operational metadata, not an ordering authority.
 

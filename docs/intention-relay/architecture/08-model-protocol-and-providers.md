@@ -228,8 +228,9 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 The runtime uses the immutable persisted attempt timeout and at most two total attempts. A deadline is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
 provider failure may produce one retry; it appends `ProviderAttemptFailed(1)`, then `RetryScheduled(1, 2)`, waits
-exactly 250 ms through `ModelTimePort`, and starts attempt two. Cancellation races the stream, deadline, and wait; once
-cancelling is durable it suppresses later provider events/errors and retries.
+exactly 250 ms through `ModelTimePort`, and starts attempt two. Interruption races the stream, deadline, and wait: the
+stopped stream ends and the run rebuilds its next request with the durable notice, and an interrupt during the retry
+wait starts the next attempt immediately.
 
 ## Required tests and outcomes
 

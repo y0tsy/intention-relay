@@ -6,7 +6,7 @@ Owner: architecture 18. Decisions: ADR 0010, ADR 0027, ADR 0033. Research: m4plu
 
 This document owns future Mandate MCP source proposals, discovery, normalized capabilities, run-local capability
 selections, invocation, safe projections, disposal, recovery, and compatibility. It applies only to future Mandate
-execution through the fixed `mcp` `ToolId`. M3/M4 bytes, IDs, UUIDs, queues, provider behavior, replay, recovery,
+execution through the fixed `mcp` `ToolId`. M3/M4 bytes, IDs, UUIDs, provider behavior, replay, recovery,
 snapshots, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics, and
 retained bounded user connection/catalog research remains historical provenance, not future Mandate capability state.
 
@@ -22,8 +22,8 @@ This document owns only MCP-specific nested-selection semantics and capability l
 scheduler, lifecycle, provider, child/verifier, process supervisor, MCP administration surface, plugin system, or
 authority source. An MCP source, server, discovery response, capability, result, or error is evidence/data only: it
 cannot create or mutate a ToolId, registry entry, Mandate, lifecycle, trigger reason, RunId, scheduler candidate, Goal,
-Skill, confirmation, `ask_user`, child, graph message, verifier authority, target mutation, session, ordinary queue,
-provider selection, or execution kind.
+Skill, confirmation, `ask_user`, child, graph message, verifier authority, target mutation, session, ordinary turn
+input, provider selection, or execution kind.
 
 ## One fixed tool and immutable records
 

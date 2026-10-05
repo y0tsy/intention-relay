@@ -11,7 +11,7 @@ This record promotes the Foundation Mandate authority rules into one detailed li
 identity, revisions, lifecycle, trigger reasons, fresh-run admission, conflict precedence,
 recovery, and Mandate protocol/persistence boundaries.
 
-Mandate triggers are distinct from M3 queue tickets. Admission is one atomic, idempotent transition that freezes a new
+Mandate triggers are distinct from pending turns and accepted turn input. Admission is one atomic, idempotent transition that freezes a new
 RunId, revision, reason, selection, and execution meaning before an external effect. User lifecycle/revision mutations
 win conflicts. A started effect without terminal proof commits a bounded partial result and pauses no Mandate.
 

@@ -35,7 +35,7 @@ Milestone 5+.
 
 1. A Goal is a user-managed, immutable revisioned acceptance/evidence record,
 not an instruction channel or execution authority.
-2. M3/M4 queue tickets, sessions, runs, events, snapshots, replay, and
+2. M3/M4 sessions, runs, events, snapshots, replay, and
 recovery remain authoritative; no historical record gains synthetic Goal state.
 3. A project Goal enters a session only through an explicit durable link;
 every child is an obligatory component; the tree is a DAG with no cycles.

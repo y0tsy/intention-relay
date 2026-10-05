@@ -5,8 +5,8 @@
 Owner: architecture 16. Decisions: ADR 0008, ADR 0034. Research: m4plus_concept.md.
 
 This document owns durable Mandate scheduler reevaluation, readiness/capacity evidence, candidate selection, and the
-scheduler handoff to fresh admission. It applies only to future `Mandate` execution and preserves M3/M4 ordinary queues,
-run recovery, provider behavior, tool-call denial, replay, bytes, and meaning. Calendar/interval source syntax,
+scheduler handoff to fresh admission. It applies only to future `Mandate` execution and preserves M3/M4 ordinary turn
+input, run recovery, provider behavior, tool-call denial, replay, bytes, and meaning. Calendar/interval source syntax,
 time-zone/DST semantics, timer topology, and worker process topology remain later work: calendar/interval/time-zone/DST
 semantics are an accepted post-M5 future direction under [ADR
 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as typed
@@ -184,8 +184,8 @@ schedule, time zone, configuration, registry, provider, or readiness cannot reta
 Future scheduler projections use typed JSON-RPC 2.0 methods (ADR 0045) with the Mandate container journal sequence,
 correlated results or typed resync/error, and never partial snapshots. Reconnect/replay is read-only and cannot replay a
 wakeup, admission, or external action; exact method shapes, pages, retention, and schema remain deferred. M3 session
-replay, M4 run streaming, ordinary queue tickets, provider kinds, tool-call denial, snapshots, interruption, and all
-historical bytes/meaning remain unchanged, legacy queue tickets never become Mandate reasons, and no historical record
+replay, M4 run streaming, ordinary turn input, provider kinds, tool-call denial, snapshots, interruption, and all
+historical bytes/meaning remain unchanged, pending turns never become Mandate reasons, and no historical record
 gains scheduler facts.
 
 ## Dependencies and non-goals

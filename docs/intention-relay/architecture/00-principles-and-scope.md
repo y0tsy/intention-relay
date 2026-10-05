@@ -31,8 +31,9 @@ minimal native bridge because a WebView cannot directly use the local typed sock
 
 ### 5. One active run per session
 
-A session may have one active run only. Additional user turns are durably queued or explicitly rejected by policy, never
-silently merged into an active model context. The chosen v1 policy is a durable queue.
+A session may have one active run only. A user turn accepted while that run is active is recorded as a durable pending
+turn and joins the run's live context in order at the next model boundary; it never starts a second run and never
+silently merges into an in-flight request.
 
 ### 6. Local trusted workspace
 
@@ -126,7 +127,7 @@ work; the second stays owned by the named slice.
 
 | Topic | Settled decision and source |
 | --- | --- |
-| Queue execution | The repository atomically promotes the oldest eligible queued turn, tickets are never reused, removal and inspection stay explicit, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Queue"). |
+| Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary; removal of a not-yet-seen pending turn stays explicit, `run.interrupt` stops the in-flight call with a notice while the run continues, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
 | Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` (decision [0017](../decisions/0017-build-autopilot-and-plan-focus-continuity.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-workspace-and-hooks.md). |
 | AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule in [ADR 0038](../decisions/0038-no-backward-compatibility-and-legacy-removal.md). |
 | Plan revision mechanics | Each edit rewrites the single full-file `plan.md` artifact, preserves controlled metadata, increments the frontmatter revision, and persists a matching typed plan revision ([architecture 07](07-plan-and-build-modes.md)); no patch-record family exists, and Plan mode itself is M7 scope. |

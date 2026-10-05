@@ -357,7 +357,7 @@ any provider call. The closed results are `reasoning_history_unavailable` (missi
 bound). A run is never silently sent without required history.
 
 Every dependent run receives an immutable `ReasoningHistoryManifestDto` in the same durable transaction as its
-`RunStarted` fact (including repository-owned queued-turn promotion): schema and transfer policy, compatibility
+`RunStarted` fact: schema and transfer policy, compatibility
 identity, ordered source-response references, per-entry references and sizes, and one manifest identity; no duplicate
 reasoning text. One source reference carries the source session/run, completed sequence, final assistant-turn identity
 when present, and ordered reasoning fact cursor/category/size references. A compatible completed response with no

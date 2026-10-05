@@ -34,8 +34,8 @@ flowchart LR
 
 M1 parses, validates, and projects configuration. It defines the immutable, serializable `ConfigSnapshotDto` shape. M3
 makes that DTO the canonical credential-free configuration selection for durable storage and runs: the daemon
-composition receives one validated startup snapshot, records it by `ConfigRevisionId`, and every accepted or terminally
-promoted run persists its own immutable selected snapshot/revision.
+composition receives one validated startup snapshot, records it by `ConfigRevisionId`, and every accepted run persists
+its own immutable selected snapshot/revision.
 
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
 changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
@@ -49,7 +49,7 @@ outcome test; it affects fresh runs only and never mutates a recorded snapshot.
 -  `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do
 not enter storage, events, snapshots, or protocol DTOs.
 - The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
-- An accepted or promoted run receives an immutable copy of its selected snapshot/revision.
+- An accepted run receives an immutable copy of its selected snapshot/revision.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
 to a configuration edit.
 -  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
@@ -168,7 +168,7 @@ Daemon-owned observability must expose typed, safe operational data:
 - protocol compatibility status;
 - connection/subscription health;
 - session/run states and durations;
-- queue depth;
+- pending turns and their count;
 - provider/model identity without credentials;
 - usage where reported;
 - tool lifecycle and policy outcomes;
@@ -195,7 +195,7 @@ atomicity.
 | TOML validation | Parser fixture tests. | Invalid config returns typed errors without partial state replacement. |
 | M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and stored by revision. |
 | Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
-| Run snapshot immutability | Accepted-turn and terminal-promotion integration fixtures. | Started and promoted runs retain their selected immutable config revision. |
+| Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain their selected immutable config revision. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Permission safety | Filesystem permission test on Unix. | Created config is user-readable only or fails safely. |
 | Redaction | Table-driven secret injection plus raw SQLite persistence fixtures. | Recognizable fake credentials are absent from configuration-revision JSON, session/run snapshot JSON, event envelopes, errors, logs, and presentation DTOs. |

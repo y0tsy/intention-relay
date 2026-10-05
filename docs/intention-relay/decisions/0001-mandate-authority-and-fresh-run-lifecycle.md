@@ -10,8 +10,10 @@ A Mandate is durable user-issued work authority, not a Goal, prompt, tool permis
 second runtime. User commands own product lifecycle and revision decisions. The daemon may only record explicitly
 defined operational facts, including trigger capture, admission, and known terminal disposition.
 
-A continuation always admits a fresh run with a new `RunId`. Revision changes affect only future admission. No provider
-request, tool call, process, kernel, child work, MCP operation, or external effect resumes after restart.
+A Mandate continuation always admits a fresh run with a new `RunId`; a user message accepted while a run is active is
+durable pending input that joins that run's live context at the next boundary and never starts a second run. Revision
+changes affect only future admission. No provider request, tool call, process, kernel, child work, MCP operation, or
+external effect resumes after restart.
 
 The conceptual durable Mandate family (`MandateDto`, `MandateRevisionDto`, `MandateTriggerReasonDto`,
 `MandateRunDispositionDto`) is future detail owned by [architecture
@@ -30,7 +32,7 @@ observation or explicit user lifecycle action may make that trigger eligible for
 ## Invariants
 
 - exactly one non-terminal Mandate run exists at a time;
-- triggers are durable causal evidence, not legacy queued turns;
+- triggers are durable causal evidence, not pending input;
 - Goals, Skills, parentage, activity, MCP source, model output, bridge grants,
 kernel state, and adapter state grant no lifecycle authority;
 - intrinsic bounds, typed capacity availability, and forbidden product ceilings

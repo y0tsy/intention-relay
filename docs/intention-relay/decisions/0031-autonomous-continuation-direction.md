@@ -30,7 +30,8 @@ remains bound to Milestone 5+.
 ## Normative invariants
 
 1. Continue autonomously is Mandate continuation, not old-run resumption: it
-admits only a fresh run with a new `RunId`.
+admits only a fresh run with a new `RunId`. A pending user message behind an active run joins that run's context in
+durable order and is neither autonomous continuation nor old-run resumption.
 2. A known terminal disposition may return a Mandate to `Active` only after
 the required graph terminalization owned by architecture 17 completes.
 3. A known non-zero `execute` exit, typed validation failure, provider failure
