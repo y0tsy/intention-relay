@@ -170,14 +170,14 @@ configuration, ancestry, prompts, Goals, Skills, or adapter state.
 ### 13. Mandate authority is user-issued and bounded
 
 A future Mandate is durable user-issued work authority. User commands own its product lifecycle and revisions. The
-daemon owns only explicitly enumerated operational facts such as durable trigger capture, admission, known terminal
-disposition, and mandatory uncertainty pausing. A Goal, Skill, parent relation, MCP source, provider response, bridge
-grant, kernel namespace, or activity record cannot grant lifecycle, target-mutation, scheduling, or tool authority.
+daemon owns only explicitly enumerated operational facts such as durable trigger capture, admission, and known terminal
+disposition. A Goal, Skill, parent relation, MCP source, provider response, bridge grant, kernel namespace, or activity
+record cannot grant lifecycle, target-mutation, scheduling, or tool authority.
 
 ### 14. Continuation is fresh admission, never resumption
 
 A future continuation may admit a new run from durable state. It never resumes, reattaches, or repeats an old provider
-request, tool call, process, kernel task, child work, MCP operation, bridge operation, or uncertain external effect.
+request, tool call, process, kernel task, child work, MCP operation, bridge operation, or interrupted external effect.
 
 ### 15. Durable transitions and effects are separate
 
@@ -188,9 +188,9 @@ scoped reread; publication failure cannot roll back committed state.
 ### 16. External uncertainty is explicit
 
 A future external attempt distinguishes no-start, started, known terminal, and unknown terminal facts. A known
-validation failure, provider failure, or non-zero process exit is not automatically unknown. An `ExternalEffectUnknown`
-pauses its owning Mandate and blocks automatic continuation until an authorized future reconciliation records a fresh
-path or stop decision.
+validation failure, provider failure, or non-zero process exit is not automatically unknown. A started attempt
+interrupted or lost before a final result commits a bounded `Partial` result: the model receives the captured output
+with a notice and the next model step proceeds. Nothing pauses, and nothing is automatically retried.
 
 ### 17. Compatibility is non-reinterpretation
 
@@ -236,7 +236,7 @@ qualifying evidence. Architecture 17 owns the detailed rules.
 
 Future Mandate MCP work uses the one fixed `mcp` capability path to acquire and invoke immutable run-local capabilities.
 An MCP server, discovery, capability, or result cannot create lifecycle, scheduler, registry, child, verifier, or user
-authority. Started uncertain MCP work never resumes. Architecture 18 owns the detailed rules.
+authority. Started unproven MCP work never resumes. Architecture 18 owns the detailed rules.
 
 ### 24. Gateway/RLM attachment is typed ingress, not authority
 

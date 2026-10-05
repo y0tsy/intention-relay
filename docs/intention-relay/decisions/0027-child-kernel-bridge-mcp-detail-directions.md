@@ -60,8 +60,8 @@ local stdio process is run-owned, lazy, and never reattached.
 
 - Limit failures are known typed pre-effect rejections; no content is
 truncated or partly committed.
-- A started unproven effect is `ExternalEffectUnknown` and never retried,
-reattached, or rerun.
+- A started unproven effect yields a bounded `Partial` result with its notice and is never retried, reattached, or
+rerun; the next model step proceeds.
 - An unnegotiated client fails closed; historical M4 runs retain
 byte-identical replay and denial.
 

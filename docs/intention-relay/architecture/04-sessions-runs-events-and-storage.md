@@ -293,25 +293,25 @@ dependent external work;
 -  no external provider, tool, process, kernel, child, MCP, network, or scheduler action occurs inside the transition
 transaction;
 - recovery preserves durable facts/triggers but never resumes old work;
--  an unknown external terminal effect causes the owning Mandate to await an explicit future reconciliation, not an
-automatic retry or next model step.
+-  a started effect without terminal proof commits a bounded partial result and permits the next model step, never an
+automatic retry.
 
 [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md) owns the detailed Mandate lifecycle,
-trigger ordering, fresh admission, uncertainty, and recovery contract; [architecture
+trigger ordering, fresh admission, and recovery contract; [architecture
 16](16-mandate-scheduler-and-readiness-driven-admission.md) owns scheduler semantics, and [architecture
 17](17-mandate-child-graph-and-delegated-verifier-authority.md) owns child graph and verifier authority. Existing run
 states and M3/M4 recovery behavior remain unchanged. Concrete timer/process topology, event variants, protocol delivery,
 and schema design remain later packages. See [decision
 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md) and [decision
-0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
+0052](../decisions/0052-partial-tool-results-for-interrupted-execution.md).
 
 ## Post-M4 tool-loop storage consequence
 
 Future model-tool-loop work atomically records a completed tool-calling model step, its ordered tool group, normalized
 calls, and the matching container-journal position, projection, event, and snapshot updates before any local effect.
 Future admissions, starts, fragments, and terminal results order by the run's container journal, commit before
-publication, and publish only after an independent scoped reread. A started effect without terminal proof follows the
-Mandate uncertainty transition; recovery never retries or resumes a tool action. This adds no current table, event,
+publication, and publish only after an independent scoped reread. A started effect without terminal proof commits a
+bounded partial result; recovery never retries or resumes a tool action. This adds no current table, event,
 state, migration, or reinterpretation of M4 `ToolCallRecorded` denial;
 [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md) owns the exact semantics.
 
@@ -350,7 +350,7 @@ authority](17-mandate-child-graph-and-delegated-verifier-authority.md) owns the 
 
 Future MCP discovery atomically commits safe discovery evidence, immutable capability revisions, accumulated selection,
 and its tool result before publication. Future invocation atomically binds its exact selection/capability/input before
-effect and persists only safe terminal projection or exact uncertainty evidence. These records remain separate from the
+effect and persists only safe terminal projection or bounded partial evidence. These records remain separate from the
 session event sequence, the run's container journal, ordinary queues, and M4 replay: MCP records belong to their Mandate
 container and order by that Mandate's container journal. Recovery never reconnects, reattaches, rediscovers, retries, or
 resumes MCP work. This adds no current table, event, migration, or historical reinterpretation; [Mandate MCP

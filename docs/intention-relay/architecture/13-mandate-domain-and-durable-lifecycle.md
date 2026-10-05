@@ -2,11 +2,11 @@
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
-Owner: architecture 13. Decisions: ADR 0001, ADR 0002, ADR 0006, ADR 0031. Research: m4plus_concept.md.
+Owner: architecture 13. Decisions: ADR 0001, ADR 0006, ADR 0031, ADR 0052. Research: m4plus_concept.md.
 
-This document owns the future Mandate aggregate, lifecycle, triggers, fresh-run admission, uncertainty, and recovery
-boundary. It applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets,
-provider selection, replay, tool denial, and recovery retain their recorded ordinary semantics.
+This document owns the future Mandate aggregate, lifecycle, triggers, fresh-run admission, and recovery boundary. It
+applies only to future `Mandate` and `VerifierMandate` execution. M3/M4 Sessions, Runs, queue tickets, provider
+selection, replay, tool denial, and recovery retain their recorded ordinary semantics.
 
 ## Ownership and non-authorities
 
@@ -20,8 +20,6 @@ daemon, child relation, or second runtime.
 | Capture a trigger reason | May request | Durable operational fact | No implicit right | Source observation is not authority |
 | Admit a fresh run | No direct mutation | Yes, only from eligible `Active` reason | No | Same |
 | Record known terminal disposition | No | Yes | No | Same |
-| Record uncertainty pause | No | Yes, mandatory | No | Same |
-| Reconcile exact unknown effect | Yes | No discretion | Only future exact authority | Same |
 
 User lifecycle/revision mutations win optimistic conflicts against daemon and verifier mutations; a rejected loser
 performs a scoped reread and cannot merge by inference, overwrite, or retry with changed meaning.
@@ -29,11 +27,11 @@ performs a scoped reread and cannot merge by inference, overwrite, or retry with
 ## Aggregate and identity
 
 A Mandate owns its identity, current lifecycle, active immutable revision, pending trigger reasons and their coalesced
-provenance, current non-terminal run reference, dispositions, verified checkpoint references, uncertainty references,
-and its Mandate container journal sequence/version.
+provenance, current non-terminal run reference, dispositions, verified checkpoint references, and its Mandate container
+journal sequence/version.
 
-`MandateId`, revision, trigger reason, disposition, reconciliation, operation, and container journal sequence are typed
-future values. Mandate facts order by a Mandate container journal, the container journal of the container "Mandate
+`MandateId`, revision, trigger reason, disposition, operation, and container journal sequence are typed future values.
+Mandate facts order by a Mandate container journal, the container journal of the container "Mandate
 aggregate", when that container is activated. That journal orders exactly the records that belong to the Mandate
 aggregate and are not records of one session, is dense within the aggregate, and is its only gap-detection token; it is
 the authoritative optimistic-concurrency and event order for Mandate facts, never an identity and never an observation
@@ -83,7 +81,7 @@ MandateRunDispositionDto
   terminal_kind
   next_action = Continue | AwaitUserDecision | None
   checkpoint_reference_when_verified
-  external_effect_reference_when_unknown
+  partial_effect_reference_when_present
 ```
 
 All records are credential-free typed serde JSON records, immutable at their selected revision, and represented through
@@ -99,16 +97,16 @@ non-authorizing. `MandateRunDispositionDto.next_action` records the disposition'
 ### Normative transition and cancellation boundary
 
 The transition set is closed and explicit: `Draft -> Active | Stopped`, `Active -> Working | Paused | Completed |
-Stopped`, `Working -> Active | PausedAwaitingDecision | Paused | Completed | Stopped`, `Paused -> Active | NeedsRework |
-Completed | Stopped`, `PausedAwaitingDecision -> Active | Stopped`, and `NeedsRework -> Active | Completed | Stopped`.
+Stopped`, `Working -> Active | Paused | Completed | Stopped`, `Paused -> Active | NeedsRework | Completed | Stopped`,
+and `NeedsRework -> Active | Completed | Stopped`.
 `Archived` is inert, and a known run disposition may return a Mandate to `Active` only after required graph
 terminalization owned by architecture 17 completes.
 
 Cancellation is a control signal, not effect evidence. It stops new admission and may request executor cancellation, but
 each attempt is classified independently: before-start interruption/cancellation has no external effect, and started
-work without terminal proof is `ExternalEffectUnknown`. The run is terminalized only after those facts are durably
-recorded. Unknown effect pauses only its owning Mandate; exact reconciliation may yield only fresh `Active` work or
-`Stopped`, never rollback, safe-repeat, reattachment, or old-run continuation.
+work without terminal proof commits a bounded `Partial` result. A cancelled run is terminalized only after those facts
+are durably recorded. Partial pauses no Mandate and permits the next model step; interrupted work is never rolled back,
+safely repeated, reattached, or continued.
 
 ## Lifecycle
 
@@ -123,13 +121,10 @@ stateDiagram
   Active --> Completed: user or verifier
   Active --> Stopped: user or verifier
   Working --> Active: daemon known disposition
-  Working --> PausedAwaitingDecision: daemon unknown effect
   Paused --> Active: user resumes
   Paused --> NeedsRework: user or verifier
   Paused --> Completed: user or verifier
   Paused --> Stopped: user or verifier
-  PausedAwaitingDecision --> Active: exact reconciliation
-  PausedAwaitingDecision --> Stopped: exact reconciliation
   NeedsRework --> Active: user resumes
   NeedsRework --> Paused: user or verifier
   NeedsRework --> Completed: user or verifier
@@ -142,8 +137,6 @@ stateDiagram
 - Mandate `Active` may admit one fresh run only when an eligible reason exists. Activation itself creates no run.
 - Mandate `Working` means exactly one non-terminal Mandate run exists.
 - Mandate `Paused` retains history and pending reasons but blocks admission.
--  Mandate `PausedAwaitingDecision` is mandatory uncertainty quarantine. It blocks retry, reattachment, rediscovery,
-  next model step, and automatic continuation.
 - Mandate `NeedsRework` is a product decision, not a failure classification.
 - Mandate `Completed` asserts full objective acceptance. Mandate `Stopped` asserts no completion.
 - Mandate `Archived` is inert historical presentation. Restore/reopen is excluded pending a separate contract.
@@ -177,11 +170,11 @@ guarantee.
 **Continue autonomously** creates or activates a **Build-mode Mandate** by default ([ADR
 0031](../decisions/0031-autonomous-continuation-direction.md)). After a known terminal run disposition, the daemon
 records its terminal evidence and, when continuation remains enabled, returns the Mandate to `Active`; a pending
-coalesced continuation reason then admits a completely fresh run. There is no hidden retry count, automatic escalation
-threshold, or conversion of a known failure into an unknown effect: a known non-zero `execute` exit, typed validation
-failure, provider failure with durable terminal evidence, or known MCP result is a known outcome and may lead to the
-next fresh run, and the user decides when a known failure means pause, stop, completion, revision, or needs-rework,
-except where an explicit delegated verifier has the corresponding operation. Plan mode remains distinct: it denies
+coalesced continuation reason then admits a completely fresh run. There is no hidden retry count or automatic
+escalation threshold: a known non-zero `execute` exit, typed validation failure, provider failure with durable terminal
+evidence, or known MCP result is a known outcome and may lead to the next fresh run, and the user decides when a known
+failure means pause, stop, completion, revision, or needs-rework, except where an explicit delegated verifier has the
+corresponding operation. Plan mode remains distinct: it denies
 ordinary project `write`/`edit`, and plan mutation remains its own typed plan operation. Neither mode is a sandbox or a
 claim to constrain programs running with the user's ordinary OS authority, and the direction does not amend the ordinary
 Build Autopilot direction of ADR 0017/0018.
@@ -227,8 +220,6 @@ reuse fails before a mutation, another trigger consumption, or another RunId.
 | Trigger capture/coalescing | reason/provenance, idempotency, eligibility projection, container journal sequence |
 | Fresh admission | selected reason, new RunId, frozen selection/meaning, Working projection and all evidence |
 | Known disposition | exact terminal evidence, disposition, eligible continuation reason if selected, Active transition |
-| Unknown effect | exact started-attempt evidence, uncertainty reference, PausedAwaitingDecision transition |
-| Exact reconciliation | named uncertainty/baseline/evidence, idempotency, only Active or Stopped outcome |
 | Capacity unavailable | observable outcome with reason retained and no admission |
 
 A known terminal disposition may return Mandate `Working` to Mandate `Active` only after graph-terminalization rules
@@ -271,7 +262,7 @@ concurrency cap, or escalation threshold is introduced for Mandate admission her
 tool, child, or scheduler packages remain separately classified, and this document resolves neither direct descriptor
 admission nor WorkspaceRoot policy.
 
-## External attempts, recovery, and reconciliation
+## External attempts and recovery
 
 The closed shared attempt-evidence family is adopted as future detail:
 
@@ -291,32 +282,32 @@ ExternalAttemptEvidenceDto
 ```
 
 Future external attempt evidence uses the Foundation phases: `AdmittedBeforeStart`, `Started`, `KnownTerminal`, and
-`UnknownTerminal`. `UnknownTerminal` classifies attempt evidence; `ExternalEffectUnknown` is the resulting Mandate
-condition. A known validation failure, provider failure, known non-zero process exit, or known MCP result is not
-unknown; only daemon-owned execution and recovery logic classifies an attempt. Before start, a result is a known
-pre-effect outcome, including `InterruptedBeforeStart`; after start without durable terminal proof, loss, cancellation,
-or restart records `ExternalEffectUnknown`. Unknown evidence atomically prevents the next model step, automatic retry or
-continuation, rediscovery, reattachment, and old-work resume; for Mandate work it atomically moves `Working` to
-`PausedAwaitingDecision`. Recovery writes missing terminal outcomes and the run transition to `Interrupted` atomically
-and never opens another model step, repeats a tool, or reconstructs a remote continuation. The family is shared by
-`execute`, kernel/bridge, MCP discovery and invocation, provider-adjacent external work, and child work.
+`UnknownTerminal`. `UnknownTerminal` classifies attempt evidence; a started attempt interrupted or lost before a final
+result commits a bounded `Partial` result. A known validation failure, provider failure, known non-zero process exit, or
+known MCP result is not unknown; only daemon-owned execution and recovery logic classifies an attempt. Before start, a
+result is a known pre-effect outcome, including `InterruptedBeforeStart`; after start without durable terminal proof,
+loss, cancellation, or restart commits the output captured before the interruption as `Partial`. Partial evidence
+permits the next model step and pauses no Mandate: nothing is retried, rediscovered, reattached, or resumed. Recovery
+writes missing terminal outcomes and the run transition to `Interrupted` atomically and never opens another model step,
+repeats a tool, or reconstructs a remote continuation. The family is shared by `execute`, kernel/bridge, MCP discovery
+and invocation, provider-adjacent external work, and child work.
 
 Recovery completes before readiness. It preserves revisions, reasons, immutable selections, verified checkpoints, and
 durable evidence, and terminalizes old work without executing it: admitted-but-not-started work becomes a known
-pre-effect interruption, and started work lacking terminal proof becomes an exact unknown effect that pauses only its
-owning Mandate. Recovery never resumes, retries, reattaches, or reruns a provider request, tool call, process, bridge
-operation, kernel cell/task, child run, MCP operation, scheduler action, or other external effect; a later run has a new
-`RunId` and requires fresh admission.
+pre-effect interruption, and started work lacking terminal proof pauses nothing. A live interruption commits a bounded
+partial result; a restart adds no new durable record and reports the unfinished call through a recovery notice in the
+next run's model context. Recovery never resumes, retries, reattaches, or reruns a provider request, tool call, process,
+bridge operation, kernel cell/task, child run, MCP operation, scheduler action, or other external effect; a later run
+has a new `RunId` and requires fresh admission.
 
-Reconciliation names the exact uncertainty and frozen baseline and may produce only Mandate `Active` for later fresh
-work or Mandate `Stopped`; it never asserts rollback, absence, idempotence, repeatability, or safe replay of the old
-effect.
+An interrupted effect is never rolled back, repeated, reattached, or resumed, and no later work asserts absence,
+idempotence, repeatability, or safe replay of the old effect.
 
 ## Persistence and protocol boundary
 
 Future projections include a credential-free Mandate summary, a Mandate detail snapshot, trigger eligibility/provenance,
-immutable run binding/selection, and safe disposition/uncertainty references. Snapshots accelerate query/recovery but
-are not alternate authority; events remain immutable and corrections are new events/projections.
+immutable run binding/selection, and safe disposition references. Snapshots accelerate query/recovery but are not
+alternate authority; events remain immutable and corrections are new events/projections.
 
 Future Mandate projections are exposed through typed JSON-RPC 2.0 methods over the local socket ([ADR
 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed commands and queries, correlated results, then Mandate
@@ -338,9 +329,8 @@ It defines no tool loop, registry detail, child graph or verifier-authority sema
 semantics, Goal/Skill behavior, provider evolution, bridge attachment, kernel lifecycle, forks, activity/UI, scheduler
 topology, schema, migrations, crates, Cargo, or implementation activation. Architectures 19-24 own bridge attachment,
 kernel lifecycle, Goal/Skill/context selection, forks, and activity projections; none can create a trigger reason,
-`RunId`, lifecycle transition, admission, or reconciliation result. A bridge or kernel operation creates neither a
-trigger reason nor a `RunId`, and started unproven bridge or kernel work pauses only its owning Mandate under this
-document's uncertainty law and later requires fresh admission.
+`RunId`, lifecycle transition, or admission. A bridge or kernel operation creates neither a trigger reason nor a
+`RunId`, and started unproven bridge or kernel work commits a bounded partial result and later requires fresh admission.
 
 ## Required evidence before implementation
 

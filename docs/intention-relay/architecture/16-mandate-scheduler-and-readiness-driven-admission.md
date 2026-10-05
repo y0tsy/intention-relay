@@ -15,8 +15,8 @@ architecture 03.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason order, conflict precedence,
-uncertainty, and the atomic fresh-admission transaction; architecture 14 is the historical record of the removed
+Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason order, conflict precedence, and the
+atomic fresh-admission transaction; architecture 14 is the historical record of the removed
 execution-meaning machinery (ADR 0046); architecture 15 owns frozen tool selection and tool/resource compatibility;
 architecture 18 owns MCP source/capability semantics and MCP-specific readiness.
 
@@ -55,9 +55,8 @@ The stages have distinct authority:
 A scheduler evaluates four independent conditions: durable reason eligibility, current Mandate lifecycle permission,
 typed technical readiness, and finite capacity availability. A failed or stale observation preserves the exact pending
 reason and creates no `RunId`, and restoration only wakes reevaluation. The scheduler never interprets readiness as
-semantic meaning, never repairs stale selections, and never owns effect reconciliation, which is coordinated by the
-owning Mandate lifecycle transaction: executors report attempt facts, verifiers may provide explicit authority, and the
-scheduler only observes the resulting eligibility after reconciliation.
+semantic meaning, never repairs stale selections, and never owns effect classification: executors report attempt facts,
+and the scheduler only observes the resulting eligibility.
 
 ## Readiness and capacity evidence
 
@@ -165,7 +164,7 @@ Recovery completes before scheduler admission:
 
 1. recover and classify every unfinished Mandate run/attempt;
 2. terminalize admitted-before-start work as known pre-effect interruption;
-3. convert started work without terminal proof to exact unknown effect and pause only its owning Mandate;
+3. classify started work without terminal proof as a bounded partial result;
 4. rebuild/read durable scheduler projections and establish new readiness observations without starting work;
 5. retain pending reasons; and
 6. only then allow fresh candidate evaluation and admission.

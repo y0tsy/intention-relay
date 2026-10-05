@@ -14,8 +14,7 @@ default for future Mandate work;
 - after a known terminal run disposition, the daemon records its terminal
 evidence and, when continuation remains enabled, returns the Mandate to `Active`; a pending coalesced continuation
 reason then admits a completely fresh run;
-- there is no hidden retry count, automatic escalation threshold, or
-conversion of a known failure into an unknown effect; and
+- there is no hidden retry count or automatic escalation threshold; and
 - Build mode is the default for **Continue autonomously**, while Plan mode
 remains meaningfully distinct (it denies ordinary project `write`/`edit`, and plan mutation remains its own typed plan
 operation).
@@ -43,8 +42,7 @@ meaningfully distinct and neither mode is a sandbox.
 
 ## Failure semantics
 
-- No hidden retry count, automatic escalation threshold, or conversion of a
-known failure into an unknown effect exists.
+- No hidden retry count or automatic escalation threshold exists.
 - Recovery never resumes a run, provider request, tool invocation, bridge
 operation, process, kernel cell, background task, child run, MCP process, or external effect; a fresh run may use only
 durable verified checkpoints and selected historical references.

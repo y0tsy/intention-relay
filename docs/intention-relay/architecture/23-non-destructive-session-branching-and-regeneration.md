@@ -11,8 +11,8 @@ queues, provider selections, retries, event bytes/sequences, cursors, snapshots,
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers,
-fresh admission, uncertainty, and reconciliation. Architecture 14 owns run-execution meaning and historical
+Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers, and
+fresh admission. Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical framing was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
 Architectures 15--20 own tool, scheduler, child/verifier, MCP, bridge, and kernel semantics. Architecture 21 owns
 Goal/Skill/context source, audience, and disclosure semantics. Architecture 22 owns

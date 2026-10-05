@@ -238,7 +238,7 @@ roadmap](11-implementation-roadmap.md) owns activation order and status.
 | **VerifierMandate execution** | Future Mandate execution with explicit, target-scoped delegated verifier authority. |
 | **Mandate child graph** | Future immutable direct-child Mandate edges and delegation snapshots, distinct from session or conversation lineage. |
 | **Fresh run** | A new `RunId` admitted from durable future work state. It is never resumption of prior external work. |
-| **ExternalEffectUnknown** | A future started external attempt whose terminal effect cannot be durably proven. It is distinct from a known failure. |
+| **Partial** | A tool call interrupted or lost before a final result whose bounded partial output is delivered to the model with a notice and whose next step proceeds; it is distinct from a known failure. |
 | **Intrinsic bound** | A representation, correctness, or security constraint. |
 | **Capacity availability** | Observable temporary resource availability, not a product quota. |
 | **Product ceiling** | A policy quota that requires a recorded precedent; it cannot silently govern future Mandate admission. |

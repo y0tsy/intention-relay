@@ -19,7 +19,7 @@ operations return durable evidence; changed reuse fails before effect.
 
 - architecture 15 owns descriptor selection, direct admission, tool-loop facts,
 `ToolCallId`, and generic effect evidence;
-- architecture 13 owns Mandate uncertainty and reconciliation;
+- architecture 13 owns Mandate lifecycle and fresh admission;
 - architecture 17 owns child Mandate creation and verifier authority, so
 `sub_agent` bridge ingress cannot revive retained RLM child identities;
 - architecture 18 owns MCP lifecycle, so bridge transport can carry only safe

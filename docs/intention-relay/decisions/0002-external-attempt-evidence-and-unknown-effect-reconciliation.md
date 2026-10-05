@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0052](0052-partial-tool-results-for-interrupted-execution.md).
 
 ## Decision
 

@@ -12,7 +12,7 @@ IPython/RLM material remains research provenance and historical-only where it co
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 is the historical
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
 record of the removed execution-meaning machinery (ADR 0046); 15 owns registry selection, direct tool admission,
 `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 16 owns readiness-driven admission; 17 owns
 child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity,
@@ -60,7 +60,7 @@ One additive bounded reference joins the selection: `script_library_reference` p
 absolute or symlink-target path, and its absence means an empty import surface.
 
 A `KernelEpochId` is created lazily only after recovery completes, a supported active Mandate run is reread, the exact
-kernel/bridge/tool selections validate, required live capacity exists, and no cancellation or uncertainty gate applies.
+kernel/bridge/tool selections validate, required live capacity exists, and no cancellation gate applies.
 A fresh run never reuses a live kernel or namespace. Process creation occurs outside semantic transactions.
 
 ```mermaid
@@ -79,8 +79,8 @@ stateDiagram
   Unknown --> [*]
 ```
 
-`Unknown` is attempt evidence, not a kernel-owned product state. Architecture 13 uses exact unproven started evidence to
-pause only the owning Mandate.
+`Unknown` is attempt evidence, not a kernel-owned product state. A started kernel attempt without terminal proof commits
+a bounded partial result and pauses no Mandate.
 
 ## Foreground cells, output, and host requests
 
@@ -204,12 +204,12 @@ disposal, daemon shutdown, or checkpoint restoration. Their in-memory results ma
 foreground cell.
 
 Cancellation terminates the attached epoch without claiming rollback. Before start it records known pre-effect
-cancellation/interruption; after start, known terminal proof remains known and absent proof is exact
-`ExternalEffectUnknown` under architecture 13. `StopRunCommandDto` remains the only first-scope run cancellation
+cancellation/interruption; after start, known terminal proof remains known and absent proof commits a bounded `Partial`
+result with its notice; no Mandate pause follows. `StopRunCommandDto` remains the only first-scope run cancellation
 command: the daemon commits the existing `Running -> Cancelling -> Cancelled` lifecycle and then terminates the attached
 kernel rather than merely leaving a potentially modified namespace alive. It does not wait for the cell to acknowledge
 an interrupt. Late cell output, host responses, fragments, and results after cancellation, terminalization, epoch
-replacement, grant expiry, or restart are non-authoritative and cannot append facts or repair uncertainty.
+replacement, grant expiry, or restart are non-authoritative and cannot append facts.
 
 Recovery completes before kernel readiness, attachment, scheduling, or admission. It invalidates grants, refuses
 old-sidecar adoption, classifies unfinished kernel attempts from durable evidence, disposes discoverable private

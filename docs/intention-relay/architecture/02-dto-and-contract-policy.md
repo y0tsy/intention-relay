@@ -302,7 +302,7 @@ semantics.
 
 Future child/verifier families include typed child-edge, `ParentMandateId`, delegation snapshot, direct-edge
 control/message, terminal-summary, verifier authority/revision, immutable target-set, audit baseline/evidence/verdict,
-target-mutation, and reconciliation values. They are credential-free, closed, versioned families that neither widen
+and target-mutation values. They are credential-free, closed, versioned families that neither widen
 historical records nor grant authority by relationship, prompt, evidence, or current state. Architecture 17 owns their
 semantics.
 

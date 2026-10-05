@@ -12,7 +12,7 @@ retained bounded user connection/catalog research remains historical provenance,
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, reconciliation, and user-conflict precedence.
+Architecture 13 owns Mandate lifecycle, fresh admission, and user-conflict precedence.
 Architecture 14 is the historical record of the removed execution-meaning envelope, canonical framing, decoders, and
 compatibility classes (ADR 0046). Architecture 15 owns the fixed `mcp` slot, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary. Architecture 16 owns readiness-driven fresh
@@ -140,7 +140,7 @@ capability visibility is forbidden. Commit is followed by scoped durable reread 
 step. Equal acquisition identity and equal typed request return the committed discovery/selection without another
 external action, changed reuse fails before discovery, and concurrent selection commits compare the expected predecessor
 revision: a loser rereads and may not infer a merge or overwrite a different selection. An accepted empty discovery is a
-known result, not uncertainty.
+known result.
 
 ## Invocation, results, and safe projection
 
@@ -176,9 +176,9 @@ resources, provider-native IDs, and unsafe resource details never leave the MCP 
 tool-call fragment stream, is observational only, and is never model context until a terminal safe result commits. A
 validated result, known protocol failure, known remote failure, known connection refusal, or result-schema failure with
 durably proven remote terminal effect is known; a result-schema mismatch after dispatch without that proof is not
-pre-effect incompatibility but an unknown started effect.
+pre-effect incompatibility but a started effect without terminal proof.
 
-## Readiness, cancellation, recovery, and reconciliation
+## Readiness, cancellation, and recovery
 
 MCP readiness is typed operational evidence for resources named by frozen source/acquisition semantics, such as
 descriptor implementation, exact private material generation, transport/process capacity, or protocol support. It must
@@ -186,9 +186,10 @@ not perform discovery, and the scheduler cannot select sources/capabilities, sta
 repair meaning, or retry acquisition/invocation; run-local acquisition is tool-loop work after admission.
 
 Before `Started`, cancellation or restart records a known before-start outcome and no MCP effect occurs; after
-`Started`, only durable terminal proof makes the result known, and otherwise exact acquisition/invocation attempt
-evidence records `ExternalEffectUnknown` and architecture 13 pauses only the owning Mandate. Cancellation prevents later
-calls/model steps, suppresses late facts, and disposes private resources without asserting rollback.
+`Started`, only durable terminal proof makes the result known, and otherwise the interrupted acquisition/invocation
+commits a bounded `Partial` result with its notice. Partial pauses no Mandate: the next model step proceeds, and the
+interrupted call is never repeated. Cancellation prevents later calls/model steps, suppresses late facts, and disposes
+private resources without asserting rollback.
 
 Local stdio resources are run-owned and lazy: they are disposed on completion, cancellation, failure, or interruption,
 never shared with another run, and never reattached after restart. HTTP connections and local process epochs are private
@@ -198,18 +199,18 @@ Recovery completes before readiness/admission. It validates historical MCP recor
 disposes private resources, establishes fresh readiness epochs without dispatch, and never reconnects, polls,
 reattaches, respawns, retries, resumes, rediscovers, or repeats old discovery/invocation work. A fresh run imports no
 live process, connection, credential handle, or accumulated selection; it acquires again, and earlier discovery remains
-audit evidence only. Exact reconciliation names the uncertainty and frozen attempt baseline and may yield only Mandate
-`Active` for later fresh work or `Stopped`.
+audit evidence only.
 
 ## Child, verifier, protocol, and compatibility boundaries
 
 A child has its own MCP acquisition lifecycle. Delegation may carry only explicit safe source/provenance references,
 never a live process, connection, credential handle, accumulated selection, invocation, or unfinished effect; parent
-controls cannot invoke, widen, inspect private resources, or reconcile child MCP work, and child MCP uncertainty remains
+controls cannot invoke, widen, or inspect private resources, and an interrupted child MCP call's partial result remains
 child-local.
 
 Verifier MCP work belongs only to the verifier Mandate; an MCP result is evidence and cannot issue, expand, consume, or
-exercise verifier authority or mutate a target, and verifier MCP uncertainty pauses only the verifier.
+exercise verifier authority or mutate a target, and an interrupted verifier MCP call yields a bounded `Partial` result
+with its notice and pauses nothing.
 
 Future MCP projections use typed JSON-RPC 2.0 methods (ADR 0045) layered with the `model_tool_loop_v1` descriptor/model
 capability: authoritative initial replay/resync/error, bounded ordered discovery/capability/selection/invocation
@@ -242,12 +243,12 @@ Every MCP call passes the same registry selection, daemon-bound authority, typed
 programmatic-caller-policy selection, idempotency, durable outcome, cancellation, redaction, and post-reread publication
 rules as another registered tool. Connection, method, schema, and gateway revisions are frozen in the call and run
 selection. A remote schema mismatch fails closed before an external effect; an already started ambiguous call is never
-repeated and records `ExternalEffectUnknown` when appropriate. A service may emit bounded safe progress through the
-ordinary durable output stream but cannot invoke `ask_user` or create a confirmation request, and it cannot create a
-Goal, proposal, session, run, connection, tool registration, child agent, message, or another authority context. There
-is no MCP listener, remote attachment to the daemon bridge, plug-in system, Skill/MCP installation, dynamic tool
-registration, server-driven child control, autonomous continuation, or claim that a local service is isolated from the
-user's ordinary OS authority.
+repeated and commits a bounded `Partial` result with its notice when appropriate. A service may emit bounded safe
+progress through the ordinary durable output stream but cannot invoke `ask_user` or create a confirmation request, and
+it cannot create a Goal, proposal, session, run, connection, tool registration, child agent, message, or another
+authority context. There is no MCP listener, remote attachment to the daemon bridge, plug-in system, Skill/MCP
+installation, dynamic tool registration, server-driven child control, autonomous continuation, or claim that a local
+service is isolated from the user's ordinary OS authority.
 
 The MCP-related closed safe failures through `ErrorDto` are:
 

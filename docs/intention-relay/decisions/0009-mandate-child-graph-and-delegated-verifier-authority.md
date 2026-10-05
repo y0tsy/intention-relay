@@ -12,7 +12,7 @@ tool, or verifier authority. Child outcomes are evidence and never implicitly mu
 
 Target mutation by a verifier requires separate user-issued, revisioned, target-scoped authority with exact allowed
 operations, immutable audit baseline, and qualifying evidence. A verdict alone grants nothing. User lifecycle, revision,
-reconciliation, revocation, and authority changes win conflicts.
+revocation, and authority changes win conflicts.
 
 ## Invariants
 
@@ -22,7 +22,7 @@ reparenting, detaching, merging, and cross-graph links fail before mutation;
 commit before publication, and reread before dispatch;
 - child and verifier selections are immutable nested execution meaning; current
 ancestry, authority, configuration, registry, provider, or UI cannot rebuild missing meaning;
-- child and verifier unknown effects remain local to their owning Mandate;
+- child and verifier partial results remain local to their owning Mandate;
 - recovery never resumes, retries, reattaches, rediscovers, or reapplies old
 child/verifier work or target mutations;
 - a verifier target set never expands through graph, Goal, activity, session,

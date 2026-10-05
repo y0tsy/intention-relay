@@ -104,9 +104,10 @@ exception cannot omit, cancel, or bypass an active obligatory child.
 Required-gate failure moves the Goal to `NeedsRework` (retaining the gate result and prior evidence), and a successful
 gate is valid only until a new revision of the Goal, gate, template, or obligatory child invalidates it. `PauseGoal` and
 `StopGoal` prevent new ordinary and verification runs, cascade through the non-terminal subtree, cancel active runs via
-`Running -> Cancelling -> Cancelled`, and leave a started external effect `ExternalEffectUnknown` when unprovable. Pause
-is reversible via explicit resume; stop is terminal. Archiving is explicit and reversible only for a terminal idle Goal;
-it retains all history as readable, and restore changes presentation only, never launching a run.
+`Running -> Cancelling -> Cancelled`, and commit a bounded `Partial` result with its notice for a started external
+effect that cannot be proven terminal. Pause is reversible via explicit resume; stop is terminal. Archiving is explicit
+and reversible only for a terminal idle Goal; it retains all history as readable, and restore changes presentation only,
+never launching a run.
 
 ## Leading-goal run selection and durable transactions
 
@@ -164,14 +165,13 @@ VerificationTargetDto
   baseline_lifecycle_state
   frozen_goal_references
   frozen_gate_and_evidence_contract_references
-  baseline_unknown_effect_reference_when_present
+  baseline_partial_effect_reference_when_present
 
 VerificationAuditContractDto
   contract_id
   revision
   required_evidence_kinds
   completion_standard
-  reconciliation_standard_when_allowed
   contract_identity
 
 VerificationAuditEvidenceDto
@@ -192,7 +192,6 @@ VerificationTargetOperationDto
   Resume
   Stop
   ReviseFull
-  ResolveUnknownEffect
 
 VerificationTargetMutationDto
   mutation_id
@@ -212,22 +211,20 @@ VerificationAuditVerdictDto
   TargetRevisionStale
   TargetUnavailable
   VerifierUnavailable
-  VerifierExternalEffectUnknown
+  VerifierPartialEffect
 ```
 
 Authority is usable only while its revision is active, unrevoked, unexpired, and unconsumed where required, and is owned
 by the named verifier Mandate; it cannot target itself. The target set is immutable and explicitly enumerated, never
 expands, and child work cannot inherit, relay, or amplify mutation authority. `ReviseFull` may create a complete new
-target revision but never rewrites history or alters a live old run. User reconciliation uses the same durable record
-family without verifier authority and may yield only `Active` or `Stopped`. A baseline change, missing baseline, or
+target revision but never rewrites history or alters a live old run. A baseline change, missing baseline, or
 incompatibility before a verdict or mutation is `TargetRevisionStale` and fails closed; user mutations win via ordinary
 optimistic concurrency; a verdict is durable evidence, never an implicit trigger. A mutation commits atomically or not
-at all; a duplicate equal mutation returns the saved result; changed key reuse fails. `ResolveUnknownEffect` is allowed
-only when the authority explicitly includes it, the target is `PausedAwaitingDecision`, and the contract/evidence proves
-the reconciliation standard on an unchanged baseline; the sole outcomes are `Resume` (to `Active`) or `Stop`. The
-verifier's own `ExternalEffectUnknown` pauses only the verifier at `PausedAwaitingDecision` and never mutates the
-target. Activity records: `VerificationAuthorityIssued`, `VerificationAuditStarted`, `VerificationAuditVerdictRecorded`,
-`VerificationTargetMutationApplied`, `VerificationTargetMutationRejected`, `VerificationUnknownEffectReconciled`.
+at all; a duplicate equal mutation returns the saved result; changed key reuse fails. The verifier's own partial result
+pauses nothing: the verifier's next model step proceeds with the bounded captured output and its notice, and it never
+mutates the target. Activity records: `VerificationAuthorityIssued`,
+`VerificationAuditStarted`, `VerificationAuditVerdictRecorded`, `VerificationTargetMutationApplied`,
+`VerificationTargetMutationRejected`.
 Recovery never resumes verifier/target work, repeats tools, or reapplies mutations; historical M4 and v1--v4 records
 never acquire synthetic verifier authority.
 
@@ -247,7 +244,7 @@ confirmation, and selected class before execution. Gate templates have `Project`
 revisions, safe cards, explicit user create/edit/archive/restore, and typed provenance; a model may only prepare a
 template proposal under the proposal rules. An executable gate runs in the terminal verification phase of an ordinary
 leading-goal run or a separately user-admitted `VerificationOnly` run, using the same typed evidence family with
-distinct provenance. Failure, timeout, cancellation, output bound, unknown effect, missing reference, stale revision, or
+distinct provenance. Failure, timeout, cancellation, interruption, output bound, missing reference, stale revision, or
 unavailable template are known typed outcomes; no hidden retry, no next-phase readiness claim; retries occur only before
 the first irreversible durable fact and never repeat a started external action.
 
@@ -329,8 +326,8 @@ parent/Goal/memory/Skill/role/policy/activity edits do not change the child snap
 revocation can impose a stricter present-time denial. A child uses independently assigned
 session/run/class/tool/provider selections and cancellation/no-resume rules. On cancellation, failure, or daemon
 restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external effect is retried,
-reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known pre-effect or
-unknown-effect evidence. Goals, records, summaries, proposals, and readable history survive recovery; a later user
+reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known pre-effect evidence or
+a bounded partial result. Goals, records, summaries, proposals, and readable history survive recovery; a later user
 attempt obtains a new run identity and target snapshot.
 
 ## Bounds and closed safe failures

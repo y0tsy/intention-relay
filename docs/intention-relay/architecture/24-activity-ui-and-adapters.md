@@ -143,7 +143,7 @@ Each activity tree owns one append-only container journal, the activity-tree con
 gap-detection token. It orders exactly the records that belong to that activity tree and are not records of one session;
 it is never the session event sequence, the run container journal, the conversation-tree container journal, the
 delegation-edge container journal, or a notification observation position. Journal records safely describe root binding,
-child/message/clarification transitions, terminal child state, policy observation, Goal milestone, and unknown effect
+child/message/clarification transitions, terminal child state, policy observation, Goal milestone, and partial effect
 observation. No global order across trees exists.
 
 ```text
@@ -178,7 +178,7 @@ PolicySuspensionObserved
 PolicyRevocationCancellationStarted
 PolicyRevocationCancellationCompleted
 GoalActivityMilestone
-ExternalEffectUnknownObserved
+PartialEffectObserved
 ```
 
 A semantic transition atomically commits its activity projections, journal/index/ snapshot state, required notification
@@ -277,11 +277,11 @@ AgentNotificationLevelDto
   Ordinary
 ```
 
-`Urgent` is used for user-decision-needing-attention, policy-revocation or cancellation safety, `ExternalEffectUnknown`,
+`Urgent` is used for user-decision-needing-attention, policy-revocation or cancellation safety, a partial effect,
 a terminal outcome leaving obligatory work unfinished, and `sub_agent_clarification_timeout`. `Ordinary` is used only
 for a stable awaiting state or terminal milestone; there are no periodic or every-N summaries. At most one `Urgent`
 record exists per `(AgentActivityTreeId, cancellation reason)`, created atomically with the cascade-start
-projection carrying the then-known safe counts; a later distinct `ExternalEffectUnknown` is its own urgent reason.
+projection carrying the then-known safe counts; a later distinct partial effect is its own urgent reason.
 Urgent safety records take precedence over ordinary summaries; ordinary summaries may coalesce to current safe per-tree
 state. Reconnect returns current redacted summaries for affected trees, not replayed alerts. Notification replay,
 publication, archival reads, and slow-peer handling never start work.
@@ -346,7 +346,7 @@ agent_notification_summary_too_large
 
 They disclose no message or reference body, tool/MCP data, prompt, path, credential, grant, Python value, provider
 resource, process topology, counter history, or implementation detail. Every listed failure is known before an external
-effect; unknown-effect evidence is retained for work that had already started.
+effect; a bounded partial result and its notice are retained for work that had already started.
 
 ## Compatibility, dependencies, and non-goals
 

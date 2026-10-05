@@ -8,8 +8,7 @@ Accepted.
 
 A Mandate is durable user-issued work authority, not a Goal, prompt, tool permission, provider continuation, daemon, or
 second runtime. User commands own product lifecycle and revision decisions. The daemon may only record explicitly
-defined operational facts, including trigger capture, admission, known terminal disposition, and required uncertainty
-pausing.
+defined operational facts, including trigger capture, admission, and known terminal disposition.
 
 A continuation always admits a fresh run with a new `RunId`. Revision changes affect only future admission. No provider
 request, tool call, process, kernel, child work, MCP operation, or external effect resumes after restart.

@@ -8,13 +8,12 @@ Accepted.
 
 This record promotes the Foundation Mandate authority rules into one detailed lifecycle owner. [Architecture
 13](../architecture/13-mandate-domain-and-durable-lifecycle.md) is the sole detailed owner for Mandate aggregate
-identity, revisions, lifecycle, trigger reasons, fresh-run admission, conflict precedence, uncertainty pausing,
+identity, revisions, lifecycle, trigger reasons, fresh-run admission, conflict precedence,
 recovery, and Mandate protocol/persistence boundaries.
 
 Mandate triggers are distinct from M3 queue tickets. Admission is one atomic, idempotent transition that freezes a new
 RunId, revision, reason, selection, and execution meaning before an external effect. User lifecycle/revision mutations
-win conflicts. Unknown terminal effects pause the Mandate until exact reconciliation permits only a later fresh Active
-path or Stopped.
+win conflicts. A started effect without terminal proof commits a bounded partial result and pauses no Mandate.
 
 ## Compatibility and non-goals
 

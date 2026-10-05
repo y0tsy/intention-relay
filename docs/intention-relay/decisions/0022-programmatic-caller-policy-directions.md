@@ -21,8 +21,9 @@ numeric baseline and the bounded corridor are removed by [ADR
 0048](0048-limits-by-precedent-and-no-content-scanning.md);
 - policy lifecycle (`Active`/`Suspended`/`Revoked`/`Archived`) with live
 tightening, drafts, and no reactivation after revoke;
-- `InterruptedBeforeStart`/`ExternalEffectUnknown` recovery for admitted
-effects; the run, calendar, and reservation limit machinery is removed by ADR 0048;
+- `InterruptedBeforeStart`/`Partial` recovery for admitted effects: an admitted
+effect interrupted or lost before a final result commits a bounded partial result and permits the next model step; the
+run, calendar, and reservation limit machinery is removed by ADR 0048;
 - `ProgrammaticCallerPolicySelectionV1` with `Disabled` only for historical
 M4, and closed `ErrorDto` safe failures for the remaining directions.
 
@@ -47,8 +48,8 @@ and are never rewritten or given synthetic policy state.
 
 - Snapshot, revision, origin, and draft failures are known typed pre-effect
 rejections.
-- A started effect without durable terminal proof remains
-`ExternalEffectUnknown` and is never retried.
+- A started effect interrupted or lost before a final result commits a bounded
+`Partial` result with its notice and is never retried; nothing pauses.
 - Live suspension or revocation imposes stricter present-time denial but never
 rewrites historical semantics or resumes external work.
 

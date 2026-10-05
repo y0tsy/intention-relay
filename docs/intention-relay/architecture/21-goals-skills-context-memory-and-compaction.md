@@ -13,7 +13,7 @@ with architectures 13--20.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 is the historical
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
 record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the registry, frozen direct-tool
 selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 16 owns scheduler reevaluation and
 readiness; 17 owns child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge grants, ingress, operation
@@ -309,7 +309,7 @@ rollback selects an earlier record explicitly and does not erase either record.
 Compaction creates an immutable safe summary over an exact ordered set of **completed** durable history. It retains
 source ranges, compaction policy/version, safe audience, omission evidence, and exact uncompacted suffix. Original
 durable facts remain authoritative and are never deleted, replaced, or reinterpreted by a summary. A compaction cannot
-cover unfinished or unknown effects, synthesize completion, reorder history, create authority, or become
+cover unfinished or interrupted effects, synthesize completion, reorder history, create authority, or become
 continuation/recovery state.
 
 ```mermaid
@@ -333,7 +333,7 @@ sequenceDiagram
 Cancellation, terminalization, selection replacement, audience revocation, or restart blocks later disclosure and model
 steps as applicable but cannot rewrite an already committed projection or summary. Late source, card, retrieval,
 disclosure, or compaction output after cancellation, terminalization, replacement, or restart is non-authoritative and
-cannot append facts or repair uncertainty.
+cannot append facts.
 
 Recovery completes before new context-driven admission or step construction. It may validate persisted supported
 references, but never rediscloses, recompacts, fetches current catalog/file/index content, resumes/retries work, or

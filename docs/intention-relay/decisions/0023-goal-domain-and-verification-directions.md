@@ -14,8 +14,7 @@ DAG integrity, bounds 256/64/16/32/64);
 - Goal lifecycle, readiness, and user decision (`Active`/`NeedsRework`/
 `Paused`/`Stopped`/`Archived`, `Ready`, `AcceptedWithException`);
 - leading-goal run selection (`GoalRunSelectionV1`);
-- delegated Verification Mandates (authority, target sets, operation matrix,
-reconciliation);
+- delegated Verification Mandates (authority, target sets, operation matrix);
 - verification gates and evidence (`ReferenceGate`, `ExecutableGate`);
 - working memory, roles, and templates (`MemoryKindDto`, reusable `sub_agent`
 roles);
@@ -46,7 +45,8 @@ success.
 5. A run is ordinary or goal-directed with exactly one leading Goal; admission
 is atomic and never reconstructs a selection from current state.
 6. Verifier mutation requires exact issued, revisioned, target-scoped
-authority; user commands win conflicts; `ResolveUnknownEffect` yields only `Active` or `Stopped`.
+authority; user commands win conflicts; an interrupted verifier execution yields a bounded `Partial` result and never
+mutates the target.
 7. Recovery never resumes, retries, reattaches, or reruns Goal, gate, memory,
 or proposal work; a later attempt is fresh.
 
@@ -56,8 +56,8 @@ or proposal work; a later attempt is fresh.
 truncated or partly committed.
 - A stale base for a proposal or mutation is a typed conflict; rejection
 changes no active record.
-- A started verifier or gate action without durable terminal proof remains
-`ExternalEffectUnknown` and is never retried.
+- A started verifier or gate action interrupted or lost before a final result commits a bounded `Partial` result with
+its notice and is never retried; nothing pauses.
 
 ## Rationale
 

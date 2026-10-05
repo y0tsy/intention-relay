@@ -267,7 +267,7 @@ cover:
 - atomic admission/transition rollback at every persistence stage;
 - no external effect inside a transition transaction and post-commit reread
 publication;
-- crash/cancel behavior before start versus after a potentially uncertain start;
+- crash/cancel behavior before start versus after a potentially interrupted start;
 - no provider/tool/process/kernel/MCP/child/bridge resumption after restart;
 - limit behavior only where a recorded precedent names the failure mode it
 prevents, with no hidden Mandate product quotas; and
@@ -316,7 +316,7 @@ admission](16-mandate-scheduler-and-readiness-driven-admission.md).
 
 Before implementation, future child/verifier work requires typed
 edge/delegation/authority/baseline/evidence/verdict/mutation fixtures; idempotent child creation and graph-integrity
-fixtures; direct-edge-only control and non-scheduling messages; terminalization/cascade and child-local uncertainty
+fixtures; direct-edge-only control and non-scheduling messages; terminalization/cascade and child-local partial-result
 matrices; authority revision/revocation/target-set/stale-baseline/operation fixtures; user-precedence races; atomic
 fault injection; recovery/no-resume; typed protocol replay; M3/M4 and retained-RLM preservation; and fake-secret/raw
 resource absence. These are future obligations, not current tests or targets. The detailed portfolio is owned by

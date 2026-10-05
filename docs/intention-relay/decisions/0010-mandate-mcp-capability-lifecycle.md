@@ -26,8 +26,8 @@ meaning;
 ancestry cannot repair stored meaning;
 - source/server/catalog/result data grants no lifecycle, registry, scheduler,
 child, verifier, or user authority;
-- started ambiguous work pauses only its owning Mandate, and recovery never
-retries, resumes, reattaches, rediscovers, or repeats it;
+- started ambiguous work commits a bounded partial result and pauses no
+Mandate, and recovery never retries, resumes, reattaches, rediscovers, or repeats it;
 - local stdio resources are run-owned, disposed at terminalization, and never
 shared or reattached; and
 - M3/M4 and retained bounded-MCP/RLM history remains unchanged and receives no

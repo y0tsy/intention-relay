@@ -10,7 +10,7 @@ linked architecture sections.
 | ID | Status | Topic |
 | --- | --- | --- |
 | [0001](0001-mandate-authority-and-fresh-run-lifecycle.md) | Accepted | Mandate authority and fresh-run lifecycle |
-| [0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Accepted | External attempt evidence and unknown-effect reconciliation |
+| [0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Superseded | External attempt evidence and unknown-effect reconciliation |
 | [0004](0004-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path and fixed registry boundary |
 | [0005](0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Accepted | M4+ reconciliation and delivery boundaries |
 | [0006](0006-mandate-lifecycle-and-admission-boundary.md) | Accepted | Mandate lifecycle and admission boundary |
@@ -53,3 +53,4 @@ linked architecture sections.
 | [0048](0048-limits-by-precedent-and-no-content-scanning.md) | Accepted | Limits by precedent, no runtime content scanning, and removal of the corridor, calendar-period, and queue-audit engines |
 | [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers) |
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
+| [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |

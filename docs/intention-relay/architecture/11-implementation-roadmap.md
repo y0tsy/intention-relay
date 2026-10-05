@@ -451,8 +451,8 @@ per [architecture 12](12-quality-gates-and-makefile.md) is accepted.
 ### Deliver
 
 -  the Mandate aggregate, DTO family, revision, lifecycle, trigger, eligibility, fresh-admission, capacity,
-transaction-class, user-conflict, uncertainty, recovery, compatibility, and evidence contracts (architecture 13);
--  the external-attempt phase and evidence taxonomy and the unknown-effect pause with no retry, resume, reattachment, or
+transaction-class, user-conflict, recovery, compatibility, and evidence contracts (architecture 13);
+-  the external-attempt phase and evidence taxonomy and the partial-result rule with no retry, resume, reattachment, or
 rerun (architecture 13);
 -  the nested Mandate and `VerifierMandate` typed serde JSON contract families with explicit decoder outcomes and
 historical-compatibility classes (architecture 14, [ADR 0046](../decisions/0046-typed-serde-json-contracts.md));
@@ -468,7 +468,7 @@ recovery-before-scheduling (architecture 16);
 ### Tests first
 
 - admission-transaction, conflict, capacity, and legacy-ticket separation fixtures;
-- attempt-phase and unknown-effect matrix fixtures;
+- attempt-phase and partial-result matrix fixtures;
 - typed contract fixtures plus invalid vectors for both Mandate kinds;
 - reread, readiness, deterministic-selection, atomic-handoff, and recovery-before-scheduling fixtures;
 - calendar/interval/time-zone/DST fixtures over the scheduler reasons;
@@ -508,8 +508,8 @@ execution-kind-scoped `WorkspaceRoot` (architecture 15, decision 0007);
 (architectures 15, [ADR 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) as amended by [ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md));
 -  durable immutable child edges, delegation snapshots, direct-edge controls and messages, graph terminalization,
-child-local uncertainty, separately issued verifier authority, immutable target sets and baselines, conflict precedence,
-and exact reconciliation (architecture 17, decision 0009);
+separately issued verifier authority, immutable target sets and baselines, and conflict precedence (architecture 17,
+decision 0009);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts, safe replay,
 cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19, decisions 0011/0027);
@@ -530,7 +530,7 @@ cancellation propagation, recovery, and the closed `bridge_*` failures (architec
 ### Acceptance outcomes
 
 -  every Mandate tool call travels the frozen descriptor path and produces durable evidence exactly once, with no retry
-after an unknown effect;
+of an interrupted call;
 -  parenthood grants only direct-child controls and no implicit verifier or lifecycle authority, and verifier mutation
 requires exact issued authority, target, operation, baseline, and evidence;
 -  bridge ingress cannot bypass registry admission, `ToolCallId`, start/result evidence, or post-commit reread
@@ -705,8 +705,7 @@ flowchart TD
   M --> S[Trigger scheduler]
   E --> S
   T --> G[Gateway bridge]
-  S --> X[Effect reconciliation]
-  X --> C[Child verifier]
+  S --> C[Child verifier]
   T --> P[MCP lifecycle]
   M --> K[Skills Goals context]
   E --> V[Provider evolution]

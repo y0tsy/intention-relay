@@ -12,9 +12,9 @@ child/activity material remains research and historical provenance, not future M
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, reason validity/order, fresh admission, uncertainty, and user-conflict
-precedence. Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046);
-records are typed serde JSON. Architecture 15 owns the fixed `sub_agent` registry slot, frozen selection, direct tool
+Architecture 13 owns Mandate lifecycle, reason validity/order, fresh admission, and user-conflict precedence.
+Architecture 14 is the historical record of the removed execution-meaning envelope and decoders (ADR 0046); records are
+typed serde JSON. Architecture 15 owns the fixed `sub_agent` registry slot, frozen selection, direct tool
 admission, and generic tool-loop evidence. Architecture 16 owns durable reevaluation, readiness, candidate selection,
 and admission handoff.
 
@@ -122,12 +122,12 @@ reason, and architecture 13 alone may admit a fresh run. A terminal or interrupt
 undelivered ordinary message to a terminal or interrupted child is rejected with a typed durable delivery outcome, while
 the original message and its reason remain in the activity-tree container journal.
 
-Parenthood cannot complete, needs-rework, revise, archive, reconcile uncertainty, issue verifier authority, or control a
+Parenthood cannot complete, needs-rework, revise, archive, issue verifier authority, or control a
 sibling/root/unrelated Mandate; a user can mutate every child under architecture 13. Parent controls validate the exact
 edge, frozen delegated control, the expected Mandate container journal sequence, expected lifecycle, and idempotent
 operation identity.
 
-## Terminalization, uncertainty, and recovery
+## Terminalization and recovery
 
 A child terminal summary is safe provenance/evidence, not completion or failure of the parent objective. Parent
 completion requires durable terminal evidence for every applicable descendant; a parent may initiate pause/stop only
@@ -139,9 +139,8 @@ facts. A creation racing an active terminalization intent either commits first a
 or is rejected after the closure intent commits; completion revalidates the same graph epoch and cannot terminalize from
 a stale descendant set.
 
-`ExternalEffectUnknown` remains owned by the exact child that started the unproven effect. It pauses only that child and
-may block dependent ancestor closure, but it never fabricates parent uncertainty; only that child's user, or exact
-separately issued verifier authority naming that child and uncertainty, may reconcile it.
+A partial result belongs to the exact child that started the interrupted effect. It pauses no child and never becomes
+parent state: the child's next model step proceeds with the bounded captured output and its notice.
 
 Recovery completes before graph scheduling/readiness. It rebuilds projections only from supported durable edge facts,
 retains edges, snapshots, messages, summaries, checkpoints, authority references, and immutable meaning, classifies
@@ -180,13 +179,13 @@ VerifierAuditBaselineV1
   target_revision_and_sequence
   target_lifecycle
   frozen_goal_gate_evidence_references
-  optional_unknown_effect_reference
+  optional_partial_effect_reference
   audit_contract_reference
 ```
 
-Authority revisions, target sets, audit baselines, evidence, verdicts, mutations, and reconciliation records are
-immutable. A target set is explicit and never expands through parent/child, ancestry, descendants, siblings, Goals,
-sessions, branches, activity, or shared evidence; a verifier cannot target itself. Its children may gather evidence but
+Authority revisions, target sets, audit baselines, evidence, verdicts, and mutations are immutable. A target set is
+explicit and never expands through parent/child, ancestry, descendants, siblings, Goals, sessions, branches, activity,
+or shared evidence; a verifier cannot target itself. Its children may gather evidence but
 cannot inherit, relay, consume, amplify, or exercise target-mutation authority.
 
 Typed serde JSON owns the `VerifierMandate` record shape (ADR 0046); this document owns verifier nested selection field
@@ -200,7 +199,7 @@ revision, Mandate container journal sequence, lifecycle, authority revision, aud
 applicable, and operation idempotency identity. Any mismatch is a typed pre-mutation stale failure; the system never
 best-effort merges, retargets, substitutes current state, or retries with changed meaning.
 
-## Audit, mutations, conflicts, and reconciliation
+## Audit, mutations, and conflicts
 
 A verdict is durable evidence only: it neither schedules work nor mutates a target. Before dependent verifier work or
 mutation, validate exact verifier identity/revision, authority revision/lifecycle, target membership, allowed operation,
@@ -209,34 +208,31 @@ consumed, corrupt, mismatched, stale, or unsupported authority/baseline fails cl
 substitutes current authority, target revision, Goal, configuration, registry, ancestry, readiness, evidence store, or
 UI state.
 
-Primary delegated operations are `MarkNeedsRework`, `MarkComplete`, `Stop`, `ReviseFull`, and `ResolveUnknownEffect`;
-`Pause` and `Resume` are not implicit verifier powers.
+Primary delegated operations are `MarkNeedsRework`, `MarkComplete`, `Stop`, and `ReviseFull`; `Pause` and `Resume` are
+not implicit verifier powers.
 
 -  `MarkNeedsRework` requires explicit authority and qualifying fail evidence. It creates neither a trigger nor a
 resumed run.
--  `MarkComplete` requires explicit authority, unconditional pass evidence, no unresolved target uncertainty, and
-required graph terminalization closure.
-- `Stop` never asserts completion and does not bypass exact uncertainty reconciliation.
+-  `MarkComplete` requires explicit authority, unconditional pass evidence, and required graph terminalization closure.
+- `Stop` never asserts completion.
 -  `ReviseFull` requires its own authority and creates only an immutable future revision. It never rewrites an admitted
 run or historical evidence.
--  `ResolveUnknownEffect` names the exact target uncertainty and baseline and may yield only `Active` for later fresh
-work or `Stopped`. It never asserts rollback, absence, idempotence, repeatability, or safe replay.
 
 One target-mutation transaction validates the authority, baseline, evidence, verdict, target revision, container journal
-sequence, and lifecycle, graph closure where required, exact uncertainty where applicable, and idempotency identity. It
-commits all or nothing: applied/rejected result, target projection/events/snapshots when changed, authority consumption
-where selected, audit/reconciliation linkage, the target container journal sequence, safe activity/notification
-reference, and idempotency evidence.
+sequence, lifecycle, graph closure where required, and idempotency identity. It commits all or nothing: applied/rejected
+result, target projection/events/snapshots when changed, authority consumption where selected, audit linkage, the target
+container journal sequence, safe activity/notification reference, and idempotency evidence.
 
-User lifecycle, revision, reconciliation, revocation, and authority-revision mutations win optimistic conflicts. A
+User lifecycle, revision, revocation, and authority-revision mutations win optimistic conflicts. A
 losing parent, daemon, or verifier action performs a scoped reread and cannot merge, retarget, select another operation,
 or retry with changed meaning.
 
-## Verifier uncertainty and protocol boundary
+## Verifier interruption and protocol boundary
 
-If verifier external work becomes unknown, pause only the verifier Mandate; do not mutate a target, complete the audit,
-reuse partial evidence as a qualifying verdict, or treat verifier uncertainty as target uncertainty. Recovery preserves
-all authority/audit/mutation history but never replays verifier evidence work or reapplies a committed mutation.
+If verifier external work is interrupted, the verifier execution yields a bounded `Partial` result with its notice,
+never mutates the target, and pauses nothing; the partial result is not a qualifying verdict and never becomes target
+state. Recovery preserves all authority/audit/mutation history but never replays verifier evidence work or
+reapplies a committed mutation.
 
 Future child/verifier projections use typed JSON-RPC 2.0 methods with authoritative snapshot/replay or typed
 resync/error and never deliver partial data (ADR 0045). Replay is read-only: it cannot resend messages, start children,
@@ -319,7 +315,7 @@ MandateChildTerminalSummaryDto
   terminal_kind
   disposition
   verified_checkpoint_reference_when_present
-  external_effect_unknown_reference_when_present
+  partial_effect_reference_when_present
   evidence_references
   safe_conclusion
 ```
@@ -334,9 +330,9 @@ failure fail a parent, or child evidence satisfy a parent acceptance contract. U
 `RunId` values. The first scope does not require a token ceiling
 from providers that cannot report usage: when a provider reports no usage component, the tree aggregates only the
 components it reports, and no synthetic ceiling, price, or inferred cost is introduced. A child
-`Paused`/`NeedsRework`/`Stopped` does not implicitly change the parent; a child `ExternalEffectUnknown` pauses that
-child, emits an urgent graph safety observation, and blocks only automatic parent continuation that depends on its
-result.
+`Paused`/`NeedsRework`/`Stopped` does not implicitly change the parent; a child partial result pauses no parent or
+child work: the child's next model step proceeds with the bounded captured output and its notice, and the interruption
+is recorded as an urgent graph safety observation.
 
 **Queue limits.** Each parent-to-child and child-to-parent direction holds at most sixteen undelivered messages and 512
 KiB of safe message content. One slot and 64 KiB in each direction are set aside respectively for `ClarificationReply`
@@ -432,9 +428,10 @@ transcript. The bounds above are RLM-tree policy and never become Mandate admiss
 
 ## Compatibility, dependencies, and non-goals
 
-This document depends on architectures 13-16 and decisions 0001, 0002, 0004, 0006, 0007, and 0008. Architecture 18 owns
-MCP capability lifecycle; MCP evidence is non-authorizing and MCP uncertainty remains local to its owning Mandate. This
-document defines no sub-agent executor, worker or recursion topology, product depth/count/concurrency/lifetime/message
+This document depends on architectures 13-16 and decisions 0001, 0004, 0006, 0007, 0008, and 0052. Architecture 18 owns
+MCP capability lifecycle; MCP evidence is non-authorizing and an interrupted MCP call's partial result stays local to
+its owning Mandate. This document defines no sub-agent executor, worker or recursion topology,
+product depth/count/concurrency/lifetime/message
 quotas, RLM/IPython, MCP capability lifecycle semantics, Skills/Goals/context semantics, provider evolution, session
 forks, general activity/notifications/UI, schema, migrations, crates, Cargo, Makefile/CI, or production implementation.
 

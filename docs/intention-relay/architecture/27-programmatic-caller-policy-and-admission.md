@@ -220,7 +220,7 @@ confirmation.
 - `RevokePolicy` atomically creates a later immutable revision whose admission
 is disabled, enters `Revoked`, marks every active root tree that selected the policy for cancellation, and denies new
 admissions. Each affected tree follows the existing `Running -> Cancelling -> Cancelled` path; a started effect whose
-final result is not provable remains `ExternalEffectUnknown`.
+final result is not provable commits a bounded `Partial` result with its notice and pauses nothing.
 - A later user decision may create a **new** active revision of the same policy
 identity, retaining its counter history; revocation is never undone by reactivating an old revision, by restoring an
 archive, or by replay.
@@ -253,8 +253,9 @@ an external effect, network call, kernel operation, MCP process, or child admiss
 An equal repeated operation reads the accepted idempotent binding and is not a second admission. A denial, invalid
 input, expiration, cancellation, or known failure before `ToolCallStarted` leaves the run unchanged with the terminal
 known pre-effect outcome, and `ToolCallStarted` fixes the admitted outcome even when later cancellation, loss, or
-ambiguity yields `ExternalEffectUnknown`. Recovery records `InterruptedBeforeStart`, or records `ExternalEffectUnknown`
-for a started ambiguous action and never retries it; it never re-runs the action to recreate an admission.
+ambiguity commits a bounded `Partial` result. Recovery records `InterruptedBeforeStart`; a started ambiguous action
+commits a bounded `Partial` result with its notice and is never retried. Recovery never re-runs the action to recreate
+an admission.
 
 No numeric contract limit remains in the policy scope: the former counts of policies, policy references, rules, and
 typed constraints, the confirmation and corridor counts, and the fixed evidence, snapshot, and pending-draft sizes were
@@ -307,8 +308,7 @@ programmatic_policy_draft_too_large
 
 They disclose no policy body, raw input, path, grant, credential, Python value, provider resource, process topology,
 external response, counter history, or implementation detail. Every listed failure is known before an external effect,
-except that a later cancellation or recovery preserves the independently selected `ExternalEffectUnknown` evidence for
-work that had already started.
+except that work that had already started retains its independently selected bounded `Partial` result and notice.
 
 ## Compatibility and historical preservation
 
