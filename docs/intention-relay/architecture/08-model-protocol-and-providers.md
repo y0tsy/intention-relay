@@ -43,9 +43,11 @@ The optional system context is the effective instruction projection of [architec
 30](30-instruction-sources-and-system-context.md) ([ADR
 0043](../decisions/0043-instruction-sources-and-system-context.md)): the daemon assembles it once per admitted run from
 declared instruction sources, it is bounded and credential-free, and the current drivers keep translating it into the
-leading system message with no driver-specific framing, caching directive, rewrite, or provider-side scan. Historical
-M3/M4 requests keep the system context absent. A driver never synthesizes, substitutes, reorders, or truncates
-instruction text, and a provider cannot inject or extend it.
+leading system message with no driver-specific framing, rewrite, or provider-side scan; the request marks the end of
+that instruction block as an ephemeral prompt-cache breakpoint under [ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md). Historical M3/M4 requests keep the system context
+absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
+or extend it.
 
 Provider SDK types cannot leave their provider crate. The architecture checker permits `openrouter_rs` namespace use
 only in `intention-provider-openrouter` private implementation and `async_openai` only in
@@ -172,6 +174,43 @@ tool call, and the daemon-owned registry executes it under `WorkspaceRoot` with 
 remains byte-identical: without a tool executor, the runtime records the tool-call facts and appends the terminal
 `tool_execution_unavailable` failure.
 
+## Dynamic context window and prompt caching
+
+Each provider attempt windows its message list before every outbound request. The runtime owns the pass, the
+provider-neutral message shape carries the transient marker and the in-place content replacement, and the selected
+driver translates the result into its private request. The optional system context is not part of the window: the
+instruction projection of architecture 30 stays the stable leading block.
+
+The `[provider]` configuration keys `context_window_tokens` (default `250000`) and `context_capacity_tokens` (default
+`1000000`) resolve into the credential-free `ContextWindowPolicyDto` of every `ConfigSnapshotDto`; resolution requires a
+positive capacity and `0 < window < capacity`, and a value outside that range fails closed with a typed validation error
+([architecture 09](09-configuration-security-and-observability.md), [ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)).
+
+Token accounting estimates one request's input from its character count at four characters per token, rounded up,
+calibrated by provider usage: a reported `UsageDto::Reported` input count replaces the estimate for the request that
+produced it and every later increment is estimated at four characters per token; `UsageDto::NotReported` leaves the
+whole estimate character-based.
+
+While the estimate exceeds `context_window_tokens`, the longest tool-role result whose replacement is shorter is
+compressed in place, repeatedly, down to a floor that keeps its first 16 characters and appends a fixed compression
+marker. Messages are never removed or reordered, and an assistant tool-call message and its tool replies stay paired.
+The pass runs after the starting context is built and again after every appended tool result; only the in-memory request
+is windowed, and every durable tool-result fact keeps its full recorded content.
+
+An estimate above `context_capacity_tokens` invokes the named `compress_context` pass. That pass is not implemented: it
+changes nothing, fails nothing, and records nothing, so an over-capacity estimate remains windowed exactly like a
+window-only crossing; compression is a future capability with a named owner.
+
+Prompt-cache breakpoints are part of the request. The window pass clears every earlier marker and then marks at most two
+messages with `{"type": "ephemeral"}`: the last leading system-role message when the list begins with one closes the
+leading system/instruction block, and the last message in the list closes the stable window prefix that the next round
+repeats. Each driver translates a marked message into its private cache marker — the generic Chat driver as a
+message-level `cache_control`, the OpenRouter driver through the pinned SDK's cacheable content part — and marks the
+daemon-owned system context message the same way when the request carries one. A breakpoint is a transient
+request-assembly hint: it changes no message content, role, tool shape, or durable evidence, and a trim never leaves a
+stale breakpoint behind.
+
 ## Retry and timeout ownership
 
 - Provider crates classify native failures into `ProviderErrorDto`.
@@ -189,8 +228,9 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 The runtime uses the immutable persisted attempt timeout and at most two total attempts. A deadline is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
 provider failure may produce one retry; it appends `ProviderAttemptFailed(1)`, then `RetryScheduled(1, 2)`, waits
-exactly 250 ms through `ModelTimePort`, and starts attempt two. Cancellation races the stream, deadline, and wait; once
-cancelling is durable it suppresses later provider events/errors and retries.
+exactly 250 ms through `ModelTimePort`, and starts attempt two. Interruption races the stream, deadline, and wait: the
+stopped stream ends and the run rebuilds its next request with the durable notice, and an interrupt during the retry
+wait starts the next attempt immediately.
 
 ## Required tests and outcomes
 

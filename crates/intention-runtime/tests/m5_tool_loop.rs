@@ -21,8 +21,8 @@ use intention_model::{
 };
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelRunExecutionInputDto,
-    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelRunFirstAppendGate,
-    ModelSleepFuture, ModelTimePort, ToolExecutionPort,
+    ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture, ModelTimePort,
+    ToolExecutionPort,
 };
 use intention_storage::{
     AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
@@ -39,6 +39,15 @@ fn time(value: i64) -> TimestampDto {
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {
+    snapshot_with_context_window(model, None)
+}
+
+/// Builds one frozen run configuration, optionally overriding the context
+/// window policy so a test can drive the sliding window deterministically.
+fn snapshot_with_context_window(
+    model: &str,
+    context_window: Option<(u64, u64)>,
+) -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
             std::env::temp_dir()
@@ -48,8 +57,11 @@ fn snapshot(model: &str) -> ConfigSnapshotDto {
         )
         .expect("fixture path is absolute"),
     );
+    let context_window = context_window.map_or_else(String::new, |(window, capacity)| {
+        format!("context_window_tokens = {window}\ncontext_capacity_tokens = {capacity}\n")
+    });
     let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!("schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\""),
+        format!("schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\"\n{context_window}"),
         source,
     ))
     .expect("fixture config resolves");
@@ -107,9 +119,12 @@ fn request(run_id: RunId, model: &str) -> ModelRequestDto {
     .expect("request tool definitions are valid")
 }
 
-/// Ordered markers shared by the repository fixture and a gate fixture, so a
-/// test can prove in which order the executor waited and appended.
-type OrderLog = std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>;
+/// Marks one expected message as the cache breakpoint the runtime recomputes
+/// for the stable window prefix before every continuation request.
+const fn cache_breakpoint(mut message: ModelMessageDto) -> ModelMessageDto {
+    message.set_cache_control(true);
+    message
+}
 
 struct FakeRepository {
     session_id: SessionId,
@@ -123,10 +138,12 @@ struct FakeRepository {
     append_failure: RefCell<Option<ErrorDto>>,
     fail_append_at: RefCell<Option<usize>>,
     append_count: RefCell<usize>,
-    cancel_before_first_append: RefCell<bool>,
     cancel_after_append: RefCell<Option<(usize, ModelCancellationSignal)>>,
     transition_failure: RefCell<Option<(RunStatusDto, ErrorDto)>>,
-    append_order: Option<OrderLog>,
+    /// Pending user messages consumed by the next context boundary.
+    pending: RefCell<VecDeque<(TurnId, String)>>,
+    /// Facts committed by every pending-message boundary consume.
+    pending_facts: RefCell<Vec<ModelRunFactDto>>,
 }
 
 impl FakeRepository {
@@ -143,10 +160,10 @@ impl FakeRepository {
             append_failure: RefCell::new(None),
             fail_append_at: RefCell::new(None),
             append_count: RefCell::new(0),
-            cancel_before_first_append: RefCell::new(false),
             cancel_after_append: RefCell::new(None),
             transition_failure: RefCell::new(None),
-            append_order: None,
+            pending: RefCell::new(VecDeque::new()),
+            pending_facts: RefCell::new(Vec::new()),
         }
     }
 
@@ -189,9 +206,9 @@ impl StorageRepositoryDto for FakeRepository {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
 
-    fn remove_queued_turn(
+    fn remove_turn(
         &self,
-        _input: intention_storage::RemoveQueuedTurnInputDto,
+        _input: intention_storage::RemoveTurnInputDto,
     ) -> DtoResult<CommittedChangeDto> {
         Err(ErrorDto::unavailable("fixture_unused", "unused"))
     }
@@ -239,24 +256,6 @@ impl StorageRepositoryDto for FakeRepository {
         &self,
         input: AppendModelRunFactsInputDto,
     ) -> DtoResult<AppendModelRunFactsOutcomeDto> {
-        if self.cancel_before_first_append.replace(false) {
-            // This is the deterministic scheduling barrier: execution has read
-            // Starting, then the host's StopRun commit wins immediately before
-            // the first transition-to-Running append.
-            *self.status.borrow_mut() = RunStatusDto::Cancelling;
-            self.transitions
-                .borrow_mut()
-                .push(TransitionRunInputDto::new(
-                    self.session_id,
-                    self.run_id,
-                    RunStatusDto::Cancelling,
-                    time(2),
-                ));
-            return Err(ErrorDto::unavailable(
-                "run_status_changed",
-                "the run changed while execution was being admitted",
-            ));
-        }
         if let Some(error) = self.append_failure.borrow_mut().take() {
             return Err(error);
         }
@@ -274,9 +273,6 @@ impl StorageRepositoryDto for FakeRepository {
             && index == &append_index
         {
             signal.cancel();
-        }
-        if let Some(order) = &self.append_order {
-            order.lock().expect("order log is available").push("append");
         }
         assert_eq!(input.session_id(), self.session_id);
         assert_eq!(input.run_id(), self.run_id);
@@ -298,6 +294,41 @@ impl StorageRepositoryDto for FakeRepository {
         *self.cursor.borrow_mut() = cursor;
         self.appends.borrow_mut().push(input);
         AppendModelRunFactsOutcomeDto::new(cursor, self.run_snapshot(status, cursor), facts)
+    }
+
+    fn append_pending_user_turns(
+        &self,
+        input: intention_storage::AppendPendingUserTurnsInputDto,
+    ) -> DtoResult<intention_storage::AppendPendingUserTurnsOutcomeDto> {
+        assert_eq!(input.session_id(), self.session_id);
+        assert_eq!(input.run_id(), self.run_id);
+        assert_eq!(input.expected_cursor(), *self.cursor.borrow());
+        let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        if pending.is_empty() {
+            return intention_storage::AppendPendingUserTurnsOutcomeDto::new(
+                *self.cursor.borrow(),
+                Vec::new(),
+            );
+        }
+        let mut next = self.cursor.borrow().value();
+        let facts = pending
+            .into_iter()
+            .map(|(turn_id, content)| {
+                next += 1;
+                ModelRunFactDto::new(
+                    RunEventCursorDto::new(next),
+                    ModelRunFactInputDto::user_message_appended(turn_id, content)
+                        .expect("fixture pending message is valid"),
+                )
+                .expect("fixture fact is valid")
+            })
+            .collect::<Vec<_>>();
+        let cursor = RunEventCursorDto::new(next);
+        *self.cursor.borrow_mut() = cursor;
+        self.pending_facts
+            .borrow_mut()
+            .extend(facts.iter().cloned());
+        intention_storage::AppendPendingUserTurnsOutcomeDto::new(cursor, facts)
     }
 
     fn load_run_config_snapshot(
@@ -362,6 +393,8 @@ struct ScriptedDriver {
     events: RefCell<Vec<Vec<Result<ModelEventDto, ProviderErrorDto>>>>,
     executions: RefCell<usize>,
     requests: RefCell<Vec<ModelRequestDto>>,
+    /// Cancels the shared signal after the given event index of the first round.
+    cancel_during_stream: RefCell<Option<(usize, ModelCancellationSignal)>>,
 }
 
 impl ScriptedDriver {
@@ -374,6 +407,7 @@ impl ScriptedDriver {
             events: RefCell::new(rounds),
             executions: RefCell::new(0),
             requests: RefCell::new(Vec::new()),
+            cancel_during_stream: RefCell::new(None),
         }
     }
 }
@@ -390,56 +424,36 @@ impl ModelExecutionDriver for ScriptedDriver {
         request: ModelRequestDto,
         _cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
-        *self.executions.borrow_mut() += 1;
+        let execution = {
+            let mut executions = self.executions.borrow_mut();
+            *executions += 1;
+            *executions
+        };
         self.requests.borrow_mut().push(request);
         let events = self.events.borrow_mut().remove(0);
+        if execution == 1
+            && let Some((index, signal)) = self.cancel_during_stream.borrow().as_ref()
+        {
+            let signal = signal.clone();
+            let index = *index;
+            let mut seen = 0usize;
+            return Box::pin(stream::iter(events).inspect(move |_| {
+                if seen == index {
+                    signal.cancel();
+                }
+                seen += 1;
+            }));
+        }
         Box::pin(stream::iter(events))
     }
 }
 
-/// Emits one started event, then cancels the run signal from inside the stream.
+/// Emits one started event, signals the test, then blocks; later rounds finish.
 ///
-/// The round's next iteration observes the already-cancelled signal at its
-/// pre-stream check and commits the cancellation deterministically, without
-/// racing the provider timeout.
-struct SelfCancellingDriver {
-    signal: ModelCancellationSignal,
-    executions: std::sync::Mutex<usize>,
-}
-
-impl ModelDriver for SelfCancellingDriver {
-    fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
-    }
-}
-
-impl ModelExecutionDriver for SelfCancellingDriver {
-    fn execute(
-        &self,
-        _request: ModelRequestDto,
-        _cancellation: ModelCancellationSignal,
-    ) -> ModelEventStream {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder is available") += 1;
-        let signal = self.signal.clone();
-        Box::pin(
-            stream::once(async move {
-                signal.cancel();
-                Ok(ModelEventDto::started())
-            })
-            .chain(stream::pending::<Result<ModelEventDto, ProviderErrorDto>>()),
-        )
-    }
-}
-
-/// Emits one started event, signals the test, then blocks forever.
-///
-/// Used to hold the provider round mid-stream so the test can cancel the run
-/// while the round's select is waiting on the provider and its timeout.
+/// Used to hold the first provider round mid-stream so the test can interrupt
+/// the run while the round's select is waiting on the provider.
 struct PendingAfterStartedDriver {
-    entered_tx: mpsc::Sender<()>,
+    entered: std::sync::Mutex<Option<mpsc::Sender<()>>>,
     executions: std::sync::Mutex<usize>,
 }
 
@@ -455,20 +469,36 @@ impl ModelExecutionDriver for PendingAfterStartedDriver {
         _request: ModelRequestDto,
         _cancellation: ModelCancellationSignal,
     ) -> ModelEventStream {
-        *self
-            .executions
-            .lock()
-            .expect("driver recorder is available") += 1;
-        let entered_tx = self.entered_tx.clone();
-        Box::pin(
-            stream::once(async move {
-                entered_tx
-                    .send(())
-                    .expect("the test observes the started event");
-                Ok(ModelEventDto::started())
-            })
-            .chain(stream::pending::<Result<ModelEventDto, ProviderErrorDto>>()),
-        )
+        let execution = {
+            let mut executions = self
+                .executions
+                .lock()
+                .expect("driver recorder is available");
+            *executions += 1;
+            *executions
+        };
+        if execution == 1 {
+            let entered = self
+                .entered
+                .lock()
+                .expect("driver channel is available")
+                .take();
+            return Box::pin(
+                stream::once(async move {
+                    if let Some(entered) = entered {
+                        entered
+                            .send(())
+                            .expect("the test observes the started event");
+                    }
+                    Ok(ModelEventDto::started())
+                })
+                .chain(stream::pending::<Result<ModelEventDto, ProviderErrorDto>>()),
+            );
+        }
+        Box::pin(stream::iter(vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ]))
     }
 }
 
@@ -502,50 +532,6 @@ impl ModelTimePort for FlagTime {
                 std::task::Poll::Pending
             }
         }))
-    }
-}
-
-/// Holds the executor in its first-append gate until the test releases it and
-/// records the gate wait, its release, and every committed append in one
-/// shared order log.
-struct BlockingFirstAppendGate {
-    order: OrderLog,
-    entered: mpsc::Sender<()>,
-    release: std::sync::Arc<std::sync::Mutex<Option<mpsc::Receiver<()>>>>,
-}
-
-impl BlockingFirstAppendGate {
-    fn new(order: OrderLog, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
-        Self {
-            order,
-            entered,
-            release: std::sync::Arc::new(std::sync::Mutex::new(Some(release))),
-        }
-    }
-}
-
-impl ModelRunFirstAppendGate for BlockingFirstAppendGate {
-    fn wait_before_first_append(&self) -> ModelSleepFuture<'_> {
-        let order = std::sync::Arc::clone(&self.order);
-        let entered = self.entered.clone();
-        let release = self
-            .release
-            .lock()
-            .expect("gate release receiver is available")
-            .take()
-            .expect("one gate wait is scripted");
-        Box::pin(async move {
-            order
-                .lock()
-                .expect("order log is available")
-                .push("gate_wait");
-            entered.send(()).expect("the test observes the gate wait");
-            release.recv().expect("the test releases the gate wait");
-            order
-                .lock()
-                .expect("order log is available")
-                .push("gate_released");
-        })
     }
 }
 
@@ -583,7 +569,7 @@ impl ModelTimePort for RetryDelayTime {
 /// The attempt timeout is a seconds-scale duration while the runtime's retry
 /// delay is sub-second, so only the round timeout is held pending.
 struct RoundSelectTime {
-    entered: mpsc::Sender<()>,
+    entered: std::sync::Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl ModelTimePort for RoundSelectTime {
@@ -593,11 +579,17 @@ impl ModelTimePort for RoundSelectTime {
 
     fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
         if duration >= Duration::from_secs(1) {
-            let entered = self.entered.clone();
+            let entered = self
+                .entered
+                .lock()
+                .expect("time channel is available")
+                .take();
             Box::pin(async move {
-                entered
-                    .send(())
-                    .expect("the test observes the round select");
+                if let Some(entered) = entered {
+                    entered
+                        .send(())
+                        .expect("the test observes the round select");
+                }
                 future::pending::<()>().await;
             })
         } else {
@@ -915,7 +907,155 @@ fn tool_call_executes_tool_records_result_and_completes() {
             ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), "hello world").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), "hello world")
+                    .expect("message is valid"),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_request() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot_with_context_window("fixture", Some((60, 1_000_000)));
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let large = "x".repeat(400);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded(large.clone()).expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("windowed tool loop completes");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(4)
+        }
+    );
+    let requests = driver.requests.borrow();
+    let messages = requests[1].messages();
+    assert_eq!(messages.len(), 3, "no message is ever removed");
+    assert_eq!(messages[1].role(), ModelRoleDto::Assistant);
+    assert_eq!(
+        messages[1]
+            .tool_calls()
+            .expect("the assistant tool call is preserved")
+            .first()
+            .expect("one call is preserved")
+            .call_id(),
+        call.call_id()
+    );
+    let content = messages[2].content();
+    assert_eq!(messages[2].role(), ModelRoleDto::Tool);
+    assert_eq!(messages[2].tool_call_id(), Some(call.call_id()));
+    assert!(
+        content.chars().count() < large.chars().count(),
+        "the continuation request carries the compressed result"
+    );
+    assert!(content.contains("[compressed]"));
+    assert!(
+        messages[2].cache_control(),
+        "the recomputed breakpoint closes the trimmed stable prefix"
+    );
+    drop(requests);
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::ToolResultRecorded {
+            outcome: ToolResultOutcomeDto::Succeeded { content },
+            ..
+        }] if content == &large
+    ));
+}
+
+#[test]
+fn partial_tool_result_continues_the_loop_without_terminalizing() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "execute", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("recovered").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let partial_content = "captured output\n[The tool call did not receive a final result; the output above is partial.]";
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::partial(partial_content).expect("partial content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("the loop continues after a partial tool result");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(5)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 2);
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::ToolResultRecorded {
+            call_id,
+            outcome: ToolResultOutcomeDto::Partial { content },
+        }] if *call_id == call.call_id() && content == partial_content
+    ));
+    assert!(
+        appends
+            .iter()
+            .all(|append| !matches!(append.facts(), [ModelRunFactInputDto::Failed { .. }])),
+        "a partial tool result never records a failed fact"
+    );
+    drop(appends);
+    let requests = driver.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].messages(),
+        vec![
+            ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+            ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+                .expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), partial_content)
+                    .expect("message is valid"),
+            ),
         ]
     );
 }
@@ -995,7 +1135,9 @@ fn multiple_tool_calls_execute_sequentially_in_provider_order() {
             ModelMessageDto::assistant_tool_calls(None, vec![first.clone(), second.clone()])
                 .expect("message is valid"),
             ModelMessageDto::tool_result(first.call_id(), "one").expect("message is valid"),
-            ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            ),
         ]
     );
 }
@@ -1066,7 +1208,9 @@ fn repeated_tool_rounds_continue_until_finished() {
             ModelMessageDto::tool_result(first.call_id(), "one").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![second.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(second.call_id(), "two").expect("message is valid"),
+            ),
         ]
     );
 }
@@ -1466,15 +1610,21 @@ fn port_infrastructure_error_terminalizes_without_leaking_text() {
 }
 
 #[test]
-fn cancellation_during_tool_execution_suppresses_continuation() {
+fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call)),
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
     ]);
     let signal = ModelCancellationSignal::new();
     let (called_tx, called_rx) = mpsc::channel();
@@ -1503,35 +1653,38 @@ fn cancellation_during_tool_execution_suppresses_continuation() {
         .send(())
         .expect("the gated port call is released");
     let (outcome, repository, driver, port) = execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("cancellation commits");
+    let outcome = outcome.expect("the interrupted run continues and completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(2)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 1);
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(*driver.executions.borrow(), 2);
     assert_eq!(
         port.calls
             .lock()
             .expect("port call recorder is available")
             .len(),
-        1
+        1,
+        "the in-flight tool ran exactly once"
     );
     let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 2);
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ToolCallRecorded { .. }]
-    ));
-    assert!(appends.iter().all(|input| {
-        !input
-            .facts()
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolResultRecorded { .. }))
-    }));
-    drop(appends);
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::ToolResultRecorded {
+            outcome: ToolResultOutcomeDto::Succeeded { .. },
+            ..
+        }
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::InterruptNoticeRecorded { content }
+            if content == intention_runtime::INTERRUPT_NOTICE
+    )));
     assert_eq!(
         repository
             .transitions
@@ -1539,8 +1692,13 @@ fn cancellation_during_tool_execution_suppresses_continuation() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
+    let requests = driver.requests.borrow();
+    assert!(requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::Notice
+            && message.content() == intention_runtime::INTERRUPT_NOTICE
+    }));
 }
 
 #[test]
@@ -1602,16 +1760,26 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
 }
 
 #[test]
-fn cancellation_during_provider_round_cancels_run() {
+fn interruption_during_a_provider_round_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let signal = ModelCancellationSignal::new();
-    let driver = SelfCancellingDriver {
-        signal: signal.clone(),
-        executions: std::sync::Mutex::new(0),
-    };
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("partial").expect("text is valid")),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    driver
+        .cancel_during_stream
+        .borrow_mut()
+        .replace((1, signal.clone()));
     let port = ScriptedPort::new(Vec::new());
     let clock = ImmediateTime::new();
 
@@ -1626,19 +1794,27 @@ fn cancellation_during_provider_round_cancels_run() {
             ),
         ),
     )
-    .expect("round cancellation commits");
+    .expect("the interrupted round continues and completes");
 
     assert!(
-        matches!(outcome, ModelRunExecutionOutcomeDto::Cancelled { .. }),
-        "the round cancellation commits as a cancelled run, got {outcome:?}"
+        matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
+        "the interruption continues the run instead of terminalizing it, got {outcome:?}"
     );
+    assert_eq!(*driver.executions.borrow(), 2);
     let appends = repository.appends.borrow();
-    assert!(appends.iter().all(|input| {
-        !input
-            .facts()
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::AssistantContentAppended { content, .. } if content == "partial"
+    )));
+    assert!(
+        facts
             .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolCallRecorded { .. }))
-    }));
+            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
+    );
     assert_eq!(
         repository
             .transitions
@@ -1646,25 +1822,32 @@ fn cancellation_during_provider_round_cancels_run() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
 }
 
 #[test]
-fn cancellation_before_port_invocation_suppresses_tool() {
+fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
-    let driver = ScriptedDriver::new(vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::tool_call(call)),
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
     ]);
     let port = ScriptedPort::new(vec![Ok(
         ToolResultOutcomeDto::succeeded("never used").expect("content is valid")
     )]);
     let signal = ModelCancellationSignal::new();
+    // The interrupt lands on the tool-call append, before the port invocation.
     repository
         .cancel_after_append
         .borrow_mut()
@@ -1682,33 +1865,30 @@ fn cancellation_before_port_invocation_suppresses_tool() {
             ),
         ),
     )
-    .expect("cancellation before the port commits");
+    .expect("the interrupted batch continues and completes");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(2)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
         port.calls
             .lock()
             .expect("port call recorder is available")
             .len(),
         0,
-        "a cancelled run never invokes the tool"
+        "the interrupt never starts the tool effect"
     );
     let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::ToolCallRecorded { .. }]
-    ));
-    assert!(appends.iter().all(|input| {
-        !input
-            .facts()
-            .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolResultRecorded { .. }))
-    }));
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::ToolResultRecorded { outcome: ToolResultOutcomeDto::Partial { content }, .. }
+            if content == intention_runtime::TOOL_INTERRUPT_NOTICE
+    )));
 }
 
 #[test]
@@ -1781,7 +1961,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
 }
 
 #[test]
-fn cancellation_while_round_is_waiting_cancels_run() {
+fn interruption_while_the_round_is_waiting_records_a_notice_and_continues() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -1789,7 +1969,7 @@ fn cancellation_while_round_is_waiting_cancels_run() {
     let signal = ModelCancellationSignal::new();
     let (entered_tx, entered_rx) = mpsc::channel();
     let driver = PendingAfterStartedDriver {
-        entered_tx,
+        entered: std::sync::Mutex::new(Some(entered_tx)),
         executions: std::sync::Mutex::new(0),
     };
     let port = ScriptedPort::new(Vec::new());
@@ -1814,19 +1994,22 @@ fn cancellation_while_round_is_waiting_cancels_run() {
     entered_rx.recv().expect("the provider round started");
     signal.cancel();
     let (outcome, repository) = execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("round cancellation commits");
+    let outcome = outcome.expect("the interrupted round continues and completes");
 
     assert!(
-        matches!(outcome, ModelRunExecutionOutcomeDto::Cancelled { .. }),
-        "the round cancellation commits as a cancelled run, got {outcome:?}"
+        matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
+        "the interruption continues the run instead of terminalizing it, got {outcome:?}"
     );
     let appends = repository.appends.borrow();
-    assert!(appends.iter().all(|input| {
-        !input
-            .facts()
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(
+        facts
             .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolCallRecorded { .. }))
-    }));
+            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
+    );
     assert_eq!(
         repository
             .transitions
@@ -1834,7 +2017,7 @@ fn cancellation_while_round_is_waiting_cancels_run() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
 }
 
@@ -2106,11 +2289,11 @@ fn provider_failure_before_first_tool_round_is_retryable_within_attempt_budget()
 }
 
 #[test]
-fn cancellation_while_the_round_select_waits_cancels_the_run() {
+fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     // The time port signals when the round's timeout sleep is first polled,
     // which proves the round's select is already suspended on the provider
-    // stream. Cancellation then must be observed by that select rather than by
-    // a later pre-stream check.
+    // stream. The interruption then must be observed by that select rather
+    // than by a later pre-stream check, and the run continues.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2118,12 +2301,14 @@ fn cancellation_while_the_round_select_waits_cancels_the_run() {
     let signal = ModelCancellationSignal::new();
     let (started_tx, _started_rx) = mpsc::channel();
     let driver = PendingAfterStartedDriver {
-        entered_tx: started_tx,
+        entered: std::sync::Mutex::new(Some(started_tx)),
         executions: std::sync::Mutex::new(0),
     };
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
-    let clock = RoundSelectTime { entered: select_tx };
+    let clock = RoundSelectTime {
+        entered: std::sync::Mutex::new(Some(select_tx)),
+    };
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -2145,34 +2330,30 @@ fn cancellation_while_the_round_select_waits_cancels_the_run() {
         .expect("the round select waits on the provider stream");
     signal.cancel();
     let (outcome, repository, driver) = execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("round cancellation commits");
+    let outcome = outcome.expect("the interrupted round continues and completes");
 
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(1)
-        }
+    assert!(
+        matches!(outcome, ModelRunExecutionOutcomeDto::Completed { .. }),
+        "the interruption continues the run, got {outcome:?}"
     );
     assert_eq!(
         *driver
             .executions
             .lock()
             .expect("driver recorder is available"),
-        1
+        2,
+        "the run re-enters the provider after the interruption"
     );
     let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 1);
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }]
-    ));
-    assert!(appends.iter().all(|input| {
-        !input
-            .facts()
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
+    assert!(
+        facts
             .iter()
-            .any(|fact| matches!(fact, ModelRunFactInputDto::ToolCallRecorded { .. }))
-    }));
-    drop(appends);
+            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
+    );
     assert_eq!(
         repository
             .transitions
@@ -2180,116 +2361,15 @@ fn cancellation_while_the_round_select_waits_cancels_the_run() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
 }
 
 #[test]
-fn first_append_gate_is_awaited_before_the_first_durable_append() {
-    // The gate fixture and the repository fixture append to one shared order
-    // log: the executor must enter the gate, commit no durable append while
-    // the gate is held, and only append after the test releases it.
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let config = snapshot("fixture");
-    let order: OrderLog = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut repository = FakeRepository::new(session_id, run_id, config.clone());
-    repository.append_order = Some(std::sync::Arc::clone(&order));
-    let driver = ScriptedDriver::with_rounds(vec![vec![
-        Ok(ModelEventDto::started()),
-        Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
-    ]]);
-    let port = ScriptedPort::new(Vec::new());
-    let observer = RecordingCommitObserver::new();
-    let clock = ImmediateTime::new();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let gate = BlockingFirstAppendGate::new(std::sync::Arc::clone(&order), entered_tx, release_rx);
-
-    let execution = std::thread::spawn(move || {
-        let outcome = futures_executor::block_on(
-            ModelRunExecutionService::with_commit_observer_and_first_append_gate(
-                &repository,
-                &driver,
-                &clock,
-                &observer,
-                &gate,
-                &port,
-            )
-            .execute(ModelRunExecutionInputDto::new(
-                session_id,
-                run_id,
-                request(run_id, "fixture"),
-                config,
-                ModelCancellationSignal::new(),
-            )),
-        );
-        (outcome, repository, driver, observer)
-    });
-    entered_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the executor awaits the first-append gate");
-    assert_eq!(
-        order.lock().expect("order log is available").as_slice(),
-        ["gate_wait"],
-        "no durable append may commit while the first-append gate is still held"
-    );
-    release_tx.send(()).expect("the gate wait is released");
-    let (outcome, repository, driver, observer) =
-        execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("gated execution completes");
-
-    assert_eq!(
-        outcome,
-        ModelRunExecutionOutcomeDto::Completed {
-            cursor: RunEventCursorDto::new(2)
-        }
-    );
-    assert_eq!(*driver.executions.borrow(), 1);
-    assert_eq!(
-        order.lock().expect("order log is available").as_slice(),
-        ["gate_wait", "gate_released", "append", "append"],
-        "the attempt and completion appends follow the released gate"
-    );
-    let appends = repository.appends.borrow();
-    assert!(matches!(
-        appends[0].facts(),
-        [ModelRunFactInputDto::ProviderAttemptStarted { attempt: 1 }]
-    ));
-    assert_eq!(appends[0].status(), Some(RunStatusDto::Running));
-    assert!(matches!(
-        appends[1].facts(),
-        [ModelRunFactInputDto::Finished { .. }]
-    ));
-    drop(appends);
-    let commits = observer
-        .commits
-        .lock()
-        .expect("observer recorder is available");
-    assert_eq!(
-        commits.len(),
-        3,
-        "both appends and the terminal transition were observed"
-    );
-    assert_eq!(commits[0].cursor(), RunEventCursorDto::new(1));
-    assert!(matches!(
-        commits
-            .last()
-            .expect("a terminal commit is observed")
-            .snapshot()
-            .run_projection()
-            .status(),
-        RunStatusDto::Completed
-    ));
-    drop(commits);
-}
-
-#[test]
-fn cancellation_during_the_retry_delay_cancels_without_starting_the_next_attempt() {
+fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // A retryable pre-tool provider failure schedules a retry and the run then
-    // waits out the retry delay. Cancelling the run inside that wait must take
-    // the wait's cancellation branch: the run commits Cancelled through the
-    // ordinary cancel path and never re-enters the provider.
+    // waits out the retry delay. An interruption inside that wait appends its
+    // notice, clears the signal, and starts the second attempt immediately.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2333,18 +2413,16 @@ fn cancellation_during_the_retry_delay_cancels_without_starting_the_next_attempt
         .expect("the run enters the retry delay");
     signal.cancel();
     let (outcome, repository, driver, port) = execution.join().expect("execution thread completes");
-    let outcome = outcome.expect("the cancelled retry commits");
+    let outcome = outcome.expect("the interrupted retry continues");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(3)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
         *driver.executions.borrow(),
-        1,
-        "a cancelled retry wait never starts the second attempt"
+        2,
+        "the interrupted wait starts the second attempt"
     );
     assert_eq!(
         port.calls
@@ -2354,11 +2432,10 @@ fn cancellation_during_the_retry_delay_cancels_without_starting_the_next_attempt
         0
     );
     let appends = repository.appends.borrow();
-    assert_eq!(
-        appends.len(),
-        2,
-        "the cancelled wait commits no append after the retry schedule"
-    );
+    let facts = appends
+        .iter()
+        .flat_map(|input| input.facts())
+        .collect::<Vec<_>>();
     assert!(matches!(
         appends[1].facts(),
         [
@@ -2370,15 +2447,15 @@ fn cancellation_during_the_retry_delay_cancels_without_starting_the_next_attempt
         ] if failure.code() == "provider_busy"
             && failure.retry() == ErrorRetryDto::Delayed
     ));
-    assert!(appends.iter().all(|input| {
-        !input.facts().iter().any(|fact| {
-            matches!(
-                fact,
-                ModelRunFactInputDto::ProviderAttemptStarted { attempt: 2 }
-            )
-        })
-    }));
-    drop(appends);
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, ModelRunFactInputDto::InterruptNoticeRecorded { .. }))
+    );
+    assert!(facts.iter().any(|fact| matches!(
+        fact,
+        ModelRunFactInputDto::ProviderAttemptStarted { attempt: 2 }
+    )));
     assert_eq!(
         repository
             .transitions
@@ -2386,15 +2463,15 @@ fn cancellation_during_the_retry_delay_cancels_without_starting_the_next_attempt
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
 }
 
 #[test]
-fn cancellation_signalled_by_the_retry_append_never_arms_the_retry_delay() {
-    // The repository cancels the run from inside the retry-scheduling append,
-    // so the run is already cancelled when the wait would begin. The wait must
-    // commit cancellation without arming the retry delay at all.
+fn interruption_signalled_by_the_retry_append_still_starts_the_next_attempt() {
+    // The repository interrupts the run from inside the retry-scheduling
+    // append, so the signal is already set when the wait would begin. The wait
+    // appends its notice without arming the sub-second retry delay at all.
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot("fixture");
@@ -2430,18 +2507,16 @@ fn cancellation_signalled_by_the_retry_append_never_arms_the_retry_delay() {
             ),
         ),
     )
-    .expect("cancellation during the retry append commits");
+    .expect("interruption during the retry append continues the run");
 
-    assert_eq!(
+    assert!(matches!(
         outcome,
-        ModelRunExecutionOutcomeDto::Cancelled {
-            cursor: RunEventCursorDto::new(3)
-        }
-    );
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
     assert_eq!(
         *driver.executions.borrow(),
-        1,
-        "the cancelled run never starts the second attempt"
+        2,
+        "the interrupted retry still starts the second attempt"
     );
     assert!(
         clock
@@ -2450,10 +2525,9 @@ fn cancellation_signalled_by_the_retry_append_never_arms_the_retry_delay() {
             .expect("sleep recorder is available")
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
-        "an already-cancelled run never arms the sub-second retry delay"
+        "an already-interrupted run never arms the sub-second retry delay"
     );
     let appends = repository.appends.borrow();
-    assert_eq!(appends.len(), 2);
     assert!(matches!(
         appends[1].facts(),
         [
@@ -2464,6 +2538,10 @@ fn cancellation_signalled_by_the_retry_append_never_arms_the_retry_delay() {
             },
         ]
     ));
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::InterruptNoticeRecorded { .. }]
+    ));
     drop(appends);
     assert_eq!(
         repository
@@ -2472,7 +2550,7 @@ fn cancellation_signalled_by_the_retry_append_never_arms_the_retry_delay() {
             .iter()
             .map(TransitionRunInputDto::status)
             .collect::<Vec<_>>(),
-        vec![RunStatusDto::Cancelling, RunStatusDto::Cancelled]
+        vec![RunStatusDto::Completed]
     );
 }
 
@@ -2546,7 +2624,9 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
             ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), "hello").expect("message is valid"),
+            cache_breakpoint(
+                ModelMessageDto::tool_result(call.call_id(), "hello").expect("message is valid"),
+            ),
         ]
     );
     drop(requests);
@@ -2571,4 +2651,120 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
         [ModelRunFactInputDto::Finished { .. }]
     ));
     assert_eq!(appends[4].status(), Some(RunStatusDto::Completing));
+}
+
+#[test]
+fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "read", "{}").expect("call is valid");
+    repository
+        .pending
+        .borrow_mut()
+        .push_back((TurnId::new(), "pending message".to_owned()));
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::succeeded("tool output").expect("content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("the run completes after joining the pending message");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        *driver.executions.borrow(),
+        2,
+        "the pending message continues the same run"
+    );
+    let requests = driver.requests.borrow();
+    assert!(requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::User && message.content() == "pending message"
+    }));
+    drop(requests);
+    assert!(repository.pending_facts.borrow().iter().any(|fact| matches!(
+        fact.input(),
+        ModelRunFactInputDto::UserMessageAppended { content, .. } if content == "pending message"
+    )));
+    assert!(repository.pending.borrow().is_empty());
+}
+
+#[test]
+fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    repository
+        .pending
+        .borrow_mut()
+        .push_back((TurnId::new(), "arrived before completion".to_owned()));
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let port = ScriptedPort::new(Vec::new());
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("the run continues with the joined message and then completes");
+
+    assert!(matches!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed { .. }
+    ));
+    assert_eq!(
+        *driver.executions.borrow(),
+        2,
+        "the finished round is followed by another model step"
+    );
+    let requests = driver.requests.borrow();
+    assert!(requests[1].messages().iter().any(|message| {
+        message.role() == ModelRoleDto::User && message.content() == "arrived before completion"
+    }));
+    drop(requests);
+    assert!(matches!(
+        repository.pending_facts.borrow().as_slice(),
+        [fact] if matches!(
+            fact.input(),
+            ModelRunFactInputDto::UserMessageAppended { .. }
+        )
+    ));
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends.last().expect("finished append").facts(),
+        [ModelRunFactInputDto::Finished { .. }]
+    ));
 }

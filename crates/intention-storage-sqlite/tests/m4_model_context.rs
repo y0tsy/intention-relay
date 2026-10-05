@@ -12,16 +12,16 @@ use intention_config::{
 };
 use intention_domain::{
     CreateSessionCommandDto, ModelRunFactInputDto, RunEventCursorDto, RunModeDto, RunStatusDto,
-    WorkspaceRootDto,
+    ToolLifecycleEventDto, ToolLifecycleStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, CreateSessionInputDto,
-    ModelContextRoleDto, StorageRepositoryDto, TransitionRunInputDto,
+    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendToolLifecycleEventInputDto,
+    CreateSessionInputDto, ModelContextRoleDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{
-    AssistantTurnId, ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, TurnId,
-    WorkspaceId,
+    AssistantTurnId, ConfigRevisionId, ProjectId, RunId, SessionId, TimestampDto, ToolCallId,
+    TurnId, WorkspaceId,
 };
 use tempfile::TempDir;
 
@@ -96,6 +96,74 @@ fn starting_run_model_context_uses_durable_start_order_and_completed_assistant_t
     let encoded = serde_json::to_string(context.safe_config()).expect("safe config serializes");
     assert!(!encoded.contains("recognizable-fixture-credential"));
     assert!(!encoded.contains("model-context.toml"));
+}
+
+#[test]
+fn starting_run_context_notices_tool_calls_that_never_finished() {
+    let (_directory, repository) = repository();
+    let session_id = create_session(&repository, "recovery-notice");
+
+    // A recovered run carries one tool call that started and never recorded a
+    // terminal status, and one call that completed normally.
+    let recovered_run = start_run(
+        &repository,
+        session_id,
+        "recovered user",
+        "recovered-model",
+        2,
+    );
+    let unfinished_call = ToolCallId::new();
+    let finished_call = ToolCallId::new();
+    for (call_id, status) in [
+        (unfinished_call, ToolLifecycleStatusDto::Admitted),
+        (unfinished_call, ToolLifecycleStatusDto::Started),
+        (finished_call, ToolLifecycleStatusDto::Admitted),
+        (finished_call, ToolLifecycleStatusDto::Started),
+        (finished_call, ToolLifecycleStatusDto::Completed),
+    ] {
+        repository
+            .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(
+                ToolLifecycleEventDto::new(
+                    session_id,
+                    recovered_run,
+                    call_id,
+                    "read",
+                    status,
+                    "fixture lifecycle",
+                    time(2),
+                )
+                .expect("lifecycle evidence is valid"),
+            ))
+            .expect("lifecycle evidence persists");
+    }
+    repository
+        .transition_run(TransitionRunInputDto::new(
+            session_id,
+            recovered_run,
+            RunStatusDto::Interrupted,
+            time(2),
+        ))
+        .expect("the recovered run turns interrupted");
+
+    let starting_run = start_run(&repository, session_id, "current user", "current-model", 3);
+    let context = repository
+        .load_starting_run_model_context(session_id, starting_run)
+        .expect("starting run context loads");
+    assert_eq!(
+        context
+            .messages()
+            .iter()
+            .map(|message| (message.role(), message.content()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ModelContextRoleDto::User, "recovered user"),
+            (
+                ModelContextRoleDto::Notice,
+                "[The tool call \"read\" did not receive a final result.]",
+            ),
+            (ModelContextRoleDto::User, "current user"),
+        ]
+    );
 }
 
 #[test]

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 const CURRENT_SCHEMA_MAJOR: u16 = 1;
 const CURRENT_SCHEMA_MINOR: u16 = 0;
+const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 250_000;
+const DEFAULT_CONTEXT_CAPACITY_TOKENS: u64 = 1_000_000;
 
 /// Requires a schema version exactly equal to the current configuration schema.
 ///
@@ -322,6 +324,7 @@ pub struct ResolvedConfigDto {
     schema_version: SchemaVersionDto,
     provider: ProviderSelectionDto,
     provider_execution: ProviderExecutionPolicyDto,
+    context_window: ContextWindowPolicyDto,
     source_kind: ConfigSourceKindDto,
 }
 
@@ -336,6 +339,7 @@ impl<'de> Deserialize<'de> for ResolvedConfigDto {
             schema_version: SchemaVersionDto,
             provider: ProviderSelectionDto,
             provider_execution: ProviderExecutionPolicyDto,
+            context_window: ContextWindowPolicyDto,
             source_kind: ConfigSourceKindDto,
         }
 
@@ -344,6 +348,7 @@ impl<'de> Deserialize<'de> for ResolvedConfigDto {
             raw.schema_version,
             raw.provider,
             raw.provider_execution,
+            raw.context_window,
             raw.source_kind,
         )
         .map_err(serde::de::Error::custom)
@@ -411,6 +416,10 @@ impl ResolvedConfigDto {
                 "provider credential must not be empty",
             ));
         }
+        let context_window = ContextWindowPolicyDto::from_raw(
+            config.provider.context_window_tokens,
+            config.provider.context_capacity_tokens,
+        )?;
         let provider = ProviderSelectionDto::new(
             config.provider.kind,
             config.provider.model,
@@ -421,6 +430,7 @@ impl ResolvedConfigDto {
             SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR),
             provider,
             ProviderExecutionPolicyDto::from_raw(config.provider_execution)?,
+            context_window,
             source_kind,
         )
     }
@@ -429,6 +439,7 @@ impl ResolvedConfigDto {
         schema_version: SchemaVersionDto,
         provider: ProviderSelectionDto,
         provider_execution: ProviderExecutionPolicyDto,
+        context_window: ContextWindowPolicyDto,
         source_kind: ConfigSourceKindDto,
     ) -> DtoResult<Self> {
         require_current_schema_version(schema_version)?;
@@ -436,6 +447,7 @@ impl ResolvedConfigDto {
             schema_version,
             provider,
             provider_execution,
+            context_window,
             source_kind,
         })
     }
@@ -472,6 +484,12 @@ impl ResolvedConfigDto {
         &self.provider_execution
     }
 
+    /// Returns the fully effective safe context-window policy.
+    #[must_use]
+    pub const fn context_window(&self) -> &ContextWindowPolicyDto {
+        &self.context_window
+    }
+
     /// Returns the safe source category without its local filesystem path.
     #[must_use]
     pub const fn source_kind(&self) -> ConfigSourceKindDto {
@@ -482,7 +500,7 @@ impl ResolvedConfigDto {
     #[must_use]
     pub fn safe_debug_projection(&self) -> String {
         format!(
-            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={}",
+            "schema_version={}.{} source={} provider={} model={} credential_configured={} attempt_timeout_seconds={} max_attempts={} context_window_tokens={} context_capacity_tokens={}",
             self.schema_version.major(),
             self.schema_version.minor(),
             self.source_kind,
@@ -491,6 +509,8 @@ impl ResolvedConfigDto {
             self.provider.credential_configured,
             self.provider_execution.attempt_timeout_seconds,
             self.provider_execution.max_attempts,
+            self.context_window.window_tokens,
+            self.context_window.capacity_tokens,
         )
     }
 }
@@ -646,6 +666,66 @@ impl ProviderExecutionPolicyDto {
     }
 }
 
+/// Safe per-run provider context-window policy resolved at startup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ContextWindowPolicyDto {
+    window_tokens: u64,
+    capacity_tokens: u64,
+}
+
+impl<'de> Deserialize<'de> for ContextWindowPolicyDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawContextWindowPolicyDto {
+            window_tokens: u64,
+            capacity_tokens: u64,
+        }
+
+        let raw = RawContextWindowPolicyDto::deserialize(deserializer)?;
+        Self::from_raw(Some(raw.window_tokens), Some(raw.capacity_tokens))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl ContextWindowPolicyDto {
+    fn from_raw(window_tokens: Option<u64>, capacity_tokens: Option<u64>) -> DtoResult<Self> {
+        let window_tokens = window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS);
+        let capacity_tokens = capacity_tokens.unwrap_or(DEFAULT_CONTEXT_CAPACITY_TOKENS);
+        if capacity_tokens == 0 {
+            return Err(ErrorDto::validation(
+                "invalid_provider_context_capacity_tokens",
+                "provider context capacity tokens must be greater than zero",
+            ));
+        }
+        if window_tokens == 0 || window_tokens >= capacity_tokens {
+            return Err(ErrorDto::validation(
+                "invalid_provider_context_window_tokens",
+                "provider context window tokens must be greater than zero and less than the context capacity",
+            ));
+        }
+        Ok(Self {
+            window_tokens,
+            capacity_tokens,
+        })
+    }
+
+    /// Returns the sliding context window size in tokens.
+    #[must_use]
+    pub const fn window_tokens(self) -> u64 {
+        self.window_tokens
+    }
+
+    /// Returns the full model context capacity in tokens.
+    #[must_use]
+    pub const fn capacity_tokens(self) -> u64 {
+        self.capacity_tokens
+    }
+}
+
 /// Startup-only opaque provider material paired with its safe resolved projection.
 ///
 /// This type intentionally implements no `Debug`, `Display`, or serde traits and
@@ -688,6 +768,8 @@ struct RawProviderConfig {
     credential: String,
     endpoint: Option<String>,
     execution: Option<RawProviderExecutionPolicyDto>,
+    context_capacity_tokens: Option<u64>,
+    context_window_tokens: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]

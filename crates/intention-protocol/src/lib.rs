@@ -4,13 +4,13 @@
 //! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, ModelRunFactDto,
-    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunSnapshotDto,
-    SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto, ModelRunFactDto,
+    RemoveTurnCommandDto, RunEventCursorDto, RunModeDto, RunSnapshotDto, SendUserTurnCommandDto,
+    SessionProjectionDto,
 };
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, QueuePositionDto, RunId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, RunId, SchemaVersionDto,
+    SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -584,10 +584,10 @@ pub enum ProtocolCommandDto {
     CreateSession(CreateSessionCommandDto),
     /// Sends an accepted user turn to the daemon authority.
     SendUserTurn(SendUserTurnCommandDto),
-    /// Requests removal of an unstarted queued user turn.
-    RemoveQueuedTurn(RemoveQueuedTurnCommandDto),
-    /// Requests cancellation of an active daemon-owned run.
-    StopRun(StopRunCommandDto),
+    /// Requests removal of a not-yet-seen pending user turn.
+    RemoveTurn(RemoveTurnCommandDto),
+    /// Requests interruption of an active daemon-owned run's current operation.
+    InterruptRun(InterruptRunCommandDto),
     /// Begins a typed session event subscription.
     SubscribeSession(SubscribeSessionCommandDto),
 }
@@ -672,12 +672,12 @@ impl ProtocolAcceptedDto {
 pub enum ProtocolAcceptedResultDto {
     /// A durable session was created.
     CreateSession(CreateSessionAcceptedDto),
-    /// A user turn was accepted and either started or queued.
+    /// A user turn was accepted and either started a run or became a pending message.
     SendUserTurn(SendUserTurnAcceptedDto),
-    /// A queued user turn was removed.
-    RemoveQueuedTurn(RemoveQueuedTurnAcceptedDto),
-    /// A stop request was durably accepted for a run.
-    StopRun(StopRunAcceptedDto),
+    /// A pending user turn was removed.
+    RemoveTurn(RemoveTurnAcceptedDto),
+    /// An interruption request was accepted for a run.
+    InterruptRun(InterruptRunAcceptedDto),
 }
 
 /// Typed acceptance evidence for a created session.
@@ -735,8 +735,8 @@ pub enum SendUserTurnOutcomeDto {
         run_id: RunId,
         config_revision_id: ConfigRevisionId,
     },
-    /// The accepted turn was committed behind active work at its stable queue ticket.
-    Queued { queue_position: QueuePositionDto },
+    /// The accepted turn is a pending message that joins the active run context.
+    Pending,
 }
 
 /// Typed acceptance evidence for one user turn.
@@ -778,22 +778,22 @@ impl SendUserTurnAcceptedDto {
     pub const fn committed_sequence(self) -> SessionEventSequenceDto {
         self.committed_sequence
     }
-    /// Returns whether the turn started a run or received a stable queue ticket.
+    /// Returns whether the turn started a run or became a pending message.
     #[must_use]
     pub const fn outcome(self) -> SendUserTurnOutcomeDto {
         self.outcome
     }
 }
 
-/// Typed acceptance evidence for a removed queued turn.
+/// Typed acceptance evidence for a removed pending turn.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveQueuedTurnAcceptedDto {
+pub struct RemoveTurnAcceptedDto {
     session_id: SessionId,
     turn_id: TurnId,
     committed_sequence: SessionEventSequenceDto,
 }
-impl RemoveQueuedTurnAcceptedDto {
-    /// Creates complete queued-turn removal acceptance evidence.
+impl RemoveTurnAcceptedDto {
+    /// Creates complete pending-turn removal acceptance evidence.
     #[must_use]
     pub const fn new(
         session_id: SessionId,
@@ -823,25 +823,25 @@ impl RemoveQueuedTurnAcceptedDto {
     }
 }
 
-/// Typed acceptance evidence for a stop request.
+/// Typed acceptance evidence for a run interruption request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StopRunAcceptedDto {
+pub struct InterruptRunAcceptedDto {
     session_id: SessionId,
     run_id: RunId,
-    committed_sequence: SessionEventSequenceDto,
+    at_sequence: SessionEventSequenceDto,
 }
-impl StopRunAcceptedDto {
-    /// Creates complete stop-request acceptance evidence.
+impl InterruptRunAcceptedDto {
+    /// Creates complete interruption acceptance evidence.
     #[must_use]
     pub const fn new(
         session_id: SessionId,
         run_id: RunId,
-        committed_sequence: SessionEventSequenceDto,
+        at_sequence: SessionEventSequenceDto,
     ) -> Self {
         Self {
             session_id,
             run_id,
-            committed_sequence,
+            at_sequence,
         }
     }
     /// Returns the owning session identity.
@@ -849,15 +849,15 @@ impl StopRunAcceptedDto {
     pub const fn session_id(self) -> SessionId {
         self.session_id
     }
-    /// Returns the stopping run identity.
+    /// Returns the interrupted run identity.
     #[must_use]
     pub const fn run_id(self) -> RunId {
         self.run_id
     }
-    /// Returns the final sequence committed by this operation.
+    /// Returns the durable session position observed at acceptance.
     #[must_use]
-    pub const fn committed_sequence(self) -> SessionEventSequenceDto {
-        self.committed_sequence
+    pub const fn at_sequence(self) -> SessionEventSequenceDto {
+        self.at_sequence
     }
 }
 
@@ -1078,10 +1078,10 @@ pub enum ProtocolMethodDto {
     SessionCreate,
     /// User-turn delivery to the daemon authority.
     TurnSend,
-    /// Removal of an unstarted queued user turn.
+    /// Removal of a not-yet-seen pending user turn.
     TurnRemove,
-    /// Cancellation of an active daemon-owned run.
-    RunStop,
+    /// Interruption of an active daemon-owned run's current operation.
+    RunInterrupt,
     /// Session event subscription.
     SessionSubscribe,
     /// Dedicated run-stream subscription.
@@ -1102,7 +1102,7 @@ impl ProtocolMethodDto {
         Self::SessionCreate,
         Self::TurnSend,
         Self::TurnRemove,
-        Self::RunStop,
+        Self::RunInterrupt,
         Self::SessionSubscribe,
         Self::RunSubscribe,
         Self::DaemonHealth,
@@ -1116,7 +1116,7 @@ impl ProtocolMethodDto {
             Self::SessionCreate => "session.create",
             Self::TurnSend => "turn.send",
             Self::TurnRemove => "turn.remove",
-            Self::RunStop => "run.stop",
+            Self::RunInterrupt => "run.interrupt",
             Self::SessionSubscribe => "session.subscribe",
             Self::RunSubscribe => "run.subscribe",
             Self::DaemonHealth => "daemon.health",
@@ -1131,8 +1131,8 @@ impl ProtocolMethodDto {
             ProtocolRequestPayloadDto::Command(command) => match command {
                 ProtocolCommandDto::CreateSession(_) => Self::SessionCreate,
                 ProtocolCommandDto::SendUserTurn(_) => Self::TurnSend,
-                ProtocolCommandDto::RemoveQueuedTurn(_) => Self::TurnRemove,
-                ProtocolCommandDto::StopRun(_) => Self::RunStop,
+                ProtocolCommandDto::RemoveTurn(_) => Self::TurnRemove,
+                ProtocolCommandDto::InterruptRun(_) => Self::RunInterrupt,
                 ProtocolCommandDto::SubscribeSession(_) => Self::SessionSubscribe,
             },
             ProtocolRequestPayloadDto::Query(query) => match query {
@@ -1156,10 +1156,10 @@ impl ProtocolMethodDto {
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(_))
             ) | (
                 Self::TurnRemove,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveQueuedTurn(_))
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::RemoveTurn(_))
             ) | (
-                Self::RunStop,
-                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(_))
+                Self::RunInterrupt,
+                ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(_))
             ) | (
                 Self::SessionSubscribe,
                 ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SubscribeSession(_))
@@ -1180,7 +1180,7 @@ impl ProtocolMethodDto {
     #[must_use]
     pub const fn accepts_response(self, payload: &ProtocolResponsePayloadDto) -> bool {
         match self {
-            Self::SessionCreate | Self::TurnSend | Self::TurnRemove | Self::RunStop => {
+            Self::SessionCreate | Self::TurnSend | Self::TurnRemove | Self::RunInterrupt => {
                 matches!(payload, ProtocolResponsePayloadDto::CommandResult(_))
             }
             Self::DaemonHealth | Self::SessionSnapshot => {
@@ -1206,7 +1206,7 @@ impl ProtocolMethodDto {
             Self::SessionCreate
             | Self::TurnSend
             | Self::TurnRemove
-            | Self::RunStop
+            | Self::RunInterrupt
             | Self::SessionSubscribe
             | Self::RunSubscribe
             | Self::SessionSnapshot => None,
@@ -1587,8 +1587,8 @@ mod tests {
         let mismatched = JsonRpcRequestDto::new(
             6,
             ProtocolMethodDto::DaemonHealth.as_str(),
-            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
-                StopRunCommandDto::new(session_id, run_id),
+            ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
+                InterruptRunCommandDto::new(session_id, run_id),
             )),
         );
         let line = serde_json::to_string(&mismatched).expect("mismatched request serializes");

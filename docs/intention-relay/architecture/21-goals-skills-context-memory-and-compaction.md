@@ -6,14 +6,14 @@ Owner: architecture 21. Decisions: ADR 0013. Research: m4plus_concept.md.
 
 This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
 model-step projections, typed memory records, and immutable compaction. It applies only to future Mandate and
-VerifierMandate execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, queue tickets, provider behavior,
+VerifierMandate execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior,
 replay, recovery, and M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics.
 Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
 with architectures 13--20.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 is the historical
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
 record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the registry, frozen direct-tool
 selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 16 owns scheduler reevaluation and
 readiness; 17 owns child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge grants, ingress, operation
@@ -235,7 +235,7 @@ Selection is immutable before the next affected model step or external action. `
 selections; ordinary runs use a separately versioned optional selection; Mandate and VerifierMandate execution meaning
 carries the same non-authorizing frozen Skill context. A child Mandate receives only exact selected Skill/role/reference
 values explicitly placed in its delegation snapshot. A verifier Skill never derives authority. Forks retain the exact
-selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, queue promotion, and
+selected card/revision/disclosure references in their immutable base snapshot. Retry, replay, and
 recovery validate stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke,
 replacement, or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork,
 verifier, historical selection, or body.
@@ -294,9 +294,13 @@ ModelContextProjectionV1
 ```
 
 The manifest binds identities, revisions, audience, safe representation policy, declared semantic order, and typed
-omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest. It is
-immutable before the step begins. A source or card may be narrower than its original content but can never be broader or
-visible to a wider audience.
+omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest; the
+provider request built from it is a mutable window under [architecture
+08](08-model-protocol-and-providers.md) ([ADR
+0054](../decisions/0054-dynamic-context-window-and-prompt-caching.md)), and that window compresses the largest
+tool-role results in place when the request estimate crosses the configured context window. The manifest, the
+projection, and every durable fact stay recorded as written. A source or card may be narrower than its original content
+but can never be broader or visible to a wider audience.
 
 Memory uses immutable typed records, not mutable hidden prompt state. A memory record has provenance, scope, safe card,
 audience, explicit disclosure status, and supersession/replacement/rollback references. Retrieval and disclosure may
@@ -309,7 +313,7 @@ rollback selects an earlier record explicitly and does not erase either record.
 Compaction creates an immutable safe summary over an exact ordered set of **completed** durable history. It retains
 source ranges, compaction policy/version, safe audience, omission evidence, and exact uncompacted suffix. Original
 durable facts remain authoritative and are never deleted, replaced, or reinterpreted by a summary. A compaction cannot
-cover unfinished or unknown effects, synthesize completion, reorder history, create authority, or become
+cover unfinished or interrupted effects, synthesize completion, reorder history, create authority, or become
 continuation/recovery state.
 
 ```mermaid
@@ -324,7 +328,7 @@ sequenceDiagram
   U->>G: Create or revise Goal
   G->>C: Select explicit references
   C->>M: Freeze manifest and selections
-  M->>S: Bind immutable projection
+  M->>S: Bind step projection
   S->>F: Commit completed facts
   F->>C: Provide exact completed range
   C->>C: Create immutable safe summary
@@ -333,7 +337,7 @@ sequenceDiagram
 Cancellation, terminalization, selection replacement, audience revocation, or restart blocks later disclosure and model
 steps as applicable but cannot rewrite an already committed projection or summary. Late source, card, retrieval,
 disclosure, or compaction output after cancellation, terminalization, replacement, or restart is non-authoritative and
-cannot append facts or repair uncertainty.
+cannot append facts.
 
 Recovery completes before new context-driven admission or step construction. It may validate persisted supported
 references, but never rediscloses, recompacts, fetches current catalog/file/index content, resumes/retries work, or

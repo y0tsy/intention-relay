@@ -26,7 +26,7 @@ canonical fact, 4 MiB combined per group, and `tool_output_limit_exceeded`): no 
 asserted, and only the transport and IO liveness safeguards remain (ADR 0048);
 - the closed terminal outcome taxonomy (`Succeeded`,
 `DeniedBeforeExecution`, `FailedBeforeExternalEffect`, `CancelledBeforeStart`, `InterruptedBeforeStart`,
-`ExecutionUnavailable`, `ExternalEffectUnknown`), with the former `OutputLimitExceeded` member removed together with the
+`ExecutionUnavailable`, `Partial`), with the former `OutputLimitExceeded` member removed together with the
 numeric output budget (ADR 0048); and
 - tool-history replay negotiation (`RunToolHistoryPageDto` /
 `RunToolHistoryCompletedDto`), including the combined publication-gate order when the same subscription also delivers
@@ -48,7 +48,8 @@ never rewrites M3/M4 `WaitingInput` semantics.
 a fragment is never model context by itself.
 4. Output is never truncated, sampled, or partly committed; a fragment is
 either accepted whole as its own durable fact or not published.
-5. An `ExternalEffectUnknown` result never permits another model step.
+5. A `Partial` result permits the next model step: the bounded captured output is delivered with a notice, nothing is
+paused, and the interrupted call is never retried.
 6. Capability negotiation no longer exists (ADR 0045); historical M4 runs
 retain byte-identical replay and denial.
 

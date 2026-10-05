@@ -5,13 +5,13 @@
 
 use intention_domain::{RunModeDto, SessionProjectionDto, WorkspaceRootDto};
 use intention_protocol::{
-    CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedDto,
-    ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveQueuedTurnAcceptedDto,
+    CURRENT_PROTOCOL_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
+    ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolVersionDto, RemoveTurnAcceptedDto,
     SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionSnapshotDto,
-    SessionSubscriptionResponseDto, StopRunAcceptedDto,
+    SessionSubscriptionResponseDto,
 };
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
+    ConfigRevisionId, CorrelationIdDto, ProjectId, RunId, SchemaVersionDto,
     SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
 };
 
@@ -69,17 +69,13 @@ fn typed_acceptance_results_carry_required_durable_evidence() {
         started.outcome(),
         SendUserTurnOutcomeDto::Started { .. }
     ));
-    let queued = SendUserTurnAcceptedDto::new(
+    let pending = SendUserTurnAcceptedDto::new(
         session_id,
         TurnId::new(),
         SessionEventSequenceDto::new(6),
-        SendUserTurnOutcomeDto::Queued {
-            queue_position: QueuePositionDto::new(3),
-        },
+        SendUserTurnOutcomeDto::Pending,
     );
-    assert!(
-        matches!(queued.outcome(), SendUserTurnOutcomeDto::Queued { queue_position } if queue_position.value() == 3)
-    );
+    assert_eq!(pending.outcome(), SendUserTurnOutcomeDto::Pending);
     let accepted = ProtocolAcceptedDto::with_result(
         correlation,
         ProtocolAcceptedResultDto::CreateSession(created),
@@ -123,23 +119,21 @@ fn accepted_dto_accessors_preserve_typed_identity() {
         session_id,
         turn_id,
         sequence,
-        SendUserTurnOutcomeDto::Queued {
-            queue_position: QueuePositionDto::new(2),
-        },
+        SendUserTurnOutcomeDto::Pending,
     );
     assert_eq!(accepted.session_id(), session_id);
     assert_eq!(accepted.turn_id(), turn_id);
     assert_eq!(accepted.committed_sequence(), sequence);
 
-    let removed = RemoveQueuedTurnAcceptedDto::new(session_id, turn_id, sequence);
+    let removed = RemoveTurnAcceptedDto::new(session_id, turn_id, sequence);
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), turn_id);
     assert_eq!(removed.committed_sequence(), sequence);
 
-    let stopped = StopRunAcceptedDto::new(session_id, run_id, sequence);
-    assert_eq!(stopped.session_id(), session_id);
-    assert_eq!(stopped.run_id(), run_id);
-    assert_eq!(stopped.committed_sequence(), sequence);
+    let interrupted = InterruptRunAcceptedDto::new(session_id, run_id, sequence);
+    assert_eq!(interrupted.session_id(), session_id);
+    assert_eq!(interrupted.run_id(), run_id);
+    assert_eq!(interrupted.at_sequence(), sequence);
 }
 
 #[test]

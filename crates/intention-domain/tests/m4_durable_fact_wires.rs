@@ -47,6 +47,8 @@ fn model_fact_inputs_and_assigned_facts_cover_every_typed_variant_and_wire_valid
         intention_domain::ModelRunFactKindDto::UsageRecorded,
         intention_domain::ModelRunFactKindDto::ToolCallRecorded,
         intention_domain::ModelRunFactKindDto::ToolResultRecorded,
+        intention_domain::ModelRunFactKindDto::UserMessageAppended,
+        intention_domain::ModelRunFactKindDto::InterruptNoticeRecorded,
         intention_domain::ModelRunFactKindDto::Finished,
         intention_domain::ModelRunFactKindDto::Failed,
     ] {
@@ -55,6 +57,14 @@ fn model_fact_inputs_and_assigned_facts_cover_every_typed_variant_and_wire_valid
     assert_eq!(
         intention_domain::ModelRunFactKindDto::ToolResultRecorded.as_str(),
         "tool_result_recorded"
+    );
+    assert_eq!(
+        intention_domain::ModelRunFactKindDto::UserMessageAppended.as_str(),
+        "user_message_appended"
+    );
+    assert_eq!(
+        intention_domain::ModelRunFactKindDto::InterruptNoticeRecorded.as_str(),
+        "interrupt_notice_recorded"
     );
     assert_eq!(failure.code(), "provider_unavailable");
     assert_eq!(failure.retry(), intention_types::ErrorRetryDto::Delayed);
@@ -89,6 +99,10 @@ fn model_fact_inputs_and_assigned_facts_cover_every_typed_variant_and_wire_valid
             ToolResultOutcomeDto::succeeded("done").expect("outcome is valid"),
         )
         .expect("tool result fact is valid"),
+        ModelRunFactInputDto::user_message_appended(TurnId::new(), "pending message")
+            .expect("joined user message is valid"),
+        ModelRunFactInputDto::interrupt_notice_recorded("the call was stopped")
+            .expect("interrupt notice is valid"),
         ModelRunFactInputDto::finished(FinishReasonDto::Length),
         ModelRunFactInputDto::failed(failure),
     ];

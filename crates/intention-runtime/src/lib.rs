@@ -1,4 +1,4 @@
-//! Deterministic M3 run lifecycle decisions over DTO-only storage.
+//! Deterministic model-run execution over DTO-only storage.
 //!
 //! This crate has no provider, tool, timer, worker-loop, or scheduling
 //! dependency. It decides durable transitions and delegates atomic commits to
@@ -6,8 +6,7 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    ModelRunFactInputDto, RunEventCursorDto, RunFailureDto, RunProjectionDto, RunStatusDto,
-    ToolResultOutcomeDto, validate_run_status_transition,
+    ModelRunFactInputDto, RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto,
 };
 pub use intention_model::{
     AssistantReasoningDto, ModelCancellationSignal, ModelEventDto, ModelExecutionDriver,
@@ -15,165 +14,25 @@ pub use intention_model::{
     ModelToolDefinitionDto,
 };
 use intention_storage::{
-    AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, CommittedChangeDto,
-    RecoverUnfinishedRunsInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto, AppendPendingUserTurnsInputDto,
+    StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
-    AssistantTurnId, DtoResult, ErrorDto, ErrorRetryDto, RunId, SessionId, TimestampDto,
-    ToolCallDto,
+    AssistantTurnId, DtoResult, ErrorDto, ErrorRetryDto, FinishReasonDto, RunId, SessionId,
+    TimestampDto, ToolCallDto,
 };
 
-/// Explicit values for deterministic runtime lifecycle decisions.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeValuesDto {
-    next_run_id: RunId,
-    config_snapshot: ConfigSnapshotDto,
-    occurred_at: TimestampDto,
-}
+mod context_window;
 
-impl RuntimeValuesDto {
-    /// Creates deterministic DTO-only lifecycle values.
-    #[must_use]
-    pub const fn new(
-        next_run_id: RunId,
-        config_snapshot: ConfigSnapshotDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            next_run_id,
-            config_snapshot,
-            occurred_at,
-        }
-    }
+use context_window::ContextWindowState;
 
-    /// Returns the supplied identity for the next promoted run.
-    ///
-    /// Queue promotion does not use this identity: queued turns retain their
-    /// already-persisted proposed run identity.
-    #[must_use]
-    pub const fn next_run_id(&self) -> RunId {
-        self.next_run_id
-    }
+/// The durable context notice recorded when an interrupted call produced no
+/// final result of its own.
+pub const INTERRUPT_NOTICE: &str = "[The call was stopped before a final result.]";
 
-    /// Returns the immutable snapshot to attach to a newly promoted run.
-    #[must_use]
-    pub const fn config_snapshot(&self) -> &ConfigSnapshotDto {
-        &self.config_snapshot
-    }
-
-    /// Returns the explicit timestamp for lifecycle commits and recovery.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// Deterministic lifecycle service over a DTO-only storage repository.
-pub struct RuntimeService<'a, Repository> {
-    repository: &'a Repository,
-    values: RuntimeValuesDto,
-}
-
-impl<'a, Repository> RuntimeService<'a, Repository>
-where
-    Repository: StorageRepositoryDto,
-{
-    /// Creates a runtime lifecycle service with caller-supplied deterministic values.
-    #[must_use]
-    pub const fn new(repository: &'a Repository, values: RuntimeValuesDto) -> Self {
-        Self { repository, values }
-    }
-
-    /// Commits cancellation for an active run.
-    ///
-    /// A starting run follows `Starting -> Cancelling`; final cancellation and
-    /// any queue promotion are committed later through [`Self::complete_terminal`].
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed domain transition or repository error.
-    pub fn stop_run(&self, session_id: SessionId, run_id: RunId) -> DtoResult<CommittedChangeDto> {
-        let active = self.active_run(session_id, run_id)?;
-        self.transition(
-            session_id,
-            run_id,
-            active.status(),
-            RunStatusDto::Cancelling,
-        )
-    }
-
-    /// Commits a terminal transition and atomically promotes the next queued turn.
-    ///
-    /// # Errors
-    ///
-    /// Returns typed domain transition or repository errors, including invalid
-    /// terminal status requests.
-    pub fn complete_terminal(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        terminal_status: RunStatusDto,
-    ) -> DtoResult<CommittedChangeDto> {
-        if !terminal_status.is_terminal() {
-            return Err(intention_types::ErrorDto::validation(
-                "invalid_terminal_run_status",
-                "runtime completion requires a terminal run status",
-            ));
-        }
-        let projection = self.repository.load_session_snapshot(session_id)?;
-        let active = self.active_run_from_projection(&projection, run_id)?;
-        self.transition(session_id, run_id, active.status(), terminal_status)
-    }
-
-    /// Marks all unfinished durable runs interrupted before an owning facade is ready.
-    ///
-    /// External execution is deliberately never resumed by recovery.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when durable recovery cannot complete.
-    pub fn recover_before_ready(&self) -> DtoResult<Vec<CommittedChangeDto>> {
-        self.repository
-            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(self.values.occurred_at))
-    }
-
-    fn active_run(&self, session_id: SessionId, run_id: RunId) -> DtoResult<RunProjectionDto> {
-        let projection = self.repository.load_session_snapshot(session_id)?;
-        self.active_run_from_projection(&projection, run_id)
-    }
-
-    fn active_run_from_projection(
-        &self,
-        projection: &intention_domain::SessionProjectionDto,
-        run_id: RunId,
-    ) -> DtoResult<RunProjectionDto> {
-        projection
-            .active_run()
-            .filter(|active| active.run_id() == run_id)
-            .ok_or_else(|| {
-                intention_types::ErrorDto::validation(
-                    "active_run_not_found",
-                    "the requested run is not active in the session",
-                )
-            })
-    }
-
-    fn transition(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        from: RunStatusDto,
-        to: RunStatusDto,
-    ) -> DtoResult<CommittedChangeDto> {
-        validate_run_status_transition(from, to)?;
-        self.repository.transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            to,
-            self.values.occurred_at,
-        ))
-    }
-}
+/// The partial tool result recorded when an interrupt arrives before a
+/// model-requested tool call starts.
+pub const TOOL_INTERRUPT_NOTICE: &str = "[The tool call was stopped before a final result.]";
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
 const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
@@ -241,17 +100,6 @@ pub trait ModelTimePort {
 /// Provider-neutral delay future owned by a [`ModelTimePort`].
 pub type ModelSleepFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
-
-/// Optional deterministic seam immediately before an executor's first durable append.
-///
-/// Production composition supplies no gate. Daemon-host outcome fixtures use a
-/// gate to make the narrow `Starting`/`Cancelling` admission race observable
-/// without changing provider, storage, or transport behavior.
-pub trait ModelRunFirstAppendGate: Send + Sync {
-    /// Waits after the initial durable `Starting` replay and preflight, but
-    /// before the first `Starting -> Running` fact append.
-    fn wait_before_first_append(&self) -> ModelSleepFuture<'_>;
-}
 
 /// Executes one provider-normalized tool call for the model-tool loop.
 ///
@@ -333,8 +181,6 @@ pub enum ModelRunExecutionOutcomeDto {
     Completed { cursor: RunEventCursorDto },
     /// The run safely reached failed state.
     Failed { cursor: RunEventCursorDto },
-    /// Direct cancellation reached cancelled state.
-    Cancelled { cursor: RunEventCursorDto },
 }
 
 /// Safe evidence that a model execution write or state transition committed.
@@ -403,13 +249,12 @@ pub trait ModelRunCommitObserver: Send + Sync {
 }
 
 /// DTO-only executor over injected storage, selected driver, time port, optional
-/// observer and gate, and the mandatory tool executor.
+/// observer, and the mandatory tool executor.
 pub struct ModelRunExecutionService<'a, Repository, Driver: ?Sized, Time> {
     repository: &'a Repository,
     driver: &'a Driver,
     time: &'a Time,
     observer: Option<&'a dyn ModelRunCommitObserver>,
-    first_append_gate: Option<&'a dyn ModelRunFirstAppendGate>,
     tool_executor: &'a dyn ToolExecutionPort,
 }
 
@@ -435,7 +280,6 @@ where
             driver,
             time,
             observer: None,
-            first_append_gate: None,
             tool_executor,
         }
     }
@@ -454,30 +298,6 @@ where
             driver,
             time,
             observer: Some(observer),
-            first_append_gate: None,
-            tool_executor,
-        }
-    }
-
-    /// Adds a deterministic gate before the first durable execution append.
-    ///
-    /// This is reserved for host-race outcome fixtures. Normal daemon
-    /// execution must use [`Self::with_commit_observer`] or [`Self::new`].
-    #[must_use]
-    pub const fn with_commit_observer_and_first_append_gate(
-        repository: &'a Repository,
-        driver: &'a Driver,
-        time: &'a Time,
-        observer: &'a dyn ModelRunCommitObserver,
-        first_append_gate: &'a dyn ModelRunFirstAppendGate,
-        tool_executor: &'a dyn ToolExecutionPort,
-    ) -> Self {
-        Self {
-            repository,
-            driver,
-            time,
-            observer: Some(observer),
-            first_append_gate: Some(first_append_gate),
             tool_executor,
         }
     }
@@ -500,9 +320,6 @@ where
             .load_current_run_snapshot(input.session_id, input.run_id)?;
         let run = replay.run_projection();
         let mut cursor = replay.cursor();
-        if run.status() == RunStatusDto::Cancelling || input.cancellation.is_cancelled() {
-            return self.cancel(input.session_id, input.run_id, cursor, run.status());
-        }
         if run.status() != RunStatusDto::Starting {
             return Err(ErrorDto::validation(
                 "invalid_model_run_execution_state",
@@ -538,46 +355,44 @@ where
             )?;
             return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
         }
-        if let Some(first_append_gate) = self.first_append_gate {
-            first_append_gate.wait_before_first_append().await;
-        }
 
         let policy = persisted.resolved().provider_execution();
+        let context_window = persisted.resolved().context_window();
         let assistant_turn_id = AssistantTurnId::new();
         let mut pending_text = String::new();
         let mut durable_output = false;
+        // Context additions that must survive a retryable attempt boundary:
+        // joined pending user messages and interruption notices. The live
+        // context of the run stays continuous across provider attempts.
+        let mut extra_messages: Vec<ModelMessageDto> = Vec::new();
         for attempt in 1..=u16::from(policy.max_attempts()) {
-            cursor = match self.append(
+            cursor = self.append(
                 input.session_id,
                 input.run_id,
                 cursor,
                 vec![ModelRunFactInputDto::provider_attempt_started(attempt)?],
                 (attempt == 1).then_some(RunStatusDto::Running),
-            ) {
-                Ok(cursor) => cursor,
-                Err(error) => match self.cancel_after_append_race(&input)? {
-                    Some(outcome) => return Ok(outcome),
-                    None => return Err(error),
-                },
-            };
+            )?;
             let result = self
                 .drive_attempt(
                     &input,
                     policy.attempt_timeout_seconds(),
+                    ContextWindowState::new(
+                        context_window.window_tokens(),
+                        context_window.capacity_tokens(),
+                    ),
                     AttemptState {
                         cursor,
                         assistant_turn_id,
                         pending_text: &mut pending_text,
                         durable_output: &mut durable_output,
                     },
+                    &mut extra_messages,
                 )
                 .await?;
             match result {
                 AttemptResult::Completed { cursor } => {
                     return Ok(ModelRunExecutionOutcomeDto::Completed { cursor });
-                }
-                AttemptResult::Cancelled { cursor } => {
-                    return Ok(ModelRunExecutionOutcomeDto::Cancelled { cursor });
                 }
                 AttemptResult::FailedTerminal { cursor } => {
                     return Ok(ModelRunExecutionOutcomeDto::Failed { cursor });
@@ -602,9 +417,9 @@ where
                             ],
                             None,
                         )?;
-                        if let Some(outcome) = self.wait_for_retry(&input, cursor).await? {
-                            return Ok(outcome);
-                        }
+                        cursor = self
+                            .wait_for_retry(&input, cursor, &mut extra_messages)
+                            .await?;
                     } else {
                         let mut cursor = self.flush_text(
                             input.session_id,
@@ -642,7 +457,9 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
+        mut context_window: ContextWindowState,
         state: AttemptState<'_>,
+        extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<AttemptResult> {
         let AttemptState {
             mut cursor,
@@ -650,8 +467,12 @@ where
             pending_text,
             durable_output,
         } = state;
-        let mut request = input.request.clone();
         let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
+        messages.extend(extra_messages.iter().cloned());
+        // The starting context is windowed once, before its first provider
+        // request, exactly like every later tool-result round.
+        context_window.apply(&mut messages)?;
+        let mut request = input.request.with_messages(messages.clone())?;
         let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         let mut tool_round = 0u8;
         loop {
@@ -663,15 +484,58 @@ where
                     assistant_turn_id,
                     pending_text,
                     durable_output,
+                    &mut context_window,
                     cursor,
                 )
                 .await?;
             match outcome {
-                RoundOutcome::Completed { cursor } => {
+                RoundOutcome::Finished {
+                    cursor: finished_cursor,
+                    reason,
+                } => {
+                    cursor = finished_cursor;
+                    // A pending message is the nearest-boundary continuation:
+                    // it joins the live context in FIFO order and the run
+                    // continues instead of completing. An interruption that
+                    // raced the finish is answered with its notice first.
+                    if input.cancellation.is_cancelled() {
+                        cursor = self.record_interrupt_notice(input, cursor)?;
+                        messages.push(interrupt_notice_message()?);
+                        extra_messages.push(interrupt_notice_message()?);
+                        context_window.apply(&mut messages)?;
+                        request = continuation_request(input, &messages, &reasoning_attachments)?;
+                        continue;
+                    }
+                    let (next_cursor, joined) = self.consume_pending_user_turns(
+                        input,
+                        cursor,
+                        &mut messages,
+                        extra_messages,
+                    )?;
+                    cursor = next_cursor;
+                    if joined {
+                        context_window.apply(&mut messages)?;
+                        request = continuation_request(input, &messages, &reasoning_attachments)?;
+                        continue;
+                    }
+                    cursor = self.append(
+                        input.session_id,
+                        input.run_id,
+                        cursor,
+                        vec![ModelRunFactInputDto::finished(reason)],
+                        Some(RunStatusDto::Completing),
+                    )?;
+                    self.transition_completed(input.session_id, input.run_id, cursor)?;
                     return Ok(AttemptResult::Completed { cursor });
                 }
-                RoundOutcome::Cancelled { cursor } => {
-                    return self.cancel_attempt(input.session_id, input.run_id, cursor);
+                RoundOutcome::Interrupted {
+                    cursor: interrupted_cursor,
+                } => {
+                    cursor = self.record_interrupt_notice(input, interrupted_cursor)?;
+                    messages.push(interrupt_notice_message()?);
+                    extra_messages.push(interrupt_notice_message()?);
+                    context_window.apply(&mut messages)?;
+                    request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed {
                     cursor: failed_cursor,
@@ -709,49 +573,55 @@ where
                     if let Some(reasoning) = reasoning {
                         reasoning_attachments.push(reasoning);
                     }
+                    let mut interrupted_tool = false;
                     for call in calls {
                         let facts = vec![ModelRunFactInputDto::tool_call_recorded(call.clone())];
                         cursor =
                             self.append(input.session_id, input.run_id, cursor, facts, None)?;
-                        if input.cancellation.is_cancelled() {
-                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
-                        }
-                        let outcome = match self
-                            .tool_executor
-                            .execute_tool(input.session_id, input.run_id, call.clone())
-                            .await
-                        {
-                            Ok(outcome) => outcome,
-                            Err(error) => {
-                                // A tool infrastructure error is a typed failed
-                                // tool result: record it first, then terminalize.
-                                let failure = failure_from_error(&error)?;
-                                let outcome = ToolResultOutcomeDto::failed(failure.clone());
-                                let fact = ModelRunFactInputDto::tool_result_recorded(
-                                    call.call_id(),
-                                    outcome,
-                                )?;
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    vec![fact],
-                                    None,
-                                )?;
-                                *durable_output = true;
-                                let facts = vec![ModelRunFactInputDto::failed(failure)];
-                                cursor = self.append(
-                                    input.session_id,
-                                    input.run_id,
-                                    cursor,
-                                    facts,
-                                    Some(RunStatusDto::Failed),
-                                )?;
-                                return Ok(AttemptResult::FailedTerminal { cursor });
+                        // An interrupt that arrived before this call started
+                        // never begins a new effect: the call is answered with
+                        // the stopped-call notice as its partial result, so the
+                        // assistant tool-call message stays fully answered.
+                        let outcome = if input.cancellation.is_cancelled() {
+                            ToolResultOutcomeDto::partial(TOOL_INTERRUPT_NOTICE)?
+                        } else {
+                            match self
+                                .tool_executor
+                                .execute_tool(input.session_id, input.run_id, call.clone())
+                                .await
+                            {
+                                Ok(outcome) => outcome,
+                                Err(error) => {
+                                    // A tool infrastructure error is a typed failed
+                                    // tool result: record it first, then terminalize.
+                                    let failure = failure_from_error(&error)?;
+                                    let outcome = ToolResultOutcomeDto::failed(failure.clone());
+                                    let fact = ModelRunFactInputDto::tool_result_recorded(
+                                        call.call_id(),
+                                        outcome,
+                                    )?;
+                                    cursor = self.append(
+                                        input.session_id,
+                                        input.run_id,
+                                        cursor,
+                                        vec![fact],
+                                        None,
+                                    )?;
+                                    *durable_output = true;
+                                    let facts = vec![ModelRunFactInputDto::failed(failure)];
+                                    cursor = self.append(
+                                        input.session_id,
+                                        input.run_id,
+                                        cursor,
+                                        facts,
+                                        Some(RunStatusDto::Failed),
+                                    )?;
+                                    return Ok(AttemptResult::FailedTerminal { cursor });
+                                }
                             }
                         };
-                        if input.cancellation.is_cancelled() {
-                            return self.cancel_attempt(input.session_id, input.run_id, cursor);
+                        if matches!(outcome, ToolResultOutcomeDto::Partial { .. }) {
+                            interrupted_tool = true;
                         }
                         let fact = ModelRunFactInputDto::tool_result_recorded(
                             call.call_id(),
@@ -762,10 +632,19 @@ where
                             self.append(input.session_id, input.run_id, cursor, facts, None)?;
                         *durable_output = true;
                         match outcome {
-                            ToolResultOutcomeDto::Succeeded { content } => {
+                            // A partial tool result answers its call like a
+                            // completed one: the model owns the decision about
+                            // what the captured output means, and the loop
+                            // continues instead of terminalizing the run.
+                            ToolResultOutcomeDto::Succeeded { content }
+                            | ToolResultOutcomeDto::Partial { content } => {
                                 let message =
                                     ModelMessageDto::tool_result(call.call_id(), content)?;
                                 messages.push(message);
+                                // Every added tool result re-runs the window
+                                // pass, so the continuation request carries a
+                                // trimmed context and recomputed breakpoints.
+                                context_window.apply(&mut messages)?;
                             }
                             ToolResultOutcomeDto::Failed { failure } => {
                                 let facts = vec![ModelRunFactInputDto::failed(failure)];
@@ -780,13 +659,96 @@ where
                             }
                         }
                     }
-                    request = input
-                        .request
-                        .with_messages(messages.clone())?
-                        .with_assistant_reasoning(reasoning_attachments.clone())?;
+                    // A tool batch is the second bounded interruption
+                    // boundary. A partial tool result already carries the
+                    // stopped-call notice, so the run continues to the next
+                    // model step; every other in-flight batch position gets
+                    // the explicit context notice.
+                    if input.cancellation.is_cancelled() {
+                        if interrupted_tool {
+                            input.cancellation.reset();
+                        } else {
+                            cursor = self.record_interrupt_notice(input, cursor)?;
+                            messages.push(interrupt_notice_message()?);
+                            extra_messages.push(interrupt_notice_message()?);
+                        }
+                    }
+                    let (next_cursor, _joined) = self.consume_pending_user_turns(
+                        input,
+                        cursor,
+                        &mut messages,
+                        extra_messages,
+                    )?;
+                    cursor = next_cursor;
+                    context_window.apply(&mut messages)?;
+                    request = continuation_request(input, &messages, &reasoning_attachments)?;
                 }
             }
         }
+    }
+
+    /// Appends one durable interruption notice and clears the run's signal.
+    ///
+    /// The notice tells the model that its current call was stopped before a
+    /// final result; the run stays `Running` and continues with the next step.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the notice cannot be
+    /// appended durably.
+    fn record_interrupt_notice(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        cursor: RunEventCursorDto,
+    ) -> DtoResult<RunEventCursorDto> {
+        let cursor = self.append(
+            input.session_id,
+            input.run_id,
+            cursor,
+            vec![ModelRunFactInputDto::interrupt_notice_recorded(
+                INTERRUPT_NOTICE,
+            )?],
+            None,
+        )?;
+        input.cancellation.reset();
+        Ok(cursor)
+    }
+
+    /// Appends every pending user message to the live run context.
+    ///
+    /// The storage transaction marks the turns as appended and assigns their
+    /// durable fact cursors atomically, so a message can join exactly one run
+    /// context. The returned cursor is the run cursor after the append and the
+    /// flag reports whether any message joined.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the pending batch cannot commit.
+    fn consume_pending_user_turns(
+        &self,
+        input: &ModelRunExecutionInputDto,
+        cursor: RunEventCursorDto,
+        messages: &mut Vec<ModelMessageDto>,
+        extra_messages: &mut Vec<ModelMessageDto>,
+    ) -> DtoResult<(RunEventCursorDto, bool)> {
+        let outcome =
+            self.repository
+                .append_pending_user_turns(AppendPendingUserTurnsInputDto::new(
+                    input.session_id,
+                    input.run_id,
+                    cursor,
+                    self.time.now(),
+                ))?;
+        let mut joined = false;
+        for fact in outcome.facts() {
+            if let ModelRunFactInputDto::UserMessageAppended { content, .. } = fact.input() {
+                let message = ModelMessageDto::new(ModelRoleDto::User, content)?;
+                messages.push(message.clone());
+                extra_messages.push(message);
+                joined = true;
+            }
+        }
+        Ok((outcome.cursor(), joined))
     }
 
     /// Drives one provider round: a single stream with its own start event.
@@ -810,11 +772,13 @@ where
         assistant_turn_id: AssistantTurnId,
         pending_text: &mut String,
         durable_output: &mut bool,
+        context_window: &mut ContextWindowState,
         mut cursor: RunEventCursorDto,
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
         let mut lifecycle = ModelStreamLifecycleDto::new();
+        let request_characters = ContextWindowState::request_characters(&request);
         let mut stream = self.driver.execute(request, input.cancellation.clone());
         let timeout = self
             .time
@@ -828,7 +792,14 @@ where
         loop {
             if input.cancellation.is_cancelled() {
                 drop(stream);
-                return Ok(RoundOutcome::Cancelled { cursor });
+                let cursor = self.flush_text(
+                    input.session_id,
+                    input.run_id,
+                    cursor,
+                    assistant_turn_id,
+                    pending_text,
+                )?;
+                return Ok(RoundOutcome::Interrupted { cursor });
             }
             let next = stream.next().fuse();
             let cancelled = input.cancellation.cancelled().fuse();
@@ -841,7 +812,14 @@ where
             {
                 Either::Left(((), _)) => {
                     drop(stream);
-                    return Ok(RoundOutcome::Cancelled { cursor });
+                    let cursor = self.flush_text(
+                        input.session_id,
+                        input.run_id,
+                        cursor,
+                        assistant_turn_id,
+                        pending_text,
+                    )?;
+                    return Ok(RoundOutcome::Interrupted { cursor });
                 }
                 Either::Right((Either::Left((item, _)), _)) => item,
                 Either::Right((Either::Right(((), _)), _)) => {
@@ -946,13 +924,6 @@ where
                         *durable_output = true;
                     }
                 }
-                // The per-fact 512 KiB reasoning bound is enforced by the
-                // domain constructors above; the combined per-run 4 MiB bound
-                // (`intention_domain::validate_reasoning_fact_output_bound`)
-                // is enforced at the durable append authority against the
-                // per-run `reasoning_aggregate_bytes` accounting, which
-                // rejects the whole crossing batch before any write
-                // (PR24-024).
                 ModelEventDto::Usage { usage } => {
                     cursor = self.append(
                         input.session_id,
@@ -961,6 +932,7 @@ where
                         vec![ModelRunFactInputDto::usage_recorded(usage)],
                         None,
                     )?;
+                    context_window.observe_usage(usage, request_characters);
                     *durable_output = true;
                 }
                 ModelEventDto::ToolCall { call } => {
@@ -982,15 +954,7 @@ where
                         pending_text,
                     )?;
                     if calls.is_empty() {
-                        cursor = self.append(
-                            input.session_id,
-                            input.run_id,
-                            cursor,
-                            vec![ModelRunFactInputDto::finished(reason)],
-                            Some(RunStatusDto::Completing),
-                        )?;
-                        self.transition_completed(input.session_id, input.run_id, cursor)?;
-                        return Ok(RoundOutcome::Completed { cursor });
+                        return Ok(RoundOutcome::Finished { cursor, reason });
                     }
                     let reasoning = match round_reasoning_attachment(
                         reasoning_channel_seen,
@@ -1011,6 +975,14 @@ where
         }
     }
 
+    /// Waits out one scheduled retry delay, or handles an interruption.
+    ///
+    /// An interruption during the wait appends its durable notice, clears the
+    /// signal, and returns so the next provider attempt starts immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed storage error when the notice cannot be appended.
     #[expect(
         clippy::future_not_send,
         reason = "The DTO-only execution service accepts deterministic non-Sync test repositories; daemon composition owns any Send runtime boundary."
@@ -1019,32 +991,27 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         cursor: RunEventCursorDto,
-    ) -> DtoResult<Option<ModelRunExecutionOutcomeDto>> {
+        extra_messages: &mut Vec<ModelMessageDto>,
+    ) -> DtoResult<RunEventCursorDto> {
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
-            return self
-                .cancel(
-                    input.session_id,
-                    input.run_id,
-                    cursor,
-                    RunStatusDto::Running,
-                )
-                .map(Some);
+            let message = interrupt_notice_message()?;
+            let cursor = self.record_interrupt_notice(input, cursor)?;
+            extra_messages.push(message);
+            return Ok(cursor);
         }
         let delay = self.time.sleep(RETRY_DELAY).fuse();
         let cancelled = input.cancellation.cancelled().fuse();
         futures_util::pin_mut!(delay, cancelled);
         match futures_util::future::select(cancelled, delay).await {
-            Either::Left(((), _)) => self
-                .cancel(
-                    input.session_id,
-                    input.run_id,
-                    cursor,
-                    RunStatusDto::Running,
-                )
-                .map(Some),
-            Either::Right(((), _)) => Ok(None),
+            Either::Left(((), _)) => {
+                let message = interrupt_notice_message()?;
+                let cursor = self.record_interrupt_notice(input, cursor)?;
+                extra_messages.push(message);
+                Ok(cursor)
+            }
+            Either::Right(((), _)) => Ok(cursor),
         }
     }
 
@@ -1069,29 +1036,6 @@ where
         let cursor = outcome.cursor();
         self.observe_snapshot(session_id, run_id, cursor, outcome.snapshot().clone());
         Ok(cursor)
-    }
-
-    /// Resolves the narrow admission race where StopRun commits `Cancelling`
-    /// after the executor's initial replay but before its first append.
-    ///
-    /// The failed append must not strand a durable cancelling run: the task
-    /// re-reads its exact scope and remains the owner of the terminal
-    /// cancellation transition. Unrelated write failures remain errors.
-    fn cancel_after_append_race(
-        &self,
-        input: &ModelRunExecutionInputDto,
-    ) -> DtoResult<Option<ModelRunExecutionOutcomeDto>> {
-        let replay = self
-            .repository
-            .load_current_run_snapshot(input.session_id, input.run_id)?;
-        let snapshot = replay;
-        let status = snapshot.run_projection().status();
-        if status == RunStatusDto::Cancelling || input.cancellation.is_cancelled() {
-            self.cancel(input.session_id, input.run_id, snapshot.cursor(), status)
-                .map(Some)
-        } else {
-            Ok(None)
-        }
     }
 
     fn transition_completed(
@@ -1136,15 +1080,6 @@ where
         Ok(())
     }
 
-    fn observe_transition(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<()> {
-        self.observe_current_replay(session_id, run_id, cursor)
-    }
-
     fn fail(
         &self,
         session_id: SessionId,
@@ -1177,62 +1112,6 @@ where
                 None,
             )?,
         )
-    }
-
-    fn cancel_attempt(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-    ) -> DtoResult<AttemptResult> {
-        self.cancel(session_id, run_id, cursor, RunStatusDto::Running)
-            .map(|outcome| match outcome {
-                ModelRunExecutionOutcomeDto::Cancelled { cursor } => {
-                    AttemptResult::Cancelled { cursor }
-                }
-                ModelRunExecutionOutcomeDto::Completed { .. }
-                | ModelRunExecutionOutcomeDto::Failed { .. } => {
-                    unreachable!("cancel only produces a cancelled outcome")
-                }
-            })
-    }
-
-    fn cancel(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        cursor: RunEventCursorDto,
-        status: RunStatusDto,
-    ) -> DtoResult<ModelRunExecutionOutcomeDto> {
-        if status != RunStatusDto::Cancelling {
-            self.repository.transition_run(TransitionRunInputDto::new(
-                session_id,
-                run_id,
-                RunStatusDto::Cancelling,
-                self.time.now(),
-            ))?;
-            self.observe_transition(session_id, run_id, cursor)?;
-        }
-        match self.repository.transition_run(TransitionRunInputDto::new(
-            session_id,
-            run_id,
-            RunStatusDto::Cancelled,
-            self.time.now(),
-        )) {
-            Ok(_) => {
-                self.observe_transition(session_id, run_id, cursor)?;
-                Ok(ModelRunExecutionOutcomeDto::Cancelled { cursor })
-            }
-            Err(_) => {
-                let cursor = self.fail(
-                    session_id,
-                    run_id,
-                    cursor,
-                    RunFailureDto::new("provider_cancellation_failed", ErrorRetryDto::Never, None)?,
-                )?;
-                Ok(ModelRunExecutionOutcomeDto::Failed { cursor })
-            }
-        }
     }
 
     fn flush_full_text(
@@ -1298,9 +1177,6 @@ enum AttemptResult {
     Completed {
         cursor: RunEventCursorDto,
     },
-    Cancelled {
-        cursor: RunEventCursorDto,
-    },
     Failed {
         cursor: RunEventCursorDto,
         failure: RunFailureDto,
@@ -1313,12 +1189,15 @@ enum AttemptResult {
 
 /// The outcome of one provider round, carrying the round's ending cursor.
 enum RoundOutcome {
-    Completed {
+    /// The provider finished the round without tool calls. The caller owns
+    /// the completion decision, because pending user messages continue the
+    /// run instead of completing it.
+    Finished {
         cursor: RunEventCursorDto,
+        reason: FinishReasonDto,
     },
-    Cancelled {
-        cursor: RunEventCursorDto,
-    },
+    /// The round was interrupted before a final result; the run continues.
+    Interrupted { cursor: RunEventCursorDto },
     Failed {
         cursor: RunEventCursorDto,
         failure: RunFailureDto,
@@ -1411,4 +1290,29 @@ fn same_execution_selection(persisted: &ConfigSnapshotDto, current: &ConfigSnaps
 
 fn failure_from_error(error: &ErrorDto) -> DtoResult<RunFailureDto> {
     RunFailureDto::new(error.code(), error.retry(), error.correlation_id())
+}
+
+/// Returns the durable context notice for one interrupted call.
+///
+/// # Errors
+///
+/// Returns a validation error only when the static notice is rejected.
+fn interrupt_notice_message() -> DtoResult<ModelMessageDto> {
+    ModelMessageDto::new(ModelRoleDto::Notice, INTERRUPT_NOTICE)
+}
+
+/// Rebuilds the continuation request from the current live run context.
+///
+/// # Errors
+///
+/// Returns a validation error when the rebuilt request violates its contract.
+fn continuation_request(
+    input: &ModelRunExecutionInputDto,
+    messages: &[ModelMessageDto],
+    reasoning: &[AssistantReasoningDto],
+) -> DtoResult<ModelRequestDto> {
+    input
+        .request
+        .with_messages(messages.to_vec())?
+        .with_assistant_reasoning(reasoning.to_vec())
 }

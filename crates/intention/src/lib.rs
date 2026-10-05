@@ -43,16 +43,17 @@ use intention_protocol::{
 };
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_provider_openrouter::OpenRouterDriver;
-#[cfg(feature = "test-support")]
-use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitObserver, ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto,
-    ModelRunExecutionService, ModelTimePort, RuntimeService, RuntimeValuesDto, ToolExecutionPort,
-    fail_starting_run,
+    ModelRunExecutionService, ModelTimePort, ToolExecutionPort, fail_starting_run,
 };
-use intention_storage::{AppendModelRunFactsInputDto, StorageRepositoryDto};
+use intention_storage::{
+    AppendModelRunFactsInputDto, RecoverUnfinishedRunsInputDto, StorageRepositoryDto,
+};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_tools::{CancellationSignal, ToolInput, ToolResult};
+#[cfg(test)]
+use intention_tools::ToolResult;
+use intention_tools::{CancellationSignal, ToolInput};
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
     RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
@@ -67,6 +68,13 @@ const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
 /// The single live configuration snapshot schema (intention-config current schema).
 const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
+
+/// The terminal outcome of one facade local tool invocation.
+///
+/// Re-exported for the daemon host, which maps the outcome onto the
+/// model-visible tool-result fact without depending on the application crate
+/// directly.
+pub use intention_application::LocalToolInvocationOutcomeDto;
 
 /// Public M3 daemon application facade over a private durable composition.
 #[derive(Clone)]
@@ -286,7 +294,7 @@ fn committed_tool_result_evidence(
     }
 }
 
-/// Run-scoped cancellation shared between daemon-host stops and admitted local tools.
+/// Run-scoped interruption shared between daemon-host interrupts and admitted local tools.
 struct LocalToolCancellationEntry {
     signal: CancellationSignal,
     /// Local invocations currently executing against this exact run.
@@ -310,7 +318,7 @@ impl DaemonApplicationFacade {
         tool_id: impl Into<String>,
         input: ToolInput,
         workspace: WorkspaceRoot,
-    ) -> DtoResult<ToolResult> {
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         // The publication reread is scoped to this exact pre-invocation durable
         // position, so it can only observe this invocation's committed evidence.
         let after_sequence = self
@@ -345,10 +353,11 @@ impl DaemonApplicationFacade {
         result
     }
 
-    /// Binds one local invocation to its run's shared cancellation signal.
+    /// Binds one local invocation to its run's shared interruption signal.
     ///
-    /// A previously stopped run yields an already-cancelled signal so later
-    /// invocations fail before any new effect occurs.
+    /// The signal is fresh for every invocation, so an interruption reaches
+    /// only the tool that is actually in flight and the next tool of the same
+    /// continuing run starts unencumbered.
     fn bind_local_tool_cancellation(
         &self,
         session_id: SessionId,
@@ -375,14 +384,15 @@ impl DaemonApplicationFacade {
 
     /// Releases one finished local invocation from its run's shared signal.
     ///
-    /// Completed invocations drop their binding; a cancelled marker stays until
-    /// terminalization so follow-on effects remain fenced for that exact run.
+    /// The binding is dropped whenever no invocation remains in flight: an
+    /// interruption applies to the operation it caught, and the run continues
+    /// with a fresh signal for its next tool call.
     fn release_local_tool_cancellation(&self, session_id: SessionId, run_id: RunId) {
         if let Ok(mut registry) = self.inner.tool_cancellations.lock()
             && let Some(entry) = registry.get_mut(&(session_id, run_id))
         {
             entry.inflight = entry.inflight.saturating_sub(1);
-            if entry.inflight == 0 && !entry.signal.is_cancelled() {
+            if entry.inflight == 0 {
                 registry.remove(&(session_id, run_id));
             }
         }
@@ -502,45 +512,19 @@ impl DaemonApplicationFacade {
         .await
     }
 
-    /// Executes one scheduled run with the fixture-only first-append race gate.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub async fn execute_scheduled_model_run_for_daemon_with_first_append_gate<Time>(
-        &self,
-        schedule: ScheduleModelRunDto,
-        cancellation: ModelCancellationSignal,
-        time: &Time,
-        observer: &dyn ModelRunCommitObserver,
-        first_append_gate: &dyn ModelRunFirstAppendGate,
-        tool_executor: &dyn ToolExecutionPort,
-    ) -> DtoResult<ModelRunExecutionOutcomeDto>
-    where
-        Time: ModelTimePort + Sync,
-    {
-        ModelRunExecutionService::with_commit_observer_and_first_append_gate(
-            &self.inner.repository,
-            self.inner._selected_provider.driver(),
-            time,
-            observer,
-            first_append_gate,
-            tool_executor,
-        )
-        .execute(ModelRunExecutionInputDto::new(
-            schedule.session_id(),
-            schedule.run_id(),
-            schedule.request().clone(),
-            schedule.safe_config().clone(),
-            cancellation,
-        ))
-        .await
-    }
-
-    /// Durably moves the exact active run to `Cancelling` without terminalizing it.
+    /// Accepts an interruption for the exact active run and reaches its
+    /// in-flight local tool invocation.
     ///
-    /// A streaming daemon host must signal the matching execution task after this
-    /// commit; synchronous stop dispatch no longer exists outside that host.
+    /// The run stays active: the daemon host signals the matching execution
+    /// task after this validation, the interrupted operation ends with a
+    /// partial result and a context notice, and the model receives the next
+    /// step in the same run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error when the exact run is not active.
     #[doc(hidden)]
-    pub fn stop_run_for_daemon_host(
+    pub fn interrupt_run_for_daemon_host(
         &self,
         session_id: SessionId,
         run_id: RunId,
@@ -551,58 +535,18 @@ impl DaemonApplicationFacade {
                 "daemon command is unavailable",
             )
         })?;
-        let accepted = ApplicationService::new(&self.inner.repository).stop_run(
-            intention_domain::StopRunCommandDto::new(session_id, run_id),
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
+        let accepted = ApplicationService::new(&self.inner.repository).interrupt_run(
+            intention_domain::InterruptRunCommandDto::new(session_id, run_id),
         )?;
-        // After the durable Cancelling commit, reach any local tool execution
-        // bound to this exact run and fence later invocations. Durable model
-        // cancellation semantics remain two-step and unchanged.
-        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
-            registry
-                .entry((session_id, run_id))
-                .or_insert_with(|| LocalToolCancellationEntry {
-                    signal: CancellationSignal::cancelled(),
-                    inflight: 0,
-                })
-                .signal
-                .cancel();
+        // An invocation bound to this exact run observes the interruption and
+        // ends with a partial result; the binding is released when that
+        // invocation returns, so the continuing run's next tool starts fresh.
+        if let Ok(mut registry) = self.inner.tool_cancellations.lock()
+            && let Some(entry) = registry.get_mut(&(session_id, run_id))
+        {
+            entry.signal.cancel();
         }
         Ok(accepted)
-    }
-
-    /// Terminalizes an exact durable `Cancelling` run for the daemon task registry.
-    ///
-    /// This is used only when a stop wins before normal executor admission. It
-    /// preserves the required two-step cancellation path while ensuring the host
-    /// retains ownership of the terminal transition rather than leaving active
-    /// durable state without a task.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error when the exact run is unavailable or is no longer
-    /// eligible for the `Cancelling -> Cancelled` transition.
-    #[doc(hidden)]
-    pub fn terminalize_cancelling_run_for_daemon(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-    ) -> DtoResult<()> {
-        let _gate = self.inner.command_gate.lock().map_err(|_| {
-            ErrorDto::unavailable(
-                "daemon_command_unavailable",
-                "daemon command is unavailable",
-            )
-        })?;
-        RuntimeService::new(
-            &self.inner.repository,
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
-        )
-        .complete_terminal(session_id, run_id, RunStatusDto::Cancelled)?;
-        if let Ok(mut registry) = self.inner.tool_cancellations.lock() {
-            registry.remove(&(session_id, run_id));
-        }
-        Ok(())
     }
 
     /// Terminalizes one still-active run as durably `Failed` for the daemon
@@ -613,13 +557,12 @@ impl DaemonApplicationFacade {
     /// commits the terminal `Failed` transition. The failure code is the
     /// executor error's stable code, so deterministic bound and semantic
     /// failures (for example `reasoning_output_limit_exceeded`) become the
-    /// durable failed outcome (PR24-012). Runs already terminal are a no-op;
-    /// `Cancelling` runs terminalize as `Cancelled`, never here.
+    /// durable failed outcome (PR24-012). Runs already terminal are a no-op.
     ///
     /// # Errors
     ///
-    /// Returns a typed validation error for a `Cancelling` run, or the
-    /// repository's typed error when the terminal append cannot commit.
+    /// Returns the repository's typed error when the terminal append cannot
+    /// commit.
     #[doc(hidden)]
     pub fn fail_active_run_for_daemon(
         &self,
@@ -640,12 +583,6 @@ impl DaemonApplicationFacade {
         let status = replay.run_projection().status();
         if status.is_terminal() {
             return Ok(());
-        }
-        if status == RunStatusDto::Cancelling {
-            return Err(ErrorDto::validation(
-                "invalid_failed_run_state",
-                "a cancelling run terminalizes as cancelled, not failed",
-            ));
         }
         let failure = RunFailureDto::new(failure_code, ErrorRetryDto::Manual, None)?;
         self.inner
@@ -894,14 +831,13 @@ impl DaemonApplicationFacade {
                     &self.inner.dispatch,
                 )?
             }
-            ProtocolCommandDto::RemoveQueuedTurn(command) => {
-                ApplicationService::new(&self.inner.repository)
-                    .remove_queued_turn(command, timestamp)?
+            ProtocolCommandDto::RemoveTurn(command) => {
+                ApplicationService::new(&self.inner.repository).remove_turn(command, timestamp)?
             }
-            ProtocolCommandDto::StopRun(_) => {
+            ProtocolCommandDto::InterruptRun(_) => {
                 return Err(ErrorDto::validation(
-                    "invalid_stop_dispatch",
-                    "run stops use the daemon host stop path",
+                    "invalid_interrupt_dispatch",
+                    "run interrupts use the daemon host interrupt path",
                 ));
             }
             ProtocolCommandDto::SubscribeSession(_) => {
@@ -915,11 +851,9 @@ impl DaemonApplicationFacade {
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
-        RuntimeService::new(
-            &self.inner.repository,
-            RuntimeValuesDto::new(RunId::new(), self.inner.config_snapshot.clone(), now()?),
-        )
-        .recover_before_ready()?;
+        self.inner
+            .repository
+            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(now()?))?;
         Ok(())
     }
 }
@@ -1297,7 +1231,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_turn_does_not_admit_dispatch() {
+    fn pending_turn_does_not_admit_dispatch() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("queued-dispatch.sqlite"),
@@ -1319,14 +1253,14 @@ mod tests {
             1
         );
 
-        let queued = send_user_turn(&facade, session_id, "queued turn");
+        let pending = send_user_turn(&facade, session_id, "pending turn");
         assert!(matches!(
-            queued,
+            pending,
             ProtocolCommandResultDto::Accepted(accepted)
                 if matches!(
                     accepted.result(),
                     ProtocolAcceptedResultDto::SendUserTurn(turn)
-                        if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
+                        if matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending)
                 )
         ));
         assert_eq!(
@@ -1337,12 +1271,12 @@ mod tests {
                 .expect("dispatch recorder remains available")
                 .len(),
             1,
-            "queued turns never enter the dispatch seam"
+            "a pending message never enters the dispatch seam"
         );
     }
 
     #[test]
-    fn daemon_host_bridges_read_the_exact_starting_run_and_stop_only_to_cancelling() {
+    fn daemon_host_bridges_read_the_exact_starting_run_and_interrupt_keeps_it_active() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("daemon-host-bridge.sqlite"),
@@ -1388,22 +1322,30 @@ mod tests {
                 .is_empty()
         );
 
-        facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("host stop commits cancelling");
+        let interrupt = facade
+            .interrupt_run_for_daemon_host(session_id, run_id)
+            .expect("host interrupt is accepted");
+        assert!(matches!(
+            interrupt,
+            ProtocolAcceptedResultDto::InterruptRun(accepted)
+                if accepted.session_id() == session_id
+                    && accepted.run_id() == run_id
+                    && accepted.at_sequence() == replay.at_sequence()
+        ));
         assert_eq!(
             facade
                 .current_starting_run_for_daemon(session_id)
-                .expect("no starting run remains"),
-            None
+                .expect("the interrupted run stays active"),
+            Some(run_id)
         );
         assert_eq!(
             facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelling run replay reads")
+                .expect("interrupted run replay reads")
                 .run_projection()
                 .status(),
-            RunStatusDto::Cancelling
+            RunStatusDto::Starting,
+            "an interrupt never terminalizes an active run"
         );
     }
 
@@ -1568,7 +1510,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_host_failure_and_terminalization_bridges_are_safe() {
+    fn daemon_host_failure_and_interrupt_bridges_are_safe() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("bridges.sqlite"),
@@ -1588,15 +1530,15 @@ mod tests {
             unreachable!()
         };
         facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("stop commits");
+            .interrupt_run_for_daemon_host(session_id, run_id)
+            .expect("the interrupt is accepted");
         facade
-            .terminalize_cancelling_run_for_daemon(session_id, run_id)
-            .expect("terminalizes");
+            .fail_active_run_for_daemon(session_id, run_id, "fixture_failure")
+            .expect("the active run terminalizes as failed");
         let replay = facade
             .load_current_run_snapshot_for_daemon(session_id, run_id)
             .expect("replay");
-        assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
+        assert_eq!(replay.run_projection().status(), RunStatusDto::Failed);
         let other = RunId::new();
         assert!(
             facade
@@ -1611,7 +1553,7 @@ mod tests {
     }
 
     #[test]
-    fn command_routes_remove_queued_stop_and_rejects_subscription() {
+    fn command_routes_remove_turn_and_rejects_interrupt_and_subscription() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test(
             directory.path().join("routing.sqlite"),
@@ -1630,39 +1572,39 @@ mod tests {
         let SendUserTurnOutcomeDto::Started { run_id, .. } = t.outcome() else {
             unreachable!()
         };
-        let queued = send_user_turn(&facade, session_id, "queued");
-        let ProtocolCommandResultDto::Accepted(a) = queued else {
+        let pending = send_user_turn(&facade, session_id, "pending");
+        let ProtocolCommandResultDto::Accepted(a) = pending else {
             unreachable!()
         };
         let ProtocolAcceptedResultDto::SendUserTurn(t) = a.result() else {
             unreachable!()
         };
-        let queued_turn_id = t.turn_id();
-        let SendUserTurnOutcomeDto::Queued { .. } = t.outcome() else {
+        let pending_turn_id = t.turn_id();
+        let SendUserTurnOutcomeDto::Pending = t.outcome() else {
             unreachable!()
         };
         assert!(matches!(
-            facade.command(ProtocolCommandDto::RemoveQueuedTurn(
-                intention_domain::RemoveQueuedTurnCommandDto::new(session_id, queued_turn_id)
+            facade.command(ProtocolCommandDto::RemoveTurn(
+                intention_domain::RemoveTurnCommandDto::new(session_id, pending_turn_id)
             )),
             ProtocolCommandResultDto::Accepted(_)
         ));
-        // Stops no longer dispatch through the synchronous command path; the
-        // daemon host owns the exact two-step cancellation transition.
-        assert!(matches!(facade.command(ProtocolCommandDto::StopRun(
-                intention_domain::StopRunCommandDto::new(session_id, run_id)
-            )), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_stop_dispatch"));
+        // Interrupts never dispatch through the synchronous command path; the
+        // daemon host owns reaching the in-flight operation.
+        assert!(matches!(facade.command(ProtocolCommandDto::InterruptRun(
+                intention_domain::InterruptRunCommandDto::new(session_id, run_id)
+            )), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_interrupt_dispatch"));
         facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("host stop commits cancelling");
+            .interrupt_run_for_daemon_host(session_id, run_id)
+            .expect("host interrupt is accepted");
         assert_eq!(
             facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelling replay reads")
+                .expect("interrupted replay reads")
                 .run_projection()
                 .status(),
-            RunStatusDto::Cancelling,
-            "the host stop leaves the run waiting on the daemon task"
+            RunStatusDto::Starting,
+            "the interrupt leaves the run active for its continuation"
         );
         assert!(
             matches!(facade.command(ProtocolCommandDto::SubscribeSession(SubscribeSessionCommandDto::new(SCHEMA_VERSION, session_id, None, RunModeDto::Build))), ProtocolCommandResultDto::Rejected(error) if error.code() == "invalid_subscription_dispatch")
@@ -1831,14 +1773,14 @@ mod tests {
         let unknown = RunId::new();
 
         assert!(matches!(
-            facade.command(ProtocolCommandDto::StopRun(
-                intention_domain::StopRunCommandDto::new(session_id, unknown)
+            facade.command(ProtocolCommandDto::InterruptRun(
+                intention_domain::InterruptRunCommandDto::new(session_id, unknown)
             )),
             ProtocolCommandResultDto::Rejected(_)
         ));
         assert!(matches!(
-            facade.command(ProtocolCommandDto::RemoveQueuedTurn(
-                intention_domain::RemoveQueuedTurnCommandDto::new(
+            facade.command(ProtocolCommandDto::RemoveTurn(
+                intention_domain::RemoveTurnCommandDto::new(
                     session_id,
                     intention_types::TurnId::new(),
                 )
@@ -1851,7 +1793,7 @@ mod tests {
         ));
         assert!(
             facade
-                .terminalize_cancelling_run_for_daemon(session_id, unknown)
+                .interrupt_run_for_daemon_host(session_id, unknown)
                 .is_err()
         );
         assert!(
@@ -1862,54 +1804,11 @@ mod tests {
     }
 
     #[test]
-    fn daemon_stop_blocks_later_local_invocation_before_any_new_effect() {
+    fn daemon_interrupt_ends_the_in_flight_execute_with_a_partial_result() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let run_id = started_run(&facade, session_id, "stop first");
-        let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
-
-        facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("host stop commits cancelling");
-        assert_eq!(
-            facade
-                .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelling replay reads")
-                .run_projection()
-                .status(),
-            RunStatusDto::Cancelling,
-            "durable model cancellation semantics stay two-step"
-        );
-
-        let error = facade
-            .invoke_local_tool_for_daemon(
-                session_id,
-                run_id,
-                intention_types::ToolCallId::new(),
-                "write",
-                ToolInput::Write(intention_tools::WriteInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("late.txt")
-                        .expect("fixture path is valid"),
-                    content: intention_tools::BoundedText::new("late").expect("fixture content"),
-                    expected_content: None,
-                }),
-                workspace,
-            )
-            .expect_err("a stopped run cannot admit new local effects");
-        assert_eq!(error.code(), "tool_cancelled");
-        assert!(
-            !workspace_directory.path().join("late.txt").exists(),
-            "no workspace effect may occur after the stop"
-        );
-    }
-
-    #[test]
-    fn daemon_stop_reaches_in_flight_execute_and_classifies_unknown_external_effect() {
-        let (_directory, facade) = test_facade();
-        let session_id = SessionId::new();
-        create(&facade, session_id);
-        let run_id = started_run(&facade, session_id, "in flight stop");
+        let run_id = started_run(&facade, session_id, "in flight interrupt");
         let (workspace_directory, workspace) = workspace_fixture("keep.txt", "kept");
         let sentinel = workspace_directory.path().join("sentinel.txt");
         let worker_facade = facade.clone();
@@ -1949,8 +1848,8 @@ mod tests {
             )
         });
 
-        // The sentinel proves the child was spawned and running, so the stop
-        // can only land while execution is in flight.
+        // The sentinel proves the child was spawned and running, so the
+        // interrupt can only land while execution is in flight.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !sentinel.exists() {
             assert!(
@@ -1961,32 +1860,35 @@ mod tests {
         }
 
         facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("host stop commits cancelling while execute runs");
+            .interrupt_run_for_daemon_host(session_id, run_id)
+            .expect("host interrupt reaches the in-flight execute");
 
-        let error = worker
+        let outcome = worker
             .join()
             .expect("worker completes")
-            .expect_err("in-flight execution observes the stop");
-        assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+            .expect("in-flight execution observes the interrupt as a partial outcome");
+        let LocalToolInvocationOutcomeDto::Partial { stopped, .. } = outcome else {
+            unreachable!("the stopped execute must be a partial outcome")
+        };
+        assert!(stopped);
         assert_eq!(
             facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelling replay reads")
+                .expect("interrupted replay reads")
                 .run_projection()
                 .status(),
-            RunStatusDto::Cancelling,
-            "the host stop persists only the durable Cancelling step"
+            RunStatusDto::Starting,
+            "the interrupted run stays active for the continuing model loop"
         );
     }
 
     #[test]
-    fn committed_tool_results_survive_a_late_stop_which_then_fences_new_effects() {
+    fn committed_tool_results_survive_a_late_interrupt_and_the_run_stays_active() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let run_id = started_run(&facade, session_id, "late stop");
-        let (workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
+        let run_id = started_run(&facade, session_id, "late interrupt");
+        let (_workspace_directory, workspace) = workspace_fixture("hello.txt", "hello");
 
         for _ in 0..2 {
             let result = facade
@@ -2001,48 +1903,39 @@ mod tests {
                     }),
                     workspace.clone(),
                 )
-                .expect("reads complete before any stop");
+                .expect("reads complete before any interrupt");
             match result {
-                ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
-                _ => unreachable!("read dispatch returns a read result"),
+                LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(text)) => {
+                    assert_eq!(text.text.as_str(), "hello")
+                }
+                _ => unreachable!("read dispatch returns a completed read result"),
             }
         }
 
         facade
-            .stop_run_for_daemon_host(session_id, run_id)
-            .expect("host stop commits cancelling after completed effects");
-
-        let error = facade
-            .invoke_local_tool_for_daemon(
-                session_id,
-                run_id,
-                intention_types::ToolCallId::new(),
-                "write",
-                ToolInput::Write(intention_tools::WriteInput {
-                    path: intention_types::WorkspaceRelativePathDto::parse("late.txt")
-                        .expect("fixture path is valid"),
-                    content: intention_tools::BoundedText::new("late").expect("fixture content"),
-                    expected_content: None,
-                }),
-                workspace,
-            )
-            .expect_err("follow-on effects stay fenced after the stop");
-        assert_eq!(error.code(), "tool_cancelled");
-        assert!(
-            !workspace_directory.path().join("late.txt").exists(),
-            "the committed read results stand; no late effect occurs"
-        );
-
-        facade
-            .terminalize_cancelling_run_for_daemon(session_id, run_id)
-            .expect("terminalization clears the fenced run marker");
+            .interrupt_run_for_daemon_host(session_id, run_id)
+            .expect("host interrupt is accepted after completed effects");
         assert_eq!(
             facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
-                .expect("cancelled replay reads")
+                .expect("interrupted replay reads")
                 .run_projection()
                 .status(),
-            RunStatusDto::Cancelled
+            RunStatusDto::Starting,
+            "a late interrupt never rewrites completed evidence or terminalizes the run"
+        );
+        let events = facade
+            .inner
+            .repository
+            .load_tail(session_id, SessionEventSequenceDto::new(0))
+            .expect("durable events read");
+        assert!(
+            events.iter().any(|event| matches!(
+                event.payload(),
+                intention_domain::DomainEventDto::ToolLifecycle(lifecycle)
+                    if lifecycle.status() == &intention_domain::ToolLifecycleStatusDto::Completed
+            )),
+            "the committed read evidence stands"
         );
     }
 
@@ -2072,8 +1965,10 @@ mod tests {
             )
             .expect("read completes before any stop");
         match result {
-            ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
-            _ => unreachable!("read dispatch returns a read result"),
+            LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(text)) => {
+                assert_eq!(text.text.as_str(), "hello")
+            }
+            _ => unreachable!("read dispatch returns a completed read result"),
         }
 
         let durable_tail = facade

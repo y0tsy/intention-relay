@@ -143,7 +143,7 @@ Each activity tree owns one append-only container journal, the activity-tree con
 gap-detection token. It orders exactly the records that belong to that activity tree and are not records of one session;
 it is never the session event sequence, the run container journal, the conversation-tree container journal, the
 delegation-edge container journal, or a notification observation position. Journal records safely describe root binding,
-child/message/clarification transitions, terminal child state, policy observation, Goal milestone, and unknown effect
+child/message/clarification transitions, terminal child state, policy observation, Goal milestone, and partial effect
 observation. No global order across trees exists.
 
 ```text
@@ -178,7 +178,7 @@ PolicySuspensionObserved
 PolicyRevocationCancellationStarted
 PolicyRevocationCancellationCompleted
 GoalActivityMilestone
-ExternalEffectUnknownObserved
+PartialEffectObserved
 ```
 
 A semantic transition atomically commits its activity projections, journal/index/ snapshot state, required notification
@@ -223,7 +223,7 @@ cancel, configure, or delegate to a child. Equal replay returns the one accepted
 fails as a known pre-effect conflict. Messages reach a recipient only before that recipient's next fresh model request;
 they never alter an already sent provider request, interrupt a running model step, create a root run, or themselves
 schedule a parent step. The daemon records model delivery in the same pre-provider durable boundary that records the
-recipient's next model step. A terminal or cancelled recipient rejects an undelivered ordinary message with a typed
+recipient's next model step. A terminal recipient rejects an undelivered ordinary message with a typed
 durable delivery outcome; the original message and its reason remain in the activity journal.
 
 The distinct typed model input is:
@@ -249,7 +249,7 @@ A daemon-created agent status, child creation, admission, tool/MCP action, outpu
 service milestone never becomes a parent model message merely because it is visible in the activity journal. A terminal
 child conclusion is recorded as one mandatory direct-pair terminal-result availability reference and is included once in
 the next eligible parent exchange; it does not require `AwaitResult`, does not start a parent step, and does not delay
-parent terminalization. If a parent is already cancelling or terminal when no eligible step remains, the terminal
+parent terminalization. If a parent is already terminal when no eligible step remains, the terminal
 reference remains readable through the direct-child result/status evidence and activity journal without inventing a
 model delivery.
 
@@ -277,11 +277,11 @@ AgentNotificationLevelDto
   Ordinary
 ```
 
-`Urgent` is used for user-decision-needing-attention, policy-revocation or cancellation safety, `ExternalEffectUnknown`,
+`Urgent` is used for user-decision-needing-attention, policy-revocation or cancellation safety, a partial effect,
 a terminal outcome leaving obligatory work unfinished, and `sub_agent_clarification_timeout`. `Ordinary` is used only
 for a stable awaiting state or terminal milestone; there are no periodic or every-N summaries. At most one `Urgent`
 record exists per `(AgentActivityTreeId, cancellation reason)`, created atomically with the cascade-start
-projection carrying the then-known safe counts; a later distinct `ExternalEffectUnknown` is its own urgent reason.
+projection carrying the then-known safe counts; a later distinct partial effect is its own urgent reason.
 Urgent safety records take precedence over ordinary summaries; ordinary summaries may coalesce to current safe per-tree
 state. Reconnect returns current redacted summaries for affected trees, not replayed alerts. Notification replay,
 publication, archival reads, and slow-peer handling never start work.
@@ -290,7 +290,7 @@ publication, archival reads, and slow-peer handling never start work.
 accepted cursor (no read, seen, dismissed, or accepted claim) and returns one redacted `AgentNotificationSummaryDto` per
 affected tree, ordered by first new cursor then `AgentActivityTreeId`, at most 32 trees and 64 KiB per page; missed
 notifications are never replayed as new alerts. Delivery, summary, replay, reconnect, archival read, and resync are
-read/presentation only and never start a model step, `ask_user`, confirmation, tool, MCP, child, queue promotion,
+read/presentation only and never start a model step, `ask_user`, confirmation, tool, MCP, child,
 provider request, or external work. Urgent frames are prioritized over pending ordinary summaries in one bounded
 subscriber queue; an unaccepting peer receives a typed resync then detach and never blocks execution, persistence, or
 healthy subscribers.
@@ -346,7 +346,7 @@ agent_notification_summary_too_large
 
 They disclose no message or reference body, tool/MCP data, prompt, path, credential, grant, Python value, provider
 resource, process topology, counter history, or implementation detail. Every listed failure is known before an external
-effect; unknown-effect evidence is retained for work that had already started.
+effect; a bounded partial result and its notice are retained for work that had already started.
 
 ## Compatibility, dependencies, and non-goals
 

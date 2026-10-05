@@ -372,6 +372,45 @@ fn model_tool_messages_round_trip_and_validate() {
 }
 
 #[test]
+fn message_cache_markers_and_content_replacement_round_trip() {
+    let unmarked = message(ModelRoleDto::User, "first");
+    assert!(!unmarked.cache_control());
+    let encoded = serde_json::to_string(&unmarked).expect("message serializes");
+    assert!(
+        !encoded.contains("cache_control"),
+        "an unmarked message stays compact on the wire"
+    );
+
+    let mut marked = ModelMessageDto::tool_result(ToolCallId::new(), "tool result")
+        .expect("tool result message is valid");
+    marked.set_cache_control(true);
+    assert!(marked.cache_control());
+    let encoded = serde_json::to_string(&marked).expect("marked message serializes");
+    assert!(encoded.contains("\"cache_control\":true"));
+    let decoded: ModelMessageDto =
+        serde_json::from_str(&encoded).expect("marked message deserializes");
+    assert_eq!(decoded, marked);
+
+    let tool_call_id = ToolCallId::new();
+    let mut result = ModelMessageDto::tool_result(tool_call_id, "x".repeat(64))
+        .expect("tool result message is valid");
+    result
+        .replace_content("short [compressed]")
+        .expect("replacement content is valid");
+    assert_eq!(result.content(), "short [compressed]");
+    assert_eq!(result.role(), ModelRoleDto::Tool);
+    assert_eq!(result.tool_call_id(), Some(tool_call_id));
+    assert_eq!(
+        result
+            .replace_content(" ")
+            .expect_err("blank replacement must fail")
+            .code(),
+        "invalid_model_message_content"
+    );
+    assert_eq!(result.content(), "short [compressed]");
+}
+
+#[test]
 fn model_request_with_messages_preserves_fields() {
     let request = ModelRequestDto::new(
         RunId::new(),

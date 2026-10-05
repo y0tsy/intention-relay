@@ -8,18 +8,18 @@ use std::fs;
 
 use intention_application::{
     ApplicationService, CreateSessionWorkflowInputDto, HookObservationPort,
-    InvokeLocalToolInputDto, ModelRunDispatchPort, ScheduleModelRunDto,
-    SendUserTurnWorkflowInputDto, ToolResultPublicationInputDto, ToolResultPublicationPort,
-    WorkspaceBoundaryPort,
+    InvokeLocalToolInputDto, LocalToolInvocationOutcomeDto, ModelRunDispatchPort,
+    ScheduleModelRunDto, SendUserTurnWorkflowInputDto, ToolResultPublicationInputDto,
+    ToolResultPublicationPort, WorkspaceBoundaryPort,
 };
 use intention_config::{
     ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
 };
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto,
-    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto,
-    RunProjectionDto, RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto,
-    SessionProjectionDto, WorkspaceRootDto,
+    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunModeDto, RunProjectionDto,
+    RunSnapshotDto, RunStartedEventDto, RunStatusDto, SendUserTurnCommandDto, SessionProjectionDto,
+    WorkspaceRootDto,
 };
 use intention_hooks::{
     FailurePolicy, Hook, HookObservability, Outcome as HookOutcome, Phase, PhaseContext, Registry,
@@ -29,16 +29,15 @@ use intention_runtime::{ModelMessageDto, ModelRequestDto, ModelRoleDto};
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
     AppendModelRunFactsOutcomeDto, CommittedChangeDto, CreateSessionInputDto,
-    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StartingRunModelContextDto, StorageRepositoryDto,
-    ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
+    ModelContextMessageDto, ModelContextRoleDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
+    StartingRunModelContextDto, StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto,
+    TransitionRunInputDto,
 };
 use intention_tools::{ReadInput, ToolInput};
 use intention_types::ToolCallId;
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
-    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
-    TurnId, WorkspaceId,
+    RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, TurnId, WorkspaceId,
 };
 use intention_workspace::WorkspaceRoot;
 
@@ -135,6 +134,16 @@ fn fixture_time() -> TimestampDto {
     TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid")
 }
 
+/// Unwraps one completed invocation outcome; a partial outcome is a fixture error.
+fn completed_outcome(outcome: LocalToolInvocationOutcomeDto) -> intention_tools::ToolResult {
+    match outcome {
+        LocalToolInvocationOutcomeDto::Completed(result) => result,
+        LocalToolInvocationOutcomeDto::Partial { .. } => {
+            unreachable!("unexpected partial invocation in a completed fixture")
+        }
+    }
+}
+
 fn snapshot() -> ConfigSnapshotDto {
     let source = ConfigSourceDto::Explicit(
         ConfigPathDto::parse(
@@ -172,7 +181,7 @@ fn workspace_root() -> WorkspaceRootDto {
 fn projection(
     session_id: SessionId,
     active_run: Option<RunProjectionDto>,
-    queued_turns: Vec<intention_domain::QueuedTurnProjectionDto>,
+    pending_turns: Vec<intention_domain::PendingTurnProjectionDto>,
     position: u64,
 ) -> SessionProjectionDto {
     SessionProjectionDto::new(
@@ -183,7 +192,7 @@ fn projection(
         RunModeDto::Build,
         active_run.map(RunProjectionDto::config_revision_id),
         active_run,
-        queued_turns,
+        pending_turns,
         SessionEventSequenceDto::new(position),
     )
     .expect("fixture projection is valid")
@@ -284,10 +293,7 @@ impl StorageRepositoryDto for FakeRepository {
         self.accepted.borrow().clone()
     }
 
-    fn remove_queued_turn(
-        &self,
-        _input: RemoveQueuedTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
         self.removed.borrow().clone().ok_or_else(|| {
             ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
         })
@@ -411,6 +417,7 @@ fn local_tool_success_records_admission_and_completion() {
             fixture_time(),
         ))
         .expect("tool succeeds");
+    let result = completed_outcome(result);
     assert!(matches!(result, intention_tools::ToolResult::Read(_)));
     assert_eq!(repository.tool_events.borrow().len(), 3);
 }
@@ -669,6 +676,7 @@ fn pre_execution_hook_matrix_covers_errors_transforms_and_rejections_per_phase()
                 "missing-before-transform.txt",
             ))
             .expect("transformed input is executed");
+        let result = completed_outcome(result);
         assert_eq!(result, hello_read_result());
         let _ = fs::remove_dir_all(root);
 
@@ -831,7 +839,7 @@ fn post_execution_result_phases_cover_rejection_and_invalid_input() {
 }
 
 #[test]
-fn stop_and_snapshot_workflows_map_durable_results() {
+fn interrupt_and_snapshot_workflows_map_durable_results() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let config = snapshot();
@@ -855,16 +863,15 @@ fn stop_and_snapshot_workflows_map_durable_results() {
     *repository.transitioned.borrow_mut() = Some(change(state.clone(), None));
     let application = ApplicationService::new(&repository);
 
-    let stopped = application
-        .stop_run(
-            intention_domain::StopRunCommandDto::new(session_id, run_id),
-            intention_runtime::RuntimeValuesDto::new(RunId::new(), config, fixture_time()),
-        )
-        .expect("stop maps");
+    let interrupted = application
+        .interrupt_run(InterruptRunCommandDto::new(session_id, run_id))
+        .expect("interrupt maps");
     assert!(matches!(
-        stopped,
-        ProtocolAcceptedResultDto::StopRun(value)
-            if value.session_id() == session_id && value.run_id() == run_id
+        interrupted,
+        ProtocolAcceptedResultDto::InterruptRun(value)
+            if value.session_id() == session_id
+                && value.run_id() == run_id
+                && value.at_sequence() == state.at_sequence()
     ));
 
     let snapshot = application
@@ -875,12 +882,29 @@ fn stop_and_snapshot_workflows_map_durable_results() {
 }
 
 #[test]
+fn interrupt_run_rejects_a_run_that_is_not_active() {
+    let session_id = SessionId::new();
+    let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable(
+        "fixture_unused",
+        "accept is not used by this fixture",
+    )));
+    *repository.loaded_snapshot.borrow_mut() = Some(projection(session_id, None, Vec::new(), 5));
+    assert_eq!(
+        ApplicationService::new(&repository)
+            .interrupt_run(InterruptRunCommandDto::new(session_id, RunId::new()))
+            .expect_err("an inactive session has no run to interrupt")
+            .code(),
+        "active_run_not_found"
+    );
+}
+
+#[test]
 fn create_and_remove_workflows_map_committed_results() {
     let session_id = SessionId::new();
-    let queued_turn = TurnId::new();
+    let pending_turn = TurnId::new();
     let repository = FakeRepository::with_accepted(Ok(change(
         projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(4))),
+        Some(AcceptedTurnOutcomeDto::Pending),
     )));
     *repository.created.borrow_mut() =
         Some(change(projection(session_id, None, Vec::new(), 1), None));
@@ -903,15 +927,12 @@ fn create_and_remove_workflows_map_committed_results() {
         ProtocolAcceptedResultDto::CreateSession(_)
     ));
     let removed = application
-        .remove_queued_turn(
-            RemoveQueuedTurnCommandDto::new(session_id, queued_turn),
+        .remove_turn(
+            RemoveTurnCommandDto::new(session_id, pending_turn),
             fixture_time(),
         )
         .expect("removal maps");
-    assert!(matches!(
-        removed,
-        ProtocolAcceptedResultDto::RemoveQueuedTurn(_)
-    ));
+    assert!(matches!(removed, ProtocolAcceptedResultDto::RemoveTurn(_)));
 }
 
 #[test]
@@ -949,6 +970,7 @@ fn local_tool_after_execution_transform_is_applied() {
             fixture_time(),
         ))
         .expect("transformed read succeeds");
+    let result = completed_outcome(result);
     assert_eq!(
         result,
         intention_tools::ToolResult::Read(intention_tools::TextResult {
@@ -1098,6 +1120,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
                 fixture_time(),
             ))
             .expect("transformed result");
+        let result = completed_outcome(result);
         assert_eq!(
             result,
             intention_tools::ToolResult::Read(intention_tools::TextResult {
@@ -1129,6 +1152,7 @@ fn local_tool_covers_dispatch_errors_and_post_effect_result_transforms() {
             fixture_time(),
         ))
         .expect("published Continue is valid");
+    let result = completed_outcome(result);
     assert!(matches!(result, intention_tools::ToolResult::Read(_)));
     let _ = fs::remove_dir_all(root);
 }
@@ -1178,23 +1202,23 @@ fn local_tool_covers_invocation_and_pre_effect_hook_errors_and_rejections() {
 }
 
 #[test]
-fn local_tool_records_external_effect_unknown_terminal_status() {
+fn local_tool_records_partial_terminal_status_on_interruption() {
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     // The cancellation is observed after the child has been spawned, so the
-    // tool cannot know whether the external process produced an effect.
+    // call ends with whatever output was captured before the stop.
     let signal = intention_tools::CancellationSignal::new();
     let cancellation = signal.clone();
     let canceller = std::thread::spawn(move || {
         // Wait for a confirmed child spawn instead of racing a fixed sleep:
         // the cancellation then provably lands while the external process is
-        // running, preserving the unknown-effect classification everywhere.
+        // running, so the interruption cause is an observed stop.
         assert!(
             cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
         );
         cancellation.cancel();
     });
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool(
             InvokeLocalToolInputDto::new(
                 WorkspaceRoot::resolve(
@@ -1229,12 +1253,15 @@ fn local_tool_records_external_effect_unknown_terminal_status() {
             )
             .with_cancellation(signal),
         )
-        .expect_err("external effect is unknown");
+        .expect("an interrupted execute is a partial outcome");
     canceller.join().expect("cancellation helper completes");
-    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    let LocalToolInvocationOutcomeDto::Partial { stopped, .. } = outcome else {
+        unreachable!("the stopped execute must be a partial outcome")
+    };
+    assert!(stopped);
     assert!(repository.tool_events.borrow().iter().any(|event| matches!(
         event.status(),
-        intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+        intention_domain::ToolLifecycleStatusDto::Partial
     )));
 }
 
@@ -1274,7 +1301,7 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool(
             InvokeLocalToolInputDto::new(
                 WorkspaceRoot::resolve(
@@ -1297,8 +1324,14 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
             )
             .with_cancellation(intention_tools::CancellationSignal::cancelled()),
         )
-        .expect_err("cancelled invocation fails safely");
-    assert_eq!(error.code(), "tool_cancelled");
+        .expect("a pre-start cancellation is a partial outcome");
+    assert_eq!(
+        outcome,
+        LocalToolInvocationOutcomeDto::Partial {
+            stopped: true,
+            result: None,
+        }
+    );
 
     let events = repository.tool_events.borrow();
     assert!(
@@ -1321,8 +1354,7 @@ fn cancelled_tool_lifecycle_is_terminal_and_not_completed_or_replayed() {
     );
     assert!(events.iter().any(|event| matches!(
         event.status(),
-        intention_domain::ToolLifecycleStatusDto::Cancelled
-            | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+        intention_domain::ToolLifecycleStatusDto::Partial
             | intention_domain::ToolLifecycleStatusDto::Failed
     )));
 }
@@ -1406,6 +1438,7 @@ fn fail_open_hook_failures_reach_the_observation_boundary_with_redacted_metadata
             &observer,
         )
         .expect("fail-open failures continue execution");
+    let result = completed_outcome(result);
     assert!(matches!(result, intention_tools::ToolResult::Read(_)));
 
     // Metadata is not discarded: every tolerated failure reaches the boundary
@@ -1702,6 +1735,7 @@ fn fail_open_failures_in_the_published_phase_reach_the_observer() {
             &observer,
         )
         .expect("fail-open failures after publication stay tolerated");
+    let result = completed_outcome(result);
     assert_eq!(result, hello_read_result());
     // The tolerated post-publish failure is forwarded with safe identity only.
     assert_eq!(
@@ -1886,8 +1920,8 @@ fn assert_single_terminal_event(
                 event.status(),
                 intention_domain::ToolLifecycleStatusDto::Completed
                     | intention_domain::ToolLifecycleStatusDto::Failed
+                    | intention_domain::ToolLifecycleStatusDto::Partial
                     | intention_domain::ToolLifecycleStatusDto::Cancelled
-                    | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
             )
         })
         .collect::<Vec<_>>();
@@ -1927,6 +1961,7 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
             &publisher,
         )
         .expect("read succeeds");
+    let result = completed_outcome(result);
     assert_eq!(result, hello_read_result());
     assert_single_terminal_event(
         &repository,
@@ -1981,11 +2016,11 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
     drop(publisher);
     drop(repository);
 
-    // A cancelled outcome persists correlated Cancelled evidence and never
-    // reaches the publication boundary.
+    // A pre-start cancellation is a Partial outcome: correlated Partial
+    // evidence is durable and the publication boundary is never reached.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             InvokeLocalToolInputDto::new(
                 hello_workspace(&root),
@@ -2002,22 +2037,29 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
             .with_cancellation(intention_tools::CancellationSignal::cancelled()),
             &publisher,
         )
-        .expect_err("cancelled invocation fails");
-    assert_eq!(error.code(), "tool_cancelled");
+        .expect("a pre-start cancellation is a partial outcome");
+    assert_eq!(
+        outcome,
+        LocalToolInvocationOutcomeDto::Partial {
+            stopped: true,
+            result: None,
+        }
+    );
     assert_single_terminal_event(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::Cancelled,
+        &intention_domain::ToolLifecycleStatusDto::Partial,
     );
     assert!(publisher.publications.borrow().is_empty());
     assert!(publisher.evidence_at_publish.borrow().is_empty());
     drop(publisher);
     drop(repository);
 
-    // An unknown external-effect outcome persists correlated evidence that
-    // never reaches the publication boundary either.
+    // An interrupted external process is a Partial outcome carrying the
+    // captured output; correlated Partial evidence is durable and the call
+    // never reaches the publication boundary.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
     let signal = intention_tools::CancellationSignal::new();
@@ -2025,14 +2067,14 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
     let canceller = std::thread::spawn(move || {
         // Wait for a confirmed child spawn instead of racing a fixed sleep:
         // the cancellation then provably lands while the external process is
-        // running, preserving the unknown-effect classification everywhere.
+        // running, so the interruption cause is an observed stop.
         assert!(
             cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
         );
         cancellation.cancel();
     });
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             InvokeLocalToolInputDto::new(
                 hello_workspace(&root),
@@ -2065,15 +2107,22 @@ fn every_terminal_outcome_persists_one_correlated_event_before_publication() {
             .with_cancellation(signal),
             &publisher,
         )
-        .expect_err("external effect is unknown");
+        .expect("an interrupted execute is a partial outcome");
     canceller.join().expect("cancellation helper completes");
-    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    let LocalToolInvocationOutcomeDto::Partial { stopped, result } = outcome else {
+        unreachable!("cancellation must interrupt the invocation");
+    };
+    assert!(stopped);
+    assert!(matches!(
+        result,
+        Some(intention_tools::ToolResult::Execute(_))
+    ));
     assert_single_terminal_event(
         &repository,
         session_id,
         run_id,
         call_id,
-        &intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown,
+        &intention_domain::ToolLifecycleStatusDto::Partial,
     );
     assert!(publisher.publications.borrow().is_empty());
     assert!(publisher.evidence_at_publish.borrow().is_empty());
@@ -2166,10 +2215,11 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     drop(publisher);
     drop(repository);
 
-    // Cancellation: the terminal Cancelled commit classifies the cancellation.
+    // A pre-start cancellation: the terminal Partial commit classifies the
+    // interrupted call with its stable interruption code.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             InvokeLocalToolInputDto::new(
                 hello_workspace(&root),
@@ -2186,23 +2236,30 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
             .with_cancellation(intention_tools::CancellationSignal::cancelled()),
             &publisher,
         )
-        .expect_err("cancelled invocation fails");
-    assert_eq!(error.code(), "tool_cancelled");
-    let evidence = repository.result_evidence.borrow();
-    let cancelled = evidence[2]
-        .as_ref()
-        .expect("cancelled evidence commits atomically");
-    assert_eq!(cancelled.kind(), ToolResultKindDto::Execute);
+        .expect("a pre-start cancellation is a partial outcome");
     assert_eq!(
-        cancelled.content(),
-        "{\"result\":\"cancelled\",\"value\":{\"code\":\"tool_cancelled\"}}"
+        outcome,
+        LocalToolInvocationOutcomeDto::Partial {
+            stopped: true,
+            result: None,
+        }
+    );
+    let evidence = repository.result_evidence.borrow();
+    let partial = evidence[2]
+        .as_ref()
+        .expect("partial evidence commits atomically");
+    assert_eq!(partial.kind(), ToolResultKindDto::Execute);
+    assert_eq!(
+        partial.content(),
+        "{\"result\":\"partial\",\"value\":{\"code\":\"tool_cancelled\"}}"
     );
     drop(evidence);
     assert!(publisher.publications.borrow().is_empty());
     drop(publisher);
     drop(repository);
 
-    // Unknown external effect: the terminal commit classifies the uncertainty.
+    // An interrupted external process: the terminal Partial commit classifies
+    // the captured output and never publishes.
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
     let publisher = TerminalOrderingProbe::new(&repository);
     let signal = intention_tools::CancellationSignal::new();
@@ -2210,14 +2267,14 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
     let canceller = std::thread::spawn(move || {
         // Wait for a confirmed child spawn instead of racing a fixed sleep:
         // the cancellation then provably lands while the external process is
-        // running, preserving the unknown-effect classification everywhere.
+        // running, so the interruption cause is an observed stop.
         assert!(
             cancellation.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
         );
         cancellation.cancel();
     });
-    let error = ApplicationService::new(&repository)
+    let outcome = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             InvokeLocalToolInputDto::new(
                 hello_workspace(&root),
@@ -2250,17 +2307,24 @@ fn terminal_commits_carry_typed_result_evidence_before_publication() {
             .with_cancellation(signal),
             &publisher,
         )
-        .expect_err("external effect is unknown");
+        .expect("an interrupted execute is a partial outcome");
     canceller.join().expect("cancellation helper completes");
-    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    let LocalToolInvocationOutcomeDto::Partial { stopped, result } = outcome else {
+        unreachable!("cancellation must interrupt the invocation");
+    };
+    assert!(stopped);
+    assert!(matches!(
+        result,
+        Some(intention_tools::ToolResult::Execute(_))
+    ));
     let evidence = repository.result_evidence.borrow();
-    let unknown = evidence[2]
+    let partial = evidence[2]
         .as_ref()
-        .expect("unknown-effect evidence commits atomically");
-    assert_eq!(unknown.kind(), ToolResultKindDto::Execute);
+        .expect("partial evidence commits atomically");
+    assert_eq!(partial.kind(), ToolResultKindDto::Execute);
     assert_eq!(
-        unknown.content(),
-        "{\"result\":\"external_effect_unknown\",\"value\":{\"code\":\"tool_execute_external_effect_unknown\"}}"
+        partial.content(),
+        "{\"result\":\"partial\",\"value\":{\"code\":\"tool_cancelled\"}}"
     );
     drop(evidence);
     assert!(publisher.publications.borrow().is_empty());
@@ -2409,7 +2473,7 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
     let session_id = SessionId::new();
     let repository = FakeRepository::with_accepted(Ok(change(
         projection(session_id, None, Vec::new(), 3),
-        Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(4))),
+        Some(AcceptedTurnOutcomeDto::Pending),
     )));
     let dispatch = RecordingDispatchPort::default();
     let accepted = ApplicationService::new(&repository)
@@ -2423,7 +2487,7 @@ fn send_user_turn_and_schedule_returns_queued_acceptance_without_dispatching() {
         accepted,
         ProtocolAcceptedResultDto::SendUserTurn(value)
             if value.outcome()
-                == SendUserTurnOutcomeDto::Queued { queue_position: QueuePositionDto::new(4) }
+                == SendUserTurnOutcomeDto::Pending
     ));
     assert_eq!(repository.accepted_inputs.borrow().len(), 1);
     assert!(dispatch.inputs.borrow().is_empty());
@@ -2670,6 +2734,7 @@ fn lifecycle_evidence_escapes_json_control_characters_in_tool_text() {
             "control.txt",
         ))
         .expect("control characters are readable text");
+    let result = completed_outcome(result);
     assert!(matches!(result, intention_tools::ToolResult::Read(_)));
     let evidence = repository.result_evidence.borrow();
     let completed = evidence

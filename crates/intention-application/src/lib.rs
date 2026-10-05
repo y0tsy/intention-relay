@@ -5,28 +5,29 @@
 
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
-    CreateSessionCommandDto, GetSessionSnapshotQueryDto, RemoveQueuedTurnCommandDto,
-    RunEventCursorDto, RunEventTailPageDto, RunSnapshotDto, SendUserTurnCommandDto,
-    StopRunCommandDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, InterruptRunCommandDto,
+    RemoveTurnCommandDto, RunEventCursorDto, RunEventTailPageDto, RunSnapshotDto,
+    SendUserTurnCommandDto,
 };
 use intention_hooks::{
     HookObservability, Outcome as HookOutcome, PhaseContext, Registry as HookRegistry,
 };
 use intention_protocol::{
-    CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, ProtocolAcceptedResultDto,
-    RemoveQueuedTurnAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
-    SessionSnapshotDto, StopRunAcceptedDto,
+    CURRENT_DTO_SCHEMA_VERSION, CreateSessionAcceptedDto, InterruptRunAcceptedDto,
+    ProtocolAcceptedResultDto, RemoveTurnAcceptedDto, SendUserTurnAcceptedDto,
+    SendUserTurnOutcomeDto, SessionSnapshotDto,
 };
 use intention_runtime::{
-    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, RuntimeService,
-    RuntimeValuesDto, fail_starting_run,
+    ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, fail_starting_run,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendToolLifecycleEventInputDto,
-    CreateSessionInputDto, ModelContextRoleDto, RemoveQueuedTurnInputDto, StorageRepositoryDto,
+    CreateSessionInputDto, ModelContextRoleDto, RemoveTurnInputDto, StorageRepositoryDto,
     ToolResultEvidenceDto, ToolResultKindDto,
 };
-use intention_tools::{CancellationSignal, ToolInput, ToolResult, ToolService};
+use intention_tools::{
+    CancellationSignal, InterruptCause, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
+};
 use intention_types::ToolCallId;
 use intention_types::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 
@@ -115,6 +116,20 @@ pub trait ModelRunDispatchPort {
     fn dispatch_model_run(&self, input: ScheduleModelRunDto) -> DtoResult<()>;
 }
 
+/// Terminal application outcome of one explicit local tool invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalToolInvocationOutcomeDto {
+    /// The tool completed and produced its final typed result.
+    Completed(ToolResult),
+    /// The tool stopped before a final result.
+    Partial {
+        /// Whether the stop was an explicit cancellation.
+        stopped: bool,
+        /// Output captured before the stop, when the tool produced any.
+        result: Option<ToolResult>,
+    },
+}
+
 /// Application boundary for one explicit local tool invocation.
 pub trait LocalToolInvocationPort {
     /// Executes exactly one typed tool call after admission.
@@ -122,7 +137,10 @@ pub trait LocalToolInvocationPort {
     /// # Errors
     ///
     /// Returns the typed storage or tool execution error.
-    fn invoke_local_tool(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult>;
+    fn invoke_local_tool(
+        &self,
+        input: InvokeLocalToolInputDto,
+    ) -> DtoResult<LocalToolInvocationOutcomeDto>;
 }
 
 /// Application-owned observation boundary for tolerated hook failures.
@@ -348,7 +366,10 @@ where
     /// # Errors
     ///
     /// Returns the typed validation, storage, or tool execution error.
-    pub fn invoke_local_tool(&self, input: InvokeLocalToolInputDto) -> DtoResult<ToolResult> {
+    pub fn invoke_local_tool(
+        &self,
+        input: InvokeLocalToolInputDto,
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_with_publication(input, &())
     }
 
@@ -362,7 +383,7 @@ where
         &self,
         input: InvokeLocalToolInputDto,
         publisher: &P,
-    ) -> DtoResult<ToolResult> {
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_through_ports(input, publisher, &())
     }
 
@@ -379,7 +400,7 @@ where
         &self,
         input: InvokeLocalToolInputDto,
         observer: &O,
-    ) -> DtoResult<ToolResult> {
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         self.invoke_local_tool_through_ports(input, &(), observer)
     }
 
@@ -388,7 +409,7 @@ where
         input: InvokeLocalToolInputDto,
         publisher: &P,
         observer: &O,
-    ) -> DtoResult<ToolResult> {
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         let InvokeLocalToolInputDto {
             workspace,
             session_id,
@@ -623,10 +644,13 @@ where
         self.repository
             .append_tool_lifecycle_event(AppendToolLifecycleEventInputDto::new(started))?;
         let service = ToolService::new(workspace);
-        let result =
-            service.dispatch_with_cancellation(call_id, transformed_input.clone(), cancellation);
-        let mut result = match result {
-            Ok(value) => {
+        let outcome = service.dispatch_with_cancellation(
+            call_id,
+            transformed_input.clone(),
+            cancellation.clone(),
+        );
+        let mut result = match outcome {
+            Ok(ToolDispatchOutcome::Completed(value)) => {
                 let context = PhaseContext::Executed {
                     call: call_id,
                     input: transformed_input,
@@ -655,6 +679,26 @@ where
                         )),
                     },
                 }
+            }
+            Ok(ToolDispatchOutcome::Interrupted { cause, partial }) => {
+                // An interrupted dispatch is a durable partial outcome, not a
+                // typed failure: the call ends with whatever output was
+                // captured and the run continues with the next model step.
+                let code = interruption_detail_code(cause);
+                let stopped = cause == InterruptCause::Stopped || cancellation.is_cancelled();
+                append_tool_partial(
+                    self.repository,
+                    session_id,
+                    run_id,
+                    call_id,
+                    &tool_id,
+                    code,
+                    occurred_at,
+                )?;
+                return Ok(LocalToolInvocationOutcomeDto::Partial {
+                    stopped,
+                    result: partial,
+                });
             }
             Err(error) => {
                 append_tool_terminal(
@@ -778,7 +822,7 @@ where
                 HookOutcome::Reject(error) => return Err(error),
             }
         }
-        result
+        result.map(LocalToolInvocationOutcomeDto::Completed)
     }
     /// Creates an application facade around a DTO-only durable repository.
     #[must_use]
@@ -831,7 +875,7 @@ where
 
     /// Accepts a user turn and schedules an exactly-started run only after its initial commit.
     ///
-    /// Queued outcomes and idempotent retry evidence never load model context or
+    /// Pending outcomes and idempotent retry evidence never load model context or
     /// dispatch. Any post-commit context or dispatch failure is durably recorded
     /// against the exact `Starting` run and this method still returns the original
     /// acceptance.
@@ -913,46 +957,57 @@ where
         Ok(ProtocolAcceptedResultDto::SendUserTurn(accepted_turn))
     }
 
-    /// Removes one unstarted queued turn and maps its committed evidence.
+    /// Removes one not-yet-seen pending turn and maps its committed evidence.
     ///
     /// # Errors
     ///
-    /// Returns the typed repository error when no queued turn can be removed.
-    pub fn remove_queued_turn(
+    /// Returns the typed repository error when no pending turn can be removed.
+    pub fn remove_turn(
         &self,
-        command: RemoveQueuedTurnCommandDto,
+        command: RemoveTurnCommandDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
         let change = self
             .repository
-            .remove_queued_turn(RemoveQueuedTurnInputDto::new(command, occurred_at))?;
-        Ok(ProtocolAcceptedResultDto::RemoveQueuedTurn(
-            RemoveQueuedTurnAcceptedDto::new(
-                command.session_id(),
-                command.turn_id(),
-                change.position(),
-            ),
+            .remove_turn(RemoveTurnInputDto::new(command, occurred_at))?;
+        Ok(ProtocolAcceptedResultDto::RemoveTurn(
+            RemoveTurnAcceptedDto::new(command.session_id(), command.turn_id(), change.position()),
         ))
     }
 
-    /// Stops a run through the deterministic runtime lifecycle service.
+    /// Accepts an interruption request for one exact active run.
+    ///
+    /// Interruption is not a durable run state: the run stays active and the
+    /// daemon host signals the registered executor after this validation. The
+    /// returned position is the session position observed at acceptance.
     ///
     /// # Errors
     ///
-    /// Returns the typed lifecycle or storage error when cancellation cannot be
-    /// committed.
-    pub fn stop_run(
+    /// Returns a typed validation error when the exact run is not active, or a
+    /// repository error when the session projection cannot be read.
+    pub fn interrupt_run(
         &self,
-        command: StopRunCommandDto,
-        values: RuntimeValuesDto,
+        command: InterruptRunCommandDto,
     ) -> DtoResult<ProtocolAcceptedResultDto> {
-        let change = RuntimeService::new(self.repository, values)
-            .stop_run(command.session_id(), command.run_id())?;
-        Ok(ProtocolAcceptedResultDto::StopRun(StopRunAcceptedDto::new(
-            command.session_id(),
-            command.run_id(),
-            change.position(),
-        )))
+        let projection = self
+            .repository
+            .load_session_snapshot(command.session_id())?;
+        let active = projection
+            .active_run()
+            .filter(|run| run.run_id() == command.run_id())
+            .ok_or_else(|| {
+                ErrorDto::validation(
+                    "active_run_not_found",
+                    "the requested run is not active in the session",
+                )
+            })?;
+        Ok(ProtocolAcceptedResultDto::InterruptRun(
+            InterruptRunAcceptedDto::new(
+                command.session_id(),
+                active.run_id(),
+                projection.at_sequence(),
+            ),
+        ))
     }
 
     /// Loads the current internal run-scoped durable snapshot.
@@ -1044,9 +1099,7 @@ fn accepted_user_turn(
             run_id: run.run_id(),
             config_revision_id: run.config_revision_id(),
         },
-        AcceptedTurnOutcomeDto::Queued(queue_position) => {
-            SendUserTurnOutcomeDto::Queued { queue_position }
-        }
+        AcceptedTurnOutcomeDto::Pending => SendUserTurnOutcomeDto::Pending,
     };
     Ok(ProtocolAcceptedResultDto::SendUserTurn(
         SendUserTurnAcceptedDto::new(
@@ -1093,12 +1146,54 @@ const fn expected_tool_id(input: &ToolInput) -> &'static str {
 
 fn terminal_status_for_error(error: &ErrorDto) -> intention_domain::ToolLifecycleStatusDto {
     match error.code() {
-        "tool_execute_external_effect_unknown" => {
-            intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+        "tool_execution_interrupted" | "tool_cancelled" => {
+            intention_domain::ToolLifecycleStatusDto::Partial
         }
-        "tool_cancelled" => intention_domain::ToolLifecycleStatusDto::Cancelled,
         _ => intention_domain::ToolLifecycleStatusDto::Failed,
     }
+}
+
+/// Returns the stable detail code recorded for one interrupted dispatch.
+const fn interruption_detail_code(cause: InterruptCause) -> &'static str {
+    match cause {
+        InterruptCause::Stopped => "tool_cancelled",
+        InterruptCause::Lost => "tool_execution_interrupted",
+    }
+}
+
+/// Appends the terminal `Partial` lifecycle evidence for one interrupted call.
+///
+/// The durable document keeps the compact failure shape
+/// (`{"result":"partial","value":{"code":…}}`); the captured partial output
+/// travels to the model through the runtime tool-result fact.
+fn append_tool_partial<R: StorageRepositoryDto>(
+    r: &R,
+    s: SessionId,
+    run: RunId,
+    call: ToolCallId,
+    id: &str,
+    code: &str,
+    at: TimestampDto,
+) -> DtoResult<()> {
+    let evidence = ToolResultEvidenceDto::new(
+        s,
+        run,
+        call,
+        ToolResultKindDto::parse(id)?,
+        canonical_failure_document("partial", code),
+        at,
+    )?;
+    let event = intention_domain::ToolLifecycleEventDto::new(
+        s,
+        run,
+        call,
+        id.to_owned(),
+        intention_domain::ToolLifecycleStatusDto::Partial,
+        code,
+        at,
+    )?;
+    let append = AppendToolLifecycleEventInputDto::new(event).with_result(evidence)?;
+    r.append_tool_lifecycle_event(append).map(|_| ())
 }
 
 fn append_tool_failed<R: StorageRepositoryDto>(
@@ -1194,9 +1289,7 @@ fn durable_tool_result_evidence(
 fn terminal_error_tag(error: &ErrorDto) -> &'static str {
     match terminal_status_for_error(error) {
         intention_domain::ToolLifecycleStatusDto::Cancelled => "cancelled",
-        intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown => {
-            "external_effect_unknown"
-        }
+        intention_domain::ToolLifecycleStatusDto::Partial => "partial",
         _ => "failed",
     }
 }
@@ -1404,6 +1497,7 @@ fn schedule_from_context(
                 match message.role() {
                     ModelContextRoleDto::User => ModelRoleDto::User,
                     ModelContextRoleDto::Assistant => ModelRoleDto::Assistant,
+                    ModelContextRoleDto::Notice => ModelRoleDto::Notice,
                 },
                 message.content(),
             )

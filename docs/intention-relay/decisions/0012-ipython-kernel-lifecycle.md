@@ -24,7 +24,7 @@ unfinished work;
 - a required checkpoint restore fails closed; optional restore may start empty
 only in a new run with an explicit degraded outcome;
 - cell effects and host requests follow the existing before-start/started/
-known/unknown law, and unproven started work pauses only its owning Mandate; and
+known/unknown law, and unproven started work commits a bounded partial result and pauses no Mandate; and
 - restart never adopts, reattaches, retries, resumes, reruns, or replays old
 kernel/cell/task/grant/operation/external work.
 

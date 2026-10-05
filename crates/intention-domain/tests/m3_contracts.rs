@@ -4,12 +4,12 @@
 )]
 
 use intention_domain::{
-    QueuedTurnProjectionDto, RunModeDto, RunProjectionDto, RunStartedEventDto, RunStatusDto,
+    PendingTurnProjectionDto, RunModeDto, RunProjectionDto, RunStartedEventDto, RunStatusDto,
     SessionProjectionDto, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_types::{
-    ConfigRevisionId, ProjectId, QueuePositionDto, RunId, SessionEventSequenceDto, SessionId,
-    TimestampDto, TurnId, WorkspaceId,
+    ConfigRevisionId, ProjectId, RunId, SessionEventSequenceDto, SessionId, TimestampDto, TurnId,
+    WorkspaceId,
 };
 
 fn fixture_time() -> TimestampDto {
@@ -27,18 +27,12 @@ fn workspace_root() -> WorkspaceRootDto {
 }
 
 #[test]
-fn stable_queue_tickets_allow_gaps_but_require_ascending_unique_order() {
+fn pending_turns_keep_their_order_but_require_unique_identities() {
     let session_id = SessionId::new();
-    let queued_three =
-        QueuedTurnProjectionDto::new(session_id, TurnId::new(), "later", QueuePositionDto::new(3))
-            .expect("queued turn is valid");
-    let queued_seven = QueuedTurnProjectionDto::new(
-        session_id,
-        TurnId::new(),
-        "latest",
-        QueuePositionDto::new(7),
-    )
-    .expect("queued turn is valid");
+    let older = PendingTurnProjectionDto::new(session_id, TurnId::new(), "later")
+        .expect("pending turn is valid");
+    let newer = PendingTurnProjectionDto::new(session_id, TurnId::new(), "latest")
+        .expect("pending turn is valid");
     assert!(
         SessionProjectionDto::new(
             ProjectId::new(),
@@ -48,7 +42,7 @@ fn stable_queue_tickets_allow_gaps_but_require_ascending_unique_order() {
             RunModeDto::Build,
             None,
             None,
-            vec![queued_three.clone(), queued_seven],
+            vec![older.clone(), newer],
             SessionEventSequenceDto::new(3),
         )
         .is_ok()
@@ -62,7 +56,7 @@ fn stable_queue_tickets_allow_gaps_but_require_ascending_unique_order() {
             RunModeDto::Build,
             None,
             None,
-            vec![queued_three.clone(), queued_three],
+            vec![older.clone(), older],
             SessionEventSequenceDto::new(3),
         )
         .is_err()
@@ -77,27 +71,18 @@ fn m3_event_payloads_validate_and_expose_all_public_fields() {
     let occurred_at = fixture_time();
     let revision = ConfigRevisionId::new();
 
-    assert!(
-        QueuedTurnProjectionDto::new(session_id, turn_id, " ", QueuePositionDto::new(0),).is_err()
-    );
+    assert!(PendingTurnProjectionDto::new(session_id, turn_id, " ").is_err());
     assert!(
         intention_domain::UserTurnAcceptedEventDto::new(session_id, turn_id, " ", occurred_at)
             .is_err()
     );
 
-    let queued = intention_domain::UserTurnQueuedEventDto::new(
-        session_id,
-        turn_id,
-        QueuePositionDto::new(3),
-        occurred_at,
-    );
-    assert_eq!(queued.session_id(), session_id);
-    assert_eq!(queued.turn_id(), turn_id);
-    assert_eq!(queued.position(), QueuePositionDto::new(3));
-    assert_eq!(queued.occurred_at(), occurred_at);
+    let pending = intention_domain::UserTurnPendingEventDto::new(session_id, turn_id, occurred_at);
+    assert_eq!(pending.session_id(), session_id);
+    assert_eq!(pending.turn_id(), turn_id);
+    assert_eq!(pending.occurred_at(), occurred_at);
 
-    let removed =
-        intention_domain::QueuedTurnRemovedEventDto::new(session_id, turn_id, occurred_at);
+    let removed = intention_domain::TurnRemovedEventDto::new(session_id, turn_id, occurred_at);
     assert_eq!(removed.session_id(), session_id);
     assert_eq!(removed.turn_id(), turn_id);
     assert_eq!(removed.occurred_at(), occurred_at);
@@ -123,15 +108,10 @@ fn m3_event_payloads_validate_and_expose_all_public_fields() {
 }
 
 #[test]
-fn m3_projection_rejects_a_queued_turn_from_a_foreign_session() {
+fn m3_projection_rejects_a_pending_turn_from_a_foreign_session() {
     let session_id = SessionId::new();
-    let queued = QueuedTurnProjectionDto::new(
-        SessionId::new(),
-        TurnId::new(),
-        "other session",
-        QueuePositionDto::new(0),
-    )
-    .expect("queued fixture is valid");
+    let pending = PendingTurnProjectionDto::new(SessionId::new(), TurnId::new(), "other session")
+        .expect("pending fixture is valid");
     assert!(
         SessionProjectionDto::new(
             ProjectId::new(),
@@ -141,7 +121,7 @@ fn m3_projection_rejects_a_queued_turn_from_a_foreign_session() {
             RunModeDto::Build,
             None,
             None,
-            vec![queued],
+            vec![pending],
             SessionEventSequenceDto::new(3),
         )
         .is_err()
@@ -158,13 +138,8 @@ fn m3_projection_accessors_and_deserialization_cover_optional_state() {
         RunStatusDto::Running,
         ConfigRevisionId::new(),
     );
-    let queued = QueuedTurnProjectionDto::new(
-        session_id,
-        TurnId::new(),
-        "queued",
-        QueuePositionDto::new(1),
-    )
-    .expect("queued turn is valid");
+    let pending = PendingTurnProjectionDto::new(session_id, TurnId::new(), "pending")
+        .expect("pending turn is valid");
     let projection = SessionProjectionDto::new(
         ProjectId::new(),
         session_id,
@@ -173,13 +148,13 @@ fn m3_projection_accessors_and_deserialization_cover_optional_state() {
         RunModeDto::Plan,
         Some(ConfigRevisionId::new()),
         Some(run),
-        vec![queued],
+        vec![pending],
         SessionEventSequenceDto::new(4),
     )
     .expect("projection is valid");
     assert!(projection.config_revision_id().is_some());
     assert!(projection.active_run().is_some());
-    assert_eq!(projection.queued_turns().len(), 1);
+    assert_eq!(projection.pending_turns().len(), 1);
     assert_eq!(projection.at_sequence().value(), 4);
     let wire = serde_json::to_string(&projection).expect("projection serializes");
     let decoded: SessionProjectionDto = serde_json::from_str(&wire).expect("projection decodes");
@@ -194,9 +169,7 @@ fn run_status_state_machine_accepts_only_declared_edges() {
         RunStatusDto::Running,
         RunStatusDto::WaitingInput,
         RunStatusDto::Completing,
-        RunStatusDto::Cancelling,
         RunStatusDto::Completed,
-        RunStatusDto::Cancelled,
         RunStatusDto::Failed,
         RunStatusDto::Interrupted,
     ];
@@ -205,27 +178,20 @@ fn run_status_state_machine_accepts_only_declared_edges() {
             let expected = matches!(
                 (from, to),
                 (RunStatusDto::Queued, RunStatusDto::Starting)
-                    | (RunStatusDto::Queued, RunStatusDto::Cancelled)
                     | (RunStatusDto::Queued, RunStatusDto::Interrupted)
                     | (RunStatusDto::Starting, RunStatusDto::Running)
-                    | (RunStatusDto::Starting, RunStatusDto::Cancelling)
                     | (RunStatusDto::Starting, RunStatusDto::Failed)
                     | (RunStatusDto::Starting, RunStatusDto::Interrupted)
                     | (RunStatusDto::Running, RunStatusDto::WaitingInput)
                     | (RunStatusDto::Running, RunStatusDto::Completing)
-                    | (RunStatusDto::Running, RunStatusDto::Cancelling)
                     | (RunStatusDto::Running, RunStatusDto::Failed)
                     | (RunStatusDto::Running, RunStatusDto::Interrupted)
                     | (RunStatusDto::WaitingInput, RunStatusDto::Running)
-                    | (RunStatusDto::WaitingInput, RunStatusDto::Cancelling)
                     | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
                     | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
                     | (RunStatusDto::Completing, RunStatusDto::Completed)
                     | (RunStatusDto::Completing, RunStatusDto::Failed)
                     | (RunStatusDto::Completing, RunStatusDto::Interrupted)
-                    | (RunStatusDto::Cancelling, RunStatusDto::Cancelled)
-                    | (RunStatusDto::Cancelling, RunStatusDto::Failed)
-                    | (RunStatusDto::Cancelling, RunStatusDto::Interrupted)
             );
             assert_eq!(validate_run_status_transition(from, to).is_ok(), expected);
         }

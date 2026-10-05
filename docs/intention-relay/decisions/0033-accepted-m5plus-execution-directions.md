@@ -67,7 +67,7 @@ remains bound to Milestone 5+.
 creates no `RunId`, reason, lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority,
 MCP capability, bridge grant, kernel epoch, context projection, branch, or reconciliation result.
 2. M3/M4 startup-only configuration, recorded revisions, persisted snapshots,
-queue tickets, sessions, runs, events, and bytes remain authoritative and unchanged.
+sessions, runs, events, and bytes remain authoritative and unchanged.
 3. Fresh-run-only: each direction affects only future runs after activation.
 4. No direction rewrites historical bytes, assigns new meaning to a closed
 variant, or reconstructs missing meaning from current state.

@@ -14,8 +14,7 @@ default for future Mandate work;
 - after a known terminal run disposition, the daemon records its terminal
 evidence and, when continuation remains enabled, returns the Mandate to `Active`; a pending coalesced continuation
 reason then admits a completely fresh run;
-- there is no hidden retry count, automatic escalation threshold, or
-conversion of a known failure into an unknown effect; and
+- there is no hidden retry count or automatic escalation threshold; and
 - Build mode is the default for **Continue autonomously**, while Plan mode
 remains meaningfully distinct (it denies ordinary project `write`/`edit`, and plan mutation remains its own typed plan
 operation).
@@ -31,7 +30,8 @@ remains bound to Milestone 5+.
 ## Normative invariants
 
 1. Continue autonomously is Mandate continuation, not old-run resumption: it
-admits only a fresh run with a new `RunId`.
+admits only a fresh run with a new `RunId`. A pending user message behind an active run joins that run's context in
+durable order and is neither autonomous continuation nor old-run resumption.
 2. A known terminal disposition may return a Mandate to `Active` only after
 the required graph terminalization owned by architecture 17 completes.
 3. A known non-zero `execute` exit, typed validation failure, provider failure
@@ -43,8 +43,7 @@ meaningfully distinct and neither mode is a sandbox.
 
 ## Failure semantics
 
-- No hidden retry count, automatic escalation threshold, or conversion of a
-known failure into an unknown effect exists.
+- No hidden retry count or automatic escalation threshold exists.
 - Recovery never resumes a run, provider request, tool invocation, bridge
 operation, process, kernel cell, background task, child run, MCP process, or external effect; a fresh run may use only
 durable verified checkpoints and selected historical references.

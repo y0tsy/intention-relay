@@ -9,30 +9,31 @@ use std::sync::Mutex;
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     DomainEventDto, ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto,
-    ModelRunProjectionDto, QueuedTurnProjectionDto, QueuedTurnRemovedEventDto, RunEventCursorDto,
-    RunEventTailPageDto, RunProjectionDto, RunSnapshotDto, RunStartedEventDto,
-    RunStatusChangedEventDto, RunStatusDto, SessionCreatedEventDto, SessionProjectionDto,
-    ToolLifecycleStatusDto, UserTurnAcceptedEventDto, UserTurnQueuedEventDto,
-    validate_run_status_transition, validate_tool_lifecycle_transition,
+    ModelRunProjectionDto, PendingTurnProjectionDto, RunEventCursorDto, RunEventTailPageDto,
+    RunProjectionDto, RunSnapshotDto, RunStartedEventDto, RunStatusChangedEventDto, RunStatusDto,
+    SessionCreatedEventDto, SessionProjectionDto, ToolLifecycleStatusDto, TurnRemovedEventDto,
+    UserTurnAcceptedEventDto, UserTurnPendingEventDto, validate_run_status_transition,
+    validate_tool_lifecycle_transition,
 };
 use intention_storage::{
     AcceptUserTurnInputDto, AcceptedTurnOutcomeDto, AppendModelRunFactsInputDto,
-    AppendModelRunFactsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
+    AppendModelRunFactsOutcomeDto, AppendPendingUserTurnsInputDto,
+    AppendPendingUserTurnsOutcomeDto, AppendToolLifecycleEventInputDto, CommittedChangeDto,
     CreateSessionInputDto, ModelContextMessageDto, ModelContextRoleDto,
-    RecoverUnfinishedRunsInputDto, RemoveQueuedTurnInputDto, StartingRunModelContextDto,
+    RecoverUnfinishedRunsInputDto, RemoveTurnInputDto, StartingRunModelContextDto,
     StorageRepositoryDto, ToolResultEvidenceDto, ToolResultKindDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
-    EventId, EventMetadataDto, ProjectId, QueuePositionDto, RunId, SchemaVersionDto,
-    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    EventId, EventMetadataDto, ProjectId, RunId, SchemaVersionDto, SessionEventSequenceDto,
+    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use sqlite::OptionalExtension;
 
 const MAX_CANONICAL_FACT_BYTES: usize = 512 * 1024;
 const MAX_TAIL_CANONICAL_BYTES: usize = 512 * 1024;
 const MAX_TAIL_FACTS: usize = 256;
-const TERMINAL_STATUSES: &str = "'completed','cancelled','failed','interrupted'";
+const TERMINAL_STATUSES: &str = "'completed','failed','interrupted'";
 
 /// The complete current storage schema (logical version 1): the M3 base
 /// tables, the M4 run-cursor, model-fact, and model-snapshot tables (with the
@@ -49,14 +50,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   workspace_root TEXT NOT NULL,
   mode TEXT NOT NULL,
   config_revision_id TEXT,
-  last_sequence INTEGER NOT NULL CHECK(last_sequence >= 0),
-  next_queue_ticket INTEGER NOT NULL CHECK(next_queue_ticket >= 0)
+  last_sequence INTEGER NOT NULL CHECK(last_sequence >= 0)
 );
 CREATE TABLE IF NOT EXISTS turns (
   session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
   content TEXT NOT NULL CHECK(length(trim(content)) > 0), proposed_run_id TEXT NOT NULL,
-  config_revision_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('started','queued')),
-  queue_ticket INTEGER, PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
+  config_revision_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK(outcome IN ('started','pending','appended')),
+  PRIMARY KEY (session_id, turn_id), UNIQUE (proposed_run_id)
 );
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
@@ -64,12 +65,7 @@ CREATE TABLE IF NOT EXISTS runs (
   UNIQUE(session_id, turn_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session ON runs(session_id)
-  WHERE status NOT IN ('completed','cancelled','failed','interrupted');
-CREATE TABLE IF NOT EXISTS queued_turns (
-  session_id TEXT NOT NULL REFERENCES sessions(session_id), turn_id TEXT NOT NULL,
-  queue_ticket INTEGER NOT NULL,
-  PRIMARY KEY(session_id, turn_id), UNIQUE(session_id, queue_ticket)
-);
+  WHERE status NOT IN ('completed','failed','interrupted');
 CREATE TABLE IF NOT EXISTS configuration_revisions (revision_id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS domain_events (
   event_id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id),
@@ -271,27 +267,20 @@ impl SqliteStorageRepository {
             .map(|(run, turn, status, revision)| run_projection(session_id, &run, &turn, &status, &revision))
             .transpose()?;
         let mut statement = tx.prepare(
-            "SELECT queued_turns.turn_id, turns.content, queued_turns.queue_ticket FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket",
+            "SELECT turn_id, content FROM turns WHERE session_id=?1 AND outcome='pending' ORDER BY rowid",
         ).map_err(storage_error)?;
-        let queue_rows = statement
+        let pending_rows = statement
             .query_map([session_id.to_string()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(storage_error)?;
-        let queued = queue_rows
+        let pending_turns = pending_rows
             .map(|item| {
-                let (turn, content, ticket) = item.map_err(storage_error)?;
-                QueuedTurnProjectionDto::new(
+                let (turn, content) = item.map_err(storage_error)?;
+                PendingTurnProjectionDto::new(
                     session_id,
                     TurnId::parse(&turn).map_err(codec_error)?,
                     content,
-                    QueuePositionDto::new(
-                        u64::try_from(ticket).map_err(|_| codec_error("invalid queue ticket"))?,
-                    ),
                 )
             })
             .collect::<DtoResult<Vec<_>>>()?;
@@ -306,7 +295,7 @@ impl SqliteStorageRepository {
                 .map(|id| ConfigRevisionId::parse(&id).map_err(codec_error))
                 .transpose()?,
             active,
-            queued,
+            pending_turns,
             SessionEventSequenceDto::new(
                 u64::try_from(session.5).map_err(|_| codec_error("invalid event sequence"))?,
             ),
@@ -453,46 +442,6 @@ impl SqliteStorageRepository {
             .map_err(storage_error)?;
         }
         Ok(())
-    }
-
-    fn promote_oldest_queued_turn(
-        tx: &sqlite::Transaction<'_>,
-        session_id: SessionId,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Vec<EventDraft>> {
-        let queued_selection = tx
-            .query_row(
-                "SELECT queued_turns.turn_id, turns.proposed_run_id, turns.config_revision_id FROM queued_turns JOIN turns ON turns.session_id=queued_turns.session_id AND turns.turn_id=queued_turns.turn_id WHERE queued_turns.session_id=?1 ORDER BY queued_turns.queue_ticket ASC LIMIT 1",
-                [session_id.to_string()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
-            )
-            .optional()
-            .map_err(storage_error)?;
-        let Some((turn_id, run_id, revision_id)) = queued_selection else {
-            return Ok(Vec::new());
-        };
-        let promoted_turn_id = TurnId::parse(&turn_id).map_err(codec_error)?;
-        let promoted_run_id = RunId::parse(&run_id).map_err(codec_error)?;
-        let config_revision_id = ConfigRevisionId::parse(&revision_id).map_err(codec_error)?;
-        tx.execute(
-            "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
-            sqlite::params![session_id.to_string(), promoted_turn_id.to_string()],
-        )
-        .map_err(storage_error)?;
-        tx.execute("UPDATE turns SET outcome='started',queue_ticket=NULL WHERE session_id=?1 AND turn_id=?2",sqlite::params![session_id.to_string(),promoted_turn_id.to_string()]).map_err(storage_error)?;
-        tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)",sqlite::params![promoted_run_id.to_string(),session_id.to_string(),promoted_turn_id.to_string(),config_revision_id.to_string()]).map_err(storage_error)?;
-        Ok(vec![EventDraft::new(
-            Some(promoted_run_id),
-            Some(promoted_turn_id),
-            occurred_at,
-            DomainEventDto::RunStarted(RunStartedEventDto::new(
-                session_id,
-                promoted_run_id,
-                promoted_turn_id,
-                config_revision_id,
-                occurred_at,
-            )),
-        )])
     }
 
     fn ensure_run_journals(tx: &sqlite::Transaction<'_>, session_id: SessionId) -> DtoResult<()> {
@@ -667,7 +616,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     "the workspace identity is already bound to a different root",
                 ));
             }
-            tx.execute("INSERT INTO sessions(session_id,project_id,workspace_id,workspace_root,mode,config_revision_id,last_sequence,next_queue_ticket) VALUES (?1,?2,?3,?4,?5,NULL,0,0)", sqlite::params![session_id.to_string(), command.project_id().to_string(), command.workspace_id().to_string(), stored_workspace_root, mode_name(command.mode())]).map_err(storage_error)?;
+            tx.execute("INSERT INTO sessions(session_id,project_id,workspace_id,workspace_root,mode,config_revision_id,last_sequence) VALUES (?1,?2,?3,?4,?5,NULL,0)", sqlite::params![session_id.to_string(), command.project_id().to_string(), command.workspace_id().to_string(), stored_workspace_root, mode_name(command.mode())]).map_err(storage_error)?;
             let events = Self::append(
                 &tx,
                 session_id,
@@ -695,11 +644,11 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         let session_id = input.session_id();
         immediate_transaction!(self, |tx| {
             let existing = tx.query_row(
-            "SELECT content,outcome,queue_ticket,proposed_run_id,config_revision_id FROM turns WHERE session_id=?1 AND turn_id=?2",
+            "SELECT content,outcome,proposed_run_id,config_revision_id FROM turns WHERE session_id=?1 AND turn_id=?2",
             sqlite::params![session_id.to_string(), input.turn_id().to_string()],
-            |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, Option<i64>>(2)?,row.get::<_, String>(3)?,row.get::<_, String>(4)?)),
+            |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?,row.get::<_, String>(3)?)),
         ).optional().map_err(storage_error)?;
-            if let Some((content, outcome, _ticket, run, revision)) = existing {
+            if let Some((content, outcome, run, revision)) = existing {
                 if content != input.content()
                     || run != input.proposed_run_id().to_string()
                     || revision != input.config_revision_id().to_string()
@@ -712,8 +661,8 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 let projection = Self::project(&tx, session_id)?;
                 // The idempotent reply is recomputed from the current durable
                 // state, never from the immutable acceptance marker: a started
-                // turn reports the run's actual status, and a queued turn
-                // requires a current queue membership with its real ticket.
+                // turn reports the run's actual status, and a pending turn is
+                // still reported as the pending message it was accepted as.
                 let outcome = if outcome == "started" {
                     let actual_status: Option<String> = tx
                         .query_row(
@@ -734,23 +683,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         &revision,
                     )?))
                 } else {
-                    let membership = tx
-                        .query_row(
-                            "SELECT queue_ticket FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
-                            sqlite::params![session_id.to_string(), input.turn_id().to_string()],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .optional()
-                        .map_err(storage_error)?;
-                    let Some(ticket) = membership else {
-                        return Err(conflict(
-                            "accepted_turn_removed",
-                            "the accepted queued turn was removed before it could start",
-                        ));
-                    };
-                    Some(AcceptedTurnOutcomeDto::Queued(QueuePositionDto::new(
-                        u64::try_from(ticket).map_err(|_| codec_error("invalid queue ticket"))?,
-                    )))
+                    Some(AcceptedTurnOutcomeDto::Pending)
                 };
                 let result = CommittedChangeDto::new(
                     projection.clone(),
@@ -793,23 +726,84 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             )
             .optional()
             .map_err(storage_error)?;
-            let queued_exists = tx
-                .query_row(
-                    "SELECT 1 FROM queued_turns WHERE session_id=?1 LIMIT 1",
-                    [session_id.to_string()],
-                    |_| Ok(()),
+            let oldest_pending = if active.is_none() {
+                oldest_pending_turn(&tx, session_id)?
+            } else {
+                None
+            };
+            let accepted_event = || -> DtoResult<EventDraft> {
+                Ok(EventDraft::new(
+                    None,
+                    Some(input.turn_id()),
+                    input.occurred_at(),
+                    DomainEventDto::UserTurnAccepted(UserTurnAcceptedEventDto::new(
+                        session_id,
+                        input.turn_id(),
+                        input.content(),
+                        input.occurred_at(),
+                    )?),
+                ))
+            };
+            let pending_event = || -> DtoResult<EventDraft> {
+                Ok(EventDraft::new(
+                    None,
+                    Some(input.turn_id()),
+                    input.occurred_at(),
+                    DomainEventDto::UserTurnPending(UserTurnPendingEventDto::new(
+                        session_id,
+                        input.turn_id(),
+                        input.occurred_at(),
+                    )),
+                ))
+            };
+            let (outcome, drafts) = if active.is_some() {
+                tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome) VALUES (?1,?2,?3,?4,?5,'pending')", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
+                (
+                    AcceptedTurnOutcomeDto::Pending,
+                    vec![accepted_event()?, pending_event()?],
                 )
-                .optional()
-                .map_err(storage_error)?
-                .is_some();
-            if active.is_none() && queued_exists {
-                return Err(conflict(
-                    "queue_promotion_required",
-                    "durable queued turns must promote before a new run can start",
-                ));
-            }
-            let (outcome, drafts) = if active.is_none() {
-                tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'started',NULL)", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
+            } else if let Some((pending_turn_id, pending_run_id, pending_revision_id)) =
+                oldest_pending
+            {
+                // A pending message can outlive its run only in the narrow race
+                // where it was accepted while the run was already completing.
+                // The session is continuous, so the oldest pending message
+                // starts the successor run and this newly accepted message
+                // joins that run's live context at its first boundary.
+                tx.execute(
+                    "UPDATE turns SET outcome='started' WHERE session_id=?1 AND turn_id=?2",
+                    sqlite::params![session_id.to_string(), pending_turn_id.to_string()],
+                )
+                .map_err(storage_error)?;
+                tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome) VALUES (?1,?2,?3,?4,?5,'pending')", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
+                tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)", sqlite::params![pending_run_id.to_string(),session_id.to_string(),pending_turn_id.to_string(),pending_revision_id.to_string()]).map_err(storage_error)?;
+                (
+                    AcceptedTurnOutcomeDto::Started(RunProjectionDto::new(
+                        session_id,
+                        pending_run_id,
+                        pending_turn_id,
+                        RunStatusDto::Starting,
+                        pending_revision_id,
+                    )),
+                    vec![
+                        accepted_event()?,
+                        pending_event()?,
+                        EventDraft::new(
+                            Some(pending_run_id),
+                            Some(pending_turn_id),
+                            input.occurred_at(),
+                            DomainEventDto::RunStarted(RunStartedEventDto::new(
+                                session_id,
+                                pending_run_id,
+                                pending_turn_id,
+                                pending_revision_id,
+                                input.occurred_at(),
+                            )),
+                        ),
+                    ],
+                )
+            } else {
+                tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome) VALUES (?1,?2,?3,?4,?5,'started')", sqlite::params![session_id.to_string(), input.turn_id().to_string(), input.content(), input.proposed_run_id().to_string(), input.config_revision_id().to_string()]).map_err(storage_error)?;
                 tx.execute("INSERT INTO runs(run_id,session_id,turn_id,status,config_revision_id) VALUES (?1,?2,?3,'starting',?4)", sqlite::params![input.proposed_run_id().to_string(),session_id.to_string(),input.turn_id().to_string(),input.config_revision_id().to_string()]).map_err(storage_error)?;
                 (
                     AcceptedTurnOutcomeDto::Started(RunProjectionDto::new(
@@ -820,17 +814,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         input.config_revision_id(),
                     )),
                     vec![
-                        EventDraft::new(
-                            None,
-                            Some(input.turn_id()),
-                            input.occurred_at(),
-                            DomainEventDto::UserTurnAccepted(UserTurnAcceptedEventDto::new(
-                                session_id,
-                                input.turn_id(),
-                                input.content(),
-                                input.occurred_at(),
-                            )?),
-                        ),
+                        accepted_event()?,
                         EventDraft::new(
                             Some(input.proposed_run_id()),
                             Some(input.turn_id()),
@@ -845,55 +829,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         ),
                     ],
                 )
-            } else {
-                let ticket: i64 = tx
-                    .query_row(
-                        "SELECT next_queue_ticket FROM sessions WHERE session_id=?1",
-                        [session_id.to_string()],
-                        |row| row.get(0),
-                    )
-                    .map_err(not_found_or_storage)?;
-                tx.execute(
-                    "UPDATE sessions SET next_queue_ticket=next_queue_ticket+1 WHERE session_id=?1",
-                    [session_id.to_string()],
-                )
-                .map_err(storage_error)?;
-                tx.execute("INSERT INTO turns(session_id,turn_id,content,proposed_run_id,config_revision_id,outcome,queue_ticket) VALUES (?1,?2,?3,?4,?5,'queued',?6)", sqlite::params![session_id.to_string(), input.turn_id().to_string(),input.content(),input.proposed_run_id().to_string(),input.config_revision_id().to_string(),ticket]).map_err(storage_error)?;
-                tx.execute(
-                    "INSERT INTO queued_turns(session_id,turn_id,queue_ticket) VALUES (?1,?2,?3)",
-                    sqlite::params![session_id.to_string(), input.turn_id().to_string(), ticket],
-                )
-                .map_err(storage_error)?;
-                let position = QueuePositionDto::new(
-                    u64::try_from(ticket).map_err(|_| codec_error("invalid queue ticket"))?,
-                );
-                (
-                    AcceptedTurnOutcomeDto::Queued(position),
-                    vec![
-                        EventDraft::new(
-                            None,
-                            Some(input.turn_id()),
-                            input.occurred_at(),
-                            DomainEventDto::UserTurnAccepted(UserTurnAcceptedEventDto::new(
-                                session_id,
-                                input.turn_id(),
-                                input.content(),
-                                input.occurred_at(),
-                            )?),
-                        ),
-                        EventDraft::new(
-                            None,
-                            Some(input.turn_id()),
-                            input.occurred_at(),
-                            DomainEventDto::UserTurnQueued(UserTurnQueuedEventDto::new(
-                                session_id,
-                                input.turn_id(),
-                                position,
-                                input.occurred_at(),
-                            )),
-                        ),
-                    ],
-                )
             };
             let events = Self::append(&tx, session_id, sequence, drafts)?;
             Self::ensure_run_journals(&tx, session_id)?;
@@ -901,22 +836,22 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         })
     }
 
-    fn remove_queued_turn(&self, input: RemoveQueuedTurnInputDto) -> DtoResult<CommittedChangeDto> {
+    fn remove_turn(&self, input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
         let command = input.command();
         let session_id = command.session_id();
         immediate_transaction!(self, |tx| {
             let position = sequence(&tx, session_id)?;
             if tx
                 .execute(
-                    "DELETE FROM queued_turns WHERE session_id=?1 AND turn_id=?2",
+                    "DELETE FROM turns WHERE session_id=?1 AND turn_id=?2 AND outcome='pending'",
                     sqlite::params![session_id.to_string(), command.turn_id().to_string()],
                 )
                 .map_err(storage_error)?
                 != 1
             {
                 return Err(not_found(
-                    "queued_turn_not_found",
-                    "the requested queued turn does not exist",
+                    "pending_turn_not_found",
+                    "the requested pending turn does not exist",
                 ));
             }
             let events = Self::append(
@@ -927,7 +862,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     None,
                     Some(command.turn_id()),
                     input.occurred_at(),
-                    DomainEventDto::QueuedTurnRemoved(QueuedTurnRemovedEventDto::new(
+                    DomainEventDto::TurnRemoved(TurnRemovedEventDto::new(
                         session_id,
                         command.turn_id(),
                         input.occurred_at(),
@@ -959,7 +894,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 ],
             )
             .map_err(storage_error)?;
-            let mut drafts = vec![EventDraft::new(
+            let drafts = vec![EventDraft::new(
                 Some(input.run_id()),
                 None,
                 input.occurred_at(),
@@ -970,13 +905,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     input.occurred_at(),
                 )),
             )];
-            if input.status().is_terminal() {
-                drafts.extend(Self::promote_oldest_queued_turn(
-                    &tx,
-                    session_id,
-                    input.occurred_at(),
-                )?);
-            }
             let events = Self::append(&tx, session_id, position, drafts)?;
             Self::ensure_run_journals(&tx, session_id)?;
             self.finish(tx, session_id, events, None)
@@ -1041,13 +969,6 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                         input.occurred_at(),
                     )),
                 ));
-                if status.is_terminal() {
-                    drafts.extend(Self::promote_oldest_queued_turn(
-                        &tx,
-                        session_id,
-                        input.occurred_at(),
-                    )?);
-                }
             }
             let position = sequence(&tx, session_id)?;
             let events = Self::append(&tx, session_id, position, drafts)?;
@@ -1085,6 +1006,94 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 snapshot,
                 facts,
             )?;
+            tx.commit().map_err(storage_error)?;
+            Ok(outcome)
+        })
+    }
+
+    fn append_pending_user_turns(
+        &self,
+        input: AppendPendingUserTurnsInputDto,
+    ) -> DtoResult<AppendPendingUserTurnsOutcomeDto> {
+        let session_id = input.session_id();
+        let run_id = input.run_id();
+        immediate_transaction!(self, |tx| {
+            let run = load_scoped_run(&tx, session_id, run_id)?;
+            if run.status().is_terminal() {
+                return Err(invalid_run_cursor());
+            }
+            let cursor = current_run_journal(&tx, run_id)?;
+            if cursor != input.expected_cursor() {
+                return Err(cursor_conflict());
+            }
+            let pending = pending_turns(&tx, session_id)?;
+            if pending.is_empty() {
+                let outcome = AppendPendingUserTurnsOutcomeDto::new(cursor, Vec::new())?;
+                tx.commit().map_err(storage_error)?;
+                return Ok(outcome);
+            }
+            let mut next_cursor = cursor.value();
+            let mut drafts = Vec::with_capacity(pending.len());
+            let mut facts = Vec::with_capacity(pending.len());
+            for (turn_id, content) in pending {
+                next_cursor = next_cursor.checked_add(1).ok_or_else(invalid_run_cursor)?;
+                let fact = ModelRunFactDto::new(
+                    RunEventCursorDto::new(next_cursor),
+                    ModelRunFactInputDto::user_message_appended(turn_id, content)?,
+                )?;
+                let encoded = serde_json::to_vec(&fact).map_err(codec_error)?;
+                if encoded.len() > MAX_CANONICAL_FACT_BYTES {
+                    return Err(fact_too_large());
+                }
+                let payload =
+                    model_fact_event(session_id, run_id, fact.clone(), input.occurred_at());
+                drafts.push(EventDraft::new(
+                    Some(run_id),
+                    Some(run.turn_id()),
+                    input.occurred_at(),
+                    payload,
+                ));
+                facts.push(fact);
+                if tx
+                    .execute(
+                        "UPDATE turns SET outcome='appended' WHERE session_id=?1 AND turn_id=?2 AND outcome='pending'",
+                        sqlite::params![session_id.to_string(), turn_id.to_string()],
+                    )
+                    .map_err(storage_error)?
+                    != 1
+                {
+                    return Err(cursor_conflict());
+                }
+            }
+            let position = sequence(&tx, session_id)?;
+            let events = Self::append(&tx, session_id, position, drafts)?;
+            Self::ensure_run_journals(&tx, session_id)?;
+            for (fact, event) in facts.iter().zip(events.iter()) {
+                tx.execute(
+                    "INSERT INTO model_run_facts(run_id, cursor, event_id) VALUES (?1, ?2, ?3)",
+                    sqlite::params![
+                        run_id.to_string(),
+                        sqlite_integer(
+                            fact.cursor().value(),
+                            "run event cursor is outside the SQLite range"
+                        )?,
+                        event.event_id().to_string(),
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+            tx.execute(
+                "UPDATE container_journals SET cursor=?2 WHERE container_kind='run' AND container_id=?1",
+                sqlite::params![
+                    run_id.to_string(),
+                    sqlite_integer(next_cursor, "run event cursor is outside the SQLite range")?,
+                ],
+            )
+            .map_err(storage_error)?;
+            let projection = Self::project(&tx, session_id)?;
+            Self::snapshot(&tx, &projection)?;
+            let outcome =
+                AppendPendingUserTurnsOutcomeDto::new(RunEventCursorDto::new(next_cursor), facts)?;
             tx.commit().map_err(storage_error)?;
             Ok(outcome)
         })
@@ -1220,6 +1229,29 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )
                     .map_err(|_| run_model_context_unavailable())?,
                 );
+                // Pending user messages and interruption notices that joined
+                // the live context keep their durable cursor order, so a later
+                // run reconstructs the same continuous conversation.
+                messages.extend(appended_context_messages(
+                    &transaction,
+                    session_id,
+                    historical_run_id,
+                )?);
+                // A recovered run can leave tool calls whose latest durable
+                // lifecycle status is `Started` and which never recorded a
+                // result. The next context tells the model about each one, so
+                // it learns that a previous call never finished.
+                for tool_id in unfinished_tool_calls(&transaction, session_id, historical_run_id)? {
+                    messages.push(
+                        ModelContextMessageDto::new(
+                            ModelContextRoleDto::Notice,
+                            format!(
+                                "[The tool call \"{tool_id}\" did not receive a final result.]"
+                            ),
+                        )
+                        .map_err(|_| run_model_context_unavailable())?,
+                    );
+                }
                 if historical.status() == RunStatusDto::Completed
                     && let Some(content) = completed_assistant_content(&transaction, historical)?
                 {
@@ -1581,6 +1613,100 @@ fn load_turn_content(
         .map_err(|_| run_model_context_unavailable())
 }
 
+/// Returns every pending turn of one session in insertion order.
+fn pending_turns(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+) -> DtoResult<Vec<(TurnId, String)>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT turn_id, content FROM turns WHERE session_id=?1 AND outcome='pending' ORDER BY rowid",
+        )
+        .map_err(storage_error)?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(storage_error)?;
+    rows.map(|row| {
+        let (turn, content) = row.map_err(storage_error)?;
+        Ok((TurnId::parse(&turn).map_err(codec_error)?, content))
+    })
+    .collect()
+}
+
+/// Returns the oldest pending turn of one session with its durable run selection.
+fn oldest_pending_turn(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+) -> DtoResult<Option<(TurnId, RunId, ConfigRevisionId)>> {
+    connection
+        .query_row(
+            "SELECT turn_id, proposed_run_id, config_revision_id FROM turns WHERE session_id=?1 AND outcome='pending' ORDER BY rowid LIMIT 1",
+            [session_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(storage_error)?
+        .map(|(turn, run, revision)| {
+            Ok((
+                TurnId::parse(&turn).map_err(codec_error)?,
+                RunId::parse(&run).map_err(codec_error)?,
+                ConfigRevisionId::parse(&revision).map_err(codec_error)?,
+            ))
+        })
+        .transpose()
+}
+
+/// Returns the user messages and interruption notices that joined one run context.
+///
+/// The facts are returned in durable cursor order, which is the order in which
+/// the live context received them.
+fn appended_context_messages(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<Vec<ModelContextMessageDto>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT domain_events.envelope_json FROM model_run_facts JOIN domain_events ON domain_events.event_id=model_run_facts.event_id WHERE model_run_facts.run_id=?1 ORDER BY model_run_facts.cursor",
+        )
+        .map_err(|_| run_model_context_unavailable())?;
+    let rows = statement
+        .query_map([run_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_model_context_unavailable())?;
+    let mut messages = Vec::new();
+    for row in rows {
+        let encoded = row.map_err(|_| run_model_context_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+        if event.session_id() != session_id || event.run_id() != Some(run_id) {
+            return Err(run_model_context_unavailable());
+        }
+        let fact = domain_model_fact(event.payload()).ok_or_else(run_model_context_unavailable)?;
+        let (role, content) = match fact.fact().input() {
+            ModelRunFactInputDto::UserMessageAppended { content, .. } => {
+                (ModelContextRoleDto::User, content.clone())
+            }
+            ModelRunFactInputDto::InterruptNoticeRecorded { content } => {
+                (ModelContextRoleDto::Notice, content.clone())
+            }
+            _ => continue,
+        };
+        messages.push(
+            ModelContextMessageDto::new(role, content)
+                .map_err(|_| run_model_context_unavailable())?,
+        );
+    }
+    Ok(messages)
+}
+
 fn started_runs_before(
     connection: &sqlite::Connection,
     session_id: SessionId,
@@ -1666,6 +1792,58 @@ fn completed_assistant_content(
     }
 }
 
+/// Returns the tool identities of one run's calls whose latest durable
+/// lifecycle status is `Started` and which have no recorded tool-result fact.
+///
+/// A daemon restart can leave such calls behind: the durable `Started`
+/// lifecycle event exists, but no terminal lifecycle event or runtime
+/// tool-result fact ever followed it. Both conditions are evaluated over the
+/// existing session event stream, so no new durable record is required.
+fn unfinished_tool_calls(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<Vec<String>> {
+    let mut statement = connection
+        .prepare("SELECT envelope_json FROM domain_events WHERE session_id=?1 ORDER BY sequence")
+        .map_err(|_| run_model_context_unavailable())?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_model_context_unavailable())?;
+    let mut started: Vec<(ToolCallId, String)> = Vec::new();
+    let mut recorded: Vec<ToolCallId> = Vec::new();
+    for row in rows {
+        let encoded = row.map_err(|_| run_model_context_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+        if event.session_id() != session_id {
+            return Err(run_model_context_unavailable());
+        }
+        match event.payload() {
+            DomainEventDto::ToolLifecycle(lifecycle) if lifecycle.run_id() == run_id => {
+                if lifecycle.status() == &ToolLifecycleStatusDto::Started {
+                    started.push((lifecycle.call_id(), lifecycle.tool_id().to_owned()));
+                } else {
+                    started.retain(|(call, _)| *call != lifecycle.call_id());
+                }
+            }
+            DomainEventDto::ModelToolResultRecorded(fact) if fact.run_id() == run_id => {
+                if let ModelRunFactInputDto::ToolResultRecorded { call_id, .. } =
+                    fact.fact().input()
+                {
+                    recorded.push(*call_id);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(started
+        .into_iter()
+        .filter(|(call, _)| !recorded.contains(call))
+        .map(|(_, tool_id)| tool_id)
+        .collect())
+}
+
 const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventDto> {
     match event {
         DomainEventDto::ProviderAttemptStarted(value)
@@ -1676,6 +1854,8 @@ const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventD
         | DomainEventDto::UsageRecorded(value)
         | DomainEventDto::ToolCallRecorded(value)
         | DomainEventDto::ModelToolResultRecorded(value)
+        | DomainEventDto::UserMessageAppended(value)
+        | DomainEventDto::InterruptNoticeRecorded(value)
         | DomainEventDto::Finished(value)
         | DomainEventDto::Failed(value) => Some(value),
         _ => None,
@@ -1713,6 +1893,12 @@ const fn model_fact_event(
         }
         intention_domain::ModelRunFactKindDto::ToolResultRecorded => {
             DomainEventDto::ModelToolResultRecorded(event)
+        }
+        intention_domain::ModelRunFactKindDto::UserMessageAppended => {
+            DomainEventDto::UserMessageAppended(event)
+        }
+        intention_domain::ModelRunFactKindDto::InterruptNoticeRecorded => {
+            DomainEventDto::InterruptNoticeRecorded(event)
         }
         intention_domain::ModelRunFactKindDto::Finished => DomainEventDto::Finished(event),
         intention_domain::ModelRunFactKindDto::Failed => DomainEventDto::Failed(event),
@@ -1837,9 +2023,7 @@ const fn status_name(value: RunStatusDto) -> &'static str {
         RunStatusDto::Running => "running",
         RunStatusDto::WaitingInput => "waiting_input",
         RunStatusDto::Completing => "completing",
-        RunStatusDto::Cancelling => "cancelling",
         RunStatusDto::Completed => "completed",
-        RunStatusDto::Cancelled => "cancelled",
         RunStatusDto::Failed => "failed",
         RunStatusDto::Interrupted => "interrupted",
     }
@@ -1851,9 +2035,7 @@ fn parse_status(value: &str) -> DtoResult<RunStatusDto> {
         "running" => Ok(RunStatusDto::Running),
         "waiting_input" => Ok(RunStatusDto::WaitingInput),
         "completing" => Ok(RunStatusDto::Completing),
-        "cancelling" => Ok(RunStatusDto::Cancelling),
         "completed" => Ok(RunStatusDto::Completed),
-        "cancelled" => Ok(RunStatusDto::Cancelled),
         "failed" => Ok(RunStatusDto::Failed),
         "interrupted" => Ok(RunStatusDto::Interrupted),
         _ => Err(codec_error("invalid durable status")),
@@ -2189,9 +2371,7 @@ mod tests {
             RunStatusDto::Running,
             RunStatusDto::WaitingInput,
             RunStatusDto::Completing,
-            RunStatusDto::Cancelling,
             RunStatusDto::Completed,
-            RunStatusDto::Cancelled,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
         ] {
@@ -2232,8 +2412,16 @@ mod tests {
         let session_id = create_fixture_session(&repository);
         let active_run = RunId::new();
         accept_fixture_turn(&repository, session_id, TurnId::new(), active_run, "active");
-        let queued_run = RunId::new();
-        accept_fixture_turn(&repository, session_id, TurnId::new(), queued_run, "queued");
+        let pending_turn = TurnId::new();
+        let pending_run = RunId::new();
+        accept_fixture_turn(
+            &repository,
+            session_id,
+            pending_turn,
+            pending_run,
+            "pending message",
+        );
+        // A pending message never creates a run of its own.
         let terminal = repository
             .transition_run(TransitionRunInputDto::new(
                 session_id,
@@ -2243,59 +2431,56 @@ mod tests {
             ))
             .expect("terminal transition commits");
         let rows = raw_snapshot_rows(&location);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(
-            repository
-                .load_session_snapshot(session_id)
-                .expect("terminal session snapshot loads")
-                .at_sequence(),
-            terminal.position()
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows.iter()
+                .all(|(run_id, _)| run_id == &active_run.to_string())
         );
-        assert!(rows.iter().any(|(run_id, projection)| {
-            run_id == &active_run.to_string() && projection.contains("failed")
-        }));
-        assert!(rows.iter().any(|(run_id, projection)| {
-            run_id == &queued_run.to_string() && projection.contains("starting")
-        }));
+        let projection = repository
+            .load_session_snapshot(session_id)
+            .expect("terminal session snapshot loads");
+        assert_eq!(projection.at_sequence(), terminal.position());
+        assert!(projection.active_run().is_none());
+        assert_eq!(projection.pending_turns().len(), 1);
+        assert_eq!(projection.pending_turns()[0].turn_id(), pending_turn);
+
+        // An idle session admits its oldest pending message as the next run.
+        let admitted_turn = TurnId::new();
+        let admitted_run = RunId::new();
+        let change = repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(
+                    session_id,
+                    admitted_turn,
+                    "next message",
+                    admitted_run,
+                    fixture_snapshot(),
+                    fixture_time(4),
+                )
+                .expect("fixture turn input is valid"),
+            )
+            .expect("turn commits");
+        match change.turn_outcome() {
+            Some(AcceptedTurnOutcomeDto::Started(run)) => {
+                assert_eq!(run.run_id(), pending_run);
+                assert_eq!(run.turn_id(), pending_turn);
+            }
+            _ => unreachable!("the oldest pending message must start the run"),
+        }
+        let projection = repository
+            .load_session_snapshot(session_id)
+            .expect("admitted session snapshot loads");
+        assert_eq!(projection.pending_turns().len(), 1);
+        assert_eq!(projection.pending_turns()[0].turn_id(), admitted_turn);
 
         let recovery = repository
-            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(fixture_time(4)))
+            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(fixture_time(5)))
             .expect("recovery commits");
         assert_eq!(recovery.len(), 1);
-        let recovery_active = RunId::new();
-        accept_fixture_turn(
-            &repository,
-            session_id,
-            TurnId::new(),
-            recovery_active,
-            "active after terminal promotion",
-        );
-        let recovery_successor = RunId::new();
-        accept_fixture_turn(
-            &repository,
-            session_id,
-            TurnId::new(),
-            recovery_successor,
-            "queued after terminal promotion",
-        );
-        let recovery = repository
-            .recover_unfinished_runs(RecoverUnfinishedRunsInputDto::new(fixture_time(5)))
-            .expect("recovery promotes queued successor");
-        assert_eq!(recovery.len(), 1);
         let rows = raw_snapshot_rows(&location);
-        assert_eq!(rows.len(), 4);
-        assert_eq!(
-            repository
-                .load_session_snapshot(session_id)
-                .expect("recovery session snapshot loads")
-                .at_sequence(),
-            recovery[0].position()
-        );
+        assert_eq!(rows.len(), 2);
         assert!(rows.iter().any(|(run_id, projection)| {
-            run_id == &recovery_active.to_string() && projection.contains("interrupted")
-        }));
-        assert!(rows.iter().any(|(run_id, projection)| {
-            run_id == &recovery_successor.to_string() && projection.contains("starting")
+            run_id == &pending_run.to_string() && projection.contains("interrupted")
         }));
     }
 
@@ -2369,7 +2554,7 @@ mod tests {
     }
 
     #[test]
-    fn every_fault_phase_rolls_back_terminal_promotion_durably() {
+    fn every_fault_phase_rolls_back_a_terminal_transition_with_pending_messages_durably() {
         for point in [
             FaultPoint::Events,
             FaultPoint::Projection,
@@ -2381,9 +2566,14 @@ mod tests {
             let session_id = create_fixture_session(&repository);
             let active_run = RunId::new();
             accept_fixture_turn(&repository, session_id, TurnId::new(), active_run, "active");
-            let queued_turn = TurnId::new();
-            let queued_run = RunId::new();
-            accept_fixture_turn(&repository, session_id, queued_turn, queued_run, "queued");
+            let pending_turn = TurnId::new();
+            accept_fixture_turn(
+                &repository,
+                session_id,
+                pending_turn,
+                RunId::new(),
+                "pending message",
+            );
             let baseline = repository
                 .load_session_snapshot(session_id)
                 .expect("baseline snapshot loads");
@@ -2399,7 +2589,7 @@ mod tests {
                     RunStatusDto::Failed,
                     fixture_time(3),
                 ))
-                .expect_err("injected promotion fault aborts transaction");
+                .expect_err("injected fault aborts the terminal transaction");
             assert_eq!(error.code(), "injected_storage_fault");
             drop(repository);
             let reopened =

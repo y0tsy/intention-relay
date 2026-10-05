@@ -6,13 +6,13 @@ Owner: architecture 23. Decisions: ADR 0015, ADR 0026, ADR 0033. Research: m4plu
 
 This document owns future ordinary Session branching, conversation lineage, frozen fork context, regeneration, lineage
 audit, and branch presentation. It applies to future ordinary Session branching only. M3/M4 Sessions, Runs, turns,
-queues, provider selections, retries, event bytes/sequences, cursors, snapshots, replay, recovery, and M4
+pending turns, provider selections, retries, event bytes/sequences, cursors, snapshots, replay, recovery, and M4
 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded meaning.
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers,
-fresh admission, uncertainty, and reconciliation. Architecture 14 owns run-execution meaning and historical
+Architecture 04 owns current Session/Run persistence and recovery. Architecture 13 owns Mandate lifecycle, triggers, and
+fresh admission. Architecture 14 owns run-execution meaning and historical
 compatibility; its canonical framing was removed by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md).
 Architectures 15--20 own tool, scheduler, child/verifier, MCP, bridge, and kernel semantics. Architecture 21 owns
 Goal/Skill/context source, audience, and disclosure semantics. Architecture 22 owns
@@ -27,7 +27,7 @@ scheduler reason, bridge grant, kernel epoch, MCP selection, or authority.
 The Plan/Build workflow may optionally use ordinary Session lineage for an implementation handoff after plan approval;
 the default path is same-Session continuation and is not a fork. An opted-in handoff creates an independent child
 Session from the approved plan and full available safe conversational context, then may start a fresh Build Autopilot
-run. It transfers no live runtime state, credentials, grants, queues, provider requests, or unfinished effects; the
+run. It transfers no live runtime state, credentials, grants, provider requests, or unfinished effects; the
 source Session remains unchanged.
 
 History is append-only. A user fork creates a new independent child `SessionId` and leaves the source unchanged.
@@ -55,13 +55,13 @@ Mandate creation, trigger capture, or fresh admission. A failed start leaves the
 
 `ForkBoundaryDto` has exactly these variants:
 
-- `CommittedUserTurn`: a non-queued committed user turn with `RunStarted`. The child receives that validated user text
-once through a new child anchor and receives no response fact from that run.
+- `CommittedUserTurn`: a committed user turn with `RunStarted` that is not pending. The child receives that validated
+user text once through a new child anchor and receives no response fact from that run.
 - `CompletedAssistantTurn`: a genuinely completed run with one valid terminal `Finished` fact, no terminal failure,
 pending interaction, or unfinished external action. A valid empty response adds no synthetic assistant message.
 
-Queued turns, arbitrary events/cursors, partial assistant batches, failed, cancelled, interrupted, incomplete, waiting,
-or unfinished work are ineligible; source activity does not block an eligible fork, but source queues, active runs,
+Pending turns, arbitrary events/cursors, partial assistant batches, failed, interrupted, incomplete, waiting,
+or unfinished work are ineligible; source activity does not block an eligible fork, but pending input, active runs,
 waiting interaction, admitted work, and external effects never cross it.
 
 `fork-model-context-v1` is a closed ordered text-only causal projection from committed source facts at the selected
@@ -278,7 +278,7 @@ They disclose no credential, path, source content, raw provider data, or impleme
 ## Compatibility, dependencies, and non-goals
 
 M3/M4 historical sessions remain linear ordinary records until an additive migration creates deterministic root lineage
-records. Migration preserves IDs, turns, runs, queues, configuration revisions, event JSON, sequences, cursors, and
+records. Migration preserves IDs, turns, runs, pending turns, configuration revisions, event JSON, sequences, cursors, and
 snapshots byte-for-byte. It creates no synthetic parent, anchor, run, assistant message, or source event.
 
 A fork begins Mandate-free. It cannot create or transfer a Mandate reason/run, verifier authority, child edge, provider

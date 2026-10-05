@@ -80,7 +80,7 @@ owner, tests, policy mapping, migration behavior, and evidence together.
 5. No downstream milestone requires a retroactive contract change after M5+
 exit.
 6. M3/M4 startup-only configuration, recorded revisions, persisted snapshots,
-queue tickets, sessions, runs, events, and bytes remain authoritative and unchanged; no synthetic post-M5 record is
+sessions, runs, events, and bytes remain authoritative and unchanged; no synthetic post-M5 record is
 added to historical runs.
 7. M5+ introduces no second runtime, registry, scheduler, persistence
 authority, or sandbox.

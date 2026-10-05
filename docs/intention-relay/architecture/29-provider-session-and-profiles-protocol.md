@@ -37,7 +37,7 @@ declarations carried by M6-M9](11-implementation-roadmap.md#reserved-declaration
 durable `SessionProviderProfileChanged` append layer. An existing-profile request is a successful `changed = false`
 no-op that publishes no event. `GetSessionProviderProfileQueryDto` returns the durable intent, the current safe resolved
 entry/revision or a closed unavailability reason, the session projection revision, and the global default; availability
-is a daemon-computed read projection and never mass-rewrites sessions or queues.
+is a daemon-computed read projection and never mass-rewrites sessions or turns.
 
 `SendUserTurn`, `ForkSession`, and `StartForkRun` accept an optional safe profile ID and an optional expected profile
 revision; a per-turn or fork override changes only that run, a mismatch is rejected before commit, and a registry
@@ -126,7 +126,7 @@ ordinary recovery path is again the only one.
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, queue tickets, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
+M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
 tool_execution_unavailable` remain authoritative and unchanged, and no historical selection gains a synthetic
 profile/catalog/session-default state. A per-turn or fork override affects only its run; existing persisted runs retain
 their recorded immutable selection. All directions affect fresh runs only; the Slice 2 activation was reverted and

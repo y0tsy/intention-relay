@@ -7,7 +7,7 @@
 //! Test-first domain DTO and invariant evidence.
 
 use intention_domain::{
-    DomainEventDto, QueuedTurnProjectionDto, RunModeDto, SendUserTurnCommandDto,
+    DomainEventDto, PendingTurnProjectionDto, RunModeDto, SendUserTurnCommandDto,
     SessionCreatedEventDto, WorkspaceRootDto,
 };
 use intention_types::{ProjectId, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -55,11 +55,10 @@ fn workspace_root_and_turn_wire_values_enforce_validation() {
     .is_err());
 
     assert!(
-        serde_json::from_value::<QueuedTurnProjectionDto>(serde_json::json!({
+        serde_json::from_value::<PendingTurnProjectionDto>(serde_json::json!({
             "session_id": SessionId::new(),
             "turn_id": TurnId::new(),
-            "content": " ",
-            "position": 0
+            "content": " "
         }))
         .is_err()
     );
@@ -92,16 +91,14 @@ fn run_status_terminal_classification_covers_all_statuses() {
         S::Running,
         S::WaitingInput,
         S::Completing,
-        S::Cancelling,
         S::Completed,
-        S::Cancelled,
         S::Failed,
         S::Interrupted,
     ];
     for s in all {
         assert_eq!(
             s.is_terminal(),
-            matches!(s, S::Completed | S::Cancelled | S::Failed | S::Interrupted)
+            matches!(s, S::Completed | S::Failed | S::Interrupted)
         );
     }
 }

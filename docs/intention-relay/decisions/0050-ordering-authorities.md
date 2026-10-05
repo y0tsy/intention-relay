@@ -12,8 +12,8 @@ In scope: the normative sequence/cursor table of [architecture README](../archit
 sequence-independence clause of the records below, and the dead pagination, session-tail, replay, and snapshot-sequence
 members of `intention-types`, `intention-protocol`, and `intention-domain`.
 
-Out of scope: queue tickets and their atomic promotion, scheduler readiness observations, the run replay and run tail
-publication bounds, and every behavior of the ordinary runtime.
+Out of scope: scheduler readiness observations, the run replay and run tail publication bounds, and every behavior of
+the ordinary runtime.
 
 | Record | Superseded clause | Replaced by |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ publication bounds, and every behavior of the ordinary runtime.
 | [ADR 0045](0045-local-json-rpc-2-0-transport.md) 85 | "`session.subscribe` and `session.snapshot` return their snapshot-and-tail result" | They return their snapshot result, or a typed resync |
 | [ADR 0045](0045-local-json-rpc-2-0-transport.md) 122 | "M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change" | "Cursors" now means exactly the ordering model of this record; the wire change still touches none of it |
 | [ADR 0046](0046-typed-serde-json-contracts.md) 84-85 | "M3/M4 bytes, runs, events, snapshots, and cursors keep their recorded meaning and are never re-encoded, rewritten, or synthesized" | Recorded bytes and meanings are preserved; the removed write-only snapshot `sequence` columns carried no recorded meaning, and "cursors" means the two-authority model |
-| [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) 93-94 | "Live queue unchanged. M3 queue tickets and atomic promotion stay exactly as they are" | Invariant 5: queue tickets are a queue-ordering mechanism outside the ordering model, and tickets and atomic promotion are unchanged |
+| [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) 93-94 | "Live queue unchanged. M3 queue tickets and atomic promotion stay exactly as they are" | Invariant 5: queue tickets are a queue-ordering mechanism outside the ordering model; that mechanism was later removed by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md) |
 
 Each record's text stays as written; this record supersedes only the named clause.
 
@@ -87,9 +87,9 @@ The adjacency (`+1`) contracts stay in force where they exist today.
 or to the session sequence must never invalidate it.
 4. Cross-authority correlation uses typed identity only: no arithmetic, offsets, conversions, or authority
 substitution (extends [architecture 02](../architecture/02-dto-and-contract-policy.md), lines 41-42).
-5. Queue tickets (`sessions.next_queue_ticket`, `QueuePositionDto`) are a queue-ordering mechanism, not an ordering
-authority: never merged with an ordering authority, never reused, never renumbered. This ADR changes nothing about
-them.
+5. No queue-ordering mechanism exists: the M3 queue, its tickets, and their promotion were removed by [ADR
+0055](0055-pending-turns-and-cooperative-interruption.md), and pending turns are durable input joined to the live run
+context rather than an order.
 6. Scheduler readiness observations order by the owner-local operational tuple `(source_instance_id, source_epoch,
 source_sequence)`: operational metadata, not an ordering authority, never semantic identity.
 
@@ -98,8 +98,10 @@ source_sequence)`: operational metadata, not an ordering authority, never semant
 Ordering evolves in place under the single live schema version 1: no migration, no versioned upgrade step, and no
 second version ([AGENTS.md](../../../AGENTS.md), single-version rule). Recorded M3/M4 bytes and meanings are preserved;
 this change removes a representation and dead members, not a version, mirroring [ADR
-0046](0046-typed-serde-json-contracts.md). Queue tickets, scheduler observations, the replay and page bounds, and the
-run tail publication are unchanged. No compatibility fixture, decoder, alias, or golden is kept for a removed member.
+0046](0046-typed-serde-json-contracts.md). Scheduler observations, the replay and page bounds, and the run tail
+publication are unchanged; the queue and its tickets were later removed by [ADR
+0055](0055-pending-turns-and-cooperative-interruption.md). No compatibility fixture, decoder, alias, or golden is kept
+for a removed member.
 A local database file created by an earlier revision is not opened, migrated, or repaired: it is deleted and recreated
 by the normal development flow, as the single live schema requires.
 
@@ -120,7 +122,7 @@ Cursor and ordering failures stay typed and fail closed before any effect:
 ## Non-goals
 
 No new sequence, cursor, DTO, wire field, configuration, storage mechanism, or error code beyond the recorded container
-journal; no activation of any container kind beyond `run`; no change to queue tickets or their atomic promotion; no
+journal; no activation of any container kind beyond `run`; no queue, ticket, or promotion; no
 change to scheduler readiness semantics or its operational tuple; no change to replay, page, or fact bounds; no
 migration, version bump, or compatibility layer; no reuse, renumbering, or arithmetic conversion of any ordering token;
 no edit to closed milestone records, whose sequence wording stays history.

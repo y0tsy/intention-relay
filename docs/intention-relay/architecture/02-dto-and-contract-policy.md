@@ -16,7 +16,7 @@ A DTO is a stable contract, not merely any serializable struct.
 
 | Category | Purpose | Examples |
 | --- | --- | --- |
-| Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `StopRunCommandDto`. |
+| Command DTO | Requested state-changing work. | `SendUserTurnCommandDto`, `InterruptRunCommandDto`. |
 | Query DTO | Requested read model or snapshot. | `GetSessionSnapshotQueryDto`. |
 | Event DTO | Immutable fact that occurred. | `RunStartedEventDto`, `PlanUpdatedEventDto`. |
 | Persistence DTO | Storage-safe representation of a record/snapshot/event. | `PersistedRunDto`, `RunSnapshotDto`. |
@@ -296,13 +296,13 @@ rules.
 Future scheduler families include typed readiness observations, candidate views, capacity-unavailable outcomes, and
 scheduler admission requests. They are closed, credential/resource-free DTOs: no SDK health values, handles, task
 identities, opaque timer objects, raw paths, or current-state-derived execution meaning may cross a boundary. Unknown
-scheduler/readiness variants block dependent admission and cannot synthesize ordinary queue or Mandate state. [Mandate
+scheduler/readiness variants block dependent admission and cannot synthesize ordinary turn input or Mandate state. [Mandate
 scheduler and readiness-driven admission](16-mandate-scheduler-and-readiness-driven-admission.md) owns the detailed
 semantics.
 
 Future child/verifier families include typed child-edge, `ParentMandateId`, delegation snapshot, direct-edge
 control/message, terminal-summary, verifier authority/revision, immutable target-set, audit baseline/evidence/verdict,
-target-mutation, and reconciliation values. They are credential-free, closed, versioned families that neither widen
+and target-mutation values. They are credential-free, closed, versioned families that neither widen
 historical records nor grant authority by relationship, prompt, evidence, or current state. Architecture 17 owns their
 semantics.
 

@@ -5,8 +5,8 @@
 Owner: architecture 16. Decisions: ADR 0008, ADR 0034. Research: m4plus_concept.md.
 
 This document owns durable Mandate scheduler reevaluation, readiness/capacity evidence, candidate selection, and the
-scheduler handoff to fresh admission. It applies only to future `Mandate` execution and preserves M3/M4 ordinary queues,
-run recovery, provider behavior, tool-call denial, replay, bytes, and meaning. Calendar/interval source syntax,
+scheduler handoff to fresh admission. It applies only to future `Mandate` execution and preserves M3/M4 ordinary turn
+input, run recovery, provider behavior, tool-call denial, replay, bytes, and meaning. Calendar/interval source syntax,
 time-zone/DST semantics, timer topology, and worker process topology remain later work: calendar/interval/time-zone/DST
 semantics are an accepted post-M5 future direction under [ADR
 0034](../decisions/0034-accepted-m5plus-retained-deferral-directions.md), to be executed in Milestone 5+ as typed
@@ -15,8 +15,8 @@ architecture 03.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason order, conflict precedence,
-uncertainty, and the atomic fresh-admission transaction; architecture 14 is the historical record of the removed
+Architecture 13 owns Mandate lifecycle, reason validity/provenance, total reason order, conflict precedence, and the
+atomic fresh-admission transaction; architecture 14 is the historical record of the removed
 execution-meaning machinery (ADR 0046); architecture 15 owns frozen tool selection and tool/resource compatibility;
 architecture 18 owns MCP source/capability semantics and MCP-specific readiness.
 
@@ -55,9 +55,8 @@ The stages have distinct authority:
 A scheduler evaluates four independent conditions: durable reason eligibility, current Mandate lifecycle permission,
 typed technical readiness, and finite capacity availability. A failed or stale observation preserves the exact pending
 reason and creates no `RunId`, and restoration only wakes reevaluation. The scheduler never interprets readiness as
-semantic meaning, never repairs stale selections, and never owns effect reconciliation, which is coordinated by the
-owning Mandate lifecycle transaction: executors report attempt facts, verifiers may provide explicit authority, and the
-scheduler only observes the resulting eligibility after reconciliation.
+semantic meaning, never repairs stale selections, and never owns effect classification: executors report attempt facts,
+and the scheduler only observes the resulting eligibility.
 
 ## Readiness and capacity evidence
 
@@ -165,7 +164,7 @@ Recovery completes before scheduler admission:
 
 1. recover and classify every unfinished Mandate run/attempt;
 2. terminalize admitted-before-start work as known pre-effect interruption;
-3. convert started work without terminal proof to exact unknown effect and pause only its owning Mandate;
+3. classify started work without terminal proof as a bounded partial result;
 4. rebuild/read durable scheduler projections and establish new readiness observations without starting work;
 5. retain pending reasons; and
 6. only then allow fresh candidate evaluation and admission.
@@ -185,8 +184,8 @@ schedule, time zone, configuration, registry, provider, or readiness cannot reta
 Future scheduler projections use typed JSON-RPC 2.0 methods (ADR 0045) with the Mandate container journal sequence,
 correlated results or typed resync/error, and never partial snapshots. Reconnect/replay is read-only and cannot replay a
 wakeup, admission, or external action; exact method shapes, pages, retention, and schema remain deferred. M3 session
-replay, M4 run streaming, ordinary queue tickets, provider kinds, tool-call denial, snapshots, interruption, and all
-historical bytes/meaning remain unchanged, legacy queue tickets never become Mandate reasons, and no historical record
+replay, M4 run streaming, ordinary turn input, provider kinds, tool-call denial, snapshots, interruption, and all
+historical bytes/meaning remain unchanged, pending turns never become Mandate reasons, and no historical record
 gains scheduler facts.
 
 ## Dependencies and non-goals

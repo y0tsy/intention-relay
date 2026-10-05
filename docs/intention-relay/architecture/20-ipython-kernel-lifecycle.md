@@ -6,13 +6,13 @@ Owner: architecture 20. Decisions: ADR 0012, ADR 0027, ADR 0034, ADR 0042. Resea
 
 This document owns future run-scoped IPython kernel epochs, foreground cells, namespace checkpoints, kernel-local
 background work, safe kernel projections, and kernel recovery. It applies only to future Mandate and VerifierMandate
-execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, queue tickets, provider behavior, replay, recovery, and
+execution. M3/M4 bytes, IDs, UUIDs, cursors, events, snapshots, provider behavior, replay, recovery, and
 M4 `ToolCallRecorded -> tool_execution_unavailable` retain their recorded ordinary semantics. Retained session-scoped
 IPython/RLM material remains research provenance and historical-only where it conflicts with architectures 13--19.
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 is the historical
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
 record of the removed execution-meaning machinery (ADR 0046); 15 owns registry selection, direct tool admission,
 `ToolCallId`, generic tool-loop facts, `ToolCallStarted`, and publication; 16 owns readiness-driven admission; 17 owns
 child graph and verifier authority; 18 owns MCP lifecycle; 19 owns bridge attachment, grants, operation identity,
@@ -60,7 +60,7 @@ One additive bounded reference joins the selection: `script_library_reference` p
 absolute or symlink-target path, and its absence means an empty import surface.
 
 A `KernelEpochId` is created lazily only after recovery completes, a supported active Mandate run is reread, the exact
-kernel/bridge/tool selections validate, required live capacity exists, and no cancellation or uncertainty gate applies.
+kernel/bridge/tool selections validate, required live capacity exists, and no cancellation gate applies.
 A fresh run never reuses a live kernel or namespace. Process creation occurs outside semantic transactions.
 
 ```mermaid
@@ -73,14 +73,14 @@ stateDiagram
   Ready --> Running: committed cell start
   Running --> Ready: known terminal cell
   Running --> Unknown: unproven effect
-  Ready --> Disposing: terminal or cancellation
-  Running --> Disposing: failure or cancellation
+  Ready --> Disposing: terminal or interruption
+  Running --> Disposing: failure or interruption
   Disposing --> Absent: resources released
   Unknown --> [*]
 ```
 
-`Unknown` is attempt evidence, not a kernel-owned product state. Architecture 13 uses exact unproven started evidence to
-pause only the owning Mandate.
+`Unknown` is attempt evidence, not a kernel-owned product state. A started kernel attempt without terminal proof commits
+a bounded partial result and pauses no Mandate.
 
 ## Foreground cells, output, and host requests
 
@@ -193,7 +193,7 @@ action resumes; the next explicit execution may create a new kernel and restore 
 missing, corrupt, incompatible, or over-limit state produces `kernel_state_restore_unavailable`, the namespace starts
 empty, and durable history remains readable.
 
-## Background work, cancellation, and recovery
+## Background work, interruption, and recovery
 
 Background computation is private kernel convenience work only. It cannot create a trigger, child, scheduler candidate,
 durable continuation, or independent tool authority. It may use a host request only while carrying the current
@@ -203,13 +203,15 @@ cell/run/epoch termination and are excluded from checkpoints; they are terminate
 disposal, daemon shutdown, or checkpoint restoration. Their in-memory results may be captured only by a later successful
 foreground cell.
 
-Cancellation terminates the attached epoch without claiming rollback. Before start it records known pre-effect
-cancellation/interruption; after start, known terminal proof remains known and absent proof is exact
-`ExternalEffectUnknown` under architecture 13. `StopRunCommandDto` remains the only first-scope run cancellation
-command: the daemon commits the existing `Running -> Cancelling -> Cancelled` lifecycle and then terminates the attached
-kernel rather than merely leaving a potentially modified namespace alive. It does not wait for the cell to acknowledge
-an interrupt. Late cell output, host responses, fragments, and results after cancellation, terminalization, epoch
-replacement, grant expiry, or restart are non-authoritative and cannot append facts or repair uncertainty.
+Interruption terminates the attached epoch without claiming rollback. Before start it records known pre-effect
+interruption; after start, known terminal proof remains known and absent proof commits a bounded `Partial`
+result with its notice; no Mandate pause follows. `run.interrupt` (`InterruptRunCommandDto`) remains the only
+first-scope run interruption command: the daemon signals the in-flight operation, then terminates the attached
+kernel epoch rather than merely leaving a potentially modified namespace alive. The run stays `Running`, the stopped
+cell commits its bounded `Partial` result with its notice, and the model receives the next step; the daemon does not
+wait for the cell to acknowledge an interrupt. Late cell output, host responses, fragments, and results after
+interruption, terminalization, epoch replacement, grant expiry, or restart are non-authoritative and cannot append
+facts.
 
 Recovery completes before kernel readiness, attachment, scheduling, or admission. It invalidates grants, refuses
 old-sidecar adoption, classifies unfinished kernel attempts from durable evidence, disposes discoverable private

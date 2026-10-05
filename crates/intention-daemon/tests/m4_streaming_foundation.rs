@@ -34,8 +34,6 @@ use intention_protocol::{
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, RunSubscriptionResponseDto,
     SubscribeRunCommandDto, decode_response, encode_request,
 };
-#[cfg(feature = "test-support")]
-use intention_runtime::ModelRunFirstAppendGate;
 use intention_runtime::{
     ModelRunCommitDto, ModelRunCommitObserver, ModelSleepFuture, ModelTimePort,
 };
@@ -55,31 +53,6 @@ struct BlockingDriver {
     requests: Mutex<Vec<ModelRequestDto>>,
     entered: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
-}
-
-#[cfg(feature = "test-support")]
-struct FirstAppendBarrier {
-    entered: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-#[cfg(feature = "test-support")]
-impl FirstAppendBarrier {
-    fn new() -> Self {
-        Self {
-            entered: Arc::new(tokio::sync::Notify::new()),
-            release: Arc::new(tokio::sync::Notify::new()),
-        }
-    }
-}
-
-#[cfg(feature = "test-support")]
-impl ModelRunFirstAppendGate for FirstAppendBarrier {
-    fn wait_before_first_append(&self) -> ModelSleepFuture<'_> {
-        self.entered.notify_one();
-        let release = Arc::clone(&self.release);
-        Box::pin(async move { release.notified().await })
-    }
 }
 
 #[cfg(feature = "test-support")]
@@ -377,35 +350,40 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
 }
 
 #[cfg(feature = "test-support")]
-async fn stop_run_through_host(endpoint: &LocalEndpoint, session_id: SessionId, run_id: RunId) {
+async fn interrupt_run_through_host(
+    endpoint: &LocalEndpoint,
+    session_id: SessionId,
+    run_id: RunId,
+) {
     let response = send_request_through_host(
         endpoint,
-        "m4-host-stop-test",
+        "m4-host-interrupt-test",
         1,
-        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::StopRun(
-            intention_domain::StopRunCommandDto::new(session_id, run_id),
+        ProtocolRequestPayloadDto::Command(ProtocolCommandDto::InterruptRun(
+            intention_domain::InterruptRunCommandDto::new(session_id, run_id),
         )),
     )
     .await;
     assert!(matches!(
         response,
-        ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(_))
+        ProtocolResponsePayloadDto::CommandResult(ProtocolCommandResultDto::Accepted(accepted))
+            if matches!(accepted.result(), ProtocolAcceptedResultDto::InterruptRun(_))
     ));
 }
 
 #[cfg(feature = "test-support")]
-async fn send_queued_turn_through_host(
+async fn send_pending_turn_through_host(
     endpoint: &LocalEndpoint,
     session_id: SessionId,
     turn_id: TurnId,
 ) {
     let response = send_request_through_host(
         endpoint,
-        "m4-host-queue-test",
+        "m4-host-pending-test",
         1,
         ProtocolRequestPayloadDto::Command(ProtocolCommandDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, turn_id, "queued host turn")
-                .expect("queued turn is valid"),
+            SendUserTurnCommandDto::new(session_id, turn_id, "pending host turn")
+                .expect("pending turn is valid"),
         )),
     )
     .await;
@@ -415,7 +393,7 @@ async fn send_queued_turn_through_host(
             if matches!(
                 accepted.result(),
                 ProtocolAcceptedResultDto::SendUserTurn(turn)
-                    if matches!(turn.outcome(), SendUserTurnOutcomeDto::Queued { .. })
+                    if matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending)
             )
     ));
 }
@@ -606,7 +584,7 @@ async fn accepted_host_turn_executes_once_then_streams_durable_facts_and_complet
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
-async fn host_stop_cancels_blocked_execution_without_late_facts() {
+async fn host_interrupt_ends_the_blocked_round_and_the_same_run_continues() {
     let driver = Arc::new(BlockingDriver::new());
     let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
     let session_id = SessionId::new();
@@ -625,7 +603,7 @@ async fn host_stop_cancels_blocked_execution_without_late_facts() {
         )),
         ProtocolCommandResultDto::Accepted(_)
     ));
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-stop-{}", RunId::new()))
+    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-interrupt-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
     let host = intention_daemon::test_host_lifecycle(facade.clone());
@@ -637,63 +615,74 @@ async fn host_stop_cancels_blocked_execution_without_late_facts() {
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
         .await
         .expect("driver begins the blocked stream");
-    stop_run_through_host(&endpoint, session_id, run_id).await;
-    // The executor task finishes only after the cancellation terminal state is
-    // durable, so the completion watch is a deterministic status event.
+    interrupt_run_through_host(&endpoint, session_id, run_id).await;
+    // The interrupted round ends with a durable notice, so the interrupted
+    // signal is replaced and the same run admits its continuation instead of
+    // reaching a terminal cancellation.
+    tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
+        .await
+        .expect("the same run continues after the interruption notice");
+    assert_eq!(driver.executions(), 2);
+    let replay = facade
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
+        .expect("continuing run replay reads");
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Running);
+    let requests = driver.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].run_id(), run_id);
+    assert!(
+        requests[1]
+            .messages()
+            .iter()
+            .any(|message| message.role() == ModelRoleDto::Notice),
+        "the continuation carries the interruption notice"
+    );
+    let events = facade
+        .durable_events_for_test_support(session_id)
+        .expect("durable events read");
+    assert!(
+        events.iter().any(|event| matches!(
+            event.payload(),
+            intention_domain::DomainEventDto::InterruptNoticeRecorded(fact)
+                if event.run_id() == Some(run_id)
+                    && matches!(
+                        fact.fact().input(),
+                        intention_domain::ModelRunFactInputDto::InterruptNoticeRecorded { content }
+                            if content == intention_runtime::INTERRUPT_NOTICE
+                    )
+        )),
+        "the interruption notice is durable"
+    );
+
+    // Releasing the continuation completes the original run.
+    driver.release.notify_one();
     assert!(
         tokio::time::timeout(
             Duration::from_secs(2),
             host.wait_for_execution_completion(session_id, run_id),
         )
         .await
-        .expect("cancellation terminalizes the blocked execution"),
-        "the exact registered execution task completes without release"
+        .expect("the continuation completes"),
+        "the exact registered execution task completes"
     );
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("cancelled run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
     assert_eq!(
-        replay.cursor().value(),
-        1,
-        "only initial attempt fact persisted"
+        facade
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
+            .expect("completed run replay reads")
+            .run_projection()
+            .status(),
+        RunStatusDto::Completed
     );
-    assert_eq!(driver.executions(), 1);
-    driver.release.notify_one();
-    assert!(
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            host.wait_for_execution_completion(session_id, run_id),
-        )
+    server
         .await
-        .expect("released exact host execution completes"),
-        "the exact registered execution task completes after release"
-    );
-    server.await.expect("host accepts command and stop peers");
-    let released_replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("released cancellation replay reads");
-    assert_eq!(
-        released_replay.run_projection().status(),
-        RunStatusDto::Cancelled
-    );
-    assert_eq!(
-        released_replay.cursor().value(),
-        1,
-        "released driver facts cannot arrive after cancellation"
-    );
-    assert_eq!(
-        driver.executions(),
-        1,
-        "release cannot admit another provider execution"
-    );
+        .expect("host accepts command and interrupt peers");
 }
 
 #[cfg(feature = "test-support")]
 #[tokio::test]
-async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_real_host() {
+async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, snapshot) = fixture_facade(driver.clone());
+    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
     let session_id = SessionId::new();
     assert!(matches!(
         facade.command(ProtocolCommandDto::CreateSession(
@@ -710,7 +699,7 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
         )),
         ProtocolCommandResultDto::Accepted(_)
     ));
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-promotion-{}", RunId::new()))
+    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-pending-{}", RunId::new()))
         .expect("fixture endpoint is valid");
     let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
     let host = intention_daemon::test_host_lifecycle(facade.clone());
@@ -719,60 +708,86 @@ async fn terminal_promotion_schedules_the_persisted_queued_run_once_through_the_
         host_server.serve_connections(listener, 2).await;
     });
 
-    let first_run = send_user_turn_through_host(&endpoint, session_id).await;
+    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
         .await
         .expect("first execution is blocked");
-    let queued_turn_id = TurnId::new();
-    let promoted_run =
-        RunId::parse(&queued_turn_id.to_string()).expect("turn identity is a run identity");
-    send_queued_turn_through_host(&endpoint, session_id, queued_turn_id).await;
+    let pending_turn_id = TurnId::new();
+    send_pending_turn_through_host(&endpoint, session_id, pending_turn_id).await;
+    assert_eq!(
+        host.task_count(),
+        1,
+        "a pending message never admits a second execution"
+    );
     driver.release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
+    tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
         .await
-        .expect("terminal observer schedules the persisted promoted run");
+        .expect("the finished round joins the pending message and continues");
     assert_eq!(driver.executions(), 2);
     let requests = driver.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].run_id(), promoted_run);
-    assert_eq!(requests[1].model(), snapshot.resolved().provider().model());
-    assert!(matches!(requests[1].messages().last(), Some(message)
-        if message.role() == ModelRoleDto::User && message.content() == "queued host turn"));
-    let promoted_replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, promoted_run)
-        .expect("promoted run has durable replay");
     assert_eq!(
-        promoted_replay.run_projection().status(),
-        RunStatusDto::Running
+        requests[1].run_id(),
+        run_id,
+        "the pending message joins the same run"
     );
-    assert_ne!(first_run, promoted_run);
+    assert!(
+        requests[1].messages().iter().any(|message| {
+            message.role() == ModelRoleDto::User && message.content() == "pending host turn"
+        }),
+        "the joined message is part of the live context"
+    );
+    let replay = facade
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
+        .expect("continuing run replay reads");
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Running);
+    assert!(
+        facade
+            .load_current_run_snapshot_for_daemon(
+                session_id,
+                RunId::parse(&pending_turn_id.to_string()).expect("turn identity shape"),
+            )
+            .is_err(),
+        "the pending message never becomes its own run"
+    );
+    let events = facade
+        .durable_events_for_test_support(session_id)
+        .expect("durable events read");
+    assert!(
+        events.iter().any(|event| matches!(
+            event.payload(),
+            intention_domain::DomainEventDto::UserMessageAppended(fact)
+                if event.run_id() == Some(run_id)
+                    && matches!(
+                        fact.fact().input(),
+                        intention_domain::ModelRunFactInputDto::UserMessageAppended { content, .. }
+                            if content == "pending host turn"
+                    )
+        )),
+        "the join is a durable run fact"
+    );
+
     driver.release.notify_one();
-    // The promoted executor task finishes only after the run is durably
-    // terminal, so the completion watch is a deterministic status event.
     assert!(
         tokio::time::timeout(
             Duration::from_secs(2),
-            host.wait_for_execution_completion(session_id, promoted_run),
+            host.wait_for_execution_completion(session_id, run_id),
         )
         .await
-        .expect("promoted run execution completes"),
-        "the exact promoted executor completes"
+        .expect("the continuing execution completes"),
+        "the exact run execution completes"
     );
     assert_eq!(
         facade
-            .load_current_run_snapshot_for_daemon(session_id, promoted_run)
-            .expect("promoted replay reads")
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
+            .expect("completed run replay reads")
             .run_projection()
             .status(),
         RunStatusDto::Completed,
-        "the promoted run reaches durable completion"
+        "one run carries the whole continuous session"
     );
-    assert_eq!(
-        driver.executions(),
-        2,
-        "duplicate host admission cannot execute the promoted run again"
-    );
-    server.await.expect("host accepts first and queued peers");
+    assert_eq!(driver.executions(), 2);
+    server.await.expect("host accepts first and pending peers");
 }
 
 #[cfg(feature = "test-support")]
@@ -820,10 +835,8 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
     tokio::time::timeout(Duration::from_secs(1), first_driver.entered.notified())
         .await
         .expect("first host reaches an in-flight provider stream");
-    let queued_turn_id = TurnId::new();
-    let promoted_run =
-        RunId::parse(&queued_turn_id.to_string()).expect("turn identity is a run identity");
-    send_queued_turn_through_host(&first_endpoint, session_id, queued_turn_id).await;
+    let pending_turn_id = TurnId::new();
+    send_pending_turn_through_host(&first_endpoint, session_id, pending_turn_id).await;
     first_server.await.expect("first host accepted its peers");
     first_host.shutdown().await;
     drop(first_facade);
@@ -843,23 +856,23 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
     let interrupted = restarted
         .load_current_run_snapshot_for_daemon(session_id, first_run)
         .expect("interrupted original replay reads");
-    let successor = restarted
-        .load_current_run_snapshot_for_daemon(session_id, promoted_run)
-        .expect("recovery-promoted successor replay reads");
     assert_eq!(
         interrupted.run_projection().status(),
         RunStatusDto::Interrupted,
-        "recovery finishes before the second host becomes ready"
+        "recovery interrupts the in-flight run before the second host is ready"
     );
-    assert_eq!(
-        successor.run_projection().status(),
-        RunStatusDto::Starting,
-        "recovery promotion preserves queued durable input but does not resume it"
+    assert!(
+        restarted
+            .load_current_run_snapshot_for_daemon(
+                session_id,
+                RunId::parse(&pending_turn_id.to_string()).expect("turn identity shape"),
+            )
+            .is_err(),
+        "a pending message is durable input, never a run of its own"
     );
     assert_eq!(restart_driver.executions(), 0);
 
     let replay_json = serde_json::to_string(&interrupted).expect("replay serializes");
-    let successor_json = serde_json::to_string(&successor).expect("successor replay serializes");
     let events = restarted
         .durable_events_for_test_support(session_id)
         .expect("durable restart events read");
@@ -944,7 +957,6 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         .expect("restart host accepts stream peer");
     for output in [
         &replay_json,
-        &successor_json,
         &events_json,
         &error_json,
         &initial_frame_json,
@@ -963,202 +975,14 @@ async fn restart_interrupts_in_flight_and_recovery_promoted_runs_without_resumin
         )),
         "the interrupted terminal transition is durable"
     );
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_stop_before_task_registration_terminalizes_without_provider_work_or_registry_leak() {
-    let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
-    let (session_id, run_id) = create_and_start(&facade);
-    let endpoint = LocalEndpoint::from_instance_id(format!("m4-host-stop-before-{}", RunId::new()))
-        .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade.clone());
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 1).await;
-    });
-
-    stop_run_through_host(&endpoint, session_id, run_id).await;
-    server.await.expect("host accepts the stop peer");
-    host.admit_starting_run(session_id, run_id);
-    // The terminalizer removes its registry entry only after a durable
-    // terminal reread, so task cleanup is a deterministic status event.
-    tokio::time::timeout(Duration::from_secs(2), host.wait_for_task_cleanup())
-        .await
-        .expect("terminalizer removes its registry entry after a durable terminal reread");
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("cancelled run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
-    assert_eq!(replay.cursor().value(), 0);
-    assert_eq!(driver.executions(), 0, "provider work never begins");
-    assert_eq!(
-        host.task_count(),
-        0,
-        "terminalizer removes its registry entry"
-    );
-    let events = facade
-        .durable_events_for_test_support(session_id)
-        .expect("durable events read");
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event.payload(),
-                intention_domain::DomainEventDto::RunStatusChanged(change)
-                    if event.run_id() == Some(run_id) && change.status() == RunStatusDto::Cancelled
-            ))
-            .count(),
-        1,
-        "exactly one task-owned terminal cancellation is durable"
-    );
-    host.shutdown().await;
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn terminalizer_retries_an_injected_durable_failure_before_registry_cleanup() {
-    let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
-    let (session_id, run_id) = create_and_start(&facade);
-    let endpoint =
-        LocalEndpoint::from_instance_id(format!("m4-terminalizer-retry-{}", RunId::new()))
-            .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let host = intention_daemon::test_host_lifecycle(facade.clone());
-    host.inject_terminalizer_failure_once();
-    let host_server = host.clone();
-    let server = tokio::spawn(async move {
-        host_server.serve_connections(listener, 1).await;
-    });
-
-    stop_run_through_host(&endpoint, session_id, run_id).await;
-    server.await.expect("host accepts the stop peer");
-    tokio::time::timeout(Duration::from_secs(1), host.wait_for_terminalizer_failure())
-        .await
-        .expect("terminalizer observes the injected durable failure");
-    assert_eq!(
-        facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("cancelling replay reads")
-            .run_projection()
-            .status(),
-        RunStatusDto::Cancelling
-    );
-    assert_eq!(
-        host.task_count(),
-        1,
-        "failed terminalizer retains exact task ownership"
-    );
-    host.release_terminalizer_retry();
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        host.wait_for_terminalizer_completion(),
-    )
-    .await
-    .expect("terminalizer retries to durable completion");
-    host.wait_for_task_cleanup().await;
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("terminal run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
-    assert_eq!(replay.cursor().value(), 0);
-    assert_eq!(host.terminalizer_attempts(), 2);
-    assert_eq!(
-        host.task_count(),
-        0,
-        "registry cleanup follows durable terminal reread"
-    );
-    assert_eq!(
-        driver.executions(),
-        0,
-        "terminalizer never invokes the provider"
-    );
-    host.shutdown().await;
-}
-
-#[cfg(feature = "test-support")]
-#[tokio::test]
-async fn host_stop_between_starting_replay_and_first_append_terminalizes_once_without_provider_work()
- {
-    let driver = Arc::new(BlockingDriver::new());
-    let (_directory, facade, _snapshot) = fixture_facade(driver.clone());
-    let session_id = SessionId::new();
-    assert!(matches!(
-        facade.command(ProtocolCommandDto::CreateSession(
-            intention_domain::CreateSessionCommandDto::new(
-                intention_types::ProjectId::new(),
-                session_id,
-                intention_types::WorkspaceId::new(),
-                intention_domain::WorkspaceRootDto::parse(
-                    std::env::temp_dir().to_string_lossy().into_owned(),
-                )
-                .expect("fixture workspace is absolute"),
-                intention_domain::RunModeDto::Build,
-            ),
+    assert!(
+        events.iter().any(|event| matches!(
+            event.payload(),
+            intention_domain::DomainEventDto::UserTurnPending(pending)
+                if pending.turn_id() == pending_turn_id
         )),
-        ProtocolCommandResultDto::Accepted(_)
-    ));
-    let endpoint =
-        LocalEndpoint::from_instance_id(format!("m4-host-first-append-{}", RunId::new()))
-            .expect("fixture endpoint is valid");
-    let listener = AsyncLocalListener::bind(endpoint.clone()).expect("fixture listener binds");
-    let barrier = Arc::new(FirstAppendBarrier::new());
-    let server = tokio::spawn(
-        intention_daemon::serve_test_async_listener_with_first_append_gate(
-            listener,
-            facade.clone(),
-            2,
-            barrier.clone(),
-        ),
+        "the pending message survives restart as durable input"
     );
-
-    let run_id = send_user_turn_through_host(&endpoint, session_id).await;
-    tokio::time::timeout(Duration::from_secs(1), barrier.entered.notified())
-        .await
-        .expect("task observes Starting before its first append");
-    stop_run_through_host(&endpoint, session_id, run_id).await;
-    barrier.release.notify_one();
-    // The first-append fixture host is internal to
-    // `serve_test_async_listener_with_first_append_gate`, so no host status
-    // event is reachable from this test; keep a bounded 1s watchdog for the
-    // terminal transition instead of an unbounded wait.
-    for _ in 0..200 {
-        if facade
-            .load_current_run_snapshot_for_daemon(session_id, run_id)
-            .expect("run replay reads")
-            .run_projection()
-            .status()
-            == RunStatusDto::Cancelled
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    let replay = facade
-        .load_current_run_snapshot_for_daemon(session_id, run_id)
-        .expect("cancelled run replay reads");
-    assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
-    assert_eq!(replay.cursor().value(), 0);
-    assert_eq!(driver.executions(), 0, "provider work never begins");
-    let events = facade
-        .durable_events_for_test_support(session_id)
-        .expect("durable events read");
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event.payload(),
-                intention_domain::DomainEventDto::RunStatusChanged(change)
-                    if event.run_id() == Some(run_id) && change.status() == RunStatusDto::Cancelled
-            ))
-            .count(),
-        1,
-        "the task owns exactly one terminal cancellation write"
-    );
-    server.await.expect("host accepts turn and stop peers");
 }
 
 #[cfg(feature = "test-support")]

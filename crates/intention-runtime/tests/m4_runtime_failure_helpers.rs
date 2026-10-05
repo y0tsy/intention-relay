@@ -15,8 +15,8 @@ use intention_domain::{
 use intention_runtime::fail_starting_run;
 use intention_storage::{
     AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendModelRunFactsOutcomeDto,
-    CommittedChangeDto, CreateSessionInputDto, RecoverUnfinishedRunsInputDto,
-    RemoveQueuedTurnInputDto, StorageRepositoryDto, TransitionRunInputDto,
+    CommittedChangeDto, CreateSessionInputDto, RecoverUnfinishedRunsInputDto, RemoveTurnInputDto,
+    StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, ErrorRetryDto, RunId, SchemaVersionDto,
@@ -101,10 +101,7 @@ impl StorageRepositoryDto for FakeRepository {
         Err(unused())
     }
 
-    fn remove_queued_turn(
-        &self,
-        _input: RemoveQueuedTurnInputDto,
-    ) -> DtoResult<CommittedChangeDto> {
+    fn remove_turn(&self, _input: RemoveTurnInputDto) -> DtoResult<CommittedChangeDto> {
         Err(unused())
     }
 

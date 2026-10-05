@@ -10,7 +10,7 @@ linked architecture sections.
 | ID | Status | Topic |
 | --- | --- | --- |
 | [0001](0001-mandate-authority-and-fresh-run-lifecycle.md) | Accepted | Mandate authority and fresh-run lifecycle |
-| [0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Accepted | External attempt evidence and unknown-effect reconciliation |
+| [0002](0002-external-attempt-evidence-and-unknown-effect-reconciliation.md) | Superseded | External attempt evidence and unknown-effect reconciliation |
 | [0004](0004-rust-owned-capability-plane-and-fixed-tool-registry.md) | Accepted | One Rust-owned capability path and fixed registry boundary |
 | [0005](0005-m4plus-authority-reconciliation-and-delivery-boundaries.md) | Accepted | M4+ reconciliation and delivery boundaries |
 | [0006](0006-mandate-lifecycle-and-admission-boundary.md) | Accepted | Mandate lifecycle and admission boundary |
@@ -37,7 +37,7 @@ linked architecture sections.
 | [0028](0028-provider-reasoning-and-catalog-detail-directions.md) | Accepted | Post-M5 provider reasoning and catalog detail directions |
 | [0029](0029-activity-and-notification-detail-directions.md) | Accepted | Post-M5 activity and notification detail directions |
 | [0031](0031-autonomous-continuation-direction.md) | Accepted | Post-M5 autonomous continuation direction |
-| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation |
+| [0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) | Accepted | Post-M5 accepted deferred directions: activity-tree metadata, semantic content inspection, and per-call cancellation (the per-call cancellation direction is superseded by ADR 0055) |
 | [0033](0033-accepted-m5plus-execution-directions.md) | Accepted | Post-M5 accepted execution directions: control-plane editing, provider-native controls, fork execution, and RLM packaging |
 | [0034](0034-accepted-m5plus-retained-deferral-directions.md) | Accepted | Post-M5 accepted retained-deferral directions: kernel output projection, retention policy, supervision topology, calendar semantics, and activity limit classification |
 | [0035](0035-m5plus-complete-foundation-activation.md) | Accepted | M5+ complete foundation activation: hard prerequisite for M6-M9, pre-approved five-slice activation sequence (the fifth slice is added by ADR 0043) |
@@ -53,3 +53,6 @@ linked architecture sections.
 | [0048](0048-limits-by-precedent-and-no-content-scanning.md) | Accepted | Limits by precedent, no runtime content scanning, and removal of the corridor, calendar-period, and queue-audit engines |
 | [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers) |
 | [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
+| [0052](0052-partial-tool-results-for-interrupted-execution.md) | Accepted | Partial tool results for interrupted execution (bounded captured output, interruption notices, and no Mandate pause) |
+| [0054](0054-dynamic-context-window-and-prompt-caching.md) | Accepted | Dynamic context window and prompt-cache breakpoints (provider context-window policy, calibrated token accounting, largest-first tool-result compression, capacity stub, and ephemeral cache markers) |
+| [0055](0055-pending-turns-and-cooperative-interruption.md) | Accepted | Pending turns and cooperative interruption (durable pending input joined to the live run context, `run.interrupt`, no `Cancelling`/`Cancelled` run status, and cooperative tool interruption with partial results) |

@@ -16,7 +16,7 @@ implementation, tools, or provider implementations.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
 -  M1 establishes the `ConfigRevisionId` and credential-free `ConfigSnapshotDto` contract foundation. M3 makes
 `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup snapshot, storage records it by revision, and each accepted or promoted run retains its immutable revision. TOML
+startup snapshot, storage records it by revision, and each accepted run retains its immutable revision. TOML
 is applied only at daemon startup; live reload remains deferred.
 -  M3 activates `intention-application`, `intention-runtime`, `intention-storage`, and `intention-storage-sqlite`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
@@ -49,7 +49,7 @@ coverage-tier classification with the base 80% line-coverage threshold and the d
 | `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
 | `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
-| `intention-runtime` | Deterministic session/run lifecycle decisions, cancellation, terminal promotion, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
+| `intention-runtime` | Deterministic session/run lifecycle decisions, interruption handling, pending-turn context joins, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
 | `intention-storage` | DTO-only semantic repository methods, atomic committed-change evidence, snapshots, event-log contracts, and persisted config-snapshot inputs. | Config, domain, types. |
 | `intention-storage-sqlite` | Bundled SQLite single current schema (created directly on open), semantic repository implementation, projections, per-state snapshots, and append-only event persistence. | Storage, config, domain, types. |
 | `intention-config` | TOML parsing, validation, migrations, resolved config/snapshot DTOs. | Types, domain as needed. |
@@ -109,17 +109,19 @@ flowchart BT
 
 ## M3 ownership decisions
 
--  `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn,
-transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot and durable event-tail reads, and
+-  `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or
+pending, remove a not-yet-seen pending turn, append pending turns to a run context, transition a run, recover
+unfinished runs, snapshot and durable event-tail reads, and
 configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend
 resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,
 transactional projection/event/snapshot writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
 -> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
 (ADR 0047) — remains M5 policy ownership.
--  `intention-runtime` decides valid state edges and performs the required `Starting -> Cancelling -> Cancelled`
-cancellation path. The repository, not runtime or callers, atomically chooses the lowest queue ticket after every
-terminal transition, including recovery. It has no provider, tool, timer, stream, or scheduler dependency in M3.
+-  `intention-runtime` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
+call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
+creation, pending-turn context joins, and recovery. It has no provider, tool, timer, stream, or scheduler dependency in
+M3.
 -  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
 temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
 fixture listener orchestration. `intention` exposes only hidden `test-support` facade seams for an injected

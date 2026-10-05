@@ -53,8 +53,8 @@ and safe context projection.
 independent Session; it transfers no authority or live resources.
 11. All effects remain behind the single daemon-owned typed capability path.
 12. No external effect occurs inside a durable semantic transaction.
-13. A started operation without terminal proof remains `ExternalEffectUnknown`;
-it is never automatically retried, resumed, or treated as rolled back.
+13. A started operation interrupted or lost before a final result commits a bounded partial result and permits the
+next model step; it is never automatically retried, resumed, or treated as rolled back.
 14. Recovery always uses fresh admission and a new `RunId`.
 15. Audit is evidence, not proof of rollback or absence of external effects.
 16. No secret, raw provider resource, live handle, or hidden plan frontmatter
@@ -68,9 +68,8 @@ This decision supersedes the conflicting future Plan/Build statements in [archit
 from a prompt-directed limitation to an explicitly available trusted-local advisory operation while preserving ordinary
 typed Plan `write`/`edit` denial. It does not amend M3/M4 behavior, the closed M4 charter, or historical records.
 
-Same-Session continuity is not Run resumption: one-active-run, append-only history, commit-before-effect,
-unknown-effect, and no-resume rules remain authoritative. No sandboxing, rollback, implicit authority, or automatic
-retry is added.
+Same-Session continuity is not Run resumption: one-active-run, append-only history, commit-before-effect, and no-resume
+rules remain authoritative. No sandboxing, rollback, implicit authority, or automatic retry is added.
 
 ## Security and residual risk
 

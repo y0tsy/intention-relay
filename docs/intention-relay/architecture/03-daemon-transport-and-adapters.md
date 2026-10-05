@@ -44,8 +44,8 @@ a response echoes the `id` and carries exactly one of `result` or `error`; a not
 | --- | --- | --- |
 | `session.create` | `CreateSessionCommandDto` | command result DTO |
 | `turn.send` | `SendUserTurnCommandDto` | command result DTO |
-| `turn.remove` | `RemoveQueuedTurnCommandDto` | command result DTO |
-| `run.stop` | `StopRunCommandDto` | command result DTO |
+| `turn.remove` | `RemoveTurnCommandDto` | command result DTO |
+| `run.interrupt` | `InterruptRunCommandDto` | command result DTO |
 | `session.subscribe` | `SubscribeSessionCommandDto` | snapshot or resync result |
 | `run.subscribe` | `SubscribeRunCommandDto` | initial replay or resync result |
 | `daemon.health` | none | daemon health/readiness projection |
@@ -113,7 +113,7 @@ message bound and local Unix-socket/Windows-pipe permissions are unchanged.
 
 Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every
 first-host facade clone and reopening the database; this is deterministic fixture lifecycle ownership, not a production
-signal-handling claim. Admission, `StopRun`, and terminal-promotion semantics are owned by [architecture
+signal-handling claim. Admission and interruption semantics are owned by [architecture
 04](04-sessions-runs-events-and-storage.md).
 
 ## Shared client
@@ -280,10 +280,9 @@ On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
 3.  snapshot the pre-existing unfinished runs and transition each one to `interrupted` through the repository's
-   mandatory terminal-promotion transaction, with durable state-change event and snapshots;
-4.  do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly
-   promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass;
-   and
+   mandatory terminal-transition transaction, with durable state-change event and snapshots;
+4.  do not automatically retry or resume model calls, tool calls, shell processes, or other external work; pending
+   turns stay durable input and start no work during recovery; and
 5. make the recovered state available through later one-shot snapshot replay.
 
 This policy is honest about unknown external side effects. A user may initiate a new retry or manually reconciled
@@ -299,7 +298,7 @@ follow-up run.
 | Protocol mismatch | Client/server compatibility test. | Connection fails with the typed `-32001` incompatibility error before close. |
 | Protocol conformance | JSON-RPC conformance and rewritten transport integration tests. | The four standard error codes, `hello` exact-version equality, notification framing, and the one-to-one method table behave as specified. |
 | Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` before cursor/session validation without unfiltered session state, and no request claims live delivery. |
-| Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, promotes the oldest queued turn in the same transaction when present, and no provider/tool call resumes. |
+| Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
 

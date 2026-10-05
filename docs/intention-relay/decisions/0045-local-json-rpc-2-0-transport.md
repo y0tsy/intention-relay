@@ -70,8 +70,8 @@ subscription is an ordinary method call, not a connection mode.
     | --- | --- |
     | `session.create` | `CreateSessionCommandDto` |
     | `turn.send` | `SendUserTurnCommandDto` |
-    | `turn.remove` | `RemoveQueuedTurnCommandDto` |
-    | `run.stop` | `StopRunCommandDto` |
+    | `turn.remove` | `RemoveTurnCommandDto` |
+    | `run.interrupt` | `InterruptRunCommandDto` |
     | `session.subscribe` | `SubscribeSessionCommandDto` |
     | `run.subscribe` | `SubscribeRunCommandDto` |
     | `daemon.health` | `GetDaemonHealth` (no params) |

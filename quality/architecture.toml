@@ -171,12 +171,10 @@ provider_sdk_resource_patterns = [
 # The closed set of durable ordering authorities (ADR 0050). A record family
 # either orders by the session event sequence, belongs to exactly one container
 # and orders by that container's journal, or has no durable order; there is no
-# fourth option. Queue tickets are a queue-ordering mechanism rather than an
-# ordering authority, declared here so the set stays closed and explicit.
+# fourth option.
 declared = [
   "SessionEventSequenceDto",
   "RunEventCursorDto",
-  "QueuePositionDto",
 ]
 name_suffixes = [
   "SequenceDto",

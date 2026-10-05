@@ -38,86 +38,83 @@ and updated session/run snapshot in one SQLite transaction, or changes nothing.
 terminal and recovered runs**, receives a run snapshot at that same session event sequence.
 6.  Live run updates publish only after commit and an independent scoped durable reread; M3 session subscriptions remain
 durable replay-only.
-7. A queued user turn never becomes model input until it is explicitly promoted to a new run.
-8. An interrupted run is terminal. It cannot silently resume after daemon recovery.
+7. A user turn accepted while a run is active is recorded pending and joins that run's live context in durable order
+at the next model boundary; it never starts a second run.
+8. `Interrupted` is a recovery-only terminal status: an unfinished run becomes `Interrupted` on restart and never
+silently resumes, while `run.interrupt` leaves the live run `Running` and continues its work.
 
 ## Run state machine
 
 ```mermaid
 stateDiagram
-  [*] --> Queued
-  Queued --> Starting: promoted input
-  Queued --> Cancelled: user removes queued turn
+  [*] --> Starting
   Starting --> Running: model stream starts
-  Starting --> Cancelling: stop requested
   Starting --> Failed: startup error
   Starting --> Interrupted: daemon restart
   Running --> WaitingInput: ask user or permission
   WaitingInput --> Running: answer accepted
-  WaitingInput --> Cancelling: stop requested
   WaitingInput --> Failed: unrecoverable error
   WaitingInput --> Interrupted: daemon restart
   Running --> Completing: terminal model result
-  Running --> Cancelling: stop requested
-  Cancelling --> Cancelled: cancellation completes
-  Cancelling --> Failed: cancellation failure
-  Cancelling --> Interrupted: daemon restart
+  Running --> Failed: unrecoverable error
+  Running --> Interrupted: daemon restart
   Completing --> Completed: state committed
   Completing --> Failed: terminal commit failure
   Completing --> Interrupted: daemon restart
-  Running --> Failed: unrecoverable error
-  Running --> Interrupted: daemon restart
-  Queued --> Interrupted: daemon restart
   Completed --> [*]
-  Cancelled --> [*]
   Failed --> [*]
   Interrupted --> [*]
 ```
 
-Cancellation is deliberately two-step: a stop request commits `Starting` (or another cancellable active state) to
-`Cancelling`, and only a subsequent terminal commit may transition it to `Cancelled`, so `Starting -> Cancelling ->
-Cancelled` is required, never collapsed. **Every terminal repository transition** atomically attempts to remove and
-promote the oldest queued turn. When one exists, the repository creates that turn's already-selected `RunId` with its
-immutable snapshot, appends `RunStatusChanged` before `RunStarted`, and snapshots the final projection; callers cannot
-opt out.
+Interruption is not a run state. `run.interrupt` is accepted only for an exact active run, commits no durable status
+change, records a durable `InterruptNoticeRecorded` notice for the stopped provider stream or tool call, resets the
+run's cancellation signal, and the run continues with its next model step; `Cancelling` and `Cancelled` no longer
+exist, and `Interrupted` remains recovery-only. The closed status vocabulary also declares `Queued` with `Starting` and
+`Interrupted` as its only successors; the live path creates every run in `Starting` and produces no `Queued` run. A
+terminal repository transition commits its projection, event, and snapshot atomically, and it has no queued successor
+to promote.
 
 The exact policy for a question or permission after restart remains future tool and interaction work. M4 preserves the
 M3 rule: the unfinished run is marked interrupted and does not resume.
 
-## Durable input queue
+## Pending turns
 
-When a session has an active run, `SendUserTurnCommandDto` creates a durable queued turn rather than creating a parallel
-run.
+When a session has an active run, `SendUserTurnCommandDto` records a durable pending turn rather than creating a
+parallel run; when the session has no active run, acceptance starts a run — the oldest pending turn when one exists,
+otherwise the accepted turn itself — and the acceptance reports `SendUserTurnOutcomeDto::Started` with that run and its
+frozen configuration revision.
 
 ### Required semantics
 
--  queued turns receive a durable, zero-based, monotonic, never-reused queue ticket; the ticket orders the queue
-only and is not an ordering authority for session or container records; removal does not renumber remaining tickets;
-- a user can inspect and remove an unstarted queued turn;
--  after the active run reaches a terminal state, the repository atomically selects and promotes the oldest eligible
-queued turn, if any, as part of that terminal transition;
--  promotion preserves the queued turn's original durable proposed `RunId`, selected immutable config snapshot, and
-`ConfigRevisionId`; a daemon configuration change before the predecessor reaches its terminal transition cannot replace
-that selection; and
--  a failed, cancelled, or interrupted prior run does not silently inject partial assistant content into the next run's
+-  a pending turn keeps its own proposed `RunId`, selected immutable config snapshot, and `ConfigRevisionId`, used if
+it starts the successor run;
+-  the runtime appends pending turns to the live run context at the next boundary — after the provider response that
+ended a model step, or after a tool batch — in durable insertion order as `UserMessageAppended` facts, and the storage
+transaction marks them `appended` so a turn joins exactly one run context;
+- a user can inspect pending turns through `SessionProjectionDto.pending_turns` and remove a not-yet-seen one with
+`turn.remove`; removal commits `TurnRemoved` and renumbers nothing;
+-  pending turns are durable input: a restart preserves them, and a pending turn whose run ended before the join starts
+the successor run through ordinary acceptance once the session has no active run;
+-  a failed or interrupted prior run does not silently inject partial assistant content into the successor run's
 context; and
-- queue promotion is deterministic and testable without UI timing.
+- a boundary join is deterministic and testable without UI timing.
 
 ## Persistence model
 
 SQLite is the M3 `intention-storage` implementation. It uses bundled SQLite and creates the complete current storage
 schema directly on open; there is no migration chain and no version gate (ADR 0038). Storage combines:
 
-- normalized current-state tables for project, workspace-root, session, run, and queue queries;
+- normalized current-state tables for project, workspace-root, session, run, and turn queries;
 - append-only domain-event envelopes for auditability and event-tail recovery;
 - per-state-change session snapshots and snapshots for every affected run, including terminal and recovered runs; and
 -  credential-free canonical `ConfigSnapshotDto` revisions keyed by `ConfigRevisionId`; the same revision ID with an
 equal snapshot is idempotent, while the same ID with a different snapshot fails with a typed conflict.
 
-The current storage schema contains the `projects`, `workspace_roots`, `sessions`, `turns`, `runs`, `queued_turns`,
+The current storage schema contains the `projects`, `workspace_roots`, `sessions`, `turns`, `runs`,
 `configuration_revisions`, `domain_events`, `session_snapshots`, and `run_snapshots` base tables, the M4
 `model_run_facts` and `model_run_snapshots` tables, the `container_journals` table, and the `tool_results` table, all
-created directly on open. `container_journals` is the container journal mechanism: one dense journal per container
+created directly on open. The `turns` table carries one accepted turn with its proposed run and configuration revision
+and a closed `outcome` in `started`, `pending`, or `appended`. `container_journals` is the container journal mechanism: one dense journal per container
 under a closed kind set whose only member today is `run`. The fact index references the canonical typed `domain_events`
 envelope; it stores no duplicate payload. Opening the database seeds a container journal at zero for every stored run, and the write path seeds the journal of
 each newly created run (`ensure_run_journals`); no read path hydrates a missing journal.
@@ -157,13 +154,11 @@ never replaces or filters the ordinary session event sequence;
 -  a filesystem-dependent validation or hook must finish before the transition transaction, and any stale result becomes
 a typed known pre-effect outcome rather than an unrecorded second external check inside the transaction.
 
-Daemon-host outcome fixtures make the `Starting`/`Cancelling` first-append race deterministic and prove task-owned
-cancellation leaves the run's container journal at zero with neither provider execution nor model facts, that a terminal
-promotion is scheduled from the exact persisted successor once, and that stop winning before executor registration
-installs a cancellation terminalizer so later admission cannot strand durable `Cancelling` state. A blocked in-flight
-durable host reopened through a fresh host interrupts the original run before replay, does not resume it or a
-recovery-promoted `Starting` successor, and retains only credential-free replay, event, snapshot, and error
-representations.
+Daemon-host outcome fixtures make the admission/interruption race deterministic and prove that an interrupt either
+reaches the registered execution signal or arrives before admission and finds no in-flight operation to stop, and that
+a stopped call leaves later facts non-authoritative. A blocked in-flight durable host reopened through a fresh host
+interrupts the original run before replay, does not resume it, and retains only credential-free replay, event,
+snapshot, and error representations; pending turns stay durable input.
 
 ## Event taxonomy, snapshots, and event sequences
 
@@ -171,10 +166,11 @@ M5 adds tool lifecycle/result evidence to the durable taxonomy. Tool admission, 
 are correlated by `SessionId`, `RunId`, and `ToolCallId`; the terminal record may carry the bounded, redacted typed
 `ToolResultEvidenceDto`. Result evidence is distinct from model facts and is persisted before publication.
 
-M3 event payloads are closed, explicit facts: `SessionCreated`, `UserTurnAccepted`, `UserTurnQueued`,
-`QueuedTurnRemoved`, `RunStarted`, and `RunStatusChanged`. M4 adds typed durable model facts: `ProviderAttemptStarted`,
+M3 event payloads are closed, explicit facts: `SessionCreated`, `UserTurnAccepted`, `UserTurnPending`, `TurnRemoved`,
+`RunStarted`, and `RunStatusChanged`. M4 adds typed durable model facts: `ProviderAttemptStarted`,
 `ProviderAttemptFailed`, `RetryScheduled`, `AssistantContentAppended`, `ReasoningDeltaRecorded`, `UsageRecorded`,
-`ToolCallRecorded`, `Finished`, and `Failed`. Every M4 fact is a typed `DomainEventDto` payload at a dedicated position
+`ToolCallRecorded`, `Finished`, and `Failed`; the pending-turn and interrupt work adds `UserMessageAppended` and
+`InterruptNoticeRecorded` to that closed fact vocabulary. Every M4 fact is a typed `DomainEventDto` payload at a dedicated position
 in the run's container journal; no raw JSON payload is an event boundary. `ConfigurationRevisionAccepted`,
 `PlanStatusChanged`, `PlanApproved`, `BuildContinuationRequested`, and `BuildRunStartedFromPlan` are reserved typed
 taxonomy for the Plan/Build workflow. Their activation must preserve M3/M4 historical event bytes and use additive
@@ -195,16 +191,12 @@ are strict `> after_cursor`, contiguous, at most 256 facts and 512 KiB canonical
 `invalid_run_event_cursor`; unavailable history returns `run_history_unavailable`. An append above the 512 KiB
 individual fact limit returns `run_fact_too_large`; a stale expected cursor returns `run_event_cursor_conflict` with
 immediate retry guidance.
--  The daemon task and cancellation registries are keyed by exact `(SessionId, RunId)`. Admission and `StopRun`
+-  The daemon task and interruption registries are keyed by exact `(SessionId, RunId)`. Admission and interruption
 serialize through that registry: a host inserts a provider-neutral cancellation signal before spawning a newly admitted
-durable `Starting` run and deduplicates repeated admission. `StopRun` first commits `Cancelling`, publishes the durable
-status, then signals that exact task. If stop wins before registration, it installs an exact task-owned cancellation
-terminalizer, so later admission cannot leave durable `Cancelling` state stranded. The executor owns the terminal
-cancellation transition and suppression of late facts. If `StopRun` wins between the executor's initial `Starting`
-replay and its first `Starting -> Running` append, the task rereads its exact durable scope after rejection and
-terminalizes `Cancelling -> Cancelled`; unrelated append failures remain errors. A terminal commit may promote a queued
-`Starting` run, which the host schedules once from persisted context. Recovery never admits old or recovery-promoted
-work to a provider.
+durable `Starting` run and deduplicates repeated admission. `run.interrupt` validates the exact active run, then signals
+that exact task; an interrupt that arrives before admission finds no in-flight operation to stop, changes no durable
+state, and the run's next boundary continues normally. The executor owns interruption handling and suppression of late
+facts from the stopped call. Recovery never admits old work to a provider.
 -  A runtime configuration lookup for a matching `(SessionId, RunId)` returns only its immutable credential-free
 `ConfigSnapshotDto`, selected by the run's persisted `ConfigRevisionId`. Unknown sessions, unknown runs, and
 cross-session runs all return `run_configuration_not_found`; an absent persisted safe selection row returns
@@ -228,10 +220,10 @@ batches one assistant turn into non-blank UTF-8-safe 4 KiB content facts, retain
 usage once through stream lifecycle validation, records typed tool-call facts durably and executes admitted calls
 through the daemon-owned registry with correlated `ToolResultRecorded` facts, and commits `Running -> Completing`
 before the separate `Completing -> Completed` transition. A provider-neutral runtime time port supplies durable
-timestamps, attempt deadlines, and the cancellation-aware fixed 250 ms retry wait. Retryable provider/deadline
+timestamps, attempt deadlines, and the interruption-aware fixed 250 ms retry wait. Retryable provider/deadline
 failures can make only one retry, only before any durable text, reasoning, usage, or tool fact;
-`ProviderAttemptFailed` then `RetryScheduled` precede the next attempt. Cancellation suppresses later stream
-activity and never resumes after recovery.
+`ProviderAttemptFailed` then `RetryScheduled` precede the next attempt. An interruption ends the stopped stream, records
+its notice, and no interrupted call resumes after recovery.
 - Events are immutable. Corrections are new events and projection/snapshot updates, not history rewrites.
 - M3 retains complete stored history for its delivered replay behavior; compaction/retention policy remains future work.
 
@@ -239,8 +231,8 @@ activity and never resumes after recovery.
 
 Daemon startup completes recovery before it can report ready. It snapshots the pre-existing unfinished runs, transitions
 each one to `interrupted` through the same mandatory terminal-transition transaction used during normal operation, and
-writes the resulting snapshots. A newly promoted `starting` run represents already durable queued input only: recovery
-does not include it in that initial set or resume model, tool, shell, or other external work automatically.
+writes the resulting snapshots. Pending turns stay durable input across that pass; recovery starts no successor run and
+resumes no model, tool, shell, or other external work automatically.
 
 Recovery must not assert whether an interrupted `execute` or external tool had already caused a side effect. The stored
 tool/run audit is evidence of intent and observed state, not proof of external atomicity.
@@ -249,12 +241,12 @@ tool/run audit is evidence of intent and observed state, not proof of external a
 
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
-| One active run and stable tickets | SQLite contract test for concurrent logical acceptance, idempotency, queue removal, ticket non-reuse, and oldest-ticket promotion. | A second turn is durably queued with a never-reused ticket; no second active run exists, and only the oldest queued turn can promote. |
+| One active run and pending input | SQLite contract test for concurrent logical acceptance, idempotency, pending insertion order, and removal. | A second turn is recorded pending with no second active run; pending turns join the live context in insertion order, and a removed pending turn never joins. |
 | Atomic state, events, and snapshots | SQLite fault-injection outcome test after event, projection, and snapshot stages. | Each injected failure rolls back: no new projection, event envelope, or snapshot persists. |
 | Canonical config revision IDs | SQLite config-revision contract test. | An equal credential-free snapshot for the same `ConfigRevisionId` is idempotent; a different snapshot for that ID fails with a typed conflict. |
 | Explicit event taxonomy | Domain/protocol event fixture tests. | M3 facts serialize as the closed documented event variants with stable identity and sequence. |
-| Required cancellation path | Runtime state-machine test. | A starting run must commit `Starting -> Cancelling -> Cancelled`; direct terminal cancellation is rejected. |
-| Atomic terminal promotion | Runtime and SQLite contract tests. | A terminal transition and next queued run start are one durable commit with ordered facts; the promotion retains the queued turn's proposed `RunId`, config snapshot, and revision despite later daemon config changes. |
+| Interruption stays non-terminal | Runtime test. | An interrupt of an in-flight provider stream or tool call records the notice, resets the signal, leaves the run `Running`, and the next model step proceeds; `Cancelling` and `Cancelled` have no transition. |
+| Pending boundary join | Runtime and SQLite contract tests. | Pending turns are appended as ordered `UserMessageAppended` facts and marked `appended` in one durable commit; the run continues without promotion or a second run. |
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `interrupted` before readiness; no external work resumes. |
 | Replay-only consistency | Durable facade snapshot/resync contract test. | One-shot subscription returns a current projection snapshot or typed resync, never a live stream. |
 | SQLite current-schema creation and config persistence | SQLite current-schema and safe snapshot persistence fixtures. | The complete current schema is created directly on open, and only credential-free snapshot data persists. |
@@ -262,10 +254,10 @@ tool/run audit is evidence of intent and observed state, not proof of external a
 
 ## Quality-gate integration
 
-Session, run, queue, event, snapshot, and transaction tests are mandatory `make verify` inputs under the coverage policy
+Session, run, turn, event, snapshot, and transaction tests are mandatory `make verify` inputs under the coverage policy
 of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold, [ADR
 0049](../decisions/0049-base-coverage-threshold.md)), and must exercise every declared feature profile. Numeric coverage
-does not excuse missing fault-injection, recovery, ordering, or durable queue outcome tests.
+does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals
 
@@ -282,7 +274,7 @@ first-scope default.
 
 A future Mandate is a distinct durable work aggregate. It may associate with a future service-session concept while
 preserving the existing one-active-run invariant for that service session. Mandate triggers are durable causal reasons
-for future fresh admission; they are not M3 `queued_turns` and do not reinterpret legacy queue tickets.
+for future fresh admission; they are not pending turns and do not reinterpret accepted turn input.
 
 For future Mandate work:
 
@@ -293,25 +285,25 @@ dependent external work;
 -  no external provider, tool, process, kernel, child, MCP, network, or scheduler action occurs inside the transition
 transaction;
 - recovery preserves durable facts/triggers but never resumes old work;
--  an unknown external terminal effect causes the owning Mandate to await an explicit future reconciliation, not an
-automatic retry or next model step.
+-  a started effect without terminal proof commits a bounded partial result and permits the next model step, never an
+automatic retry.
 
 [Mandate domain and durable lifecycle](13-mandate-domain-and-durable-lifecycle.md) owns the detailed Mandate lifecycle,
-trigger ordering, fresh admission, uncertainty, and recovery contract; [architecture
+trigger ordering, fresh admission, and recovery contract; [architecture
 16](16-mandate-scheduler-and-readiness-driven-admission.md) owns scheduler semantics, and [architecture
 17](17-mandate-child-graph-and-delegated-verifier-authority.md) owns child graph and verifier authority. Existing run
 states and M3/M4 recovery behavior remain unchanged. Concrete timer/process topology, event variants, protocol delivery,
 and schema design remain later packages. See [decision
 0001](../decisions/0001-mandate-authority-and-fresh-run-lifecycle.md) and [decision
-0002](../decisions/0002-external-attempt-evidence-and-unknown-effect-reconciliation.md).
+0052](../decisions/0052-partial-tool-results-for-interrupted-execution.md).
 
 ## Post-M4 tool-loop storage consequence
 
 Future model-tool-loop work atomically records a completed tool-calling model step, its ordered tool group, normalized
 calls, and the matching container-journal position, projection, event, and snapshot updates before any local effect.
 Future admissions, starts, fragments, and terminal results order by the run's container journal, commit before
-publication, and publish only after an independent scoped reread. A started effect without terminal proof follows the
-Mandate uncertainty transition; recovery never retries or resumes a tool action. This adds no current table, event,
+publication, and publish only after an independent scoped reread. A started effect without terminal proof commits a
+bounded partial result; recovery never retries or resumes a tool action. This adds no current table, event,
 state, migration, or reinterpretation of M4 `ToolCallRecorded` denial;
 [Tool registry and direct Mandate tool loop](15-tool-registry-and-mandate-tool-loop.md) owns the exact semantics.
 
@@ -328,11 +320,11 @@ own.
 Future scheduler candidate outcomes and durable observations are evidence of their Mandate container and order by that
 Mandate's container journal; live readiness observations carry no durable order and order only by the owner-local
 operational tuple `(source_instance_id, source_epoch, source_sequence)`, which is operational metadata rather than an
-ordering authority. They are distinct from M3 queue tickets, the session event sequence, and the run's container
+ordering authority. They are distinct from pending turns, the session event sequence, and the run's container
 journal. An unavailable candidate retains its reason and creates no Run. Fresh admission revalidates lifecycle,
 sequence, revision, reason, meaning, and readiness atomically; no scheduler action occurs in that transaction.
 Scheduler admission begins only after recovery, and pre-crash live readiness is never trusted. This adds no current
-table, event, migration, or ordinary queue change; [Mandate scheduler and readiness-driven
+table, event, migration, or pending-turn change; [Mandate scheduler and readiness-driven
 admission](16-mandate-scheduler-and-readiness-driven-admission.md) owns the semantics.
 
 ## Post-M4 child/verifier storage consequence
@@ -340,7 +332,7 @@ admission](16-mandate-scheduler-and-readiness-driven-admission.md) owns the sema
 Future child creation atomically binds the child Mandate, immutable direct edge, delegation snapshot, parent tool
 result, and their affected projections/events/snapshots before publication. Future verifier mutation atomically
 validates its authority and frozen target baseline with its applied or rejected result. These facts remain separate from
-the session event sequence, the run's container journal, M3 queue tickets, and M4 replay: a delegation pair is a
+the session event sequence, the run's container journal, pending turns, and M4 replay: a delegation pair is a
 container, and records that belong to it order by that pair's container journal. Recovery rebuilds only supported graph
 projections and never resumes child/verifier external work. This adds no current table, event, migration, or historical
 reinterpretation; [Mandate child graph and delegated verifier
@@ -350,8 +342,8 @@ authority](17-mandate-child-graph-and-delegated-verifier-authority.md) owns the 
 
 Future MCP discovery atomically commits safe discovery evidence, immutable capability revisions, accumulated selection,
 and its tool result before publication. Future invocation atomically binds its exact selection/capability/input before
-effect and persists only safe terminal projection or exact uncertainty evidence. These records remain separate from the
-session event sequence, the run's container journal, ordinary queues, and M4 replay: MCP records belong to their Mandate
+effect and persists only safe terminal projection or bounded partial evidence. These records remain separate from the
+session event sequence, the run's container journal, pending turns, and M4 replay: MCP records belong to their Mandate
 container and order by that Mandate's container journal. Recovery never reconnects, reattaches, rediscovers, retries, or
 resumes MCP work. This adds no current table, event, migration, or historical reinterpretation; [Mandate MCP
 capability lifecycle](18-mandate-mcp-capability-lifecycle.md) owns the detailed semantics.
@@ -359,16 +351,17 @@ capability lifecycle](18-mandate-mcp-capability-lifecycle.md) owns the detailed 
 ## Post-M4 provider-evolution storage consequence
 
 Future provider catalog/profile/revision records and provider-selection bindings are additive, credential-free records.
-They do not rewrite or retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events, queues, the run's
-container journal, facts, or replay bytes. These records introduce no ordering sequence and have no durable order; they
-are correlated by typed identity and immutable revision. Recovery never resumes a prior provider request. [Provider
+They do not rewrite or retrospectively classify M4 snapshots, UUID `ConfigRevisionId` values, events, pending turns,
+the run's container journal, facts, or replay bytes. These records introduce no ordering sequence and have no durable
+order; they are correlated by typed identity and immutable revision. Recovery never resumes a prior provider request.
+[Provider
 evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md) owns the detailed semantics.
 
 ## Post-M4 session branching storage consequence
 
 Architecture 23 owns future ordinary Session lineage. Additive fork records belong to their conversation tree and order
 by that tree's container journal; they may create independent child Sessions, but cannot rewrite source events, M3/M4
-bytes, session event sequences, queues, other container journals, snapshots, or replay. One active run remains a
+bytes, session event sequences, pending turns, other container journals, snapshots, or replay. One active run remains a
 per-Session invariant; concurrent branches are separate Sessions, not parallel runs in one Session.
 
 ## Post-M5 instruction-source storage consequence

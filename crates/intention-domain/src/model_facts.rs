@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use intention_types::{
     AssistantTurnId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, FinishReasonDto,
     ProviderErrorDto, RunId, SessionEventSequenceDto, SessionId, TimestampDto, ToolCallDto,
-    ToolCallId, UsageDto,
+    ToolCallId, TurnId, UsageDto,
 };
 
 const MAX_ASSISTANT_CONTENT_BYTES: usize = 4 * 1024;
@@ -69,6 +69,10 @@ pub enum ModelRunFactKindDto {
     ToolCallRecorded,
     /// A tool result was durably recorded for one tool call.
     ToolResultRecorded,
+    /// A pending user message joined the live run context.
+    UserMessageAppended,
+    /// The run recorded a notice that its current call was stopped.
+    InterruptNoticeRecorded,
     /// The provider reported a terminal finish reason.
     Finished,
     /// The run recorded a safe terminal failure.
@@ -88,6 +92,8 @@ impl ModelRunFactKindDto {
             Self::UsageRecorded => "usage_recorded",
             Self::ToolCallRecorded => "tool_call_recorded",
             Self::ToolResultRecorded => "tool_result_recorded",
+            Self::UserMessageAppended => "user_message_appended",
+            Self::InterruptNoticeRecorded => "interrupt_notice_recorded",
             Self::Finished => "finished",
             Self::Failed => "failed",
         }
@@ -102,6 +108,9 @@ pub enum ToolResultOutcomeDto {
     Succeeded { content: String },
     /// The tool call failed safely.
     Failed { failure: RunFailureDto },
+    /// The tool call was interrupted before a final outcome; the content is
+    /// whatever output was captured before the interruption.
+    Partial { content: String },
 }
 
 impl ToolResultOutcomeDto {
@@ -123,6 +132,20 @@ impl ToolResultOutcomeDto {
     #[must_use]
     pub const fn failed(failure: RunFailureDto) -> Self {
         Self::Failed { failure }
+    }
+
+    /// Creates a partial tool-result outcome for an interrupted tool call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank.
+    pub fn partial(content: impl Into<String>) -> DtoResult<Self> {
+        let content = non_blank(
+            content.into(),
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        )?;
+        Ok(Self::Partial { content })
     }
 }
 
@@ -235,6 +258,10 @@ pub enum ModelRunFactInputDto {
         call_id: ToolCallId,
         outcome: ToolResultOutcomeDto,
     },
+    /// A pending user message joined the live run context in FIFO order.
+    UserMessageAppended { turn_id: TurnId, content: String },
+    /// The run recorded one notice that its current call was stopped.
+    InterruptNoticeRecorded { content: String },
     /// A terminal provider reason was recorded.
     Finished { reason: FinishReasonDto },
     /// A safe terminal failure was recorded.
@@ -277,6 +304,13 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
                 call_id: ToolCallId,
                 outcome: ToolResultOutcomeDto,
             },
+            UserMessageAppended {
+                turn_id: TurnId,
+                content: String,
+            },
+            InterruptNoticeRecorded {
+                content: String,
+            },
             Finished {
                 reason: FinishReasonDto,
             },
@@ -309,6 +343,12 @@ impl<'de> Deserialize<'de> for ModelRunFactInputDto {
             }
             RawModelRunFactInputDto::ToolResultRecorded { call_id, outcome } => {
                 Self::tool_result_recorded(call_id, outcome)
+            }
+            RawModelRunFactInputDto::UserMessageAppended { turn_id, content } => {
+                Self::user_message_appended(turn_id, content)
+            }
+            RawModelRunFactInputDto::InterruptNoticeRecorded { content } => {
+                Self::interrupt_notice_recorded(content)
             }
             RawModelRunFactInputDto::Finished { reason } => Ok(Self::finished(reason)),
             RawModelRunFactInputDto::Failed { failure } => Ok(Self::failed(failure)),
@@ -423,6 +463,37 @@ impl ModelRunFactInputDto {
         Ok(Self::ToolResultRecorded { call_id, outcome })
     }
 
+    /// Creates a non-blank pending user-message fact for one accepted turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the joined content is blank.
+    pub fn user_message_appended(turn_id: TurnId, content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::UserMessageAppended {
+            turn_id,
+            content: non_blank(
+                content.into(),
+                "invalid_user_message_content",
+                "joined user message content must not be empty",
+            )?,
+        })
+    }
+
+    /// Creates a non-blank interruption notice for the live run context.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the notice content is blank.
+    pub fn interrupt_notice_recorded(content: impl Into<String>) -> DtoResult<Self> {
+        Ok(Self::InterruptNoticeRecorded {
+            content: non_blank(
+                content.into(),
+                "invalid_interrupt_notice",
+                "interrupt notice content must not be empty",
+            )?,
+        })
+    }
+
     /// Creates a terminal finish fact.
     #[must_use]
     pub const fn finished(reason: FinishReasonDto) -> Self {
@@ -447,6 +518,8 @@ impl ModelRunFactInputDto {
             Self::UsageRecorded { .. } => ModelRunFactKindDto::UsageRecorded,
             Self::ToolCallRecorded { .. } => ModelRunFactKindDto::ToolCallRecorded,
             Self::ToolResultRecorded { .. } => ModelRunFactKindDto::ToolResultRecorded,
+            Self::UserMessageAppended { .. } => ModelRunFactKindDto::UserMessageAppended,
+            Self::InterruptNoticeRecorded { .. } => ModelRunFactKindDto::InterruptNoticeRecorded,
             Self::Finished { .. } => ModelRunFactKindDto::Finished,
             Self::Failed { .. } => ModelRunFactKindDto::Failed,
         }

@@ -20,7 +20,7 @@ UI/control plane, live reload, credential rotation, discovery, pricing, health c
 
 ## Ownership and non-authorities
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 owns run-execution
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 owns run-execution
 meaning and historical compatibility (its binary codec with canonical records, digests, and decode classes was removed
 by [ADR 0046](../decisions/0046-typed-serde-json-contracts.md)); 15 owns the registry, tool loop, model-step identities,
 and local tool exchange; 16 owns scheduler readiness reevaluation; 17 owns child/verifier authority; 18 owns MCP; 19
@@ -223,9 +223,10 @@ alternate endpoint, kind, driver, or current-TOML fallback.
 Future provider attempts use architecture 13's admitted-before-start, started, known-terminal, and unknown-terminal law.
 `Started` commits before an outbound boundary and never inside an external-effect transaction. A known terminal or
 pre-start failure remains known. A started request without durable terminal proof after loss, cancellation, timeout, or
-restart becomes `ExternalEffectUnknown`; architecture 13 pauses only the owning Mandate. Late provider data is
-non-authoritative. Recovery terminalizes admitted-before-start work as known interruption, recovers exact catalog
-activation, establishes new readiness, and permits only fresh admission with a new `RunId`.
+restart commits a bounded `Partial` result with its notice and pauses no Mandate; nothing is retried, and a later
+attempt is fresh admission. Late provider data is non-authoritative. Recovery terminalizes admitted-before-start work as
+known interruption, recovers exact catalog activation, establishes new readiness, and permits only fresh admission with
+a new `RunId`.
 
 A future retry may follow only a frozen-policy, durably known retryable terminal or pre-start outcome. Any accepted
 text, reasoning, summary, usage, tool, or terminal fact prevents retry. A post-dispatch timeout/loss without terminal
@@ -356,7 +357,7 @@ any provider call. The closed results are `reasoning_history_unavailable` (missi
 bound). A run is never silently sent without required history.
 
 Every dependent run receives an immutable `ReasoningHistoryManifestDto` in the same durable transaction as its
-`RunStarted` fact (including repository-owned queued-turn promotion): schema and transfer policy, compatibility
+`RunStarted` fact: schema and transfer policy, compatibility
 identity, ordered source-response references, per-entry references and sizes, and one manifest identity; no duplicate
 reasoning text. One source reference carries the source session/run, completed sequence, final assistant-turn identity
 when present, and ordered reasoning fact cursor/category/size references. A compatible completed response with no

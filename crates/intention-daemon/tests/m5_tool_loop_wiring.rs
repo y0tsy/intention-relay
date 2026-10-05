@@ -312,14 +312,18 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
         advertised_names, model_visible_names,
         "round one observes every model-visible tool definition in registry order"
     );
+    // The continuation request closes its stable window prefix with the
+    // runtime-recomputed prompt-cache breakpoint.
+    let mut expected_result =
+        ModelMessageDto::tool_result(call.call_id(), "hello from e2e").expect("message is valid");
+    expected_result.set_cache_control(true);
     assert_eq!(
         requests[1].messages(),
         vec![
             ModelMessageDto::new(ModelRoleDto::User, "turn").expect("message is valid"),
             ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
                 .expect("message is valid"),
-            ModelMessageDto::tool_result(call.call_id(), "hello from e2e")
-                .expect("message is valid"),
+            expected_result,
         ]
     );
 

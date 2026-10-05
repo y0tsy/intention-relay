@@ -74,8 +74,8 @@ Day/Week/Month period engine never existed in code: a repository search finds ze
 the documentation instead of being kept as unimplemented direction, and ADR 0022 above is amended accordingly.
 9. The unavailable-queue promotion and reconciliation, held-run admission,
 and related queue audits exist only in documentation after the Slice 2 revert (`AdmitRecoveredRun`). They are removed
-from the documentation. The live M3 queue with its tickets and atomic promotion is untouched and remains the queue
-authority.
+from the documentation. The live M3 turn input has since been replaced by pending turns joined to the live run context
+by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md).
 10. This removal is documentation-only: no queue behavior changes, and no new
 queue reconciliation, held-run admission, or audit surface is created.
 
@@ -90,14 +90,16 @@ numeric safeguards retained; a new safeguard or a changed value requires its rec
 shapes, and no heuristic replaces the removed scanners.
 4. No corridors or periods. No corridor, reservation, calendar counter, or
 Day/Week/Month period model exists in code or documentation.
-5. Live queue unchanged. M3 queue tickets and atomic promotion stay exactly
-as they are.
+5. No live queue. Pending turns are durable input joined to the live run
+context at the next boundary; the M3 queue, its tickets, and its promotion were removed by [ADR
+0055](0055-pending-turns-and-cooperative-interruption.md).
 6. No replacement bureaucracy. A removed limit is not replaced by a warning,
 a soft cap, a counter, or a periodic audit.
 
 ## Compatibility
 
-M3/M4 durable behavior, queue tickets, promotion, replay, and storage bytes are unchanged. The removed limits were
+M3/M4 durable behavior, replay, and storage bytes are unchanged; the M3 queue, its tickets, and its promotion were
+later removed by [ADR 0055](0055-pending-turns-and-cooperative-interruption.md). The removed limits were
 either speculative contract vocabulary never enforced on the live path or clauses of the reverted Slice 2 surface. Where
 a real bound exists on a live path and is retained, its value is unchanged. No protocol, DTO, configuration, or storage
 schema version changes.

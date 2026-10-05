@@ -265,18 +265,16 @@ terminal safe result projection of every call becomes model context after the wh
 
 The first-scope bounds are:
 
-- the existing **512 KiB** individual durable-fact bound applies to every fragment;
--  all output fragments and successful result content in one group share a **4 MiB** combined content limit, consumed in
-  actual durable commit order, with no equal per-call allocation and no dependence on later scheduler reconstruction;
--  content is never truncated or partly committed; if the next fragment cannot fit, it is not written and only its call
-  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue; and
-- a small closed terminal outcome remains representable after budget exhaustion.
+- the existing **512 KiB** individual durable-fact bound applies to every fragment; and
+-  content is never truncated or partly committed; if a fragment cannot fit, it is not written and only its call
+  receives the terminal `tool_output_limit_exceeded` outcome, while remaining calls continue.
 
 The closed initial terminal outcome taxonomy is: `Succeeded`, `DeniedBeforeExecution`, `FailedBeforeExternalEffect`,
-`CancelledBeforeStart`, `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and
-`ExternalEffectUnknown`. It carries only safe model-visible projection and approved typed metadata; no value silently
-changes category during replay. `Succeeded`, known denials, known pre-effect failures, and the output-limit outcome may
-enter the next typed exchange; an `ExternalEffectUnknown` result never permits another model step.
+`CancelledBeforeStart`, `InterruptedBeforeStart`, `OutputLimitExceeded`, `ExecutionUnavailable`, and `Partial`. It
+carries only safe model-visible projection and approved typed metadata; no value silently changes category during
+replay. `Succeeded`, known denials, known pre-effect failures, the output-limit outcome, and `Partial` may enter the
+next typed exchange; a `Partial` result carries the bounded captured output with its interruption notice, never blocks
+another model step, and is never retried.
 
 ### Tool history replay and subscription
 
@@ -321,23 +319,23 @@ never claims success or resumes work after restart.
 
 The progress deadline is a model-step policy owned by this document, referenced by the programmatic-caller policy under
 [architecture 27](27-programmatic-caller-policy-and-admission.md); it may not weaken it. A timeout outcome is a known
-typed failure before an external effect when no irreversible fact preceded it, and `ExternalEffectUnknown` when a
-started effect lacks durable terminal proof.
+typed failure before an external effect when no irreversible fact preceded it, and a bounded `Partial` result when a
+started effect lacks durable terminal proof; the next model step proceeds, and nothing pauses.
 
 ## Effect evidence, cancellation, and recovery
 
 `ToolCallStarted` is the durable boundary after which an external effect may be possible. Before it,
 cancellation/restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs; after it,
-known terminal evidence records the exact known result, and a started action without durably proven terminal effect
-records `ExternalEffectUnknown`. Known validation failures, denials, and known tool/process failures are not unknown
-effects. Tools are never automatically retried; provider retry may not repeat a tool action or occur after durable
-group, admission, start, output, or result evidence. Cancellation stops further admission, suppresses late facts, and
-prevents a next model step.
+known terminal evidence records the exact known result, and a started action interrupted or lost without durably proven
+terminal effect commits a bounded `Partial` result with its interruption notice. Known validation failures, denials, and
+known tool/process failures are known outcomes, not partial results. Tools are never automatically retried; provider
+retry may not repeat a tool action or occur after durable group, admission, start, output, or result evidence.
+Cancellation stops further admission, suppresses late facts, and prevents a next model step.
 
 Recovery completes before readiness, classifies unfinished calls from durable evidence, and never attaches, rediscovers,
-retries, resumes, or reruns a tool, process, filesystem, network, or other external action. For Mandate work, an unknown
-effect links the exact call/attempt evidence and moves only its owning Mandate to `PausedAwaitingDecision` under
-architecture 13; exact reconciliation permits only later fresh admission or stopping, never replay of the old call.
+retries, resumes, or reruns a tool, process, filesystem, network, or other external action. For Mandate work, a partial
+result links the exact call evidence and pauses no Mandate: the next model step proceeds with the bounded captured
+output and its notice, and the old call is never replayed.
 
 ## Compatibility and protocol boundary
 

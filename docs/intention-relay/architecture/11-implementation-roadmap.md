@@ -236,7 +236,7 @@ errors, snapshots, events, and adapter DTOs.
 
 -  M5+ exit proves M6, M7, M8, and M9 can each begin against stable contracts without any retroactive protocol, DTO,
 schema, crate-boundary, migration, or quality-policy change.
--  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, queue tickets, sessions, runs, events,
+-  M3/M4 startup-only configuration, recorded revisions, persisted run snapshots, sessions, runs, events,
 and bytes remain authoritative and unchanged; SQLite storage is the single live schema created directly on open.
 -  The reverted Slice 2 health, discovery, and pricing surfaces were non-authorizing: they create no RunId, reason,
 lifecycle transition, scheduler candidate, tool permission, child edge, verifier authority, MCP capability, bridge
@@ -451,8 +451,8 @@ per [architecture 12](12-quality-gates-and-makefile.md) is accepted.
 ### Deliver
 
 -  the Mandate aggregate, DTO family, revision, lifecycle, trigger, eligibility, fresh-admission, capacity,
-transaction-class, user-conflict, uncertainty, recovery, compatibility, and evidence contracts (architecture 13);
--  the external-attempt phase and evidence taxonomy and the unknown-effect pause with no retry, resume, reattachment, or
+transaction-class, user-conflict, recovery, compatibility, and evidence contracts (architecture 13);
+-  the external-attempt phase and evidence taxonomy and the partial-result rule with no retry, resume, reattachment, or
 rerun (architecture 13);
 -  the nested Mandate and `VerifierMandate` typed serde JSON contract families with explicit decoder outcomes and
 historical-compatibility classes (architecture 14, [ADR 0046](../decisions/0046-typed-serde-json-contracts.md));
@@ -467,12 +467,12 @@ recovery-before-scheduling (architecture 16);
 
 ### Tests first
 
-- admission-transaction, conflict, capacity, and legacy-ticket separation fixtures;
-- attempt-phase and unknown-effect matrix fixtures;
+- admission-transaction, conflict, capacity, and pending-turn separation fixtures;
+- attempt-phase and partial-result matrix fixtures;
 - typed contract fixtures plus invalid vectors for both Mandate kinds;
 - reread, readiness, deterministic-selection, atomic-handoff, and recovery-before-scheduling fixtures;
 - calendar/interval/time-zone/DST fixtures over the scheduler reasons;
-- M3/M4 byte, run, queue, and history preservation fixtures.
+- M3/M4 byte, run, and history preservation fixtures.
 
 ### Acceptance outcomes
 
@@ -480,7 +480,7 @@ recovery-before-scheduling (architecture 16);
 earlier work;
 - an unknown external effect pauses the Mandate and produces no retry, resume, or rerun;
 - identical admitted inputs produce identical frozen typed payloads;
-- no ordinary M3/M4 run, queue ticket, or history changes meaning.
+- no ordinary M3/M4 run or history changes meaning.
 
 ### Exit criteria
 
@@ -508,8 +508,8 @@ execution-kind-scoped `WorkspaceRoot` (architecture 15, decision 0007);
 (architectures 15, [ADR 0025](../decisions/0025-base-tool-contracts-and-tool-loop-bounds.md) as amended by [ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md));
 -  durable immutable child edges, delegation snapshots, direct-edge controls and messages, graph terminalization,
-child-local uncertainty, separately issued verifier authority, immutable target sets and baselines, conflict precedence,
-and exact reconciliation (architecture 17, decision 0009);
+separately issued verifier authority, immutable target sets and baselines, and conflict precedence (architecture 17,
+decision 0009);
 -  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
 durable operation correlation, the one-path ingress into registry admission and tool-loop facts, safe replay,
 cancellation propagation, recovery, and the closed `bridge_*` failures (architecture 19, decisions 0011/0027);
@@ -530,7 +530,7 @@ cancellation propagation, recovery, and the closed `bridge_*` failures (architec
 ### Acceptance outcomes
 
 -  every Mandate tool call travels the frozen descriptor path and produces durable evidence exactly once, with no retry
-after an unknown effect;
+of an interrupted call;
 -  parenthood grants only direct-child controls and no implicit verifier or lifecycle authority, and verifier mutation
 requires exact issued authority, target, operation, baseline, and evidence;
 -  bridge ingress cannot bypass registry admission, `ToolCallId`, start/result evidence, or post-commit reread
@@ -645,9 +645,8 @@ Current ordering status: the durable ordering authorities were collapsed to two 
 (`SessionEventSequenceDto`) for every record committed in one session, and the container journal sequence (storage
 mechanism `container_journals`; the only container kind today is `run`, whose position type is `RunEventCursorDto`) —
 plus one observation position, the reserved observation cursor, which is a reader's resume position and never an
-authority. The collapsed set is closed: no record family introduces a further ordering sequence, and queue tickets and
-owner-local operational tuples (for example scheduler readiness observations) are queue-ordering or operational
-metadata, not ordering authorities.
+authority. The collapsed set is closed: no record family introduces a further ordering sequence, and owner-local
+operational tuples (for example scheduler readiness observations) are operational metadata, not ordering authorities.
 
 | Package | Owner document | Status | Depends on |
 | --- | --- | --- | --- |
@@ -705,8 +704,7 @@ flowchart TD
   M --> S[Trigger scheduler]
   E --> S
   T --> G[Gateway bridge]
-  S --> X[Effect reconciliation]
-  X --> C[Child verifier]
+  S --> C[Child verifier]
   T --> P[MCP lifecycle]
   M --> K[Skills Goals context]
   E --> V[Provider evolution]

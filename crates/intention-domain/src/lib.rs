@@ -6,8 +6,8 @@
 use std::fmt::{Display, Formatter};
 
 use intention_types::{
-    ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, QueuePositionDto, RunId,
-    SessionEventSequenceDto, SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
+    ConfigRevisionId, DtoResult, ErrorDto, PlanId, ProjectId, RunId, SessionEventSequenceDto,
+    SessionId, TimestampDto, ToolCallId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -43,12 +43,8 @@ pub enum RunStatusDto {
     WaitingInput,
     /// The run is committing its terminal result.
     Completing,
-    /// A cancellation request is in progress.
-    Cancelling,
     /// The run completed successfully.
     Completed,
-    /// The run was cancelled by user or policy.
-    Cancelled,
     /// The run encountered an unrecoverable safe failure.
     Failed,
     /// Daemon recovery ended an unfinished run without retrying it.
@@ -59,10 +55,7 @@ impl RunStatusDto {
     /// Returns whether no future status transition is valid from this status.
     #[must_use]
     pub const fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Cancelled | Self::Failed | Self::Interrupted
-        )
+        matches!(self, Self::Completed | Self::Failed | Self::Interrupted)
     }
 }
 
@@ -75,27 +68,20 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
     let allowed = matches!(
         (from, to),
         (RunStatusDto::Queued, RunStatusDto::Starting)
-            | (RunStatusDto::Queued, RunStatusDto::Cancelled)
             | (RunStatusDto::Queued, RunStatusDto::Interrupted)
             | (RunStatusDto::Starting, RunStatusDto::Running)
-            | (RunStatusDto::Starting, RunStatusDto::Cancelling)
             | (RunStatusDto::Starting, RunStatusDto::Failed)
             | (RunStatusDto::Starting, RunStatusDto::Interrupted)
             | (RunStatusDto::Running, RunStatusDto::WaitingInput)
             | (RunStatusDto::Running, RunStatusDto::Completing)
-            | (RunStatusDto::Running, RunStatusDto::Cancelling)
             | (RunStatusDto::Running, RunStatusDto::Failed)
             | (RunStatusDto::Running, RunStatusDto::Interrupted)
             | (RunStatusDto::WaitingInput, RunStatusDto::Running)
-            | (RunStatusDto::WaitingInput, RunStatusDto::Cancelling)
             | (RunStatusDto::WaitingInput, RunStatusDto::Failed)
             | (RunStatusDto::WaitingInput, RunStatusDto::Interrupted)
             | (RunStatusDto::Completing, RunStatusDto::Completed)
             | (RunStatusDto::Completing, RunStatusDto::Failed)
             | (RunStatusDto::Completing, RunStatusDto::Interrupted)
-            | (RunStatusDto::Cancelling, RunStatusDto::Cancelled)
-            | (RunStatusDto::Cancelling, RunStatusDto::Failed)
-            | (RunStatusDto::Cancelling, RunStatusDto::Interrupted)
     );
     if allowed {
         Ok(())
@@ -238,15 +224,15 @@ impl CreateSessionCommandDto {
     }
 }
 
-/// A command requesting removal of one not-yet-started queued turn.
+/// A command requesting removal of one not-yet-seen pending turn.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveQueuedTurnCommandDto {
+pub struct RemoveTurnCommandDto {
     session_id: SessionId,
     turn_id: TurnId,
 }
 
-impl RemoveQueuedTurnCommandDto {
-    /// Creates a typed queued-turn removal request.
+impl RemoveTurnCommandDto {
+    /// Creates a typed pending-turn removal request.
     #[must_use]
     pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
         Self {
@@ -261,7 +247,7 @@ impl RemoveQueuedTurnCommandDto {
         self.session_id
     }
 
-    /// Returns the queued user turn identity.
+    /// Returns the pending user turn identity.
     #[must_use]
     pub const fn turn_id(self) -> TurnId {
         self.turn_id
@@ -328,44 +314,41 @@ impl RunProjectionDto {
     }
 }
 
-/// A safe current projection of one queued user turn.
+/// A safe current projection of one pending user turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct QueuedTurnProjectionDto {
+pub struct PendingTurnProjectionDto {
     session_id: SessionId,
     turn_id: TurnId,
     content: String,
-    position: QueuePositionDto,
 }
 
-impl<'de> Deserialize<'de> for QueuedTurnProjectionDto {
+impl<'de> Deserialize<'de> for PendingTurnProjectionDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
-        struct RawQueuedTurnProjectionDto {
+        struct RawPendingTurnProjectionDto {
             session_id: SessionId,
             turn_id: TurnId,
             content: String,
-            position: QueuePositionDto,
         }
 
-        let raw = RawQueuedTurnProjectionDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.turn_id, raw.content, raw.position).map_err(de::Error::custom)
+        let raw = RawPendingTurnProjectionDto::deserialize(deserializer)?;
+        Self::new(raw.session_id, raw.turn_id, raw.content).map_err(de::Error::custom)
     }
 }
 
-impl QueuedTurnProjectionDto {
-    /// Creates one queued turn projection with non-empty user content.
+impl PendingTurnProjectionDto {
+    /// Creates one pending turn projection with non-empty user content.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the queued content is blank.
+    /// Returns a validation error when the pending content is blank.
     pub fn new(
         session_id: SessionId,
         turn_id: TurnId,
         content: impl Into<String>,
-        position: QueuePositionDto,
     ) -> DtoResult<Self> {
         let content = content.into();
         if content.trim().is_empty() {
@@ -378,7 +361,6 @@ impl QueuedTurnProjectionDto {
                 session_id,
                 turn_id,
                 content,
-                position,
             })
         }
     }
@@ -389,22 +371,16 @@ impl QueuedTurnProjectionDto {
         self.session_id
     }
 
-    /// Returns the queued user turn identity.
+    /// Returns the pending user turn identity.
     #[must_use]
     pub const fn turn_id(&self) -> TurnId {
         self.turn_id
     }
 
-    /// Returns the user-authored content that remains queued.
+    /// Returns the user-authored content that is not yet in the run context.
     #[must_use]
     pub fn content(&self) -> &str {
         &self.content
-    }
-
-    /// Returns the durable zero-based queue position.
-    #[must_use]
-    pub const fn position(&self) -> QueuePositionDto {
-        self.position
     }
 }
 
@@ -420,7 +396,7 @@ pub struct SessionProjectionDto {
     config_revision_id: Option<ConfigRevisionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
-    queued_turns: Vec<QueuedTurnProjectionDto>,
+    pending_turns: Vec<PendingTurnProjectionDto>,
     at_sequence: SessionEventSequenceDto,
 }
 
@@ -440,7 +416,7 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             config_revision_id: Option<ConfigRevisionId>,
             #[serde(default)]
             active_run: Option<RunProjectionDto>,
-            queued_turns: Vec<QueuedTurnProjectionDto>,
+            pending_turns: Vec<PendingTurnProjectionDto>,
             at_sequence: SessionEventSequenceDto,
         }
 
@@ -453,7 +429,7 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             raw.mode,
             raw.config_revision_id,
             raw.active_run,
-            raw.queued_turns,
+            raw.pending_turns,
             raw.at_sequence,
         )
         .map_err(de::Error::custom)
@@ -465,8 +441,8 @@ impl SessionProjectionDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when a nested run or queued turn belongs to a
-    /// different session, or queue tickets are not strictly ascending and unique.
+    /// Returns a validation error when a nested run or pending turn belongs to a
+    /// different session, or pending turn identities are not unique.
     #[expect(
         clippy::too_many_arguments,
         reason = "This public M3 wire constructor preserves the established nine-field session projection contract."
@@ -479,25 +455,25 @@ impl SessionProjectionDto {
         mode: RunModeDto,
         config_revision_id: Option<ConfigRevisionId>,
         active_run: Option<RunProjectionDto>,
-        queued_turns: Vec<QueuedTurnProjectionDto>,
+        pending_turns: Vec<PendingTurnProjectionDto>,
         at_sequence: SessionEventSequenceDto,
     ) -> DtoResult<Self> {
         if active_run.is_some_and(|run| run.session_id() != session_id)
-            || queued_turns
+            || pending_turns
                 .iter()
-                .zip(queued_turns.iter().skip(1))
+                .zip(pending_turns.iter().skip(1))
                 .any(|(previous, next)| {
                     previous.session_id() != session_id
                         || next.session_id() != session_id
-                        || previous.position() >= next.position()
+                        || previous.turn_id() == next.turn_id()
                 })
-            || queued_turns
+            || pending_turns
                 .first()
                 .is_some_and(|turn| turn.session_id() != session_id)
         {
             return Err(ErrorDto::validation(
                 "invalid_session_projection",
-                "nested session state must belong to its session with strictly ascending queue tickets",
+                "nested session state must belong to its session with unique pending turn identities",
             ));
         }
         Ok(Self {
@@ -508,7 +484,7 @@ impl SessionProjectionDto {
             mode,
             config_revision_id,
             active_run,
-            queued_turns,
+            pending_turns,
             at_sequence,
         })
     }
@@ -548,10 +524,10 @@ impl SessionProjectionDto {
     pub const fn active_run(&self) -> Option<RunProjectionDto> {
         self.active_run
     }
-    /// Returns queued turns in durable queue order.
+    /// Returns pending turns in durable insertion order.
     #[must_use]
-    pub fn queued_turns(&self) -> &[QueuedTurnProjectionDto] {
-        &self.queued_turns
+    pub fn pending_turns(&self) -> &[PendingTurnProjectionDto] {
+        &self.pending_turns
     }
     /// Returns the event position included by the projection.
     #[must_use]
@@ -630,15 +606,15 @@ impl SendUserTurnCommandDto {
     }
 }
 
-/// A command requesting cancellation of an active run.
+/// A command requesting interruption of an active run's current operation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StopRunCommandDto {
+pub struct InterruptRunCommandDto {
     session_id: SessionId,
     run_id: RunId,
 }
 
-impl StopRunCommandDto {
-    /// Creates a typed cancellation request.
+impl InterruptRunCommandDto {
+    /// Creates a typed interruption request.
     #[must_use]
     pub const fn new(session_id: SessionId, run_id: RunId) -> Self {
         Self { session_id, run_id }
@@ -650,7 +626,7 @@ impl StopRunCommandDto {
         self.session_id
     }
 
-    /// Returns the active run requested for cancellation.
+    /// Returns the active run requested for interruption.
     #[must_use]
     pub const fn run_id(self) -> RunId {
         self.run_id
@@ -715,10 +691,10 @@ pub enum DomainEventDto {
     SessionCreated(SessionCreatedEventDto),
     /// A user turn was accepted by the durable session authority.
     UserTurnAccepted(UserTurnAcceptedEventDto),
-    /// An accepted user turn was retained behind an active run.
-    UserTurnQueued(UserTurnQueuedEventDto),
-    /// A queued user turn was removed before it began a run.
-    QueuedTurnRemoved(QueuedTurnRemovedEventDto),
+    /// An accepted user turn was retained as a pending message behind an active run.
+    UserTurnPending(UserTurnPendingEventDto),
+    /// A pending user turn was removed before it joined a run context.
+    TurnRemoved(TurnRemovedEventDto),
     /// A durable run began from an accepted user turn.
     RunStarted(RunStartedEventDto),
     /// A run state changed through a later application/runtime workflow.
@@ -739,6 +715,10 @@ pub enum DomainEventDto {
     ToolCallRecorded(ModelRunFactEventDto),
     /// A model-loop tool result was recorded with a durable run cursor.
     ModelToolResultRecorded(ModelRunFactEventDto),
+    /// A pending user message joined the run context; its payload carries the durable run cursor.
+    UserMessageAppended(ModelRunFactEventDto),
+    /// An interruption notice joined the run context; its payload carries the durable run cursor.
+    InterruptNoticeRecorded(ModelRunFactEventDto),
     /// A provider finish reason was recorded with a durable run cursor.
     Finished(ModelRunFactEventDto),
     /// A safe terminal failure was recorded with a durable run cursor.
@@ -763,7 +743,8 @@ pub enum ToolLifecycleStatusDto {
     Completed,
     Failed,
     Cancelled,
-    ExternalEffectUnknown,
+    /// The tool stopped before a final outcome; its captured output is partial.
+    Partial,
 }
 
 /// Validates one local tool lifecycle transition.
@@ -800,11 +781,7 @@ pub fn validate_tool_lifecycle_transition(
             )
             | (
                 Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::Cancelled
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::ExternalEffectUnknown
+                ToolLifecycleStatusDto::Partial
             )
     );
     if allowed {
@@ -950,8 +927,8 @@ pub enum ToolResultStatusDto {
     Failed,
     /// The tool stopped because its run was cancelled.
     Cancelled,
-    /// The tool's external effect could not be confirmed.
-    ExternalEffectUnknown,
+    /// The tool stopped before a final outcome; its captured output is partial.
+    Partial,
 }
 
 impl ToolResultStatusDto {
@@ -962,7 +939,7 @@ impl ToolResultStatusDto {
             Self::Completed => ToolLifecycleStatusDto::Completed,
             Self::Failed => ToolLifecycleStatusDto::Failed,
             Self::Cancelled => ToolLifecycleStatusDto::Cancelled,
-            Self::ExternalEffectUnknown => ToolLifecycleStatusDto::ExternalEffectUnknown,
+            Self::Partial => ToolLifecycleStatusDto::Partial,
         }
     }
 }
@@ -1248,61 +1225,15 @@ impl UserTurnAcceptedEventDto {
     }
 }
 
-/// The fact that an accepted turn became durably queued.
+/// The fact that an accepted turn became a pending message behind an active run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct UserTurnQueuedEventDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-    position: QueuePositionDto,
-    occurred_at: TimestampDto,
-}
-impl UserTurnQueuedEventDto {
-    /// Creates a queued-turn fact.
-    #[must_use]
-    pub const fn new(
-        session_id: SessionId,
-        turn_id: TurnId,
-        position: QueuePositionDto,
-        occurred_at: TimestampDto,
-    ) -> Self {
-        Self {
-            session_id,
-            turn_id,
-            position,
-            occurred_at,
-        }
-    }
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the queued turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
-    }
-    /// Returns the durable queue position.
-    #[must_use]
-    pub const fn position(self) -> QueuePositionDto {
-        self.position
-    }
-    /// Returns the occurrence time.
-    #[must_use]
-    pub const fn occurred_at(self) -> TimestampDto {
-        self.occurred_at
-    }
-}
-
-/// The fact that a queued turn was removed before a run began.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct QueuedTurnRemovedEventDto {
+pub struct UserTurnPendingEventDto {
     session_id: SessionId,
     turn_id: TurnId,
     occurred_at: TimestampDto,
 }
-impl QueuedTurnRemovedEventDto {
-    /// Creates a queued-turn removal fact.
+impl UserTurnPendingEventDto {
+    /// Creates a pending-turn fact.
     #[must_use]
     pub const fn new(session_id: SessionId, turn_id: TurnId, occurred_at: TimestampDto) -> Self {
         Self {
@@ -1316,7 +1247,41 @@ impl QueuedTurnRemovedEventDto {
     pub const fn session_id(self) -> SessionId {
         self.session_id
     }
-    /// Returns the removed queued turn identity.
+    /// Returns the pending turn identity.
+    #[must_use]
+    pub const fn turn_id(self) -> TurnId {
+        self.turn_id
+    }
+    /// Returns the occurrence time.
+    #[must_use]
+    pub const fn occurred_at(self) -> TimestampDto {
+        self.occurred_at
+    }
+}
+
+/// The fact that a pending turn was removed before it joined a run context.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TurnRemovedEventDto {
+    session_id: SessionId,
+    turn_id: TurnId,
+    occurred_at: TimestampDto,
+}
+impl TurnRemovedEventDto {
+    /// Creates a pending-turn removal fact.
+    #[must_use]
+    pub const fn new(session_id: SessionId, turn_id: TurnId, occurred_at: TimestampDto) -> Self {
+        Self {
+            session_id,
+            turn_id,
+            occurred_at,
+        }
+    }
+    /// Returns the owning session identity.
+    #[must_use]
+    pub const fn session_id(self) -> SessionId {
+        self.session_id
+    }
+    /// Returns the removed pending turn identity.
     #[must_use]
     pub const fn turn_id(self) -> TurnId {
         self.turn_id
@@ -1599,9 +1564,7 @@ mod tests {
             RunStatusDto::Running,
             RunStatusDto::WaitingInput,
             RunStatusDto::Completing,
-            RunStatusDto::Cancelling,
             RunStatusDto::Completed,
-            RunStatusDto::Cancelled,
             RunStatusDto::Failed,
             RunStatusDto::Interrupted,
         ] {
@@ -1628,9 +1591,9 @@ mod tests {
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let plan_id = PlanId::new();
-        let stop = StopRunCommandDto::new(session_id, run_id);
-        assert_eq!(stop.session_id(), session_id);
-        assert_eq!(stop.run_id(), run_id);
+        let interrupt = InterruptRunCommandDto::new(session_id, run_id);
+        assert_eq!(interrupt.session_id(), session_id);
+        assert_eq!(interrupt.run_id(), run_id);
         let query = GetSessionSnapshotQueryDto::new(session_id);
         assert_eq!(query.session_id(), session_id);
         let plan = CreatePlanCommandDto::new(session_id, plan_id);
@@ -1708,7 +1671,7 @@ mod tests {
             ToolLifecycleStatusDto::Completed,
             ToolLifecycleStatusDto::Failed,
             ToolLifecycleStatusDto::Cancelled,
-            ToolLifecycleStatusDto::ExternalEffectUnknown,
+            ToolLifecycleStatusDto::Partial,
         ];
 
         for status in &statuses {
@@ -1734,8 +1697,7 @@ mod tests {
                         ToolLifecycleStatusDto::Started,
                         ToolLifecycleStatusDto::Completed
                             | ToolLifecycleStatusDto::Failed
-                            | ToolLifecycleStatusDto::Cancelled
-                            | ToolLifecycleStatusDto::ExternalEffectUnknown
+                            | ToolLifecycleStatusDto::Partial
                     )
                 );
                 assert_eq!(
@@ -1760,8 +1722,8 @@ mod tests {
                 ToolLifecycleStatusDto::Cancelled,
             ),
             (
-                ToolResultStatusDto::ExternalEffectUnknown,
-                ToolLifecycleStatusDto::ExternalEffectUnknown,
+                ToolResultStatusDto::Partial,
+                ToolLifecycleStatusDto::Partial,
             ),
         ] {
             assert_eq!(status.lifecycle_status(), lifecycle);

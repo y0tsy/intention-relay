@@ -70,6 +70,8 @@ specific value is sufficient; the value itself is not policy.
   tests remain.
 - Corridors, reservations, the Day/Week/Month period engine, and
   unavailable-queue promotion/reconciliation audits are removed from the
-  corpus; the live M3 queue (tickets and atomic promotion) is untouched.
+  corpus; the M3 turn queue, its tickets, and its promotion were removed by
+  [ADR 0055](decisions/0055-pending-turns-and-cooperative-interruption.md), and a user turn accepted during an
+  active run is a pending turn joined to that run's live context.
 - The protocol and domain contracts are typed serde JSON; canonicalization is
   RFC 8785 only, and only when a first real consumer exists.

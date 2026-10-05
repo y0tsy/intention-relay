@@ -6,7 +6,9 @@
 //! instead of leaving its fixture helpers unused under `-D warnings`.
 
 use intention_domain::WorkspaceRootDto;
-use intention_tools::{BoundedText, CancellationSignal, ToolInput, ToolResult, ToolService};
+use intention_tools::{
+    BoundedText, CancellationSignal, ToolDispatchOutcome, ToolInput, ToolResult, ToolService,
+};
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
 
@@ -46,7 +48,11 @@ fn read_write_edit_follow_symlink_paths() {
         CancellationSignal::new(),
     );
     assert!(
-        matches!(read, Ok(ToolResult::Read(value)) if value.text.as_str() == "old"),
+        matches!(
+            read,
+            Ok(ToolDispatchOutcome::Completed(ToolResult::Read(value)))
+                if value.text.as_str() == "old"
+        ),
         "read follows the addressed link"
     );
     let write = s.dispatch_with_cancellation(

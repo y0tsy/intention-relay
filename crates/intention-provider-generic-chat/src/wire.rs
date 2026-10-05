@@ -24,17 +24,42 @@ pub struct WireRequest {
     pub tools: Vec<ChatCompletionTools>,
 }
 
+/// One outbound prompt-cache marker (`{"type":"ephemeral"}`).
+#[derive(Debug, Serialize)]
+pub struct WireCacheControl {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+impl WireCacheControl {
+    /// Creates the ephemeral marker placed on a cacheable prefix boundary.
+    #[must_use]
+    pub const fn ephemeral() -> Self {
+        Self { kind: "ephemeral" }
+    }
+}
+
 /// One outbound Chat Completions context message.
 ///
 /// The assistant variant is the only place a round-tripped reasoning channel
-/// may appear: it stays a sibling of `content` and never merges into it.
+/// may appear: it stays a sibling of `content` and never merges into it. Every
+/// variant carries the optional prompt-cache marker of the message that closes
+/// a cacheable prefix.
 #[derive(Debug, Serialize)]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum WireMessage {
     /// The daemon-owned system context.
-    System { content: String },
+    System {
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<WireCacheControl>,
+    },
     /// One user turn.
-    User { content: String },
+    User {
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<WireCacheControl>,
+    },
     /// One assistant turn, optionally carrying tool calls and the reasoning
     /// text that belongs to them.
     Assistant {
@@ -44,11 +69,15 @@ pub enum WireMessage {
         tool_calls: Option<Vec<ChatCompletionMessageToolCalls>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<WireCacheControl>,
     },
     /// One tool result answering a previous assistant tool call.
     Tool {
         content: String,
         tool_call_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<WireCacheControl>,
     },
 }
 

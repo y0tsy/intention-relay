@@ -24,8 +24,8 @@ path exists;
 - `ToolEffectProfile` is descriptive, not authority or sandboxing;
 - a tool effect starts only after durable `ToolCallStarted` evidence;
 - tools never automatically retry or resume after recovery;
-- an unknown started effect pauses only its owning Mandate and requires exact
-reconciliation before later fresh work.
+- a started effect without terminal proof commits a bounded partial result and
+pauses no Mandate; later work is fresh admission.
 
 ## Compatibility and non-goals
 

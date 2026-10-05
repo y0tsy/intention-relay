@@ -31,6 +31,8 @@ pub enum ModelRoleDto {
     Assistant,
     /// A tool-role message carrying the result of one tool call.
     Tool,
+    /// A daemon-synthesized notice about prior run state.
+    Notice,
 }
 
 /// A validated model-context message, text-only or carrying tool calls or a tool result.
@@ -42,6 +44,13 @@ pub struct ModelMessageDto {
     tool_calls: Option<Vec<ToolCallDto>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<ToolCallId>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    cache_control: bool,
+}
+
+/// Reports whether an optional message flag stays off the wire.
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl<'de> Deserialize<'de> for ModelMessageDto {
@@ -58,6 +67,8 @@ impl<'de> Deserialize<'de> for ModelMessageDto {
             tool_calls: Option<Vec<ToolCallDto>>,
             #[serde(default)]
             tool_call_id: Option<ToolCallId>,
+            #[serde(default)]
+            cache_control: bool,
         }
 
         let raw = RawModelMessageDto::deserialize(deserializer)?;
@@ -69,7 +80,10 @@ impl<'de> Deserialize<'de> for ModelMessageDto {
                 Self::assistant_tool_calls(Some(raw.content), tool_calls)
             }
             (
-                role @ (ModelRoleDto::System | ModelRoleDto::User | ModelRoleDto::Assistant),
+                role @ (ModelRoleDto::System
+                | ModelRoleDto::User
+                | ModelRoleDto::Assistant
+                | ModelRoleDto::Notice),
                 None,
                 None,
             ) => Self::new(role, raw.content),
@@ -78,7 +92,9 @@ impl<'de> Deserialize<'de> for ModelMessageDto {
                 "model message role and tool-call fields are inconsistent",
             )),
         };
-        message.map_err(de::Error::custom)
+        let mut message = message.map_err(de::Error::custom)?;
+        message.set_cache_control(raw.cache_control);
+        Ok(message)
     }
 }
 
@@ -107,6 +123,7 @@ impl ModelMessageDto {
             content,
             tool_calls: None,
             tool_call_id: None,
+            cache_control: false,
         })
     }
 
@@ -130,6 +147,7 @@ impl ModelMessageDto {
             content: content.unwrap_or_default(),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
+            cache_control: false,
         })
     }
 
@@ -151,7 +169,25 @@ impl ModelMessageDto {
             content,
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
+            cache_control: false,
         })
+    }
+
+    /// Replaces this message's content, keeping its role and tool shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the replacement content is blank.
+    pub fn replace_content(&mut self, content: impl Into<String>) -> DtoResult<()> {
+        let content = content.into();
+        if content.trim().is_empty() {
+            return Err(ErrorDto::validation(
+                "invalid_model_message_content",
+                "model message content must not be empty",
+            ));
+        }
+        self.content = content;
+        Ok(())
     }
 
     /// Returns the message role.
@@ -176,6 +212,21 @@ impl ModelMessageDto {
     #[must_use]
     pub const fn tool_call_id(&self) -> Option<ToolCallId> {
         self.tool_call_id
+    }
+
+    /// Returns whether this message marks the end of one cacheable prompt prefix.
+    ///
+    /// The flag is a transient request-assembly hint: it never changes message
+    /// content, role, or tool shape, and providers translate it into their
+    /// prompt-cache marker when they support one.
+    #[must_use]
+    pub const fn cache_control(&self) -> bool {
+        self.cache_control
+    }
+
+    /// Marks or clears the prompt-cache breakpoint carried by this message.
+    pub const fn set_cache_control(&mut self, cache_control: bool) {
+        self.cache_control = cache_control;
     }
 }
 
@@ -1001,6 +1052,15 @@ impl ModelCancellationSignal {
                 waiter.wake();
             }
         }
+    }
+
+    /// Clears a cancellation request so the same run can observe the next one.
+    ///
+    /// An interrupt ends one in-flight operation and the run continues; the
+    /// executor that handled the interruption resets the signal, so a later
+    /// interrupt reaches the same shared signal again.
+    pub fn reset(&self) {
+        self.state.cancelled.store(false, Ordering::Release);
     }
 
     /// Returns a fresh independently awaitable future that completes on cancellation.

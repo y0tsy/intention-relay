@@ -7,10 +7,10 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, ExecuteInput, GlobInput, GrepInput, GrepMatch,
-    GrepResult, GrepScope, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
-    TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolId, ToolInput,
-    ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection, ToolService,
-    WriteInput, WriteResult, model_visible_descriptors, registry,
+    GrepResult, GrepScope, InterruptCause, PathsResult, REDACTED_WORKSPACE_CWD, ReadInput,
+    TOOL_DESCRIPTOR_REVISION, TOOL_SCHEMA_VERSION, TextResult, ToolDispatchOutcome, ToolId,
+    ToolInput, ToolProcessStatus, ToolProjectedContent, ToolResult, ToolResultProjection,
+    ToolService, WriteInput, WriteResult, model_visible_descriptors, registry,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use tempfile::TempDir;
@@ -20,6 +20,36 @@ fn fixture_dir(label: &str) -> TempDir {
         .prefix(&format!("intention-tools-{label}-"))
         .tempdir()
         .expect("temporary workspace")
+}
+
+/// Test adapter: unwraps one completed dispatch and fails loudly on any
+/// interruption, so fixtures that expect a final typed result stay direct.
+trait DispatchCompleted {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult;
+}
+
+impl DispatchCompleted for ToolService {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult {
+        match self
+            .dispatch_with_cancellation(call, input, cancellation)
+            .expect("completed dispatch succeeds")
+        {
+            ToolDispatchOutcome::Completed(result) => result,
+            ToolDispatchOutcome::Interrupted { cause, partial } => {
+                unreachable!("unexpected interrupted dispatch: {cause:?} {partial:?}")
+            }
+        }
+    }
 }
 
 #[test]
@@ -35,19 +65,17 @@ fn execute_uses_workspace_cwd_and_returns_typed_result() {
     } else {
         vec![]
     };
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(program).expect("program"),
-                args: args
-                    .into_iter()
-                    .map(|value| BoundedText::new(value).expect("argument"))
-                    .collect(),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("execution");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(program).expect("program"),
+            args: args
+                .into_iter()
+                .map(|value| BoundedText::new(value).expect("argument"))
+                .collect(),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -176,13 +204,11 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
     };
     // A known non-zero exit is a normalized program result on the typed
     // output path, not a transport-level error.
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            nonzero_input(),
-            CancellationSignal::new(),
-        )
-        .expect("nonzero exit must stay a typed result");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        nonzero_input(),
+        CancellationSignal::new(),
+    );
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -221,7 +247,7 @@ fn tool_service_covers_nonzero_execute_as_normalized_result() {
 }
 
 #[test]
-fn execute_cancellation_is_classified_as_unknown_effect() {
+fn execute_cancellation_is_classified_as_a_stopped_interruption() {
     let root_dir = fixture_dir("timeout-");
     let root = root_dir.path();
     let workspace = intention_workspace::WorkspaceRoot::resolve(
@@ -234,16 +260,16 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
     let cancellation_helper = std::thread::spawn(move || {
         // Wait for a confirmed child spawn instead of racing a fixed sleep:
         // the cancellation then provably lands while the child is running,
-        // so the tool classifies the external effect as unknown. The short
-        // fixture stays alive long enough on both Unix and Windows, and its
-        // trap ignores termination signals.
+        // so the interruption cause is an observed stop. The short fixture
+        // stays alive long enough on both Unix and Windows, and its trap
+        // ignores termination signals.
         assert!(
             canceller.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
             "execute child was never observed after spawn"
         );
         canceller.cancel();
     });
-    let error = service
+    let outcome = service
         .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
@@ -264,11 +290,21 @@ fn execute_cancellation_is_classified_as_unknown_effect() {
             }),
             cancellation,
         )
-        .expect_err("cancellation");
+        .expect("an interrupted dispatch is an outcome, not an error");
     cancellation_helper
         .join()
         .expect("cancellation helper completes");
-    assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+    let ToolDispatchOutcome::Interrupted { cause, partial } = outcome else {
+        unreachable!("cancellation must interrupt the dispatch");
+    };
+    assert_eq!(cause, InterruptCause::Stopped);
+    let Some(ToolResult::Execute(value)) = partial else {
+        unreachable!("the stopped execute captures the output of its collected pipes")
+    };
+    // Captured output keeps the completed rendering without the exit status
+    // line that only a finished program has.
+    assert!(value.text.as_str().starts_with("stdout:\n"));
+    assert!(!value.text.as_str().contains("exit_code:"));
 }
 
 #[test]
@@ -314,19 +350,17 @@ fn grep_reports_no_matches_for_a_valid_file_scope() {
     )
     .expect("workspace root");
     let service = ToolService::new(workspace);
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("x").expect("pattern"),
-                path: None,
-                scope: Some(GrepScope::File {
-                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
-                }),
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("x").expect("pattern"),
+            path: None,
+            scope: Some(GrepScope::File {
+                path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
             }),
-            CancellationSignal::new(),
-        )
-        .expect("valid file scope with no matches");
+        }),
+        CancellationSignal::new(),
+    );
     assert!(matches!(result, ToolResult::Grep(value) if value.matches.is_empty()));
 }
 
@@ -359,19 +393,17 @@ fn search_rejects_unsafe_patterns_and_reports_utf8_columns() {
         );
         assert_eq!(result.unwrap_err().code(), "invalid_tool_pattern");
     }
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle").unwrap(),
-                path: Some(WorkspaceRelativePathDto::parse("file.txt").unwrap()),
-                scope: Some(GrepScope::File {
-                    path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
-                }),
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").unwrap(),
+            path: Some(WorkspaceRelativePathDto::parse("file.txt").unwrap()),
+            scope: Some(GrepScope::File {
+                path: WorkspaceRelativePathDto::parse("file.txt").unwrap(),
             }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(result) = result else {
         unreachable!()
     };
@@ -390,15 +422,13 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
     .unwrap();
     let service = ToolService::new(workspace);
     for pattern in ["*.txt", "**/*.txt", "real/*.txt", "{target,deep}*"] {
-        let result = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Glob(GlobInput {
-                    pattern: BoundedText::new(pattern).unwrap(),
-                }),
-                CancellationSignal::new(),
-            )
-            .unwrap();
+        let result = service.dispatch_completed(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new(pattern).unwrap(),
+            }),
+            CancellationSignal::new(),
+        );
         let ToolResult::Glob(result) = result else {
             unreachable!("non-glob result")
         };
@@ -412,15 +442,13 @@ fn glob_matches_are_sorted_deduplicated_and_deterministic() {
         );
     }
     // `**/` recursion reaches nested directories, not only the workspace root.
-    let recursive = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("**/*.txt").unwrap(),
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+    let recursive = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("**/*.txt").unwrap(),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Glob(recursive) = recursive else {
         unreachable!("non-glob result")
     };
@@ -444,15 +472,13 @@ fn bounded_sources_report_truncation_only_past_the_output_bound() {
     .unwrap();
     let service = ToolService::new(workspace);
     for (name, truncated, length) in [("exact.bin", false, 65_536), ("over.bin", true, 65_536)] {
-        let result = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Read(ReadInput {
-                    path: WorkspaceRelativePathDto::parse(name).unwrap(),
-                }),
-                CancellationSignal::new(),
-            )
-            .unwrap();
+        let result = service.dispatch_completed(
+            ToolCallId::new(),
+            ToolInput::Read(ReadInput {
+                path: WorkspaceRelativePathDto::parse(name).unwrap(),
+            }),
+            CancellationSignal::new(),
+        );
         let ToolResult::Read(result) = result else {
             unreachable!("non-read result")
         };
@@ -491,19 +517,17 @@ fn grep_file_scope_rejects_directories_and_follows_file_links() {
     // An explicitly addressed file link is followed like any other path.
     #[cfg(unix)]
     {
-        let result = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Grep(GrepInput {
-                    pattern: BoundedText::new("needle").unwrap(),
-                    path: Some(WorkspaceRelativePathDto::parse("link.txt").unwrap()),
-                    scope: Some(GrepScope::File {
-                        path: WorkspaceRelativePathDto::parse("link.txt").unwrap(),
-                    }),
+        let result = service.dispatch_completed(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("needle").unwrap(),
+                path: Some(WorkspaceRelativePathDto::parse("link.txt").unwrap()),
+                scope: Some(GrepScope::File {
+                    path: WorkspaceRelativePathDto::parse("link.txt").unwrap(),
                 }),
-                CancellationSignal::new(),
-            )
-            .unwrap();
+            }),
+            CancellationSignal::new(),
+        );
         let ToolResult::Grep(result) = result else {
             unreachable!("non-grep result")
         };
@@ -531,8 +555,14 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
             ToolInput::Read(ReadInput { path: path.clone() }),
             CancellationSignal::cancelled(),
         )
-        .expect_err("cancelled invocation");
-    assert_eq!(cancelled.code(), "tool_cancelled");
+        .expect("pre-start cancellation is an interrupted outcome");
+    assert_eq!(
+        cancelled,
+        ToolDispatchOutcome::Interrupted {
+            cause: InterruptCause::Stopped,
+            partial: None,
+        }
+    );
 
     let missing_parent = WorkspaceRelativePathDto::parse("missing/new.txt").expect("path");
     let write_error = service
@@ -562,23 +592,92 @@ fn dispatch_reports_precise_errors_and_process_output_paths() {
         .expect_err("missing edit target");
     assert_eq!(edit_missing.code(), "edit_target_missing");
 
-    let grep = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle").expect("pattern"),
-                path: Some(path.clone()),
-                scope: Some(GrepScope::File { path }),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("grep");
+    let grep = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").expect("pattern"),
+            path: Some(path.clone()),
+            scope: Some(GrepScope::File { path }),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(result) = grep else {
         unreachable!("dispatch returned non-grep result")
     };
     assert_eq!(result.matches.len(), 1);
     assert_eq!(result.matches[0].fragment.as_str(), "needle");
     assert!(!result.truncated);
+}
+
+#[test]
+fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
+    let root_dir = fixture_dir("stop-effects");
+    let root = root_dir.path();
+    std::fs::write(root.join("file.txt"), "original").expect("seed");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root.to_string_lossy().into_owned()).expect("root"),
+    )
+    .expect("workspace root");
+    let service = ToolService::new(workspace);
+    let stopped = || ToolDispatchOutcome::Interrupted {
+        cause: InterruptCause::Stopped,
+        partial: None,
+    };
+
+    // Write and edit report the stop instead of touching the file.
+    let write = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Write(WriteInput {
+                path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
+                content: BoundedText::new("replacement").expect("content"),
+                expected_content: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped write is an outcome, not an error");
+    assert_eq!(write, stopped());
+    let edit = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Edit(EditInput {
+                path: WorkspaceRelativePathDto::parse("file.txt").expect("path"),
+                old: BoundedText::new("original").expect("old"),
+                new: BoundedText::new("replacement").expect("new"),
+                expected_content: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped edit is an outcome, not an error");
+    assert_eq!(edit, stopped());
+    assert_eq!(
+        std::fs::read_to_string(root.join("file.txt")).expect("file survives untouched"),
+        "original"
+    );
+
+    // The search tools report the stop without collecting results.
+    let glob = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Glob(GlobInput {
+                pattern: BoundedText::new("**/*.txt").expect("pattern"),
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped glob is an outcome, not an error");
+    assert_eq!(glob, stopped());
+    let grep = service
+        .dispatch_with_cancellation(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: BoundedText::new("original").expect("pattern"),
+                path: None,
+                scope: None,
+            }),
+            CancellationSignal::cancelled(),
+        )
+        .expect("a stopped grep is an outcome, not an error");
+    assert_eq!(grep, stopped());
 }
 
 #[test]
@@ -594,19 +693,17 @@ fn execute_returns_stdout_stderr_and_truncation_metadata() {
     } else {
         ("sh", vec!["-c", "printf out; printf err >&2"])
     };
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(program).expect("program"),
-                args: args
-                    .into_iter()
-                    .map(|arg| BoundedText::new(arg).expect("arg"))
-                    .collect(),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("execute");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(program).expect("program"),
+            args: args
+                .into_iter()
+                .map(|arg| BoundedText::new(arg).expect("arg"))
+                .collect(),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned non-execute result")
     };
@@ -709,31 +806,27 @@ fn tool_service_returns_search_matches_and_sorted_glob_paths() {
         )
         .expect("workspace root"),
     );
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle").expect("pattern"),
-                path: Some(WorkspaceRelativePathDto::parse("z.txt").expect("path")),
-                scope: Some(GrepScope::File {
-                    path: WorkspaceRelativePathDto::parse("z.txt").expect("path"),
-                }),
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").expect("pattern"),
+            path: Some(WorkspaceRelativePathDto::parse("z.txt").expect("path")),
+            scope: Some(GrepScope::File {
+                path: WorkspaceRelativePathDto::parse("z.txt").expect("path"),
             }),
-            CancellationSignal::new(),
-        )
-        .expect("grep");
+        }),
+        CancellationSignal::new(),
+    );
     assert!(
         matches!(result, ToolResult::Grep(value) if value.matches.iter().map(|m| m.fragment.as_str()).collect::<Vec<_>>() == vec!["needle", "needle two"])
     );
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("*.txt").expect("pattern"),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("glob");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("*.txt").expect("pattern"),
+        }),
+        CancellationSignal::new(),
+    );
     assert!(
         matches!(result, ToolResult::Glob(value) if value.paths.iter().map(WorkspaceRelativePathDto::as_str).collect::<Vec<_>>() == vec!["a.txt", "z.txt"])
     );
@@ -750,15 +843,13 @@ fn glob_empty_and_grep_read_failure_are_typed() {
         )
         .unwrap(),
     );
-    let glob = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("*.none").unwrap(),
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+    let glob = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("*.none").unwrap(),
+        }),
+        CancellationSignal::new(),
+    );
     assert!(matches!(glob, ToolResult::Glob(value) if value.paths.is_empty()));
     let error = service
         .dispatch_with_cancellation(
@@ -875,13 +966,13 @@ fn invocation_call_identity_is_validated() {
 }
 
 #[test]
-fn cancelled_dispatch_is_rejected_before_any_tool_effect() {
+fn cancelled_dispatch_is_interrupted_before_any_tool_effect() {
     let root_dir = fixture_dir("cancelled-before-dispatch");
     let workspace = intention_workspace::WorkspaceRoot::resolve(
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
-    let error = ToolService::new(workspace)
+    let outcome = ToolService::new(workspace)
         .dispatch_with_cancellation(
             ToolCallId::new(),
             ToolInput::Write(WriteInput {
@@ -891,8 +982,14 @@ fn cancelled_dispatch_is_rejected_before_any_tool_effect() {
             }),
             CancellationSignal::cancelled(),
         )
-        .unwrap_err();
-    assert_eq!(error.code(), "tool_cancelled");
+        .expect("pre-start cancellation is an interrupted outcome, not an error");
+    assert_eq!(
+        outcome,
+        ToolDispatchOutcome::Interrupted {
+            cause: InterruptCause::Stopped,
+            partial: None,
+        }
+    );
     assert!(!root_dir.path().join("created.txt").exists());
 }
 
@@ -928,13 +1025,11 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
     .unwrap();
     let service = ToolService::new(workspace);
     let path = WorkspaceRelativePathDto::parse("bytes.bin").unwrap();
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Read(ReadInput { path: path.clone() }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Read(ReadInput { path: path.clone() }),
+        CancellationSignal::new(),
+    );
     assert!(matches!(
         result,
         ToolResult::Read(TextResult {
@@ -942,17 +1037,15 @@ fn tool_service_read_and_grep_report_truncation_for_invalid_utf8() {
             ..
         })
     ));
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("x").unwrap(),
-                path: Some(path.clone()),
-                scope: Some(GrepScope::File { path }),
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("x").unwrap(),
+            path: Some(path.clone()),
+            scope: Some(GrepScope::File { path }),
+        }),
+        CancellationSignal::new(),
+    );
     assert!(matches!(
         result,
         ToolResult::Grep(intention_tools::GrepResult {
@@ -986,9 +1079,7 @@ fn execute_success_reports_stderr_and_typed_success_status() {
             },
         })
     };
-    let result = service
-        .dispatch_with_cancellation(ToolCallId::new(), input(), CancellationSignal::new())
-        .unwrap();
+    let result = service.dispatch_completed(ToolCallId::new(), input(), CancellationSignal::new());
     assert!(
         matches!(result, ToolResult::Execute(TextResult { text, .. }) if text.as_str().contains("stderr:\nerr"))
     );
@@ -1037,19 +1128,17 @@ fn execute_inherits_the_invoking_environment() {
     } else {
         ("sh", vec!["-c".to_owned(), "test -n \"$PATH\"".to_owned()])
     };
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Execute(ExecuteInput {
-                program: BoundedText::new(program).unwrap(),
-                args: args
-                    .into_iter()
-                    .map(|arg| BoundedText::new(arg).unwrap())
-                    .collect(),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("environment probe executes");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Execute(ExecuteInput {
+            program: BoundedText::new(program).unwrap(),
+            args: args
+                .into_iter()
+                .map(|arg| BoundedText::new(arg).unwrap())
+                .collect(),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -1070,28 +1159,24 @@ fn dispatch_covers_empty_read_and_successful_empty_edit() {
     .expect("workspace");
     let service = ToolService::new(workspace);
     let path = WorkspaceRelativePathDto::parse("empty.txt").expect("path");
-    let read = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Read(ReadInput { path: path.clone() }),
-            CancellationSignal::new(),
-        )
-        .expect("read");
+    let read = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Read(ReadInput { path: path.clone() }),
+        CancellationSignal::new(),
+    );
     assert!(
         matches!(read, ToolResult::Read(TextResult { truncated: false, text }) if text.as_str().is_empty())
     );
-    let edit = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Edit(EditInput {
-                path,
-                old: BoundedText::new("").expect("old"),
-                new: BoundedText::new("replacement").expect("new"),
-                expected_content: None,
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("edit");
+    let edit = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Edit(EditInput {
+            path,
+            old: BoundedText::new("").expect("old"),
+            new: BoundedText::new("replacement").expect("new"),
+            expected_content: None,
+        }),
+        CancellationSignal::new(),
+    );
     assert!(matches!(edit, ToolResult::Edit(_)));
 }
 
@@ -1138,9 +1223,8 @@ fn execute_reports_signal_termination_as_known_terminal_result() {
             ],
         })
     };
-    let result = service
-        .dispatch_with_cancellation(ToolCallId::new(), signal_input(), CancellationSignal::new())
-        .expect("signal termination is a known terminal outcome");
+    let result =
+        service.dispatch_completed(ToolCallId::new(), signal_input(), CancellationSignal::new());
     let ToolResult::Execute(result) = result else {
         unreachable!("dispatch returned a non-execute result")
     };
@@ -1179,19 +1263,17 @@ fn grep_truncates_long_multibyte_fragments_on_character_boundary() {
         &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
     )
     .unwrap();
-    let result = ToolService::new(workspace)
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle").unwrap(),
-                path: Some(WorkspaceRelativePathDto::parse("large.txt").unwrap()),
-                scope: Some(GrepScope::File {
-                    path: WorkspaceRelativePathDto::parse("large.txt").unwrap(),
-                }),
+    let result = ToolService::new(workspace).dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").unwrap(),
+            path: Some(WorkspaceRelativePathDto::parse("large.txt").unwrap()),
+            scope: Some(GrepScope::File {
+                path: WorkspaceRelativePathDto::parse("large.txt").unwrap(),
             }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(result) = result else {
         unreachable!("dispatch returned non-grep result")
     };
@@ -1212,7 +1294,7 @@ fn execute_formats_success_and_truncates_both_streams() {
     .unwrap();
     let service = ToolService::new(workspace);
     let result = service
-        .dispatch_with_cancellation(
+        .dispatch_completed(
             ToolCallId::new(),
             ToolInput::Execute(ExecuteInput {
                 program: BoundedText::new(if cfg!(windows) { "cmd" } else { "sh" }).unwrap(),
@@ -1238,8 +1320,7 @@ fn execute_formats_success_and_truncates_both_streams() {
                 },
             }),
             CancellationSignal::new(),
-        )
-        .unwrap();
+        );
     let ToolResult::Execute(value) = result else {
         unreachable!()
     };
@@ -1847,6 +1928,59 @@ fn projections_preserve_collections_and_round_trip() {
     };
     assert_eq!(matches.len(), 10_001);
     assert!(truncated);
+}
+
+#[test]
+fn envelope_reports_an_interrupted_execute_as_its_stable_error_code() {
+    let root_dir = fixture_dir("envelope-interrupted");
+    let workspace = intention_workspace::WorkspaceRoot::resolve(
+        &WorkspaceRootDto::parse(root_dir.path().to_string_lossy().into_owned()).unwrap(),
+    )
+    .unwrap();
+    let service = ToolService::new(workspace);
+    let cancellation = CancellationSignal::new();
+    let canceller = cancellation.clone();
+    let helper = std::thread::spawn(move || {
+        assert!(
+            canceller.wait_until_spawn_observed(std::time::Duration::from_secs(10)),
+            "execute child was never observed after spawn"
+        );
+        canceller.cancel();
+    });
+    let error = service
+        .invoke_enveloped_with_cancellation(
+            intention_tools::ToolInvocation {
+                schema_version: TOOL_SCHEMA_VERSION,
+                context: intention_tools::ToolContext {
+                    session_id: intention_types::SessionId::parse(
+                        "00000000-0000-4000-8000-000000000013",
+                    )
+                    .unwrap(),
+                    run_id: intention_types::RunId::parse("00000000-0000-4000-8000-000000000014")
+                        .unwrap(),
+                    call_id: ToolCallId::new(),
+                },
+                input: ToolInput::Execute(ExecuteInput {
+                    program: BoundedText::new(if cfg!(windows) { "ping" } else { "sh" }).unwrap(),
+                    args: if cfg!(windows) {
+                        vec![
+                            BoundedText::new("-n").unwrap(),
+                            BoundedText::new("2").unwrap(),
+                            BoundedText::new("127.0.0.1").unwrap(),
+                        ]
+                    } else {
+                        vec![
+                            BoundedText::new("-c").unwrap(),
+                            BoundedText::new("sleep 2").unwrap(),
+                        ]
+                    },
+                }),
+            },
+            cancellation,
+        )
+        .expect_err("an interrupted execution has no result-boundary envelope");
+    helper.join().expect("cancellation helper completes");
+    assert_eq!(error.code(), "tool_cancelled");
 }
 
 #[test]

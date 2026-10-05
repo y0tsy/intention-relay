@@ -9,8 +9,8 @@ use intention_domain::{
     RunStatusDto, WorkspaceRootDto,
 };
 use intention_storage::{
-    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, CreateSessionInputDto,
-    StorageRepositoryDto, TransitionRunInputDto,
+    AcceptUserTurnInputDto, AppendModelRunFactsInputDto, AppendPendingUserTurnsInputDto,
+    CreateSessionInputDto, StorageRepositoryDto, TransitionRunInputDto,
 };
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 use intention_types::{ProjectId, RunId, SessionId, TimestampDto, TurnId, WorkspaceId};
@@ -243,25 +243,25 @@ fn durable_model_fact_failures_are_safe_and_terminal_runs_reject_new_facts() {
 }
 
 #[test]
-fn terminal_model_fact_append_promotes_the_oldest_queued_turn() {
+fn terminal_model_fact_append_leaves_pending_messages_unstarted() {
     let (_directory, repository) = temporary_repository();
     let (session_id, run_id) = create_started_run(&repository);
-    let queued_turn_id = TurnId::new();
-    let queued_run_id = RunId::new();
-    let queued_snapshot = snapshot();
+    let pending_turn_id = TurnId::new();
+    let pending_run_id = RunId::new();
+    let pending_snapshot = snapshot();
     repository
         .accept_user_turn(
             AcceptUserTurnInputDto::new(
                 session_id,
-                queued_turn_id,
-                "queued turn",
-                queued_run_id,
-                queued_snapshot.clone(),
+                pending_turn_id,
+                "pending turn",
+                pending_run_id,
+                pending_snapshot.clone(),
                 time(3),
             )
-            .expect("queued turn input is valid"),
+            .expect("pending turn input is valid"),
         )
-        .expect("turn queues behind active run");
+        .expect("turn becomes pending behind the active run");
 
     let outcome = repository
         .append_model_run_facts(
@@ -277,7 +277,7 @@ fn terminal_model_fact_append_promotes_the_oldest_queued_turn() {
             )
             .expect("terminal append input is valid"),
         )
-        .expect("terminal facts append and promote");
+        .expect("terminal facts append without starting the pending message");
     assert_eq!(
         outcome.snapshot().run_projection().status(),
         RunStatusDto::Failed
@@ -285,25 +285,46 @@ fn terminal_model_fact_append_promotes_the_oldest_queued_turn() {
     let session = repository
         .load_session_snapshot(session_id)
         .expect("session snapshot loads");
-    assert_eq!(
-        session.active_run().expect("queued run promoted").run_id(),
-        queued_run_id
+    assert!(session.active_run().is_none());
+    assert_eq!(session.pending_turns().len(), 1);
+    assert_eq!(session.pending_turns()[0].turn_id(), pending_turn_id);
+    assert_eq!(session.pending_turns()[0].content(), "pending turn");
+    // The pending message owns no run until an idle session admits it.
+    assert!(
+        repository
+            .load_current_run_snapshot(session_id, pending_run_id)
+            .is_err()
     );
+
+    // The next accepted message finds the idle session and admits the oldest
+    // pending message with its retained durable selection.
+    let later = repository
+        .accept_user_turn(
+            AcceptUserTurnInputDto::new(
+                session_id,
+                TurnId::new(),
+                "later message",
+                RunId::new(),
+                snapshot(),
+                time(5),
+            )
+            .expect("later turn input is valid"),
+        )
+        .expect("idle admission commits");
+    let Some(intention_storage::AcceptedTurnOutcomeDto::Started(started)) = later.turn_outcome()
+    else {
+        unreachable!("the oldest pending message starts the run")
+    };
+    assert_eq!(started.run_id(), pending_run_id);
+    assert_eq!(started.turn_id(), pending_turn_id);
+    let admitted = repository
+        .load_current_run_snapshot(session_id, pending_run_id)
+        .expect("admitted run snapshot loads");
+    assert_eq!(admitted.cursor().value(), 0);
+    assert_eq!(admitted.run_projection().status(), RunStatusDto::Starting);
     assert_eq!(
-        session
-            .active_run()
-            .expect("queued run remains active")
-            .turn_id(),
-        queued_turn_id
-    );
-    let promoted = repository
-        .load_current_run_snapshot(session_id, queued_run_id)
-        .expect("promoted run snapshot loads");
-    assert_eq!(promoted.cursor().value(), 0);
-    assert_eq!(promoted.run_projection().status(), RunStatusDto::Starting);
-    assert_eq!(
-        promoted.run_projection().config_revision_id(),
-        queued_snapshot.revision_id()
+        admitted.run_projection().config_revision_id(),
+        pending_snapshot.revision_id()
     );
     let events = repository
         .load_tail(session_id, intention_types::SessionEventSequenceDto::new(0))
@@ -318,14 +339,78 @@ fn terminal_model_fact_append_promotes_the_oldest_queued_turn() {
             )
         })
         .expect("terminal status event is present");
-    let promoted_index = events
+    let admitted_index = events
         .iter()
         .position(|event| {
             matches!(
                 event.payload(),
-                DomainEventDto::RunStarted(started) if started.run_id() == queued_run_id
+                DomainEventDto::RunStarted(started) if started.run_id() == pending_run_id
             )
         })
-        .expect("promoted run event is present");
-    assert!(terminal_index < promoted_index);
+        .expect("admitted run event is present");
+    assert!(terminal_index < admitted_index);
+}
+
+#[test]
+fn pending_messages_append_to_the_live_run_context_in_fifo_order() {
+    let (_directory, repository) = temporary_repository();
+    let (session_id, run_id) = create_started_run(&repository);
+    let pending = [
+        (TurnId::new(), RunId::new(), "first pending"),
+        (TurnId::new(), RunId::new(), "second pending"),
+    ];
+    for (turn_id, run, content) in pending {
+        repository
+            .accept_user_turn(
+                AcceptUserTurnInputDto::new(session_id, turn_id, content, run, snapshot(), time(3))
+                    .expect("pending turn input is valid"),
+            )
+            .expect("turn becomes pending");
+    }
+
+    let outcome = repository
+        .append_pending_user_turns(AppendPendingUserTurnsInputDto::new(
+            session_id,
+            run_id,
+            RunEventCursorDto::new(0),
+            time(5),
+        ))
+        .expect("pending messages append to the live run context");
+    let contents = outcome
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact.input() {
+            ModelRunFactInputDto::UserMessageAppended { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(contents, vec!["first pending", "second pending"]);
+    assert_eq!(outcome.cursor().value(), 2);
+    let session = repository
+        .load_session_snapshot(session_id)
+        .expect("session snapshot loads");
+    assert!(session.pending_turns().is_empty());
+    assert!(
+        session
+            .active_run()
+            .is_some_and(|active| active.run_id() == run_id),
+        "the same run keeps owning the live context"
+    );
+
+    // A second consume at the advanced cursor is an exact no-op.
+    let again = repository
+        .append_pending_user_turns(AppendPendingUserTurnsInputDto::new(
+            session_id,
+            run_id,
+            RunEventCursorDto::new(2),
+            time(6),
+        ))
+        .expect("an empty pending batch is a no-op");
+    assert!(again.facts().is_empty());
+    assert_eq!(again.cursor().value(), 2);
+    let replay = repository
+        .load_current_run_snapshot(session_id, run_id)
+        .expect("run snapshot loads");
+    assert_eq!(replay.cursor().value(), 2);
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Starting);
 }

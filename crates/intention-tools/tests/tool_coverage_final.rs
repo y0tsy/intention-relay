@@ -22,21 +22,49 @@ fn text(s: &str) -> BoundedText {
     BoundedText::new(s).unwrap()
 }
 
+/// Test adapter: unwraps one completed dispatch and fails loudly on any
+/// interruption, so fixtures that expect a final typed result stay direct.
+trait DispatchCompleted {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult;
+}
+
+impl DispatchCompleted for ToolService {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult {
+        match self
+            .dispatch_with_cancellation(call, input, cancellation)
+            .expect("completed dispatch succeeds")
+        {
+            ToolDispatchOutcome::Completed(result) => result,
+            ToolDispatchOutcome::Interrupted { cause, partial } => {
+                unreachable!("unexpected interrupted dispatch: {cause:?} {partial:?}")
+            }
+        }
+    }
+}
+
 #[test]
 fn exercises_plain_grep_and_envelope_fallback() {
     let (dir, service) = service();
     std::fs::write(dir.path().join("x.txt"), "é needle\nnope\n").unwrap();
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: text("needle"),
-                scope: None,
-                path: Some(path("x.txt")),
-            }),
-            CancellationSignal::new(),
-        )
-        .unwrap();
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: text("needle"),
+            scope: None,
+            path: Some(path("x.txt")),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(result) = result else {
         return;
     };

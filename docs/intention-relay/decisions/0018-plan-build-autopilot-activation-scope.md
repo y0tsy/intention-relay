@@ -17,8 +17,8 @@ no per-action confirmation.
 default and keeps the conversational context.
 5. The optional new-Session handoff uses only a frozen safe snapshot and an
 independent fresh run.
-6. M3/M4 records and the one-active-run, no-resume, unknown-effect,
-commit-before-effect, redaction, and DTO-only boundaries are preserved.
+6. M3/M4 records and the one-active-run, no-resume, commit-before-effect,
+redaction, and DTO-only boundaries are preserved.
 
 This activation adds no sandboxing, rollback, implicit authority, automatic retry of started effects, provider routing,
 or hidden permission configuration, and it deletes or shortens no existing architecture, roadmap, reconciliation,

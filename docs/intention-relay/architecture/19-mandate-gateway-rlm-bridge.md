@@ -6,13 +6,13 @@ Owner: architecture 19. Decisions: ADR 0011, ADR 0027, ADR 0032. Research: m4plu
 
 This document owns future Mandate Gateway/RLM attachment, ephemeral bridge grant, ingress operation correlation, safe
 bridge-visible delivery, and bridge recovery. It applies only to future Mandate execution; M3/M4 bytes, IDs, UUIDs,
-cursors, events, snapshots, queue tickets, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
+cursors, events, snapshots, provider behavior, replay, recovery, and M4 `ToolCallRecorded ->
 tool_execution_unavailable` retain their recorded ordinary semantics. Retained RLM bridge, child, and activity material
 remains research provenance and historical-only where it conflicts with architectures 13--18.
 
 ## Ownership and one capability path
 
-Architecture 13 owns Mandate lifecycle, fresh admission, uncertainty, and exact reconciliation; 14 is the historical
+Architecture 13 owns Mandate lifecycle and fresh admission; 14 is the historical
 record of the removed execution-meaning envelope and decoders (ADR 0046); 15 owns the fixed registry, frozen tool
 selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and recovery; 16 owns scheduler
 reevaluation and readiness-driven admission; 17 owns child Mandates, graph edges, delegation, controls, terminalization,
@@ -46,7 +46,7 @@ kernel, process, connection, endpoint, credential, registry state, descriptor ha
 and external resource.
 
 After a durable reread proves a supported active Mandate run, exact frozen bridge and tool selections, active model
-step, and no cancellation or uncertainty gate, the daemon alone may issue an opaque ephemeral grant:
+step, and no cancellation gate, the daemon alone may issue an opaque ephemeral grant:
 
 ```text
 BridgeAttachmentGrantV1
@@ -151,16 +151,16 @@ a further ordering sequence. Publication occurs only after commit and an indepen
 publisher/channel failure cannot roll back a commit or cause redispatch.
 
 Before `ToolCallStarted`, cancellation or recovery records known `CancelledBeforeStart` or `InterruptedBeforeStart`.
-After start, a durably proven terminal result remains known; without terminal proof the exact attempt becomes
-`ExternalEffectUnknown` and architecture 13 pauses only its owning Mandate. Known validation, denial, protocol, tool, or
-remote failures remain known when terminal effect proof exists.
+After start, a durably proven terminal result remains known; without terminal proof the exact attempt commits a bounded
+`Partial` result with its notice and pauses no Mandate, and the next model step proceeds. Known validation, denial,
+protocol, tool, or remote failures remain known when terminal effect proof exists.
 
-Channel close, slow-peer resync, and grant expiry do not cancel a run; run cancellation remains owner-controlled and the
-bridge only propagates it. The first bridge contract adds no per-`ToolCallId` cancellation command: run cancellation
-uses the existing `StopRunCommandDto` and `Running -> Cancelling -> Cancelled` lifecycle, and a valid durable
-cancellation/result race is decided by the first committing mutation, with the loser rereading and unable to overwrite.
-Cancellation blocks later admissions and model steps; late fragments/results after cancellation, terminalization, grant
-expiry, or restart are non-authoritative and cannot append durable facts or repair uncertainty.
+Channel close, slow-peer resync, and grant expiry do not interrupt a run; run interruption remains owner-controlled and
+the bridge only propagates it. The first bridge contract adds no per-`ToolCallId` interruption command: `run.interrupt`
+signals the registered execution, ends the in-flight operation with its bounded `Partial` result and notice, and keeps
+the run `Running`, and a valid durable interruption/result race is decided by the first committing mutation, with the
+loser rereading and unable to overwrite. Late fragments/results after interruption, terminalization, grant
+expiry, or restart are non-authoritative and cannot append durable facts.
 
 Recovery completes before attachment, readiness, scheduling, or fresh admission: it invalidates old grants, disposes
 private bridge-side resources, classifies operations only from durable evidence, and rebuilds safe projections only from
@@ -179,9 +179,10 @@ kernel, provider continuation, MCP selection, connection, process, or unfinished
 own architecture-13 fresh admission.
 
 Bridge-held evidence, a grant, parenthood, or a bridge result never grants or amplifies verifier authority; target
-mutation remains architecture 17's exact authority/baseline/evidence operation and verifier uncertainty remains verifier
-local. Bridge transport may carry only architecture-18 safe MCP projections and cannot discover, select, invoke,
-reattach, or recreate MCP work. Bridge replay is a read-only projection layered on the underlying ordering authorities:
+mutation remains architecture 17's exact authority/baseline/evidence operation and an interrupted verifier call's
+partial result remains verifier local. Bridge transport may carry only architecture-18 safe MCP projections and cannot
+discover, select, invoke, reattach, or recreate MCP work. Bridge replay is a read-only projection layered on the
+underlying ordering authorities:
 correlated initial replay, typed resync/error, then live post-commit facts after required history completes; it cannot
 create a bridge-owned sequence, resend a graph message, start a child, consume verifier authority, rediscover/invoke
 MCP, or execute external work.

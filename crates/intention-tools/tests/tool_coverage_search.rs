@@ -24,6 +24,36 @@ fn text(value: &str) -> BoundedText {
     BoundedText::new(value).unwrap()
 }
 
+/// Test adapter: unwraps one completed dispatch and fails loudly on any
+/// interruption, so fixtures that expect a final typed result stay direct.
+trait DispatchCompleted {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult;
+}
+
+impl DispatchCompleted for ToolService {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult {
+        match self
+            .dispatch_with_cancellation(call, input, cancellation)
+            .expect("completed dispatch succeeds")
+        {
+            ToolDispatchOutcome::Completed(result) => result,
+            ToolDispatchOutcome::Interrupted { cause, partial } => {
+                unreachable!("unexpected interrupted dispatch: {cause:?} {partial:?}")
+            }
+        }
+    }
+}
+
 #[test]
 fn scoped_search_reports_file_directory_workspace_and_failures() {
     let (dir, service) = service();
@@ -39,17 +69,15 @@ fn scoped_search_reports_file_directory_workspace_and_failures() {
         },
         GrepScope::Workspace,
     ] {
-        let result = service
-            .dispatch_with_cancellation(
-                ToolCallId::new(),
-                ToolInput::Grep(GrepInput {
-                    pattern: text("needle"),
-                    scope: Some(scope),
-                    path: None,
-                }),
-                CancellationSignal::new(),
-            )
-            .unwrap();
+        let result = service.dispatch_completed(
+            ToolCallId::new(),
+            ToolInput::Grep(GrepInput {
+                pattern: text("needle"),
+                scope: Some(scope),
+                path: None,
+            }),
+            CancellationSignal::new(),
+        );
         assert!(matches!(result, ToolResult::Grep(v) if !v.matches.is_empty()));
     }
     for scope in [

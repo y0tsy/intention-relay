@@ -33,7 +33,7 @@ ProgrammaticCallerRootOriginDto
 
 `InteractiveUser` is the root of an ordinary user-admitted run and all of its descendants. These values are not
 account identities, credentials, operating-system identities, or user-supplied input. No second root exists in this
-first scope: a protocol peer, detached Python task, child agent, MCP service, provider, bridge channel, queued item,
+first scope: a protocol peer, detached Python task, child agent, MCP service, provider, bridge channel, pending turn,
 replay, and daemon recovery cannot become an independent root.
 
 The policy distinguishes only the root origin, but the daemon retains the exact internal calling path as immutable audit
@@ -215,12 +215,12 @@ decision:
 confirmations, and permits no new admission; it does not claim to roll back or silently stop an action that already
 reached `ToolCallStarted`.
 - `ResumePolicy` may make a suspended policy active again only through an
-explicit user operation on its then-current active revision; it does not revive a cancelled run or an expired
+explicit user operation on its then-current active revision; it does not revive a terminal run or an expired
 confirmation.
 - `RevokePolicy` atomically creates a later immutable revision whose admission
-is disabled, enters `Revoked`, marks every active root tree that selected the policy for cancellation, and denies new
-admissions. Each affected tree follows the existing `Running -> Cancelling -> Cancelled` path; a started effect whose
-final result is not provable remains `ExternalEffectUnknown`.
+is disabled, enters `Revoked`, interrupts every active root tree that selected the policy, and denies new
+admissions. Each affected tree's active run is interrupted cooperatively, keeps running with its notice, and admits no
+new work; a started effect whose final result is not provable commits a bounded `Partial` result with its notice.
 - A later user decision may create a **new** active revision of the same policy
 identity, retaining its counter history; revocation is never undone by reactivating an old revision, by restoring an
 archive, or by replay.
@@ -253,8 +253,9 @@ an external effect, network call, kernel operation, MCP process, or child admiss
 An equal repeated operation reads the accepted idempotent binding and is not a second admission. A denial, invalid
 input, expiration, cancellation, or known failure before `ToolCallStarted` leaves the run unchanged with the terminal
 known pre-effect outcome, and `ToolCallStarted` fixes the admitted outcome even when later cancellation, loss, or
-ambiguity yields `ExternalEffectUnknown`. Recovery records `InterruptedBeforeStart`, or records `ExternalEffectUnknown`
-for a started ambiguous action and never retries it; it never re-runs the action to recreate an admission.
+ambiguity commits a bounded `Partial` result. Recovery records `InterruptedBeforeStart`; a started ambiguous action
+commits a bounded `Partial` result with its notice and is never retried. Recovery never re-runs the action to recreate
+an admission.
 
 No numeric contract limit remains in the policy scope: the former counts of policies, policy references, rules, and
 typed constraints, the confirmation and corridor counts, and the fixed evidence, snapshot, and pending-draft sizes were
@@ -307,12 +308,11 @@ programmatic_policy_draft_too_large
 
 They disclose no policy body, raw input, path, grant, credential, Python value, provider resource, process topology,
 external response, counter history, or implementation detail. Every listed failure is known before an external effect,
-except that a later cancellation or recovery preserves the independently selected `ExternalEffectUnknown` evidence for
-work that had already started.
+except that work that had already started retains its independently selected bounded `Partial` result and notice.
 
 ## Compatibility and historical preservation
 
-M3/M4 bytes, queue tickets, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
+M3/M4 bytes, sessions, runs, events, snapshots, replay, recovery, and `ToolCallRecorded ->
 tool_execution_unavailable` remain authoritative and unchanged, and no historical record gains a synthetic policy state;
 the `Disabled` policy selection applies only to historical M4 records and is never rewritten. For new Mandate work,
 retained RLM run-rooted activity identity, root-origin, direct-pair queue, and fixed observation limits are
