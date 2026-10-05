@@ -10,7 +10,7 @@ use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     DomainEventDto, ModelRunFactDto, ModelRunFactEventDto, ModelRunFactInputDto,
     ModelRunProjectionDto, QueuedTurnProjectionDto, QueuedTurnRemovedEventDto, RunEventCursorDto,
-    RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto, RunStartedEventDto,
+    RunEventTailPageDto, RunProjectionDto, RunSnapshotDto, RunStartedEventDto,
     RunStatusChangedEventDto, RunStatusDto, SessionCreatedEventDto, SessionProjectionDto,
     ToolLifecycleStatusDto, UserTurnAcceptedEventDto, UserTurnQueuedEventDto,
     validate_run_status_transition, validate_tool_lifecycle_transition,
@@ -77,16 +77,18 @@ CREATE TABLE IF NOT EXISTS domain_events (
   UNIQUE(session_id, sequence)
 );
 CREATE TABLE IF NOT EXISTS session_snapshots (
-  session_id TEXT PRIMARY KEY REFERENCES sessions(session_id), sequence INTEGER NOT NULL,
+  session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
   projection_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
-  sequence INTEGER NOT NULL, projection_json TEXT NOT NULL
+  projection_json TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS run_cursors (
-  run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
-  cursor INTEGER NOT NULL CHECK(cursor >= 0)
+CREATE TABLE IF NOT EXISTS container_journals (
+  container_kind TEXT NOT NULL CHECK(container_kind IN ('run')),
+  container_id TEXT NOT NULL,
+  cursor INTEGER NOT NULL CHECK(cursor >= 0),
+  PRIMARY KEY(container_kind, container_id)
 );
 CREATE TABLE IF NOT EXISTS model_run_facts (
   run_id TEXT NOT NULL REFERENCES runs(run_id), cursor INTEGER NOT NULL CHECK(cursor > 0),
@@ -95,10 +97,10 @@ CREATE TABLE IF NOT EXISTS model_run_facts (
 );
 CREATE TABLE IF NOT EXISTS model_run_snapshots (
   run_id TEXT PRIMARY KEY REFERENCES runs(run_id), session_id TEXT NOT NULL REFERENCES sessions(session_id),
-  sequence INTEGER NOT NULL, cursor INTEGER NOT NULL CHECK(cursor >= 0), snapshot_json TEXT NOT NULL
+  cursor INTEGER NOT NULL CHECK(cursor >= 0), snapshot_json TEXT NOT NULL
 );
-INSERT OR IGNORE INTO run_cursors(run_id, session_id, cursor)
-  SELECT run_id, session_id, 0 FROM runs;
+INSERT OR IGNORE INTO container_journals(container_kind, container_id, cursor)
+  SELECT 'run', run_id, 0 FROM runs;
 CREATE TABLE IF NOT EXISTS tool_results (
   run_id TEXT NOT NULL REFERENCES runs(run_id),
   session_id TEXT NOT NULL REFERENCES sessions(session_id),
@@ -357,13 +359,9 @@ impl SqliteStorageRepository {
 
     fn snapshot(tx: &sqlite::Transaction<'_>, projection: &SessionProjectionDto) -> DtoResult<()> {
         let encoded = serde_json::to_string(projection).map_err(codec_error)?;
-        let sequence = sqlite_integer(
-            projection.at_sequence().value(),
-            "snapshot sequence is outside the SQLite range",
-        )?;
         tx.execute(
-            "INSERT INTO session_snapshots(session_id, sequence, projection_json) VALUES (?1, ?2, ?3) ON CONFLICT(session_id) DO UPDATE SET sequence=excluded.sequence, projection_json=excluded.projection_json",
-            sqlite::params![projection.session_id().to_string(), sequence, encoded],
+            "INSERT INTO session_snapshots(session_id, projection_json) VALUES (?1, ?2) ON CONFLICT(session_id) DO UPDATE SET projection_json=excluded.projection_json",
+            sqlite::params![projection.session_id().to_string(), encoded],
         ).map_err(storage_error)?;
         let runs = {
             let mut statement = tx
@@ -394,8 +392,8 @@ impl SqliteStorageRepository {
             )?;
             let encoded = serde_json::to_string(&run).map_err(codec_error)?;
             tx.execute(
-                "INSERT INTO run_snapshots(run_id, session_id, sequence, projection_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(run_id) DO UPDATE SET sequence=excluded.sequence, projection_json=excluded.projection_json",
-                sqlite::params![run.run_id().to_string(), projection.session_id().to_string(), sequence, encoded],
+                "INSERT INTO run_snapshots(run_id, session_id, projection_json) VALUES (?1, ?2, ?3) ON CONFLICT(run_id) DO UPDATE SET projection_json=excluded.projection_json",
+                sqlite::params![run.run_id().to_string(), projection.session_id().to_string(), encoded],
             )
             .map_err(storage_error)?;
         }
@@ -434,7 +432,7 @@ impl SqliteStorageRepository {
                 &status,
                 &revision,
             )?;
-            let cursor = current_run_cursor(tx, run.run_id())?;
+            let cursor = current_run_journal(tx, run.run_id())?;
             let model = model_projection(tx, run, cursor)?;
             let snapshot = RunSnapshotDto::new(
                 projection.session_id(),
@@ -444,11 +442,10 @@ impl SqliteStorageRepository {
             )?;
             let encoded = serde_json::to_string(&snapshot).map_err(codec_error)?;
             tx.execute(
-                "INSERT INTO model_run_snapshots(run_id, session_id, sequence, cursor, snapshot_json) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(run_id) DO UPDATE SET sequence=excluded.sequence, cursor=excluded.cursor, snapshot_json=excluded.snapshot_json",
+                "INSERT INTO model_run_snapshots(run_id, session_id, cursor, snapshot_json) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(run_id) DO UPDATE SET cursor=excluded.cursor, snapshot_json=excluded.snapshot_json",
                 sqlite::params![
                     run.run_id().to_string(),
                     projection.session_id().to_string(),
-                    sqlite_integer(projection.at_sequence().value(), "snapshot sequence is outside the SQLite range")?,
                     sqlite_integer(cursor.value(), "run event cursor is outside the SQLite range")?,
                     encoded,
                 ],
@@ -498,9 +495,9 @@ impl SqliteStorageRepository {
         )])
     }
 
-    fn ensure_run_cursors(tx: &sqlite::Transaction<'_>, session_id: SessionId) -> DtoResult<()> {
+    fn ensure_run_journals(tx: &sqlite::Transaction<'_>, session_id: SessionId) -> DtoResult<()> {
         tx.execute(
-            "INSERT INTO run_cursors(run_id, session_id, cursor) SELECT run_id, session_id, 0 FROM runs WHERE session_id=?1 ON CONFLICT(run_id) DO NOTHING",
+            "INSERT INTO container_journals(container_kind, container_id, cursor) SELECT 'run', run_id, 0 FROM runs WHERE session_id=?1 ON CONFLICT(container_kind, container_id) DO NOTHING",
             [session_id.to_string()],
         )
         .map_err(storage_error)?;
@@ -689,7 +686,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )),
                 )],
             )?;
-            Self::ensure_run_cursors(&tx, session_id)?;
+            Self::ensure_run_journals(&tx, session_id)?;
             self.finish(tx, session_id, events, None)
         })
     }
@@ -899,7 +896,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )
             };
             let events = Self::append(&tx, session_id, sequence, drafts)?;
-            Self::ensure_run_cursors(&tx, session_id)?;
+            Self::ensure_run_journals(&tx, session_id)?;
             self.finish(tx, session_id, events, Some(outcome))
         })
     }
@@ -981,7 +978,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 )?);
             }
             let events = Self::append(&tx, session_id, position, drafts)?;
-            Self::ensure_run_cursors(&tx, session_id)?;
+            Self::ensure_run_journals(&tx, session_id)?;
             self.finish(tx, session_id, events, None)
         })
     }
@@ -997,7 +994,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             if run.status().is_terminal() {
                 return Err(invalid_run_cursor());
             }
-            let cursor = current_run_cursor(&tx, run_id)?;
+            let cursor = current_run_journal(&tx, run_id)?;
             if cursor != input.expected_cursor() {
                 return Err(cursor_conflict());
             }
@@ -1054,7 +1051,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
             }
             let position = sequence(&tx, session_id)?;
             let events = Self::append(&tx, session_id, position, drafts)?;
-            Self::ensure_run_cursors(&tx, session_id)?;
+            Self::ensure_run_journals(&tx, session_id)?;
             for (fact, event) in facts.iter().zip(events.iter()) {
                 tx.execute(
                     "INSERT INTO model_run_facts(run_id, cursor, event_id) VALUES (?1, ?2, ?3)",
@@ -1070,11 +1067,10 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                 .map_err(storage_error)?;
             }
             tx.execute(
-                "UPDATE run_cursors SET cursor=?2 WHERE run_id=?1 AND session_id=?3",
+                "UPDATE container_journals SET cursor=?2 WHERE container_kind='run' AND container_id=?1",
                 sqlite::params![
                     run_id.to_string(),
                     sqlite_integer(next_cursor, "run event cursor is outside the SQLite range")?,
-                    session_id.to_string(),
                 ],
             )
             .map_err(storage_error)?;
@@ -1257,18 +1253,15 @@ impl StorageRepositoryDto for SqliteStorageRepository {
         result
     }
 
-    fn load_current_run_replay(
+    fn load_current_run_snapshot(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
+    ) -> DtoResult<RunSnapshotDto> {
         let connection = self.connection()?;
         let snapshot = load_model_run_snapshot(&connection, session_id, run_id)?;
         drop(connection);
-        RunReplayDto::new(
-            snapshot.clone(),
-            RunEventTailPageDto::empty(session_id, run_id, snapshot.cursor()),
-        )
+        Ok(snapshot)
     }
 
     fn load_run_tail(
@@ -1279,7 +1272,7 @@ impl StorageRepositoryDto for SqliteStorageRepository {
     ) -> DtoResult<RunEventTailPageDto> {
         let connection = self.connection()?;
         let _run = load_scoped_run(&connection, session_id, run_id)?;
-        let current_cursor = current_run_cursor(&connection, run_id)?;
+        let current_cursor = current_run_journal(&connection, run_id)?;
         if after_cursor > current_cursor {
             return Err(invalid_run_cursor());
         }
@@ -1517,13 +1510,13 @@ impl EventDraft {
         }
     }
 }
-fn current_run_cursor(
+fn current_run_journal(
     connection: &sqlite::Connection,
     run_id: RunId,
 ) -> DtoResult<RunEventCursorDto> {
     let cursor: i64 = connection
         .query_row(
-            "SELECT cursor FROM run_cursors WHERE run_id=?1",
+            "SELECT cursor FROM container_journals WHERE container_kind='run' AND container_id=?1",
             [run_id.to_string()],
             |row| row.get(0),
         )
@@ -2074,14 +2067,14 @@ mod tests {
         .expect("temporary location is absolute")
     }
 
-    fn raw_snapshot_rows(location: &SqliteDatabaseLocationDto) -> Vec<(String, i64, String)> {
+    fn raw_snapshot_rows(location: &SqliteDatabaseLocationDto) -> Vec<(String, String)> {
         let connection =
             sqlite::Connection::open(&location.0).expect("database reopens for inspection");
         let mut statement = connection
-            .prepare("SELECT run_id, sequence, projection_json FROM run_snapshots ORDER BY run_id")
+            .prepare("SELECT run_id, projection_json FROM run_snapshots ORDER BY run_id")
             .expect("run snapshot query prepares");
         statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .expect("run snapshot query executes")
             .map(|row| row.expect("run snapshot row reads"))
             .collect()
@@ -2110,20 +2103,16 @@ mod tests {
         .collect()
     }
 
-    fn raw_model_snapshot_rows(
-        location: &SqliteDatabaseLocationDto,
-    ) -> Vec<(String, i64, i64, String)> {
+    fn raw_model_snapshot_rows(location: &SqliteDatabaseLocationDto) -> Vec<(String, i64, String)> {
         let connection =
             sqlite::Connection::open(&location.0).expect("database reopens for inspection");
         let mut statement = connection
             .prepare(
-                "SELECT run_id, sequence, cursor, snapshot_json FROM model_run_snapshots ORDER BY run_id",
+                "SELECT run_id, cursor, snapshot_json FROM model_run_snapshots ORDER BY run_id",
             )
             .expect("model snapshot query prepares");
         statement
-            .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .expect("model snapshot query executes")
             .map(|row| row.expect("model snapshot row reads"))
             .collect()
@@ -2255,16 +2244,17 @@ mod tests {
             .expect("terminal transition commits");
         let rows = raw_snapshot_rows(&location);
         assert_eq!(rows.len(), 2);
-        let terminal_sequence =
-            i64::try_from(terminal.position().value()).expect("terminal sequence fits SQLite");
-        assert!(
-            rows.iter()
-                .all(|(_, sequence, _)| *sequence == terminal_sequence)
+        assert_eq!(
+            repository
+                .load_session_snapshot(session_id)
+                .expect("terminal session snapshot loads")
+                .at_sequence(),
+            terminal.position()
         );
-        assert!(rows.iter().any(|(run_id, _, projection)| {
+        assert!(rows.iter().any(|(run_id, projection)| {
             run_id == &active_run.to_string() && projection.contains("failed")
         }));
-        assert!(rows.iter().any(|(run_id, _, projection)| {
+        assert!(rows.iter().any(|(run_id, projection)| {
             run_id == &queued_run.to_string() && projection.contains("starting")
         }));
 
@@ -2294,16 +2284,17 @@ mod tests {
         assert_eq!(recovery.len(), 1);
         let rows = raw_snapshot_rows(&location);
         assert_eq!(rows.len(), 4);
-        let recovery_sequence =
-            i64::try_from(recovery[0].position().value()).expect("recovery sequence fits SQLite");
-        assert!(
-            rows.iter()
-                .all(|(_, sequence, _)| { *sequence == recovery_sequence })
+        assert_eq!(
+            repository
+                .load_session_snapshot(session_id)
+                .expect("recovery session snapshot loads")
+                .at_sequence(),
+            recovery[0].position()
         );
-        assert!(rows.iter().any(|(run_id, _, projection)| {
+        assert!(rows.iter().any(|(run_id, projection)| {
             run_id == &recovery_active.to_string() && projection.contains("interrupted")
         }));
-        assert!(rows.iter().any(|(run_id, _, projection)| {
+        assert!(rows.iter().any(|(run_id, projection)| {
             run_id == &recovery_successor.to_string() && projection.contains("starting")
         }));
     }
@@ -2458,7 +2449,7 @@ mod tests {
                 )
                 .expect("initial fact appends");
             let baseline_replay = repository
-                .load_current_run_replay(session_id, run_id)
+                .load_current_run_snapshot(session_id, run_id)
                 .expect("baseline replay loads");
             let baseline_model_snapshots = raw_model_snapshot_rows(&location);
             let baseline_facts: i64 = {
@@ -2495,7 +2486,7 @@ mod tests {
                 SqliteStorageRepository::open(location.clone()).expect("database reopens");
             assert_eq!(
                 reopened
-                    .load_current_run_replay(session_id, run_id)
+                    .load_current_run_snapshot(session_id, run_id)
                     .expect("reopened replay loads"),
                 baseline_replay
             );

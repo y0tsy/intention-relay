@@ -346,12 +346,9 @@ async fn daemon_tool_executor_executes_real_read_tool_through_loop() {
     ));
 
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("completed run replay reads");
-    assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Completed
-    );
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Completed);
     let facts_json = serde_json::to_string(&facts).expect("facts serialize");
     assert!(
         !facts_json.contains(&workspace_directory.path().to_string_lossy().into_owned()),
@@ -416,10 +413,7 @@ async fn daemon_tool_executor_missing_file_returns_typed_failure() {
             if failure.code() == "tool_read_failed"
     ));
     let replay = facade
-        .load_current_run_replay_for_daemon(session_id, run_id)
+        .load_current_run_snapshot_for_daemon(session_id, run_id)
         .expect("failed run replay reads");
-    assert_eq!(
-        replay.snapshot().run_projection().status(),
-        RunStatusDto::Failed
-    );
+    assert_eq!(replay.run_projection().status(), RunStatusDto::Failed);
 }

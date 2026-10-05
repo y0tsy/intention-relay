@@ -135,7 +135,8 @@ regeneration, reconnect, and audit never rebuild it. No path may re-derive instr
 current `AGENTS.md` content, current session state, or a live ancestor. The projection is the contents of the
 `effective_instruction_projection` and `materialized_effective_instruction_projection` fields of the fork base and
 preview records ([architecture 23](23-non-destructive-session-branching-and-regeneration.md)), and its revision identity
-is recorded as safe usage provenance. It adds no event sequence, no lifecycle transition, and no authority.
+is recorded as safe usage provenance. It introduces no further ordering sequence, no lifecycle transition, and no
+authority.
 
 ## Workspace project instructions
 
@@ -241,8 +242,8 @@ Classification and redaction rules of [architecture 09](09-configuration-securit
 M3/M4 requests keep the optional system context absent, and M3/M4 runs carry no instruction state. Historical records
 never gain a reconstructed instruction projection, and a missing or unreadable materialized projection leaves the
 dependent fork or handoff blocked while unrelated history remains readable. The mechanism adds no second model protocol,
-no second storage schema, no new sequence, and no migration; it is part of the single live first-scope instruction
-contract.
+no second storage schema, no further ordering sequence, and no migration; it is part of the single live first-scope
+instruction contract.
 
 ## Dependencies and non-goals
 

@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use intention_client::{RunStreamClient, RunSubscriptionReducer};
 use intention_domain::{
     ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto, RunEventCursorDto,
-    RunEventTailPageDto, RunProjectionDto, RunSnapshotDto,
+    RunProjectionDto, RunSnapshotDto,
 };
 use intention_protocol::{
     JsonRpcErrorDto, JsonRpcResponseDto, ProtocolDaemonMessageDto, ProtocolHelloDto,
@@ -95,40 +95,13 @@ fn fact(cursor: u64, reasoning: Option<&str>) -> ModelRunFactDto {
     ModelRunFactDto::new(RunEventCursorDto::new(cursor), input).expect("fact is valid")
 }
 
-fn replay_with_tail(
-    session_id: SessionId,
-    run_id: RunId,
-    snapshot_cursor: u64,
-    tail: Vec<ModelRunFactDto>,
-) -> RunSubscriptionResponseDto {
-    let snapshot = snapshot(
+fn replay(session_id: SessionId, run_id: RunId, cursor: u64) -> RunSubscriptionResponseDto {
+    RunSubscriptionResponseDto::Replay(snapshot(
         session_id,
         run_id,
-        snapshot_cursor,
+        cursor,
         intention_domain::RunStatusDto::Running,
-    );
-    let next_cursor = tail
-        .last()
-        .map_or(snapshot_cursor, |fact| fact.cursor().value());
-    RunSubscriptionResponseDto::Replay(
-        intention_domain::RunReplayDto::new(
-            snapshot,
-            RunEventTailPageDto::new(
-                session_id,
-                run_id,
-                RunEventCursorDto::new(snapshot_cursor),
-                tail,
-                RunEventCursorDto::new(next_cursor),
-                false,
-            )
-            .expect("replay tail is coherent"),
-        )
-        .expect("replay is coherent"),
-    )
-}
-
-fn replay(session_id: SessionId, run_id: RunId, cursor: u64) -> RunSubscriptionResponseDto {
-    replay_with_tail(session_id, run_id, cursor, Vec::new())
+    ))
 }
 
 #[test]
@@ -251,72 +224,6 @@ fn reducer_applies_historical_reasoning_without_double_applying_snapshot_facts()
     assert_eq!(reducer.last_cursor(), Some(RunEventCursorDto::new(3)));
 }
 
-#[test]
-fn reducer_applies_replay_tail_atomically_and_preserves_tail_only_reasoning() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let mut reducer = RunSubscriptionReducer::new(session_id, run_id);
-    reducer
-        .apply_initial(replay_with_tail(
-            session_id,
-            run_id,
-            2,
-            vec![fact(3, Some("think")), fact(4, None)],
-        ))
-        .expect("replay tail applies");
-    assert_eq!(reducer.last_cursor(), Some(RunEventCursorDto::new(4)));
-    assert_eq!(reducer.reasoning_content(), "think");
-    assert_eq!(
-        reducer.snapshot().expect("snapshot exists").cursor(),
-        RunEventCursorDto::new(2)
-    );
-}
-
-#[test]
-fn reducer_rejects_replay_with_incomplete_tail_without_mutating_state() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let mut reducer = RunSubscriptionReducer::new(session_id, run_id);
-    reducer
-        .apply_initial(replay_with_tail(
-            session_id,
-            run_id,
-            0,
-            vec![fact(1, Some("existing"))],
-        ))
-        .expect("initial replay applies");
-    let before = reducer.clone();
-    let invalid_tail = RunEventTailPageDto::new(
-        session_id,
-        run_id,
-        RunEventCursorDto::new(1),
-        vec![fact(2, Some("partial"))],
-        RunEventCursorDto::new(2),
-        true,
-    )
-    .expect("partial replay tail remains a valid domain page");
-    let incomplete = RunSubscriptionResponseDto::Replay(
-        intention_domain::RunReplayDto::new(
-            snapshot(
-                session_id,
-                run_id,
-                1,
-                intention_domain::RunStatusDto::Running,
-            ),
-            invalid_tail,
-        )
-        .expect("replay shape is coherent"),
-    );
-    assert_eq!(
-        reducer
-            .apply_initial(incomplete)
-            .expect_err("incomplete replay tail rejects")
-            .code(),
-        "invalid_run_subscription"
-    );
-    assert_eq!(reducer, before);
-}
-
 #[tokio::test]
 async fn request_replay_applies_correlated_response_after_cursor_gap() {
     let endpoint = endpoint();
@@ -362,15 +269,25 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
         messages
             .send_message(&encode_response(
                 replay_id,
-                ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
-                    session_id,
-                    run_id,
-                    0,
-                    vec![fact(1, Some("recovered")), fact(2, None)],
-                )),
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 1)),
             ))
             .await
             .expect("replay response sends");
+        messages
+            .send_message(&ProtocolDaemonMessageDto::run_frame(
+                RunStreamFrameDto::LiveBatch(
+                    RunLiveBatchDto::new(
+                        session_id,
+                        run_id,
+                        RunEventCursorDto::new(0),
+                        vec![fact(1, Some("recovered")), fact(2, None)],
+                        RunEventCursorDto::new(2),
+                    )
+                    .expect("resumed batch validates"),
+                ),
+            ))
+            .await
+            .expect("resumed frame sends");
     });
     let client = RunStreamClient::new(endpoint, "run-stream-client").expect("client is valid");
     let mut subscription = client
@@ -390,6 +307,17 @@ async fn request_replay_applies_correlated_response_after_cursor_gap() {
         .request_replay()
         .await
         .expect("correlated replay applies");
+    assert_eq!(
+        subscription.reducer().last_cursor(),
+        Some(RunEventCursorDto::new(1))
+    );
+    assert!(
+        subscription
+            .receive()
+            .await
+            .expect("resumed facts are delivered")
+            .is_none()
+    );
     assert_eq!(
         subscription.reducer().last_cursor(),
         Some(RunEventCursorDto::new(2))
@@ -469,12 +397,7 @@ async fn request_replay_buffers_frames_queued_before_the_correlated_reply() {
         messages
             .send_message(&encode_response(
                 recovery_id,
-                ProtocolResponsePayloadDto::RunSubscription(replay_with_tail(
-                    session_id,
-                    run_id,
-                    1,
-                    vec![fact(2, None), fact(3, None)],
-                )),
+                ProtocolResponsePayloadDto::RunSubscription(replay(session_id, run_id, 1)),
             ))
             .await
             .expect("recovery replay sends");
@@ -510,7 +433,7 @@ async fn request_replay_buffers_frames_queued_before_the_correlated_reply() {
         .expect("recovery replay applies");
     assert_eq!(
         subscription.reducer().last_cursor(),
-        Some(RunEventCursorDto::new(3))
+        Some(RunEventCursorDto::new(1))
     );
     server.await.expect("scripted peer completes");
 }

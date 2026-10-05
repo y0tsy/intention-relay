@@ -239,13 +239,13 @@ step, not the run, and is valid only when the same transaction records the compl
 positions, cursor/index, projections, events, and snapshots; no local effect occurs inside it.
 
 Calls admit independently and may execute concurrently; a group is not a workspace transaction and makes no
-serializability or merge claim. Shared run cursor order reflects durable commit order, and each call's positive fragment
-position is contiguous only within that call. Every call has exactly one terminal result; the next model step waits for
-all group positions to become terminal and receives a typed `ModelToolExchangeDto` in original model call order, never
-completion order. Partial fragments are observable but never model context. Provider continuations are always fresh
-requests reconstructed from complete local typed history; remote conversation state, opaque continuation identifiers,
-and provider-owned tool execution are excluded, and a driver that cannot translate that local typed exchange cannot
-claim `model_tool_loop_v1` support.
+serializability or merge claim. Run container journal order reflects durable commit order, and each call's positive
+fragment position is contiguous only within that call. Every call has exactly one terminal result; the next model step
+waits for all group positions to become terminal and receives a typed `ModelToolExchangeDto` in original model call
+order, never completion order. Partial fragments are observable but never model context. Provider continuations are
+always fresh requests reconstructed from complete local typed history; remote conversation state, opaque continuation
+identifiers, and provider-owned tool execution are excluded, and a driver that cannot translate that local typed
+exchange cannot claim `model_tool_loop_v1` support.
 
 Representation limits for group validity and output framing are intrinsic bounds or typed capacity outcomes, never
 Mandate product ceilings. Oversized or malformed groups fail before effects; output is never partially committed, and a
@@ -255,9 +255,9 @@ call whose fragment cannot fit receives a known terminal outcome without changin
 
 Each call produces one ordered stream of `ToolOutputDeltaRecorded` facts followed by exactly one
 `ToolCallResultRecorded` terminal fact. An output delta contains the `ToolCallId`, a positive per-call fragment
-position, and normalized safe content. Position among all facts is the shared `RunEventCursorDto`; the fragment position
-orders fragments within one call only. Duplicate, missing, non-contiguous, post-terminal, wrong-group, or untyped
-fragments fail closed as `tool_result_stream_invalid`.
+position, and normalized safe content. Position among all facts is a position in the run container journal
+(`RunEventCursorDto`); the per-call fragment position is a within-call rank, not a sequence authority. Duplicate,
+missing, non-contiguous, post-terminal, wrong-group, or untyped fragments fail closed as `tool_result_stream_invalid`.
 
 Each accepted fragment commits immediately as its own durable fact; after an independent durable reread the daemon
 publishes to normal run subscribers. A fragment is never inserted into the next model request by itself; only the
@@ -282,17 +282,18 @@ enter the next typed exchange; an `ExternalEffectUnknown` result never permits a
 
 Run snapshots contain only a compact safe summary of active step/group/call state; no tool-output text, full terminal
 content, raw tool results, model-visible projection text, provider-native correlation data, or implementation resources.
-Tool facts retain the shared run cursor and are available for bounded tail replay.
+Tool facts take a position in the run container journal and are available for bounded tail replay.
 
 `model_tool_loop_v1` is a descriptor/model capability, not a wire capability: there is no protocol capability
-negotiation or family gate (ADR 0045). After the correlated `RunReplayDto` result of a run subscription, the subscriber
+negotiation or family gate (ADR 0045). After the correlated `RunSnapshotDto` result of a run subscription, the subscriber
 receives `RunToolHistoryPageDto` notifications: one fixed session/run identity, a captured upper cursor, non-empty
 ascending tool facts, bounded by the existing **256 facts and 512 KiB per page**. The final `RunToolHistoryCompletedDto`
-repeats the identity and upper cursor. One publication gate serializes `RunReplayDto`, tool-history pages, completion,
+repeats the identity and upper cursor. One publication gate serializes `RunSnapshotDto`, tool-history pages, completion,
 then live `run.frame` notifications. When the same subscription also carries the normalized reasoning stream, the
-combined gate serializes `RunReplayDto`, reasoning pages and completion, tool-history pages and completion, then live
+combined gate serializes `RunSnapshotDto`, reasoning pages and completion, tool-history pages and completion, then live
 frames; if either history class is absent, its pages and completion frame are omitted and the remaining frames keep this
-order. Sparse shared cursors are valid; missing or incomplete history requires typed resynchronization and never causes
+order. Sparse positions are valid within the tool-history page subset only, never for the run container journal itself,
+which stays dense within its container; missing or incomplete history requires typed resynchronization and never causes
 a live-tool retry.
 
 A subscriber to a run containing post-M4 model-tool-loop facts receives the complete typed history or a typed error,

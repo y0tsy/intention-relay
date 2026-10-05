@@ -135,7 +135,7 @@ consolidation stands under the protocol, codec, root, and limit changes of ADRs 
 removed surfaces at family granularity; the exact per-symbol inventories live in the wave commits.
 
 Retained by design in the same program: the incompatible-major rejection path with its golden
-`hello-incompatible-major-v2.json`; `ensure_run_cursors`, `snapshot_model_runs`, and the direct full-schema create path
+`hello-incompatible-major-v2.json`; `ensure_run_journals`, `snapshot_model_runs`, and the direct full-schema create path
 in `open()` with its regression test; modern `tool_calls` merge/finish, `provider_reasoning_stream_invalid`, and
 `with_reasoning_effort`; `stop_run_for_daemon_host`, `terminalize_cancelling_run_for_daemon`, the daemon async host
 path, and the protocol `StopRunCommandDto`; `committed_tool_result_evidence` and the `HostCommitObserver` publication

@@ -208,7 +208,7 @@ remained the stopping authority. No private binding survived restart. The Slice 
 tables, and the configuration-audit sequence. The reverted audit taxonomy (candidate prepared, removal
 pending/accepted/rejected/expired, catalog accepted/activated, activation recovery required, recovery completed) was the
 durable `configuration_audit.audit_kind` vocabulary written by the storage path, not protocol events, and no wire event
-DTO carried those names; it was neither Session, Run, Mandate, MCP, lineage, nor activity sequence. Numeric
+DTO carried those names; it was not one of the two ordering authorities and had no container journal. Numeric
 catalog/parser/page bounds must be explicitly classified as intrinsic representation bounds, protocol bounds, or actual
 capacity, never Mandate admission quotas.
 
@@ -240,10 +240,10 @@ an audience. The ordinary same-run continuation is not prior-reasoning injection
 round's own accepted reasoning to the assistant tool-call message of that in-flight exchange as transient request state
 (ADR 0041); prior-run, cross-turn, and fork reasoning injection remains forbidden.
 
-The future normalized stream uses one `RunEventCursorDto` for text, reasoning, summaries, tool calls, usage, and
-terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model` and was removed by the
-Slice 2 revert: the closed fragment category and the summary delta no longer exist, and the live normalized reasoning
-event is the M4 `ModelEventDto::ReasoningDelta { content }`. The reverted shape was:
+The future normalized stream uses one run container journal (`RunEventCursorDto`) for text, reasoning, summaries, tool
+calls, usage, and terminal facts. The Slice 2 provider-neutral reasoning DTO surface was owned by `intention-model` and
+was removed by the Slice 2 revert: the closed fragment category and the summary delta no longer exist, and the live
+normalized reasoning event is the M4 `ModelEventDto::ReasoningDelta { content }`. The reverted shape was:
 
 ```text
 ReasoningFragmentCategoryDto
@@ -330,8 +330,8 @@ protocol-side effort copy were removed by the unconsumed-surface audit (2026-09)
 For a `responses` profile whose model subset declares summary support, the default request asks for an automatic
 provider reasoning summary. A returned summary becomes a distinct tail-only `ReasoningSummaryDelta` and corresponding
 durable fact. It is not a `ReasoningDelta`, is never raw chain-of-thought, and does not enter model context or a run
-snapshot. It follows the normalized reasoning cursor order, the 4 MiB per-run reasoning bound, the existing tail replay
-and publication rules, and the selected initial-delivery contract. It enters a typed `TextualHistoryV1` transfer
+snapshot. It follows the run container journal order, the 4 MiB per-run reasoning bound, the existing tail replay and
+publication rules, and the selected initial-delivery contract. It enters a typed `TextualHistoryV1` transfer
 together with the selected response's textual reasoning fragments.
 
 ## Typed cross-turn reasoning history
@@ -378,19 +378,21 @@ work. Historical M4 runs remain readable with no synthetic manifests.
 same source `RunId` twice. There is no price, currency, or inferred cost.
 
 Initial reasoning delivery is an unconditional part of the ordinary run subscription: after the existing correlated
-authoritative `RunReplayDto` snapshot response, the daemon sends uncorrelated `RunReasoningHistoryPageDto` and
+authoritative `RunSnapshotDto` response, the daemon sends uncorrelated `RunReasoningHistoryPageDto` and
 `RunReasoningHistoryCompletedDto` frames. The former `normalized_reasoning_stream_v1` negotiated capability was removed
 by [ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md), so delivery is not gated on a handshake string. A page
 carries a fixed session/run identity, a captured upper run cursor, and a non-empty ascending list of only reasoning
-fragment or summary facts; cursors may be sparse but strictly increasing across all initial pages. The completion frame
+fragment or summary facts; page positions may be sparse but strictly increasing across all initial pages, and that
+sparseness is a property of the reasoning page subset only, never of the run container journal. The completion frame
 repeats the fixed identities and captured upper cursor. Under the serialized publication gate, the daemon captures the
 upper cursor, registers the subscriber, enqueues the correlated snapshot response, every history page through the
 cursor, and the completion frame before any later live fact; live frames begin strictly after the captured cursor, and a
 client never receives live reasoning before the initial history completes. Pages expose both categories and summaries in
 the same ordinary run-subscription visibility class as live facts; the existing tail bounds of at most **256 facts** and
-**512 KiB** of fact data apply and may be sparse relative to the shared run cursor. Unavailable or incomplete initial
-history requires typed resynchronization with no client guessing. A client that cannot decode these typed frames fails
-closed rather than receiving a partially understood frame. Legacy M4 runs retain existing subscription behavior.
+**512 KiB** of fact data apply, and page positions may be sparse relative to the full run container journal, which stays
+dense within its container. Unavailable or incomplete initial history requires typed resynchronization with no client
+guessing. A client that cannot decode these typed frames fails closed rather than receiving a partially understood
+frame. Legacy M4 runs retain existing subscription behavior.
 
 ## Reasoning in branches
 

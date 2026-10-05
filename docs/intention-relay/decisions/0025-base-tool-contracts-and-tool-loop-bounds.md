@@ -30,7 +30,7 @@ asserted, and only the transport and IO liveness safeguards remain (ADR 0048);
 numeric output budget (ADR 0048); and
 - tool-history replay negotiation (`RunToolHistoryPageDto` /
 `RunToolHistoryCompletedDto`), including the combined publication-gate order when the same subscription also delivers
-the normalized reasoning stream (`RunReplayDto` → reasoning pages/completion → tool pages/completion → live frames, with
+the normalized reasoning stream (`RunSnapshotDto` → reasoning pages/completion → tool pages/completion → live frames, with
 omit-if-absent for either history class).
 
 Each direction keeps M3/M4 behavior authoritative (including the byte-identical `tool_execution_unavailable` denial),

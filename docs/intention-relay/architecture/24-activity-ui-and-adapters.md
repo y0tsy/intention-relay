@@ -31,7 +31,8 @@ grant or infer any of those authorities.
 
 New work uses a daemon-assigned `AgentActivityTreeId`. New Mandate work retains Mandate-scoped activity identity across
 fresh runs; a `RunId` is provenance, not activity authority. `AgentActivityTreeId` is distinct from
-`ConversationTreeId`, Mandate graph identity, Session sequence, Run cursor, lineage sequence, and notification cursor.
+`ConversationTreeId`, Mandate graph identity, the session event sequence, the run container journal
+(`RunEventCursorDto`), the conversation-tree container journal, and the notification observation cursor.
 
 Every new root run receives its `AgentActivityTreeId` in the same durable admission transaction as its immutable run
 selection. Every root tree begins with one durable `RootActivityTreeBound` journal record even when it has no child or
@@ -60,8 +61,10 @@ AgentActivitySelectionV1
   }
 ```
 
-Each admitted direct child has one immutable parent/child activity pair with a daemon-assigned pair identity and one
-shared monotonic pair order. Only this pair may exchange the closed message kinds:
+Each admitted direct child has one immutable parent/child activity pair, the container "delegation pair", with a
+daemon-assigned pair identity and one delegation-edge container journal shared by both directions. Its dense
+`pair_order` positions (`AgentPairOrderDto`) are the pair's only gap-detection token, and the journal is never reused
+for global event order. Only this pair may exchange the closed message kinds:
 
 | Direction | Kinds |
 | --- | --- |
@@ -69,8 +72,8 @@ shared monotonic pair order. Only this pair may exchange the closed message kind
 | Child to parent | `Report`, `ClarificationRequest` |
 
 A sibling, indirect relative, root, adapter, bridge, kernel, MCP service, provider, or arbitrary caller cannot send a
-pair message. Invalid direction, stale link, terminal endpoint, duplicate/skipped order, invalid reference, or limit
-failure rejects before publication.
+pair message. Invalid direction, stale link, terminal endpoint, duplicate or skipped `pair_order`, invalid reference, or
+limit failure rejects before publication.
 
 ```mermaid
 flowchart LR
@@ -131,14 +134,17 @@ undelivered messages and 512 KiB of canonical safe content, with one slot and 64
 `ClarificationReply` and `ClarificationRequest` respectively; ordinary `Instruction`/`Report` use at most 15 slots and
 448 KiB.
 
-Messages deliver only at the recipient's next fresh model request, in activity journal order. They cannot alter a sent
-provider request, interrupt a step, create a run, schedule work, or become a remote continuation. Clarification waiting,
-timeout, cancellation, terminalization, and restart never resume work.
+Messages deliver only at the recipient's next fresh model request, in activity-tree container journal order. They cannot
+alter a sent provider request, interrupt a step, create a run, schedule work, or become a remote continuation.
+Clarification waiting, timeout, cancellation, terminalization, and restart never resume work.
 
-Each tree owns an append-only `AgentActivityJournalSequenceDto`, independent of all Session, Run, lineage, provider,
-tool, and notification sequences. Journal records safely describe root binding, child/message/clarification transitions,
-terminal child state, policy observation, Goal milestone, and unknown effect observation. No global order across
-trees exists.
+Each activity tree owns one append-only container journal, the activity-tree container journal, with
+`AgentActivityJournalSequenceDto` as its position type; it is dense within its tree and is that tree's only
+gap-detection token. It orders exactly the records that belong to that activity tree and are not records of one session;
+it is never the session event sequence, the run container journal, the conversation-tree container journal, the
+delegation-edge container journal, or a notification observation position. Journal records safely describe root binding,
+child/message/clarification transitions, terminal child state, policy observation, Goal milestone, and unknown effect
+observation. No global order across trees exists.
 
 ```text
 AgentActivityJournalRecordDto
@@ -180,8 +186,9 @@ reference, acknowledgement consequences, and related message/child state, or com
 outside the transaction. Publication follows commit and exact scoped reread. A `safe_user_projection` is limited to safe
 text, closed kind, safe status, bounded counters, reason code, and allowed typed references; it never includes tool/MCP/
 provider/reasoning data, prompts, paths, commands, grants, credentials, Python values, transcripts, or diagnostics.
-`DirectChildStatusDto` reports one child; `DescendantSummaryDto` reports a subtree with one journal sequence and bounded
-counts, marked incomplete when a projection is unreadable, built from durable safe projections only.
+`DirectChildStatusDto` reports one child; `DescendantSummaryDto` reports a subtree with one activity-tree container
+journal sequence and bounded counts, marked incomplete when a projection is unreadable, built from durable safe
+projections only.
 
 The research values below are not activated limits ([ADR
 0048](../decisions/0048-limits-by-precedent-and-no-content-scanning.md)):
@@ -203,7 +210,7 @@ everything, and physical deletion, compaction, export, and garbage collection re
 ## Child operations, delivery, and model exchanges
 
 The daemon-internal RLM child operation is closed and bound to the child's immutable `RlmParentLinkDto`, current
-`ModelStepId`, daemon-assigned `RlmMessageId`, message kind, pair order, and the typed message payload reference:
+`ModelStepId`, daemon-assigned `RlmMessageId`, message kind, `pair_order`, and the typed message payload reference:
 
 ```text
 RlmChildMessageOperation
@@ -234,9 +241,9 @@ RlmMessageExchangeDto
 It remains distinct from text-only `ModelMessageDto` and from `ModelToolExchangeDto`. A provider descriptor owns the
 private compatible translation, but it cannot flatten an RLM message into an ordinary user or assistant history item,
 infer a current message, reorder it, or introduce a remote continuation. The daemon supplies all undelivered messages
-for the recipient in increasing `AgentActivityJournalSequenceDto` order; that order is the same durable order visible in
-the journal, and an inner `AgentPairOrderDto` proves the order of every individual pair. No alternative sorting by
-child, class, task, timing estimate, or current projection is allowed.
+for the recipient in increasing activity-tree container journal order; that order is the same durable order visible in
+the journal, and each delegation pair's `pair_order` (`AgentPairOrderDto`) proves the order of every message within
+that pair. No alternative sorting by child, class, task, timing estimate, or current projection is allowed.
 
 A daemon-created agent status, child creation, admission, tool/MCP action, output fragment, policy detail, or other
 service milestone never becomes a parent model message merely because it is visible in the activity journal. A terminal
@@ -256,10 +263,13 @@ credential-free surface that never rewrites history and is never destructive; it
 
 ## Notifications and acknowledgement
 
-One daemon-owned `AgentNotificationJournal` serves the local OS user. Its independent `AgentNotificationCursorDto` is an
-observation position, never a read, seen, dismissed, or accepted claim. Records contain only activity tree and record
-references, closed `Urgent` or `Ordinary` level/reason, safe counts/states, time, and record identity. They exclude
-message text and all sensitive content/resources.
+One daemon-owned `AgentNotificationJournal` serves the local OS user. Its notification observation cursor — reserved
+as `AgentNotificationCursorDto` and typed only when this surface is activated, because an observation position needs no
+DTO before it has a producer — is the observation position for that one reader: a resume position only, never a read,
+seen, dismissed, or accepted claim, never an ordering authority, never durable order, never a deduplication key, and
+never a conflict token. Records contain only activity tree and record references, closed `Urgent` or `Ordinary`
+level/reason, safe counts/states, time, and record identity. They exclude message text and all sensitive
+content/resources.
 
 ```text
 AgentNotificationLevelDto
@@ -286,16 +296,17 @@ subscriber queue; an unaccepting peer receives a typed resync then detach and ne
 healthy subscribers.
 
 Durable acknowledgement/read state is a separate presentation acknowledgement aggregate with its own typed commands and
-projections. It never rewrites a notification journal record, changes the notification cursor, creates authority, or
-schedules/retries work. Native OS notifications, remote push, accounts, and inbox semantics are excluded.
+projections. It never rewrites a notification journal record, changes the notification observation cursor, creates
+authority, or schedules/retries work. Native OS notifications, remote push, accounts, and inbox semantics are excluded.
 
 ## Protocol, adapters, and recovery
 
 Activity and notification projections ride the single JSON-RPC 2.0 connection over the existing private
 Unix-socket/Windows-named-pipe endpoint ([ADR 0045](../decisions/0045-local-json-rpc-2-0-transport.md)): typed
 subscription methods and notification frames replace the former `agent_activity_v1` and `user_notifications_v1`
-negotiated families and their capability gates. Activity replay captures one upper journal sequence, sends a safe
-snapshot and bounded ascending pages through that bound, sends completion, then emits only later live frames.
+negotiated families and their capability gates. Activity replay captures one upper activity-tree container journal
+sequence, sends a safe snapshot and bounded ascending pages through that bound, sends completion, then emits only later
+live frames.
 Notification reconnect accepts an observation cursor and returns bounded current safe summaries. Unsupported, corrupt,
 unavailable, gapped, slow, or detached peers fail closed or resynchronize without blocking durable work or healthy
 peers; a peer that cannot decode a typed frame receives no partially understood frame. There is no second listener.

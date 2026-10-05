@@ -46,7 +46,7 @@ coverage-tier classification with the base 80% line-coverage threshold and the d
 
 | Crate | Owns | May depend on |
 | --- | --- | --- |
-| `intention-types` | ID newtypes, schema versions, common errors, time, pagination, envelopes. | Minimal shared dependencies only. |
+| `intention-types` | ID newtypes, schema versions, common errors, time, envelopes. | Minimal shared dependencies only. |
 | `intention-domain` | Domain DTOs, value validation, domain events, invariants. | `intention-types`. |
 | `intention-application` | Commands, queries, semantic use-case workflows, and protocol-result mapping over DTO-only storage. | Domain, storage contracts, runtime contracts, config snapshots, protocol, types. |
 | `intention-runtime` | Deterministic session/run lifecycle decisions, cancellation, terminal promotion, and recovery-before-ready. | Domain, storage contracts, config snapshots, types. |
@@ -110,7 +110,7 @@ flowchart BT
 ## M3 ownership decisions
 
 -  `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn,
-transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot/tail reads, and
+transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot and durable event-tail reads, and
 configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend
 resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,

@@ -25,7 +25,7 @@ use intention_config::{
 use intention_domain::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_domain::{
     DomainEventDto, GetSessionSnapshotQueryDto, ModelRunFactInputDto, RunEventCursorDto,
-    RunFailureDto, RunReplayDto, RunStatusDto, ToolLifecycleStatusDto,
+    RunFailureDto, RunSnapshotDto, RunStatusDto, ToolLifecycleStatusDto,
 };
 use intention_hooks::{
     Hook, Outcome as HookOutcome, Phase, PhaseContext, Registry as HookRegistry,
@@ -38,8 +38,8 @@ use intention_protocol::SendUserTurnOutcomeDto;
 use intention_protocol::{
     DaemonHealthDto, DaemonReadinessDto, ProtocolAcceptedDto, ProtocolAcceptedResultDto,
     ProtocolCommandDto, ProtocolCommandResultDto, ProtocolQueryDto, ProtocolQueryResultDto,
-    SessionEventTailBatchDto, SessionResyncDto, SessionResyncReasonDto,
-    SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    SessionResyncDto, SessionResyncReasonDto, SessionSubscriptionResponseDto,
+    SubscribeSessionCommandDto,
 };
 use intention_provider_generic_chat::GenericChatDriver;
 use intention_provider_openrouter::OpenRouterDriver;
@@ -636,8 +636,8 @@ impl DaemonApplicationFacade {
         let replay = self
             .inner
             .repository
-            .load_current_run_replay(session_id, run_id)?;
-        let status = replay.snapshot().run_projection().status();
+            .load_current_run_snapshot(session_id, run_id)?;
+        let status = replay.run_projection().status();
         if status.is_terminal() {
             return Ok(());
         }
@@ -653,7 +653,7 @@ impl DaemonApplicationFacade {
             .append_model_run_facts(AppendModelRunFactsInputDto::new(
                 session_id,
                 run_id,
-                replay.snapshot().cursor(),
+                replay.cursor(),
                 vec![ModelRunFactInputDto::failed(failure)],
                 Some(RunStatusDto::Failed),
                 now()?,
@@ -693,12 +693,13 @@ impl DaemonApplicationFacade {
 
     /// Loads an authoritative current run snapshot for the private daemon host.
     #[doc(hidden)]
-    pub fn load_current_run_replay_for_daemon(
+    pub fn load_current_run_snapshot_for_daemon(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
-        ApplicationService::new(&self.inner.repository).load_current_run_replay(session_id, run_id)
+    ) -> DtoResult<RunSnapshotDto> {
+        ApplicationService::new(&self.inner.repository)
+            .load_current_run_snapshot(session_id, run_id)
     }
 
     /// Loads a contiguous durable run-fact range for the private daemon host.
@@ -802,7 +803,7 @@ impl DaemonApplicationFacade {
         }
     }
 
-    /// Returns a durable checkpoint and its contiguous replay tail, or typed resync.
+    /// Returns a durable checkpoint, or a typed resync.
     ///
     /// This retained M3 session-subscription seam is replay-only and does not
     /// filter session snapshots. M4 run-scoped streaming publishes through the
@@ -835,28 +836,7 @@ impl DaemonApplicationFacade {
                 SessionResyncReasonDto::InvalidPosition,
             );
         }
-        if requested_after != current.at_sequence() {
-            return SessionSubscriptionResponseDto::snapshot_and_tail(
-                current.clone(),
-                SessionEventTailBatchDto::new(
-                    SCHEMA_VERSION,
-                    command.session_id(),
-                    current.at_sequence(),
-                    Vec::new(),
-                )
-                .unwrap_or_else(|_| unreachable!("empty durable tail must be valid")),
-            )
-            .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"));
-        }
-        let tail = SessionEventTailBatchDto::new(
-            SCHEMA_VERSION,
-            command.session_id(),
-            requested_after,
-            Vec::new(),
-        )
-        .unwrap_or_else(|_| unreachable!("empty durable tail must be valid"));
-        SessionSubscriptionResponseDto::snapshot_and_tail(current, tail)
-            .unwrap_or_else(|_| unreachable!("current snapshot and empty tail must agree"))
+        SessionSubscriptionResponseDto::snapshot(current)
     }
 
     /// Dispatches a durable M3 command.
@@ -1397,9 +1377,9 @@ mod tests {
             (session_id, run_id)
         );
         let replay = facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
             .expect("current run replay reads");
-        assert_eq!(replay.snapshot().cursor(), RunEventCursorDto::new(0));
+        assert_eq!(replay.cursor(), RunEventCursorDto::new(0));
         assert!(
             facade
                 .load_run_tail_for_daemon(session_id, run_id, RunEventCursorDto::new(0))
@@ -1419,9 +1399,8 @@ mod tests {
         );
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelling run replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelling
@@ -1544,8 +1523,8 @@ mod tests {
                 Some(SessionEventSequenceDto::new(1)),
                 RunModeDto::Build,
             )),
-            SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
-                if snapshot.at_sequence() == SessionEventSequenceDto::new(1) && tail.events().is_empty()
+            SessionSubscriptionResponseDto::Snapshot(snapshot)
+                if snapshot.at_sequence() == SessionEventSequenceDto::new(1)
         ));
         assert!(matches!(
             facade.subscribe(SubscribeSessionCommandDto::new(
@@ -1615,12 +1594,9 @@ mod tests {
             .terminalize_cancelling_run_for_daemon(session_id, run_id)
             .expect("terminalizes");
         let replay = facade
-            .load_current_run_replay_for_daemon(session_id, run_id)
+            .load_current_run_snapshot_for_daemon(session_id, run_id)
             .expect("replay");
-        assert_eq!(
-            replay.snapshot().run_projection().status(),
-            RunStatusDto::Cancelled
-        );
+        assert_eq!(replay.run_projection().status(), RunStatusDto::Cancelled);
         let other = RunId::new();
         assert!(
             facade
@@ -1681,9 +1657,8 @@ mod tests {
             .expect("host stop commits cancelling");
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelling replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelling,
@@ -1740,26 +1715,21 @@ mod tests {
         assert_eq!(durable_events.len(), 2);
 
         // The committed evidence replays as an authoritative snapshot: the
-        // M3 seam returns the current durable checkpoint with an empty
-        // contiguous tail, and replaying at that checkpoint is a stable
-        // no-op that duplicates or loses nothing.
+        // M3 seam returns the current durable checkpoint, and replaying at that
+        // checkpoint is a stable no-op that duplicates or loses nothing.
         let replay = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
             session_id,
             Some(SessionEventSequenceDto::new(0)),
             RunModeDto::Build,
         ));
-        let SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } = replay else {
-            unreachable!("durable replay is contiguous")
+        let SessionSubscriptionResponseDto::Snapshot(snapshot) = replay else {
+            unreachable!("durable replay returns the current checkpoint")
         };
         assert_eq!(
             snapshot.at_sequence(),
             SessionEventSequenceDto::new(3),
             "the snapshot advanced through the committed create and turn batches"
-        );
-        assert!(
-            tail.events().is_empty(),
-            "the checkpoint replay carries no duplicate events"
         );
         let current = facade.subscribe(SubscribeSessionCommandDto::new(
             SCHEMA_VERSION,
@@ -1768,8 +1738,8 @@ mod tests {
             RunModeDto::Build,
         ));
         assert!(
-            matches!(current, SessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail }
-                if snapshot.at_sequence() == SessionEventSequenceDto::new(3) && tail.events().is_empty()),
+            matches!(current, SessionSubscriptionResponseDto::Snapshot(snapshot)
+                if snapshot.at_sequence() == SessionEventSequenceDto::new(3)),
             "the current checkpoint is replayable without duplication"
         );
     }
@@ -1904,9 +1874,8 @@ mod tests {
             .expect("host stop commits cancelling");
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelling replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelling,
@@ -2002,9 +1971,8 @@ mod tests {
         assert_eq!(error.code(), "tool_execute_external_effect_unknown");
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelling replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelling,
@@ -2070,9 +2038,8 @@ mod tests {
             .expect("terminalization clears the fenced run marker");
         assert_eq!(
             facade
-                .load_current_run_replay_for_daemon(session_id, run_id)
+                .load_current_run_snapshot_for_daemon(session_id, run_id)
                 .expect("cancelled replay reads")
-                .snapshot()
                 .run_projection()
                 .status(),
             RunStatusDto::Cancelled

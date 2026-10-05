@@ -126,7 +126,7 @@ promoted runs keep immutable snapshot/revision attachment. Append-only events, c
 session/run snapshots are atomic; the one-active-run invariant, durable queued input with never-reused queue tickets,
 atomic terminal promotion, the `Starting -> Cancelling -> Cancelled` lifecycle, and recovery-before-ready without
 automatic external-work resumption are in place. M3 applies TOML once per daemon startup (no live reload) and serves
-durable one-shot snapshot/tail replay or typed resync only; a `run_id: Some` request always returns typed
+durable one-shot snapshot replay or typed resync only; a `run_id: Some` request always returns typed
 `HistoryUnavailable` resync rather than unfiltered session state. Persistent live run streaming, post-commit fan-out,
 slow-peer policy, and safely represented run-scoped replay arrive with M4 through separate contracts. Evidence: [M3
 Closure Evidence](../closeout/m3-closure-evidence.md).
@@ -640,6 +640,14 @@ child/verifier, and bridge packages (architectures 15/17/19), and Milestone 12 t
 (architectures 18/20/21) plus the remaining architecture 22 provider work. Each milestone requires an accepted
 activating specification and atomic updates to crate ownership, DTO/wire/storage versions, quality policy, feature
 profiles, and evidence. This roadmap owns sequencing and milestone acceptance only.
+
+Current ordering status: the durable ordering authorities were collapsed to two — the session event sequence
+(`SessionEventSequenceDto`) for every record committed in one session, and the container journal sequence (storage
+mechanism `container_journals`; the only container kind today is `run`, whose position type is `RunEventCursorDto`) —
+plus one observation position, the reserved observation cursor, which is a reader's resume position and never an
+authority. The collapsed set is closed: no record family introduces a further ordering sequence, and queue tickets and
+owner-local operational tuples (for example scheduler readiness observations) are queue-ordering or operational
+metadata, not ordering authorities.
 
 | Package | Owner document | Status | Depends on |
 | --- | --- | --- | --- |

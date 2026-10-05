@@ -4,14 +4,13 @@
 //! client bootstrap, daemon lifecycle, runtime actors, or presentation logic.
 
 use intention_domain::{
-    CreateSessionCommandDto, DomainEventDto, GetSessionSnapshotQueryDto, ModelRunFactDto,
-    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunReplayDto, RunSnapshotDto,
+    CreateSessionCommandDto, GetSessionSnapshotQueryDto, ModelRunFactDto,
+    RemoveQueuedTurnCommandDto, RunEventCursorDto, RunModeDto, RunSnapshotDto,
     SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
 };
 use intention_types::{
-    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, EventEnvelopeDto, ProjectId,
-    QueuePositionDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId,
-    WorkspaceId,
+    ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ProjectId, QueuePositionDto, RunId,
+    SchemaVersionDto, SessionEventSequenceDto, SessionId, TurnId, WorkspaceId,
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
@@ -566,45 +565,15 @@ impl<'de> Deserialize<'de> for RunStreamFrameDto {
 }
 
 /// The correlated first reply to a dedicated run subscription request.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "The replay is a stable public wire DTO and must remain unboxed for the same Rust and JSON shape."
-)]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum RunSubscriptionResponseDto {
-    /// The authoritative current run snapshot and strict-after tail.
-    Replay(RunReplayDto),
+    /// The authoritative current run snapshot; later facts arrive as live batches.
+    Replay(RunSnapshotDto),
     /// A typed initial resynchronization requirement.
     Resync(RunResyncDto),
     /// A safe scoped request error, including `run_replay_not_found`.
     Error(ErrorDto),
-}
-
-impl<'de> Deserialize<'de> for RunSubscriptionResponseDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-        #[expect(
-            clippy::large_enum_variant,
-            reason = "The private intermediary mirrors the public unboxed replay DTO for validated wire decoding."
-        )]
-        enum RawRunSubscriptionResponseDto {
-            Replay(RunReplayDto),
-            Resync(RunResyncDto),
-            Error(ErrorDto),
-        }
-        Ok(
-            match RawRunSubscriptionResponseDto::deserialize(deserializer)? {
-                RawRunSubscriptionResponseDto::Replay(replay) => Self::Replay(replay),
-                RawRunSubscriptionResponseDto::Resync(resync) => Self::Resync(resync),
-                RawRunSubscriptionResponseDto::Error(error) => Self::Error(error),
-            },
-        )
-    }
 }
 
 /// A typed protocol command wrapper with no transport-specific resources.
@@ -978,109 +947,6 @@ impl SessionSnapshotDto {
     }
 }
 
-/// A validated, ordered event tail for one durable session.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SessionEventTailBatchDto {
-    schema_version: SchemaVersionDto,
-    session_id: SessionId,
-    after_sequence: SessionEventSequenceDto,
-    events: Vec<EventEnvelopeDto<DomainEventDto>>,
-}
-
-impl<'de> Deserialize<'de> for SessionEventTailBatchDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawSessionEventTailBatchDto {
-            #[serde(deserialize_with = "current_schema_version")]
-            schema_version: SchemaVersionDto,
-            session_id: SessionId,
-            after_sequence: SessionEventSequenceDto,
-            events: Vec<EventEnvelopeDto<DomainEventDto>>,
-        }
-
-        let raw = RawSessionEventTailBatchDto::deserialize(deserializer)?;
-        Self::new(
-            raw.schema_version,
-            raw.session_id,
-            raw.after_sequence,
-            raw.events,
-        )
-        .map_err(de::Error::custom)
-    }
-}
-
-impl SessionEventTailBatchDto {
-    /// Creates a contiguous ordered event tail after a known durable position.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when an event belongs to another session or the
-    /// tail is not contiguous from `after_sequence`.
-    pub fn new(
-        schema_version: SchemaVersionDto,
-        session_id: SessionId,
-        after_sequence: SessionEventSequenceDto,
-        events: Vec<EventEnvelopeDto<DomainEventDto>>,
-    ) -> DtoResult<Self> {
-        let mut expected = after_sequence.value();
-        for event in &events {
-            expected = expected.checked_add(1).ok_or_else(|| {
-                ErrorDto::validation(
-                    "invalid_event_tail",
-                    "event tail cannot follow the maximum sequence position",
-                )
-            })?;
-            if event.session_id() != session_id || event.sequence().value() != expected {
-                return Err(ErrorDto::validation(
-                    "invalid_event_tail",
-                    "event tail must be contiguous and scoped to its session",
-                ));
-            }
-        }
-        Ok(Self {
-            schema_version,
-            session_id,
-            after_sequence,
-            events,
-        })
-    }
-
-    /// Returns the tail schema version.
-    #[must_use]
-    pub const fn schema_version(&self) -> SchemaVersionDto {
-        self.schema_version
-    }
-
-    /// Returns the session to which every event in the tail belongs.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the durable position immediately preceding the first event.
-    #[must_use]
-    pub const fn after_sequence(&self) -> SessionEventSequenceDto {
-        self.after_sequence
-    }
-
-    /// Returns the validated ordered events in this tail batch.
-    #[must_use]
-    pub fn events(&self) -> &[EventEnvelopeDto<DomainEventDto>] {
-        &self.events
-    }
-
-    /// Returns the durable position after the last event in this batch.
-    #[must_use]
-    pub fn next_after_sequence(&self) -> SessionEventSequenceDto {
-        self.events
-            .last()
-            .map_or(self.after_sequence, EventEnvelopeDto::sequence)
-    }
-}
-
 /// The reviewed reason why a subscriber must obtain a fresh snapshot.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1134,79 +1000,25 @@ impl SessionResyncDto {
     }
 }
 
-/// A subscription response containing either a consistent snapshot and tail or a resync instruction.
-///
-/// `SnapshotAndTail` deliberately retains value fields: boxing either field
-/// would change the public Rust DTO contract while providing no wire-format
-/// benefit, because serde already serializes the same tagged value.
+/// A subscription response containing either a consistent snapshot or a resync instruction.
 #[expect(
     clippy::large_enum_variant,
-    reason = "SnapshotAndTail is an established public DTO variant; boxing its value fields would break Rust consumers without changing the serde wire format."
+    reason = "Snapshot is an established public DTO variant; boxing it would break Rust consumers without changing the serde wire format."
 )]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionSubscriptionResponseDto {
-    /// A snapshot checkpoint and its contiguous tail from that checkpoint.
-    SnapshotAndTail {
-        /// The consistent session checkpoint.
-        snapshot: SessionSnapshotDto,
-        /// Events immediately following the snapshot checkpoint.
-        tail: SessionEventTailBatchDto,
-    },
+    /// A consistent session checkpoint.
+    Snapshot(SessionSnapshotDto),
     /// The subscriber must discard local state and request a new snapshot.
     ResyncRequired(SessionResyncDto),
 }
 
-impl<'de> Deserialize<'de> for SessionSubscriptionResponseDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-        #[expect(
-            clippy::large_enum_variant,
-            reason = "The private deserialization intermediary mirrors the public unboxed DTO so serde can validate snapshot and tail coherence after decoding."
-        )]
-        enum RawSessionSubscriptionResponseDto {
-            SnapshotAndTail {
-                snapshot: SessionSnapshotDto,
-                tail: SessionEventTailBatchDto,
-            },
-            ResyncRequired(SessionResyncDto),
-        }
-
-        match RawSessionSubscriptionResponseDto::deserialize(deserializer)? {
-            RawSessionSubscriptionResponseDto::SnapshotAndTail { snapshot, tail } => {
-                Self::snapshot_and_tail(snapshot, tail).map_err(de::Error::custom)
-            }
-            RawSessionSubscriptionResponseDto::ResyncRequired(resync) => {
-                Ok(Self::ResyncRequired(resync))
-            }
-        }
-    }
-}
-
 impl SessionSubscriptionResponseDto {
-    /// Creates a consistent snapshot and tail response.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error unless the tail starts exactly at the snapshot
-    /// position and both values identify the same session.
-    pub fn snapshot_and_tail(
-        snapshot: SessionSnapshotDto,
-        tail: SessionEventTailBatchDto,
-    ) -> DtoResult<Self> {
-        let session_matches = snapshot.session_id() == tail.session_id();
-        let position_matches = snapshot.at_sequence() == tail.after_sequence();
-        if !(session_matches && position_matches) {
-            return Err(ErrorDto::validation(
-                "invalid_subscription_response",
-                "snapshot and tail must share one session and event position",
-            ));
-        }
-        Ok(Self::SnapshotAndTail { snapshot, tail })
+    /// Creates a consistent session checkpoint response.
+    #[must_use]
+    pub const fn snapshot(snapshot: SessionSnapshotDto) -> Self {
+        Self::Snapshot(snapshot)
     }
 
     /// Creates a typed subscription resynchronization response.
@@ -1651,7 +1463,6 @@ mod tests {
     )]
 
     use super::*;
-    use intention_types::{EventId, EventMetadataDto, TimestampDto};
 
     fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
         intention_domain::WorkspaceRootDto::parse(
@@ -1679,27 +1490,6 @@ mod tests {
             at_sequence,
         )
         .expect("fixture projection is valid")
-    }
-
-    fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
-        let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
-        EventEnvelopeDto::new(
-            EventMetadataDto::new(
-                SchemaVersionDto::new(1, 1),
-                EventId::new(),
-                session_id,
-                None,
-                None,
-                SessionEventSequenceDto::new(sequence),
-                occurred_at,
-            ),
-            DomainEventDto::RunStatusChanged(intention_domain::RunStatusChangedEventDto::new(
-                session_id,
-                RunId::new(),
-                intention_domain::RunStatusDto::Running,
-                occurred_at,
-            )),
-        )
     }
 
     #[test]
@@ -1730,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn tails_and_subscription_responses_validate_continuity() {
+    fn subscription_responses_round_trip_snapshots_and_resync() {
         let schema = SchemaVersionDto::new(1, 1);
         let session_id = SessionId::new();
         let snapshot = SessionSnapshotDto::with_projection(
@@ -1740,24 +1530,10 @@ mod tests {
             fixture_projection(session_id, SessionEventSequenceDto::new(2)),
         )
         .expect("fixture snapshot is valid");
-        let tail = SessionEventTailBatchDto::new(
-            schema,
-            session_id,
-            snapshot.at_sequence(),
-            vec![fixture_event(session_id, 3)],
-        )
-        .expect("contiguous tail is valid");
-        assert_eq!(tail.next_after_sequence(), SessionEventSequenceDto::new(3));
-        assert!(SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail).is_ok());
-        assert!(
-            SessionEventTailBatchDto::new(
-                schema,
-                session_id,
-                SessionEventSequenceDto::new(2),
-                vec![fixture_event(session_id, 4)],
-            )
-            .is_err()
-        );
+        assert!(matches!(
+            SessionSubscriptionResponseDto::snapshot(snapshot),
+            SessionSubscriptionResponseDto::Snapshot(_)
+        ));
     }
 
     #[test]
@@ -1856,34 +1632,6 @@ mod tests {
     fn remaining_constructor_and_deserialization_error_paths_are_checked() {
         let session = SessionId::new();
         let run = RunId::new();
-        let tail = |event_session: SessionId| {
-            serde_json::json!({
-                "schema_version": {"major": 1, "minor": 1},
-                "session_id": session,
-                "after_sequence": 4,
-                "events": [{
-                    "schema_version": {"major": 1, "minor": 1},
-                    "event_id": EventId::new(),
-                    "session_id": event_session,
-                    "run_id": null,
-                    "turn_id": null,
-                    "sequence": 5,
-                    "occurred_at": 1,
-                    "payload": {"kind": "run_status_changed", "data": {
-                        "session_id": session, "run_id": run, "status": "running", "occurred_at": 1
-                    }}
-                }]
-            })
-        };
-        assert!(
-            serde_json::from_value::<SessionEventTailBatchDto>(tail(session)).is_ok(),
-            "the flat envelope fixture deserializes before the tail rule applies"
-        );
-        assert!(
-            serde_json::from_value::<SessionEventTailBatchDto>(tail(SessionId::new())).is_err(),
-            "an event scoped to another session violates the tail rule"
-        );
-
         let batch = RunLiveBatchDto::new(
             session,
             run,

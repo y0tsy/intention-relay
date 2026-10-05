@@ -1,8 +1,9 @@
 //! Shared, dependency-light DTOs for every Intention Relay boundary.
 //!
-//! This crate owns validated identifiers, schema versions, safe errors, temporal
-//! values, pagination primitives, and versioned event envelopes. It deliberately
-//! has no domain, persistence, provider, runtime, or presentation dependency.
+//! This crate owns validated identifiers, the session event sequence, schema
+//! versions, safe errors, temporal values, and versioned event envelopes. It
+//! deliberately has no domain, persistence, provider, runtime, or presentation
+//! dependency.
 
 use std::fmt::{Display, Formatter};
 
@@ -200,89 +201,6 @@ impl QueuePositionDto {
     #[must_use]
     pub const fn value(self) -> u64 {
         self.0
-    }
-}
-
-/// An opaque continuation marker for a bounded collection query.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct PageCursorDto(String);
-
-impl<'de> Deserialize<'de> for PageCursorDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::parse(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
-
-impl PageCursorDto {
-    /// Parses a non-empty opaque cursor token.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe validation error if `value` is empty or whitespace only.
-    pub fn parse(value: impl Into<String>) -> DtoResult<Self> {
-        let value = value.into();
-        if value.trim().is_empty() {
-            Err(ErrorDto::validation(
-                "invalid_page_cursor",
-                "page cursor must not be empty",
-            ))
-        } else {
-            Ok(Self(value))
-        }
-    }
-
-    /// Returns the opaque cursor token.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// A bounded page request for collection queries.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-pub struct PageRequestDto {
-    limit: u16,
-}
-
-impl<'de> Deserialize<'de> for PageRequestDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawPageRequestDto {
-            limit: u16,
-        }
-
-        let raw = RawPageRequestDto::deserialize(deserializer)?;
-        Self::new(raw.limit).map_err(de::Error::custom)
-    }
-}
-
-impl PageRequestDto {
-    /// Creates a page request with a positive maximum result count.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe validation error when `limit` is zero.
-    pub fn new(limit: u16) -> DtoResult<Self> {
-        if limit == 0 {
-            Err(ErrorDto::validation(
-                "invalid_page_limit",
-                "page limit must be greater than zero",
-            ))
-        } else {
-            Ok(Self { limit })
-        }
-    }
-
-    /// Returns the requested maximum result count.
-    #[must_use]
-    pub const fn limit(self) -> u16 {
-        self.limit
     }
 }
 
@@ -737,7 +655,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_temporal_and_pagination_values_validate_their_boundaries() {
+    fn schema_temporal_and_sequence_values_validate_their_boundaries() {
         let current = SchemaVersionDto::new(1, 2);
         assert_eq!(current.major(), 1);
         assert_eq!(current.minor(), 2);
@@ -760,30 +678,6 @@ mod tests {
             "invalid_timestamp"
         );
         assert_eq!(SessionEventSequenceDto::new(8).value(), 8);
-        assert_eq!(
-            PageCursorDto::parse("cursor")
-                .expect("non-empty cursor is valid")
-                .as_str(),
-            "cursor"
-        );
-        assert_eq!(
-            PageCursorDto::parse(" ")
-                .expect_err("blank cursor must fail")
-                .code(),
-            "invalid_page_cursor"
-        );
-        assert_eq!(
-            PageRequestDto::new(10)
-                .expect("positive limit is valid")
-                .limit(),
-            10
-        );
-        assert_eq!(
-            PageRequestDto::new(0)
-                .expect_err("zero limit must fail")
-                .code(),
-            "invalid_page_limit"
-        );
     }
 
     #[test]

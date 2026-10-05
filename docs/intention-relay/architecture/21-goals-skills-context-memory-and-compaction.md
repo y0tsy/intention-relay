@@ -240,12 +240,15 @@ recovery validate stored selection and never rediscover a current Skill. A new r
 replacement, or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork,
 verifier, historical selection, or body.
 
-The daemon owns one append-only Skill sequence separate from session/run cursors. `SkillCreated`, `SkillImported`,
-`SkillRevisionCreated`, `SkillReplacementLinked`, `SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`,
-`SkillResolutionRecorded`, `SkillSelected`, `SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and
-`SkillProposalRejected` are typed facts. Every state-changing command atomically commits its projection, event(s),
-idempotency binding, and affected snapshot(s), then publishes only after durable reread. Current cards and catalog
-snapshots accelerate queries but never reconstruct historical use.
+Skill facts are session records: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
+`SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
+`SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and `SkillProposalRejected` are typed facts
+committed in exactly one session and ordered by that session's event sequence; no separate Skill sequence exists. The
+one cross-session aspect is catalog state, not a fact family: records, revisions, and cards carry identity and exact
+revision, and a list binds the catalog revision and opaque token below, so catalog state has no durable order and needs
+no container journal. Every state-changing command atomically commits its projection, event(s), idempotency binding, and
+affected snapshot(s), then publishes only after durable reread. Current cards and catalog snapshots accelerate queries
+but never reconstruct historical use.
 
 Skill operations are typed JSON-RPC 2.0 methods (card-only listing, exact inspect/disclosure, user invocation, lifecycle
 commands, and durable skill audit; ADR 0045). A list captures one catalog revision, uses stable ordering and an opaque

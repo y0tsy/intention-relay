@@ -21,7 +21,7 @@ A DTO is a stable contract, not merely any serializable struct.
 | Event DTO | Immutable fact that occurred. | `RunStartedEventDto`, `PlanUpdatedEventDto`. |
 | Persistence DTO | Storage-safe representation of a record/snapshot/event. | `PersistedRunDto`, `RunSnapshotDto`. |
 | Provider DTO | Provider-neutral model request/stream/error contract, including advertised tool definitions and the transient same-run reasoning attachment. | `ModelRequestDto`, `ModelToolDefinitionDto`, `AssistantReasoningDto`, `ModelEventDto`. |
-| Durable model fact DTO | Typed append-only provider/model evidence, safe run projection, and scoped replay. | `ModelRunFactDto`, `RunSnapshotDto`, `RunReplayDto`. |
+| Durable model fact DTO | Typed append-only provider/model evidence, safe run projection, and scoped replay. | `ModelRunFactDto`, `RunSnapshotDto`. |
 | Runtime execution DTO | Immutable selected execution input, safe terminal outcome, and provider-neutral time port over injected provider/storage contracts. | `ModelRunExecutionInputDto`, `ModelRunExecutionOutcomeDto`, `ModelTimePort`. |
 | Tool DTO | Typed tool invocation, bounded result, metadata, policy decision, and durable result projection. | `ToolInvocationDto`, `ToolResultDto`, `ToolResultProjection`, `ToolResultEvidenceDto`. |
 | Hook DTO | Controlled state passed between tool hook phases. | `ToolHookContextDto`. |
@@ -39,7 +39,12 @@ identity across Session, Run, Mandate, activity, lineage, graph, operation, or d
 Deterministic UUIDv5 is permitted only where the owner freezes its namespace and name derivation. Daemon-assigned/random
 UUIDs and deterministic UUIDv5 values are not interchangeable. Historical UUID bytes and meanings remain unchanged and
 cannot be normalized into future records. UUIDs, operation identities, sequences, and diagnostic correlation IDs are
-distinct classes and must not be converted or used as authority substitutes.
+distinct classes and must not be converted or used as authority substitutes. Durable ordering has exactly two
+authorities — the session event sequence (`SessionEventSequenceDto`) for every record committed in one session, and the
+container journal sequence (storage mechanism `container_journals`) for records that belong to one container and are
+not a record of one session — plus one observation position, the reserved observation cursor, which is a reader's
+resume position and never an authority; the set is closed, and no record family may introduce a further ordering
+sequence.
 
 ### IDs
 
@@ -136,10 +141,11 @@ provider-error values; `intention-model` re-exports them for source compatibilit
 may exist only inside the owning provider implementation before being normalized to those DTOs.
 
 M4 durable model facts are domain-owned typed envelopes, never raw JSON. A run-scoped snapshot carries its compatible M3
-`RunProjectionDto`, dedicated `RunEventCursorDto`, bounded assistant-turn content, optional normalized
-usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only contiguous typed facts
-strictly after a cursor. M4's dedicated wire family keeps this scope separate from M3 session replay:
-`SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunReplayDto`, `RunResyncDto`,
+`RunProjectionDto`, its position in the run container journal (`RunEventCursorDto`), bounded assistant-turn content,
+optional normalized usage/finish/failure state, and never accumulated reasoning. `RunEventTailPageDto` carries only
+contiguous typed facts strictly after a position in the run container journal. M4's dedicated wire family keeps this
+scope separate from M3 session replay:
+`SubscribeRunCommandDto` receives a correlated `RunSubscriptionResponseDto` containing `RunSnapshotDto`, `RunResyncDto`,
 or a safe `ErrorDto`; subsequent `RunLiveBatchDto`, `RunSnapshotFrameDto`, and `RunResyncDto` are uncorrelated
 `RunStreamFrameDto` values. Live batches are non-empty, run-scoped, positive-cursor contiguous ranges, while snapshot
 frames are daemon-authoritative status checkpoints. `RunResyncReasonDto` is closed and rejects unknown variants;
@@ -212,7 +218,7 @@ their recorded bytes and meaning.
 -  versioned JSON fixtures for every public DTO family, including valid current fixtures, supported legacy fixtures, and
 malformed/compatibility cases;
 - invalid-shape and invalid-ID tests at every input boundary;
-- explicit wire-validation tests for non-blank, path, timestamp, pagination, and schema invariants;
+- explicit wire-validation tests for non-blank, path, timestamp, and schema invariants;
 - schema compatibility fixtures for transport and persisted events;
 - compile-time tests proving forbidden implementation types do not appear in public signatures where tooling permits;
 - consumer-driven contract tests for `intention-client` against daemon transport;

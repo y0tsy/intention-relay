@@ -6,8 +6,8 @@
 //! Test-first protocol contract and current-version wire evidence.
 
 use intention_domain::{
-    DomainEventDto, GetSessionSnapshotQueryDto, RunModeDto, RunStatusChangedEventDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionProjectionDto, StopRunCommandDto,
+    GetSessionSnapshotQueryDto, RunModeDto, SendUserTurnCommandDto, SessionProjectionDto,
+    StopRunCommandDto,
 };
 use intention_protocol::{
     CURRENT_DTO_SCHEMA_VERSION, CURRENT_PROTOCOL_VERSION, DaemonHealthDto, DaemonReadinessDto,
@@ -15,15 +15,14 @@ use intention_protocol::{
     ProtocolAcceptedDto, ProtocolAcceptedResultDto, ProtocolCommandDto, ProtocolCommandResultDto,
     ProtocolHelloDto, ProtocolMethodDto, ProtocolQueryDto, ProtocolQueryResultDto,
     ProtocolRequestPayloadDto, ProtocolResponsePayloadDto, ProtocolVersionDto, RunResyncDto,
-    RunResyncReasonDto, RunStreamFrameDto, SessionEventTailBatchDto, SessionResyncDto,
-    SessionResyncReasonDto, SessionSnapshotDto, SessionSubscriptionResponseDto,
-    SubscribeSessionCommandDto, decode_hello_request, decode_request_line, decode_response,
-    encode_hello_request, encode_request, encode_response, is_notification_line,
-    parse_run_frame_notification,
+    RunResyncReasonDto, RunStreamFrameDto, SessionResyncDto, SessionResyncReasonDto,
+    SessionSnapshotDto, SessionSubscriptionResponseDto, SubscribeSessionCommandDto,
+    decode_hello_request, decode_request_line, decode_response, encode_hello_request,
+    encode_request, encode_response, is_notification_line, parse_run_frame_notification,
 };
 use intention_types::{
-    CorrelationIdDto, ErrorDto, EventEnvelopeDto, EventId, EventMetadataDto, ProjectId,
-    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto, WorkspaceId,
+    CorrelationIdDto, ErrorDto, ProjectId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
+    WorkspaceId,
 };
 
 fn fixture_workspace_root() -> intention_domain::WorkspaceRootDto {
@@ -52,27 +51,6 @@ fn fixture_projection(
         at_sequence,
     )
     .expect("fixture projection is valid")
-}
-
-fn fixture_event(session_id: SessionId, sequence: u64) -> EventEnvelopeDto<DomainEventDto> {
-    let occurred_at = TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid");
-    EventEnvelopeDto::new(
-        EventMetadataDto::new(
-            SchemaVersionDto::new(1, 1),
-            EventId::new(),
-            session_id,
-            None,
-            None,
-            SessionEventSequenceDto::new(sequence),
-            occurred_at,
-        ),
-        DomainEventDto::RunStatusChanged(RunStatusChangedEventDto::new(
-            session_id,
-            intention_types::RunId::new(),
-            RunStatusDto::Running,
-            occurred_at,
-        )),
-    )
 }
 
 #[test]
@@ -273,7 +251,7 @@ fn jsonrpc_method_table_covers_every_request_variant_exactly_once() {
 }
 
 #[test]
-fn daemon_health_and_snapshot_tail_contracts_round_trip() {
+fn daemon_health_and_session_snapshot_contracts_round_trip() {
     let schema = SchemaVersionDto::new(1, 1);
     let health = DaemonHealthDto::new(schema, CURRENT_PROTOCOL_VERSION, DaemonReadinessDto::Ready);
     assert_eq!(
@@ -292,15 +270,7 @@ fn daemon_health_and_snapshot_tail_contracts_round_trip() {
         fixture_projection(session_id, SessionEventSequenceDto::new(2)),
     )
     .expect("fixture snapshot is valid");
-    let tail = SessionEventTailBatchDto::new(
-        schema,
-        session_id,
-        snapshot.at_sequence(),
-        vec![fixture_event(session_id, 3)],
-    )
-    .expect("contiguous tail is valid");
-    let response = SessionSubscriptionResponseDto::snapshot_and_tail(snapshot, tail)
-        .expect("matching snapshot and tail are valid");
+    let response = SessionSubscriptionResponseDto::snapshot(snapshot);
 
     let encoded = serde_json::to_string(&response).expect("response serializes");
     let decoded: SessionSubscriptionResponseDto =
@@ -554,50 +524,6 @@ fn hello_version_mismatch_answers_with_the_typed_32001_error() {
 }
 
 #[test]
-fn event_tails_and_subscription_responses_reject_mismatched_boundaries() {
-    let schema = SchemaVersionDto::new(1, 1);
-    let session_id = SessionId::new();
-    let other_session_id = SessionId::new();
-    let overflow = SessionEventTailBatchDto::new(
-        schema,
-        session_id,
-        SessionEventSequenceDto::new(u64::MAX),
-        vec![fixture_event(session_id, 0)],
-    )
-    .expect_err("a tail cannot continue after the maximum sequence");
-    assert_eq!(overflow.code(), "invalid_event_tail");
-
-    let session_mismatch = SessionEventTailBatchDto::new(
-        schema,
-        session_id,
-        SessionEventSequenceDto::new(0),
-        vec![fixture_event(other_session_id, 1)],
-    )
-    .expect_err("tail events must belong to the requested session");
-    assert_eq!(session_mismatch.code(), "invalid_event_tail");
-
-    let tail = SessionEventTailBatchDto::new(
-        schema,
-        session_id,
-        SessionEventSequenceDto::new(1),
-        Vec::new(),
-    )
-    .expect("empty tail is valid");
-    let response = SessionSubscriptionResponseDto::snapshot_and_tail(
-        SessionSnapshotDto::with_projection(
-            schema,
-            session_id,
-            SessionEventSequenceDto::new(0),
-            fixture_projection(session_id, SessionEventSequenceDto::new(0)),
-        )
-        .expect("fixture snapshot is valid"),
-        tail,
-    )
-    .expect_err("snapshot and tail positions must agree");
-    assert_eq!(response.code(), "invalid_subscription_response");
-}
-
-#[test]
 fn unknown_additive_hello_fields_remain_tolerated() {
     let hello: ProtocolHelloDto = serde_json::from_str(
         r#"{"version":{"major":2,"minor":0},"adapter_name":"fixture","future_additive":true}"#,
@@ -613,7 +539,7 @@ fn malformed_protocol_payload_fields_and_closed_variants_are_rejected() {
         r#"{"kind":"command","data":{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","turn_id":"11111111-1111-4111-8111-111111111111","content":" "}}}"#,
         r#"{"kind":"query","data":{"kind":"unknown_query"}}"#,
         r#"{"status":"unknown","data":{}}"#,
-        r#"{"kind":"subscription","data":{"kind":"snapshot_and_tail","data":{"snapshot":{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":0},"tail":{"schema_version":{"major":1,"minor":1},"session_id":"22222222-2222-4222-8222-222222222222","after_sequence":0,"events":[]}}}}"#,
+        r#"{"kind":"subscription","data":{"kind":"snapshot","data":{"schema_version":{"major":1,"minor":1},"session_id":"11111111-1111-4111-8111-111111111111","at_sequence":0}}}"#,
     ] {
         if wire.contains("unknown_query") {
             assert!(serde_json::from_str::<ProtocolRequestPayloadDto>(wire).is_err());
@@ -749,16 +675,6 @@ fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
         None,
     ))
     .expect("run subscription serializes");
-    let tail = serde_json::to_value(
-        SessionEventTailBatchDto::new(
-            CURRENT_DTO_SCHEMA_VERSION,
-            session_id,
-            SessionEventSequenceDto::new(0),
-            Vec::new(),
-        )
-        .expect("empty tail is valid"),
-    )
-    .expect("tail serializes");
     let resync = serde_json::to_value(SessionResyncDto::new(
         CURRENT_DTO_SCHEMA_VERSION,
         session_id,
@@ -788,10 +704,6 @@ fn a_payload_schema_version_other_than_the_current_one_is_rejected_on_decode() {
         assert_schema_version_is_rejected::<intention_protocol::SubscribeRunCommandDto>(
             wire, &stale,
         );
-
-        let mut wire = tail.clone();
-        wire["schema_version"] = stale.clone();
-        assert_schema_version_is_rejected::<SessionEventTailBatchDto>(wire, &stale);
 
         let mut wire = resync.clone();
         wire["schema_version"] = stale.clone();

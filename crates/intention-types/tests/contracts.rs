@@ -6,9 +6,8 @@
 //! Test-first contract evidence for the planned `intention-types` public API.
 
 use intention_types::{
-    ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto, EventId, EventMetadataDto,
-    PageCursorDto, PageRequestDto, RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId,
-    TimestampDto,
+    ErrorCategoryDto, ErrorDto, ErrorRetryDto, EventEnvelopeDto, EventId, EventMetadataDto, RunId,
+    SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
 };
 
 #[test]
@@ -60,8 +59,6 @@ fn event_envelopes_round_trip_with_causal_identity() {
 #[test]
 fn validated_value_dtos_reject_invalid_wire_values() {
     assert!(serde_json::from_str::<TimestampDto>("-1").is_err());
-    assert!(serde_json::from_str::<PageCursorDto>(r#"" ""#).is_err());
-    assert!(serde_json::from_str::<PageRequestDto>(r#"{"limit":0}"#).is_err());
 }
 
 #[test]

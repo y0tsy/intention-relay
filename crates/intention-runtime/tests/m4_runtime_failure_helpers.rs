@@ -10,8 +10,7 @@ use intention_config::{
 };
 use intention_domain::{
     DomainEventDto, ModelRunFactDto, ModelRunFactInputDto, ModelRunProjectionDto,
-    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
-    RunStatusDto, SessionProjectionDto,
+    RunEventCursorDto, RunProjectionDto, RunSnapshotDto, RunStatusDto, SessionProjectionDto,
 };
 use intention_runtime::fail_starting_run;
 use intention_storage::{
@@ -73,7 +72,7 @@ impl FakeRepository {
         }
     }
 
-    fn replay(&self) -> DtoResult<RunReplayDto> {
+    fn replay(&self) -> DtoResult<RunSnapshotDto> {
         let run = RunProjectionDto::new(
             self.session_id,
             self.run_id,
@@ -89,10 +88,7 @@ impl FakeRepository {
             SessionEventSequenceDto::new(cursor.value()),
             projection,
         )?;
-        RunReplayDto::new(
-            snapshot,
-            RunEventTailPageDto::empty(self.session_id, self.run_id, cursor),
-        )
+        Ok(snapshot)
     }
 }
 
@@ -141,14 +137,14 @@ impl StorageRepositoryDto for FakeRepository {
         *self.status.borrow_mut() = RunStatusDto::Failed;
         self.appends.borrow_mut().push(input);
         let replay = self.replay()?;
-        AppendModelRunFactsOutcomeDto::new(cursor, replay.snapshot().clone(), facts)
+        AppendModelRunFactsOutcomeDto::new(cursor, replay, facts)
     }
 
-    fn load_current_run_replay(
+    fn load_current_run_snapshot(
         &self,
         session_id: SessionId,
         run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
+    ) -> DtoResult<RunSnapshotDto> {
         assert_eq!((session_id, run_id), (self.session_id, self.run_id));
         self.replay()
     }

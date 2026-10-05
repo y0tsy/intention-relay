@@ -11,8 +11,8 @@
 use intention_config::ConfigSnapshotDto;
 use intention_domain::{
     CreateSessionCommandDto, DomainEventDto, ModelRunFactInputDto, RemoveQueuedTurnCommandDto,
-    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunReplayDto, RunSnapshotDto,
-    RunStatusDto, SessionProjectionDto,
+    RunEventCursorDto, RunEventTailPageDto, RunProjectionDto, RunSnapshotDto, RunStatusDto,
+    SessionProjectionDto,
 };
 use intention_types::{
     ConfigRevisionId, DtoResult, ErrorDto, EventEnvelopeDto, QueuePositionDto, RunId,
@@ -895,17 +895,17 @@ pub trait StorageRepositoryDto {
         ))
     }
 
-    /// Loads the current matching run snapshot at its cursor and an empty tail after it.
+    /// Loads the current matching run snapshot at its cursor.
     ///
     /// # Errors
     ///
     /// Returns `run_replay_not_found` for unknown or cross-session run identity,
     /// or `run_history_unavailable` when durable M4 replay cannot be loaded.
-    fn load_current_run_replay(
+    fn load_current_run_snapshot(
         &self,
         _session_id: SessionId,
         _run_id: RunId,
-    ) -> DtoResult<RunReplayDto> {
+    ) -> DtoResult<RunSnapshotDto> {
         Err(ErrorDto::unavailable(
             "run_history_unavailable",
             "the durable run history is unavailable",

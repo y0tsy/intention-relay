@@ -624,6 +624,63 @@ def check_provider_sdk_ownership(
     return failures
 
 
+ORDERING_AUTHORITY_TYPE = re.compile(
+    r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:struct|enum|type)\s+(\w+)",
+    re.MULTILINE,
+)
+
+
+def ordering_authority_failures(
+    declared: list[str], suffixes: list[str], texts: dict[Path, str]
+) -> list[str]:
+    """Returns failures for ordering-authority types outside the declared set.
+
+    The set of durable ordering authorities is closed (ADR 0050): a record
+    family orders by the session event sequence, belongs to exactly one container
+    and orders by that container's journal, or has no durable order.
+
+    This is a name-level guard over production type declarations of every
+    visibility, including aliases. It does not inspect fields, SQL columns, or
+    documentation, so those remain review responsibilities.
+    """
+    failures: list[str] = []
+    found: set[str] = set()
+    for path, text in texts.items():
+        if "tests" in path.parts:
+            continue
+        for name in ORDERING_AUTHORITY_TYPE.findall(text):
+            if not any(name.endswith(suffix) for suffix in suffixes):
+                continue
+            found.add(name)
+            if name not in declared:
+                failures.append(
+                    f"{path}: ordering authority {name} is not declared in "
+                    "quality/architecture.toml [ordering_authorities].declared"
+                )
+    for name in declared:
+        if name not in found:
+            failures.append(
+                f"quality/architecture.toml declares ordering authority {name}, "
+                "but no production source defines it"
+            )
+    return failures
+
+
+def self_test_ordering_authorities() -> None:
+    """Proves the ordering-authority check can fail before it is trusted."""
+    declared = ["SessionEventSequenceDto"]
+    suffixes = ["SequenceDto"]
+    clean = {Path("crates/fixture/src/lib.rs"): "pub struct SessionEventSequenceDto(u64);\n"}
+    undeclared = {Path("crates/fixture/src/lib.rs"): "pub struct ExtraSequenceDto(u64);\n"}
+    missing = {Path("crates/fixture/src/lib.rs"): "pub struct UnrelatedDto(u64);\n"}
+    if ordering_authority_failures(declared, suffixes, clean):
+        fail("ordering-authority self-test: the declared set must pass")
+    if not ordering_authority_failures(declared, suffixes, undeclared):
+        fail("ordering-authority self-test: an undeclared authority must fail")
+    if not ordering_authority_failures(declared, suffixes, missing):
+        fail("ordering-authority self-test: a missing declared authority must fail")
+
+
 def check_coverage_policy(root: Path, architecture: dict[str, object]) -> list[str]:
     coverage = load_toml(root / "quality" / "coverage.toml")
     state = coverage.get("policy")
@@ -683,6 +740,18 @@ def main() -> None:
     failures.extend(check_declared_boundaries(policy, packages, texts))
     failures.extend(check_provider_sdk_ownership(policy, packages, texts))
     failures.extend(check_coverage_policy(root, policy))
+
+    self_test_ordering_authorities()
+    ordering = policy.get("ordering_authorities")
+    if not isinstance(ordering, dict):
+        fail("missing [ordering_authorities] table")
+    failures.extend(
+        ordering_authority_failures(
+            string_list(ordering, "declared"),
+            string_list(ordering, "name_suffixes"),
+            texts,
+        )
+    )
 
     forbidden = policy.get("forbidden")
     if not isinstance(forbidden, dict):

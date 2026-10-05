@@ -52,3 +52,4 @@ linked architecture sections.
 | [0047](0047-workspace-root-addressing-anchor.md) | Accepted | WorkspaceRoot as an addressing anchor (join, child-process cwd, default glob/grep scope; not a security boundary) |
 | [0048](0048-limits-by-precedent-and-no-content-scanning.md) | Accepted | Limits by precedent, no runtime content scanning, and removal of the corridor, calendar-period, and queue-audit engines |
 | [0049](0049-base-coverage-threshold.md) | Accepted | Base 80% line-coverage threshold and designated-files mechanism (replaces the A/B/C coverage tiers) |
+| [0050](0050-ordering-authorities.md) | Accepted | Ordering authorities (session event sequence and container journal sequence, plus the observation cursor as a non-authoritative resume position) |
