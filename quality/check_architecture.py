@@ -624,7 +624,10 @@ def check_provider_sdk_ownership(
     return failures
 
 
-ORDERING_AUTHORITY_TYPE = re.compile(r"pub\s+(?:struct|enum)\s+(\w+)")
+ORDERING_AUTHORITY_TYPE = re.compile(
+    r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(?:struct|enum|type)\s+(\w+)",
+    re.MULTILINE,
+)
 
 
 def ordering_authority_failures(
@@ -635,6 +638,10 @@ def ordering_authority_failures(
     The set of durable ordering authorities is closed (ADR 0050): a record
     family orders by the session event sequence, belongs to exactly one container
     and orders by that container's journal, or has no durable order.
+
+    This is a name-level guard over production type declarations of every
+    visibility, including aliases. It does not inspect fields, SQL columns, or
+    documentation, so those remain review responsibilities.
     """
     failures: list[str] = []
     found: set[str] = set()

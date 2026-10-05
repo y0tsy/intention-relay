@@ -177,7 +177,7 @@ impl IntentionClient {
         }
     }
 
-    /// Obtains a consistent snapshot-and-tail or typed resync response.
+    /// Obtains a consistent snapshot or typed resync response.
     ///
     /// # Errors
     ///

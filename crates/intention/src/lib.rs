@@ -803,7 +803,7 @@ impl DaemonApplicationFacade {
         }
     }
 
-    /// Returns a durable checkpoint and its contiguous replay tail, or typed resync.
+    /// Returns a durable checkpoint, or a typed resync.
     ///
     /// This retained M3 session-subscription seam is replay-only and does not
     /// filter session snapshots. M4 run-scoped streaming publishes through the

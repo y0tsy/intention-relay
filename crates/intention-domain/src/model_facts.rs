@@ -898,19 +898,6 @@ impl RunEventTailPageDto {
         })
     }
 
-    /// Creates the empty page at a current run cursor.
-    #[must_use]
-    pub const fn empty(session_id: SessionId, run_id: RunId, cursor: RunEventCursorDto) -> Self {
-        Self {
-            session_id,
-            run_id,
-            after_cursor: cursor,
-            facts: Vec::new(),
-            next_after_cursor: cursor,
-            has_more: false,
-        }
-    }
-
     /// Returns the owning session identity.
     #[must_use]
     pub const fn session_id(&self) -> SessionId {

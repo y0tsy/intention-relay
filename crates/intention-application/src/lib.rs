@@ -955,7 +955,7 @@ where
         )))
     }
 
-    /// Loads the current internal run-scoped durable replay.
+    /// Loads the current internal run-scoped durable snapshot.
     ///
     /// This application-facing read deliberately does not alter the M3 public
     /// protocol subscription surface.

@@ -82,7 +82,7 @@ On the wire, `params` carries the existing typed `ProtocolRequestPayloadDto` and
 conformance test enforces the one-to-one coverage of every command and query variant.
 11. After a `run.subscribe`, the server publishes `run.frame` notifications
 carrying `RunStreamFrameDto`. Session subscriptions have no push channel: `session.subscribe` and `session.snapshot`
-return their snapshot-and-tail result, and a client that needs newer events subscribes again from its cursor. No
+return their snapshot result, and a client that needs newer events subscribes again from its cursor. No
 `session.frame` notification, push registry, or second connection purpose exists. Notifications carry no `id` and expect
 no response.
 12. The initial replay or resynchronization of a run subscription is the

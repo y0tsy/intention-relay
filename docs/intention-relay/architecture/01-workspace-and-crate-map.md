@@ -110,7 +110,7 @@ flowchart BT
 ## M3 ownership decisions
 
 -  `intention-storage` defines semantic, DTO-only operations such as create session, accept or remove a queued turn,
-transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot/tail reads, and
+transition a run with mandatory oldest-queued promotion after every terminal state, recovery, snapshot and durable event-tail reads, and
 configuration-snapshot acceptance. It does not expose a transaction closure, SQL connection, filesystem path, or backend
 resource.
 -  `intention-storage-sqlite` owns bundled SQLite opening and direct creation of the single current storage schema,

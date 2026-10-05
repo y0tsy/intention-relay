@@ -263,8 +263,9 @@ credential-free surface that never rewrites history and is never destructive; it
 
 ## Notifications and acknowledgement
 
-One daemon-owned `AgentNotificationJournal` serves the local OS user. Its `AgentNotificationCursorDto` is the
-notification observation cursor for that one reader: an observation position and resume position only, never a read,
+One daemon-owned `AgentNotificationJournal` serves the local OS user. Its notification observation cursor — reserved
+as `AgentNotificationCursorDto` and typed only when this surface is activated, because an observation position needs no
+DTO before it has a producer — is the observation position for that one reader: a resume position only, never a read,
 seen, dismissed, or accepted claim, never an ordering authority, never durable order, never a deduplication key, and
 never a conflict token. Records contain only activity tree and record references, closed `Urgent` or `Ordinary`
 level/reason, safe counts/states, time, and record identity. They exclude message text and all sensitive

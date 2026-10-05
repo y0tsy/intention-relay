@@ -126,7 +126,7 @@ promoted runs keep immutable snapshot/revision attachment. Append-only events, c
 session/run snapshots are atomic; the one-active-run invariant, durable queued input with never-reused queue tickets,
 atomic terminal promotion, the `Starting -> Cancelling -> Cancelled` lifecycle, and recovery-before-ready without
 automatic external-work resumption are in place. M3 applies TOML once per daemon startup (no live reload) and serves
-durable one-shot snapshot/tail replay or typed resync only; a `run_id: Some` request always returns typed
+durable one-shot snapshot replay or typed resync only; a `run_id: Some` request always returns typed
 `HistoryUnavailable` resync rather than unfiltered session state. Persistent live run streaming, post-commit fan-out,
 slow-peer policy, and safely represented run-scoped replay arrive with M4 through separate contracts. Evidence: [M3
 Closure Evidence](../closeout/m3-closure-evidence.md).

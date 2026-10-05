@@ -46,14 +46,14 @@ a response echoes the `id` and carries exactly one of `result` or `error`; a not
 | `turn.send` | `SendUserTurnCommandDto` | command result DTO |
 | `turn.remove` | `RemoveQueuedTurnCommandDto` | command result DTO |
 | `run.stop` | `StopRunCommandDto` | command result DTO |
-| `session.subscribe` | `SubscribeSessionCommandDto` | snapshot/tail or resync result |
+| `session.subscribe` | `SubscribeSessionCommandDto` | snapshot or resync result |
 | `run.subscribe` | `SubscribeRunCommandDto` | initial replay or resync result |
 | `daemon.health` | none | daemon health/readiness projection |
 | `session.snapshot` | `GetSessionSnapshotQueryDto` | durable session snapshot |
 
 The method table is one-to-one with the `ProtocolCommandDto` and `ProtocolQueryDto` variants, plus the dedicated
 `run.subscribe` request that replaced the former run-stream connection role. `run.frame`, carrying `RunStreamFrameDto`,
-is the only notification; `session.subscribe` and `session.snapshot` return snapshot-and-tail results, and there is no
+is the only notification; `session.subscribe` and `session.snapshot` return durable snapshot results, and there is no
 session push channel.
 
 Errors follow JSON-RPC 2.0: `-32700` parse error, `-32600` invalid request, `-32601` method not found, `-32602` invalid
@@ -125,7 +125,7 @@ signal-handling claim. Admission, `StopRun`, and terminal-promotion semantics ar
 - typed command dispatch and query execution;
 - typed subscriptions;
 - reconnect behavior;
-- snapshot-plus-event-tail recovery;
+- snapshot recovery;
 - local transport error classification.
 
 It must not contain Svelte, terminal, or domain workflow behavior.
@@ -192,18 +192,18 @@ delivery, and requires snapshot recovery for a forward sequence gap.
 ### M3 durable replay-only subscriptions
 
 M3 serves sessions from durable SQLite projections and append-only event envelopes. A session subscription is still a
-one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot** and an empty
-contiguous tail at that snapshot's included sequence, or a typed resync when the session cannot be supplied. It is
+one-shot JSON-RPC request: for an unscoped request it returns the **current durable projection snapshot**, or a typed
+resync when the session cannot be supplied. It is
 **replay-only**, not a retained connection and not a live event feed, and historical projection reconstruction is not
 represented in M3. The post-commit publication seam is removed (ADR 0038 Wave 7): committed evidence is published only
 through the daemon host's commit-observation path, never through a no-op session seam. M3 durability, unscoped
-snapshot/tail replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4
+snapshot replay, ordering, and resync remain unchanged; persistent delivery is implemented only for the separate M4
 run-scoped DTOs, never for filtered M3 session state.
 
-M3 snapshot/tail DTOs represent session-contiguous sequence and cannot safely express filtered run state. Therefore
+M3 session snapshot DTOs represent session-contiguous sequence and cannot safely express filtered run state. Therefore
 every subscription with `run_id: Some` returns typed `HistoryUnavailable` resync **before any session or cursor
 validation**, whether the run matches, does not exist, belongs to another session, or has an invalid cursor. It must
-never fall back to an unfiltered session snapshot or tail. Correctly scoped replay is delivered separately by the M4
+never fall back to an unfiltered session snapshot. Correctly scoped replay is delivered separately by the M4
 run-stream subscription contract; this M3 safe resync remains distinct and is not a live stream.
 
 ## Subscription and reconnect
@@ -219,19 +219,19 @@ sequenceDiagram
 
   AD->>CL: Subscribe from sequence N
   CL->>DM: New subscription request
-  DM-->>CL: Snapshot plus event tail, or resync
+  DM-->>CL: Snapshot, or resync
   CL-->>AD: Reconcile view
   Note over AD,DM: Request connection is closed
   AD->>CL: Recover after disconnect
   CL->>DM: New subscription from last sequence M
-  DM-->>CL: Event tail or typed resync
+  DM-->>CL: Current snapshot or typed resync
   CL-->>AD: Consistent state or cleared projection
 ```
 
 ### Reconciliation rules
 
 - Adapters render in session event sequence order per session.
-- A gap requires recovery through a snapshot and event tail, not guessed UI state.
+- A gap requires recovery through a fresh snapshot, not guessed UI state.
 - Duplicate delivery is tolerated through `event_id` and session-event-sequence-aware reducers.
 - A stale live event may not mutate a projection if its session event sequence position is already applied.
 - The session event sequence is the session ordering authority; adapters do not synthesize a server sequence.
@@ -284,7 +284,7 @@ On daemon startup, before it reports `DaemonReadinessDto::Ready`:
 4.  do not automatically retry or resume model calls, tool calls, shell processes, or other external work. A newly
    promoted `starting` run represents already durable queued input only and is not reconsidered by that recovery pass;
    and
-5. make the recovered state available through later one-shot snapshot/tail replay.
+5. make the recovered state available through later one-shot snapshot replay.
 
 This policy is honest about unknown external side effects. A user may initiate a new retry or manually reconciled
 follow-up run.
@@ -293,12 +293,12 @@ follow-up run.
 
 | Requirement | Test evidence | Observable result |
 | --- | --- | --- |
-| Shared daemon | `intention-test-support` fixture-host integration and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health, snapshot, and event-tail DTOs for the same session. |
+| Shared daemon | `intention-test-support` fixture-host integration and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health and snapshot DTOs for the same session. |
 | Startup race | Multi-client bootstrap integration test. | Exactly one daemon host is created. |
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
 | Protocol mismatch | Client/server compatibility test. | Connection fails with the typed `-32001` incompatibility error before close. |
 | Protocol conformance | JSON-RPC conformance and rewritten transport integration tests. | The four standard error codes, `hello` exact-version equality, notification framing, and the one-to-one method table behave as specified. |
-| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot plus an empty contiguous tail, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` before cursor/session validation without unfiltered session state, and no request claims live delivery. |
+| Reconnect | Durable replay-only subscription integration test, including run-scoped requests. | An unscoped new one-shot request receives a current durable snapshot, or typed resync; every `run_id: Some` request receives `HistoryUnavailable` before cursor/session validation without unfiltered session state, and no request claims live delivery. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, promotes the oldest queued turn in the same transaction when present, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
 | Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |

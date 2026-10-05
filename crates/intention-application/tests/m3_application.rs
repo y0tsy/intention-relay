@@ -339,11 +339,14 @@ impl StorageRepositoryDto for FakeRepository {
         run_id: RunId,
         _after_cursor: RunEventCursorDto,
     ) -> DtoResult<RunEventTailPageDto> {
-        Ok(RunEventTailPageDto::empty(
+        RunEventTailPageDto::new(
             session_id,
             run_id,
             RunEventCursorDto::new(0),
-        ))
+            Vec::new(),
+            RunEventCursorDto::new(0),
+            false,
+        )
     }
 
     fn recover_unfinished_runs(

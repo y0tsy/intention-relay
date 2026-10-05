@@ -27,6 +27,7 @@ publication bounds, and every behavior of the ordinary runtime.
 | [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) 14 | Tree-level metadata "never becomes activity, authority, or a second sequence" | Invariant 1: tree metadata has no durable order of its own |
 | [ADR 0032](0032-accepted-deferred-directions-activity-metadata-content-inspection-per-call-cancellation.md) 29 | Tree-level metadata "does not replace or filter the activity journal or notification sequences" | The activity journal is the activity-tree container journal (authority 2, when activated), and the notification cursor is an observation position, not a sequence |
 | [ADR 0035](0035-m5plus-complete-foundation-activation.md) 85-86 | "M5+ introduces no second runtime, registry, scheduler, persistence authority, or sandbox" | The container journal is a storage mechanism inside the existing single persistence authority, not a second one; scheduler observations are operational metadata |
+| [ADR 0045](0045-local-json-rpc-2-0-transport.md) 85 | "`session.subscribe` and `session.snapshot` return their snapshot-and-tail result" | They return their snapshot result, or a typed resync |
 | [ADR 0045](0045-local-json-rpc-2-0-transport.md) 122 | "M3/M4/M5 durable runs, sessions, events, snapshots, cursors, and storage bytes are untouched by the wire change" | "Cursors" now means exactly the ordering model of this record; the wire change still touches none of it |
 | [ADR 0046](0046-typed-serde-json-contracts.md) 84-85 | "M3/M4 bytes, runs, events, snapshots, and cursors keep their recorded meaning and are never re-encoded, rewritten, or synthesized" | Recorded bytes and meanings are preserved; the removed write-only snapshot `sequence` columns carried no recorded meaning, and "cursors" means the two-authority model |
 | [ADR 0048](0048-limits-by-precedent-and-no-content-scanning.md) 93-94 | "Live queue unchanged. M3 queue tickets and atomic promotion stay exactly as they are" | Invariant 5: queue tickets are a queue-ordering mechanism outside the ordering model, and tickets and atomic promotion are unchanged |
@@ -99,6 +100,8 @@ second version ([AGENTS.md](../../../AGENTS.md), single-version rule). Recorded 
 this change removes a representation and dead members, not a version, mirroring [ADR
 0046](0046-typed-serde-json-contracts.md). Queue tickets, scheduler observations, the replay and page bounds, and the
 run tail publication are unchanged. No compatibility fixture, decoder, alias, or golden is kept for a removed member.
+A local database file created by an earlier revision is not opened, migrated, or repaired: it is deleted and recreated
+by the normal development flow, as the single live schema requires.
 
 ## Security and failure behavior
 
@@ -153,6 +156,17 @@ write-only snapshot `sequence` columns) have no remaining producer or consumer; 
 no current-policy statement still requires a removed sequence, naming any closed record deliberately left as history;
 unchanged replay and page bounds (strict-after contiguity, 256 facts, 512 KiB canonical fact data, `has_more`); and the
 gate suite passing. Gates: `make quick`, `make verify`, `docs-check`, `make architecture`, Linux/Windows CI.
+
+The symbol receipt is exact for `crates/`, `docs/intention-relay/`, `quality/`, the `Makefile`, and `.github/`. The
+removed names survive only as historical prose in the root `architecture-fitness-audit.md` (a non-normative artifact of
+an earlier audit, whose own removal is recorded separately) and in the preserved research tree `docs/reference/`; both
+are exempt because editing a historical record to hide a name it reported would destroy the record.
+
+The closed-set guard is a name-level check: `quality/check_architecture.py` rejects any production type declaration of
+any visibility, including aliases, whose name ends in a declared ordering suffix and is not in the declared set, and it
+rejects a declared authority that no production source defines. It carries a self-test proving it can fail. It does not
+inspect fields, SQL columns, or documentation, so an ordering field or column added without a new type remains a review
+responsibility stated here rather than a checked invariant.
 
 ## Research provenance
 

@@ -185,6 +185,8 @@ name_suffixes = [
   "TicketDto",
   "WatermarkDto",
   "OrderDto",
+  "EpochDto",
+  "JournalDto",
 ]
 
 [[future_crates]]

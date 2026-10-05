@@ -119,8 +119,8 @@ The current storage schema contains the `projects`, `workspace_roots`, `sessions
 `model_run_facts` and `model_run_snapshots` tables, the `container_journals` table, and the `tool_results` table, all
 created directly on open. `container_journals` is the container journal mechanism: one dense journal per container
 under a closed kind set whose only member today is `run`. The fact index references the canonical typed `domain_events`
-envelope; it stores no duplicate payload. Each run's container journal is seeded at zero by the write path
-(`ensure_run_journals`), never by open-time hydration.
+envelope; it stores no duplicate payload. Opening the database seeds a container journal at zero for every stored run, and the write path seeds the journal of
+each newly created run (`ensure_run_journals`); no read path hydrates a missing journal.
 
 ## Transaction and publication order
 
@@ -129,7 +129,7 @@ sequenceDiagram
   participant A as Application/runtime
   participant R as Semantic repository
   participant S as SQLite
-  participant P as Snapshot/tail replay
+  participant P as Snapshot replay
 
   A->>R: Validate DTO and select transition
   R->>S: Begin immediate transaction
@@ -137,7 +137,7 @@ sequenceDiagram
   R->>S: Write session/run snapshot at final sequence
   S-->>R: Commit success
   R-->>A: Committed change evidence
-  P->>S: Later one-shot snapshot/tail read
+  P->>S: Later one-shot snapshot read
   S-->>P: Durable projection and ordered events
 ```
 
@@ -184,8 +184,8 @@ versioned records.
 session (`domain_events.sequence`, with the current position in `sessions.last_sequence`).
 - Event IDs provide deduplication; the session event sequence provides ordering.
 - Every state-changing commit persists a snapshot whose `at_sequence` includes its final event.
--  A replay-only subscriber without a run scope receives the current durable projection snapshot and an empty contiguous
-tail at that snapshot's sequence, or a typed resync response. A known-session tail position beyond the durable final
+-  A replay-only subscriber without a run scope receives the current durable projection snapshot, or a typed resync
+response. A known-session tail position beyond the durable final
 sequence, including one outside SQLite's integer range, fails typed `invalid_event_tail_position` before a history
 query; an unknown session remains typed not-found.
 -  Correct run-scoped replay uses a dedicated `RunSnapshotDto` and `RunEventTailPageDto`; it never filters a session
@@ -224,7 +224,7 @@ provider kind, model, endpoint, attempt timeout, and max-attempt selection exact
 snapshot. A mismatch makes no provider call and appends the safe terminal `provider_configuration_unavailable` failure.
 The executor appends every model fact with the returned container-journal position only and delegates each
 fact/status batch to the repository's atomic append contract. It records `Starting -> Running` attempt facts,
-batches one assistant turn into non-blank UTF-8-safe 4 KiB content facts, retains reasoning only in the tail, records
+batches one assistant turn into non-blank UTF-8-safe 4 KiB content facts, retains reasoning only in run facts, never in the snapshot, records
 usage once through stream lifecycle validation, records typed tool-call facts durably and executes admitted calls
 through the daemon-owned registry with correlated `ToolResultRecorded` facts, and commits `Running -> Completing`
 before the separate `Completing -> Completed` transition. A provider-neutral runtime time port supplies durable
@@ -256,7 +256,7 @@ tool/run audit is evidence of intent and observed state, not proof of external a
 | Required cancellation path | Runtime state-machine test. | A starting run must commit `Starting -> Cancelling -> Cancelled`; direct terminal cancellation is rejected. |
 | Atomic terminal promotion | Runtime and SQLite contract tests. | A terminal transition and next queued run start are one durable commit with ordered facts; the promotion retains the queued turn's proposed `RunId`, config snapshot, and revision despite later daemon config changes. |
 | Recovery before ready | Composition restart fixture with an unfinished run. | Every unfinished run becomes `interrupted` before readiness; no external work resumes. |
-| Replay-only consistency | Durable facade snapshot/tail/resync contract test. | One-shot subscription returns a current projection plus stored contiguous tail or typed resync, never a live stream. |
+| Replay-only consistency | Durable facade snapshot/resync contract test. | One-shot subscription returns a current projection snapshot or typed resync, never a live stream. |
 | SQLite current-schema creation and config persistence | SQLite current-schema and safe snapshot persistence fixtures. | The complete current schema is created directly on open, and only credential-free snapshot data persists. |
 | M4 durable model facts and replay | Domain/storage/SQLite contract fixtures and fault injection after fact envelope/index, projection, and snapshot stages. | Typed fact batches use exact container-journal positions, bounded scoped replay never leaks a run, and every injected stage rolls back fact/index/journal/projection/session/M4 snapshot state. |
 
