@@ -234,8 +234,8 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 ## Quality-gate integration
 
 Tool, WorkspaceRoot, and hook tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md) (base 80% threshold, [ADR
-0049](../decisions/0049-base-coverage-threshold.md)). Architecture checks must reject direct process-CWD fallback and
+Makefile](12-quality-gates-and-makefile.md) (per-crate tiers, [ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)). Architecture checks must reject direct process-CWD fallback and
 VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope,
 execute-CWD, hook-order, and policy-denial scenarios above.
 

@@ -305,9 +305,9 @@ follow-up run.
 ## Quality-gate integration
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
-policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold and designated files,
-[ADR 0049](../decisions/0049-base-coverage-threshold.md)). Tauri and TUI are accepted through mapping contracts and
-fixture-daemon outcome scenarios, not a misleading aggregate UI line-coverage target.
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers,
+[ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)). Tauri and TUI carry the `edge` tier floor in addition to
+their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
 
 ## Open implementation decisions
 

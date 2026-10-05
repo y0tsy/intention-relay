@@ -204,8 +204,8 @@ atomicity.
 
 ## Quality-gate integration
 
-`intention-config` remains subject to the base 80% line-coverage threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)). TOML parsing, M1 snapshot serialization, permissions, redaction,
+`intention-config` remains subject to its `standard` tier floor ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)). TOML parsing, M1 snapshot serialization, permissions, redaction,
 and safe observability tests are blocking `make verify` inputs; M3 adds canonical snapshot-persistence, restart-only
 application, and per-run snapshot integration coverage. A recognizable fake secret is a mandatory regression fixture
 across logs, errors, snapshots, events, and adapter DTOs. See [12 Quality Gates and

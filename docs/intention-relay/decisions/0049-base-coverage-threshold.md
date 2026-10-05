@@ -7,6 +7,10 @@ Accepted 2026-09-30. It deletes the A/B/C coverage tiers and replaces them with 
 The designated-files list is empty at adoption; the mechanism exists so a future high-risk file can carry a higher bar.
 This record authorizes no new test, exclusion, override, or quality gate.
 
+Amended 2026-10-05 by [ADR 0051](0051-per-crate-coverage-tiers.md): the base threshold, the designated-files mechanism,
+and invariants 1, 2, and 4 are superseded by per-crate tiers. The exclusion, branch-metric, feature-profile, and
+scenario clauses stand.
+
 ## Scope and supersession
 
 In scope: the line-coverage threshold policy, its per-crate classification, and its declaration surface.
@@ -32,6 +36,9 @@ are historical or no-op wording: they are not policy declarations and are left a
 3. There are no per-crate categories, tier letters, or 95/90/85 crate
 thresholds.
 
+Items 1-3 are superseded by [ADR 0051](0051-per-crate-coverage-tiers.md): per-crate tiers (`core` 75%, `standard` 60%,
+`edge` 20%, `exempt` 0%) set the floors, and the workspace aggregate carries no threshold.
+
 ### Designated files
 
 4. A versioned designated-files list names individual source files that must
@@ -41,6 +48,9 @@ with a rationale. The file must exist, appear exactly once in the coverage repor
 6. The mechanism exists so a future high-risk file can carry a higher bar
 without reintroducing crate categories. A file enters the list only with its recorded rationale; the list is not a
 second tier scheme.
+
+Items 4-6 are superseded by [ADR 0051](0051-per-crate-coverage-tiers.md): the designated-files list, its per-file checks,
+and the 85% bar are deleted; the tiers are the only numeric classification.
 
 ### Unchanged exclusions, metrics, and tests
 
@@ -54,7 +64,8 @@ scenario tests defined by [architecture 10](../architecture/10-test-driven-deliv
 threshold never replaces them.
 10. Tauri and TUI presentation crates keep their existing treatment: complete
 command/event mapping contracts, all mandatory fixture-daemon smoke and outcome scenarios, and required platform CI
-evidence instead of an aggregate UI line target.
+evidence instead of an aggregate UI line target. — Amended by [ADR
+0051](0051-per-crate-coverage-tiers.md): Tauri and TUI carry the `edge` tier floor in addition to this treatment.
 
 ## Rationale
 
@@ -69,17 +80,20 @@ threshold pass, and no scenario, branch, safety, boundary, or outcome test stops
 ## Invariants
 
 1. 80% floor. Every production crate and the workspace aggregate meet the base
-80% line-coverage threshold.
+80% line-coverage threshold. — Superseded by [ADR 0051](0051-per-crate-coverage-tiers.md): every collected crate meets
+its declared tier floor, and the workspace aggregate carries no threshold.
 2. Designated 85%. Only files on the designated-files list carry the 85% bar,
-and every entry carries a rationale.
+and every entry carries a rationale. — Superseded by ADR 0051: there is no designated-files list.
 3. Exact exclusions. Enabled exclusions remain exact source paths with
 rationale, owner, and equivalent test evidence; no exclusion is added, removed, or weakened by this record.
 4. No tier reintroduction. No per-crate category, tier letter, or 95/90/85
-crate threshold returns under another name.
+crate threshold returns under another name. — Cancelled by ADR 0051: per-crate tiers are reintroduced under the approved
+layout.
 5. Semantics first. Branch coverage, feature profiles, and the mandatory
 scenario tests are unchanged and are never replaced by a line percentage.
 6. No override. There is no coverage override, waiver, ratchet, grace period,
-or grandfather clause beyond the designated-files mechanism and the reviewable exclusion policy.
+or grandfather clause beyond the designated-files mechanism and the reviewable exclusion policy. — Amended by ADR 0051:
+the designated-files mechanism no longer exists and the no-override rule stands.
 
 ## Compatibility
 
@@ -116,12 +130,16 @@ for new production crates.
 
 ## Evidence
 
-The policy change is accepted only together with: `quality/coverage.toml` declaring `base_threshold_percent = 80.0` and
-`designated_threshold_percent = 85.0` with an empty designated-files list; the coverage checker and its self-test
+The policy change is accepted only together with: `quality/coverage.toml` declaring the single base threshold and the
+designated-file bar with an empty designated-files list; the coverage checker and its self-test
 fixtures exercising the per-crate base threshold, the workspace aggregate, the designated-file bar, and the unchanged
 exclusion semantics; a documentation search receipt showing no current-policy or future-milestone statement still
 requires coverage tiers, and naming the closed records deliberately left as history; and the gate suite passing. Gates:
 `make quick`, `make verify`, `docs-check`, Linux/Windows CI.
+
+Amended 2026-10-05: this section records the accepted 2026-09-30 change only. The live policy declares the tier tables
+in `quality/coverage.toml` ([ADR 0051](0051-per-crate-coverage-tiers.md)); neither threshold key nor the designated-files
+list exists.
 
 ## Research provenance
 

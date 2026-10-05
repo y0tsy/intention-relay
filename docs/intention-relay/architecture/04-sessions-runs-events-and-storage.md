@@ -255,8 +255,8 @@ tool/run audit is evidence of intent and observed state, not proof of external a
 ## Quality-gate integration
 
 Session, run, turn, event, snapshot, and transaction tests are mandatory `make verify` inputs under the coverage policy
-of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (base 80% threshold, [ADR
-0049](../decisions/0049-base-coverage-threshold.md)), and must exercise every declared feature profile. Numeric coverage
+of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers, [ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)), and must exercise every declared feature profile. Numeric coverage
 does not excuse missing fault-injection, recovery, ordering, or durable turn outcome tests.
 
 ## Non-goals

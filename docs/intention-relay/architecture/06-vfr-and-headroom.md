@@ -136,8 +136,8 @@ original/retrieved content.
 
 ## Quality-gate integration
 
-Both crates are subject to the base 80% line-coverage threshold ([ADR
-0049](../decisions/0049-base-coverage-threshold.md)); their transform, retrieval, expiry, ordering, and adapter/model
+Both crates are subject to the coverage tier declared when they are activated ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)); their transform, retrieval, expiry, ordering, and adapter/model
 distinction tests are blocking `make verify` inputs under every relevant feature profile. Architecture checks must prove
 base tools do not import either extension implementation crate. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).

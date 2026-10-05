@@ -5,7 +5,7 @@
 This document makes TTD a delivery requirement for Intention Relay: it defines how architecture rules become executable
 checks and how implementation is judged by observable product outcomes, not only source structure or unit coverage. It
 applies to every crate, vertical slice, and adapter. The mandatory pinned tooling, strict linting, the coverage policy
-(base 80% threshold and designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles,
+(per-crate tiers, [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles,
 Makefile targets, and supply-chain gates are defined in [Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Delivery principle
@@ -48,7 +48,7 @@ Compilation is necessary but never sufficient acceptance evidence.
 For each implementation slice:
 
 1. reference the owning architecture document, the applicable coverage
-declarations under [ADR 0049](../decisions/0049-base-coverage-threshold.md), and acceptance criteria;
+declarations under [ADR 0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria;
 2. add or update DTO/contract fixtures before implementation;
 3. add failing domain, architecture, and outcome tests appropriate to the slice;
 4. implement the smallest code that makes the intended tests pass;
@@ -103,9 +103,8 @@ Every planned crate must declare a test target before implementation. Minimum ex
 | composition root | Wiring smoke tests using explicit test configuration only. |
 
 The goal is not an arbitrary number of tests. The required quantity is the smallest portfolio that proves each stated
-invariant, contract, failure mode, and outcome. The base 80% line-coverage threshold and the designated-files mechanism
-are mandatory guardrails defined in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md); they must never
-replace these semantic requirements.
+invariant, contract, failure mode, and outcome. The per-crate tier floors are mandatory guardrails defined in [12 Quality
+Gates and Makefile](12-quality-gates-and-makefile.md); they must never replace these semantic requirements.
 
 ## Closed-milestone evidence
 
@@ -238,7 +237,7 @@ CI, or any required status check.
 Each completed implementation slice must report:
 
 -  the architecture document, the applicable coverage declarations under [ADR
-  0049](../decisions/0049-base-coverage-threshold.md), and acceptance criteria it implements;
+  0051](../decisions/0051-per-crate-coverage-tiers.md), and acceptance criteria it implements;
 - tests added before or alongside behavior;
 - `make quick`, narrow, integration, and `make verify` checks run;
 - outcome scenarios covered;

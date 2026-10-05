@@ -188,6 +188,12 @@ jobs:
       - name: Report disk space before quality gate
         run: df -h . "$HOME"
 
+      - name: Run coverage-checker self-tests
+        # Pure-Python tier decisions over synthetic reports; platform-invariant,
+        # so it runs on the Linux lint-arch entry like the other source gates.
+        if: matrix.phase == 'lint-arch' && runner.os == 'Linux'
+        run: python3 quality/test_check_coverage.py
+
       - name: Collect runner metrics before quality gate (coverage)
         if: matrix.scope == 'coverage'
         run: python3 quality/collect_runner_metrics.py --label before --phase ${{ matrix.phase }} --out quality/reports/runner-metrics-${{ matrix.phase }}-before.json

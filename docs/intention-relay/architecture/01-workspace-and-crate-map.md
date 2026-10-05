@@ -39,8 +39,8 @@ contract.
 tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace/hook services; `intention-daemon` hosts
 the application path but does not select implementations. The remaining registry slots are reserved and unavailable.
 
-The M1-M5 activation notes are historical records: [ADR 0049](../decisions/0049-base-coverage-threshold.md) replaced the
-coverage-tier classification with the base 80% line-coverage threshold and the designated-files mechanism.
+The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
+`quality/coverage.toml` ([ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)).
 
 ## Planned crates
 
@@ -175,8 +175,8 @@ The workspace must have tests that fail when these rules are broken:
 8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (base 80% threshold and
-designated files, [ADR 0049](../decisions/0049-base-coverage-threshold.md)), feature profiles, lint policy, and
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers,
+[ADR 0051](../decisions/0051-per-crate-coverage-tiers.md)), feature profiles, lint policy, and
 Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals
@@ -214,8 +214,8 @@ feature policy remain activation-time projections.
 Architectures 17, 18, and 20 own future child/verifier, MCP, and kernel semantics. Kernel work must split typed
 contracts, lifecycle orchestration, and private Python/Jupyter translation without exposing implementation resources;
 Skill, provider-profile, and fork boundaries remain separate delivery decisions. Any split must preserve this acyclic
-direction, DTO-first contracts, a declared test target, the base 80% line-coverage threshold and designated-files
-mechanism ([ADR 0049](../decisions/0049-base-coverage-threshold.md)), and isolated architecture fixtures before
+direction, DTO-first contracts, a declared test target, the declared coverage tier ([ADR
+0051](../decisions/0051-per-crate-coverage-tiers.md)), and isolated architecture fixtures before
 production activation. Architecture 16 owns no scheduler crate; exact crate allocation remains activation-time work.
 
 See [decision 0004](../decisions/0004-rust-owned-capability-plane-and-fixed-tool-registry.md) and the ownership map.
