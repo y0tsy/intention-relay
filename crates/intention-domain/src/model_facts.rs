@@ -102,6 +102,9 @@ pub enum ToolResultOutcomeDto {
     Succeeded { content: String },
     /// The tool call failed safely.
     Failed { failure: RunFailureDto },
+    /// The tool call was interrupted before a final outcome; the content is
+    /// whatever output was captured before the interruption.
+    Partial { content: String },
 }
 
 impl ToolResultOutcomeDto {
@@ -123,6 +126,20 @@ impl ToolResultOutcomeDto {
     #[must_use]
     pub const fn failed(failure: RunFailureDto) -> Self {
         Self::Failed { failure }
+    }
+
+    /// Creates a partial tool-result outcome for an interrupted tool call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when content is blank.
+    pub fn partial(content: impl Into<String>) -> DtoResult<Self> {
+        let content = non_blank(
+            content.into(),
+            "invalid_tool_result_content",
+            "tool result content must not be empty",
+        )?;
+        Ok(Self::Partial { content })
     }
 }
 

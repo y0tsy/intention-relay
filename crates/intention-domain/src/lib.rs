@@ -763,7 +763,8 @@ pub enum ToolLifecycleStatusDto {
     Completed,
     Failed,
     Cancelled,
-    ExternalEffectUnknown,
+    /// The tool stopped before a final outcome; its captured output is partial.
+    Partial,
 }
 
 /// Validates one local tool lifecycle transition.
@@ -800,11 +801,7 @@ pub fn validate_tool_lifecycle_transition(
             )
             | (
                 Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::Cancelled
-            )
-            | (
-                Some(ToolLifecycleStatusDto::Started),
-                ToolLifecycleStatusDto::ExternalEffectUnknown
+                ToolLifecycleStatusDto::Partial
             )
     );
     if allowed {
@@ -950,8 +947,8 @@ pub enum ToolResultStatusDto {
     Failed,
     /// The tool stopped because its run was cancelled.
     Cancelled,
-    /// The tool's external effect could not be confirmed.
-    ExternalEffectUnknown,
+    /// The tool stopped before a final outcome; its captured output is partial.
+    Partial,
 }
 
 impl ToolResultStatusDto {
@@ -962,7 +959,7 @@ impl ToolResultStatusDto {
             Self::Completed => ToolLifecycleStatusDto::Completed,
             Self::Failed => ToolLifecycleStatusDto::Failed,
             Self::Cancelled => ToolLifecycleStatusDto::Cancelled,
-            Self::ExternalEffectUnknown => ToolLifecycleStatusDto::ExternalEffectUnknown,
+            Self::Partial => ToolLifecycleStatusDto::Partial,
         }
     }
 }
@@ -1708,7 +1705,7 @@ mod tests {
             ToolLifecycleStatusDto::Completed,
             ToolLifecycleStatusDto::Failed,
             ToolLifecycleStatusDto::Cancelled,
-            ToolLifecycleStatusDto::ExternalEffectUnknown,
+            ToolLifecycleStatusDto::Partial,
         ];
 
         for status in &statuses {
@@ -1734,8 +1731,7 @@ mod tests {
                         ToolLifecycleStatusDto::Started,
                         ToolLifecycleStatusDto::Completed
                             | ToolLifecycleStatusDto::Failed
-                            | ToolLifecycleStatusDto::Cancelled
-                            | ToolLifecycleStatusDto::ExternalEffectUnknown
+                            | ToolLifecycleStatusDto::Partial
                     )
                 );
                 assert_eq!(
@@ -1760,8 +1756,8 @@ mod tests {
                 ToolLifecycleStatusDto::Cancelled,
             ),
             (
-                ToolResultStatusDto::ExternalEffectUnknown,
-                ToolLifecycleStatusDto::ExternalEffectUnknown,
+                ToolResultStatusDto::Partial,
+                ToolLifecycleStatusDto::Partial,
             ),
         ] {
             assert_eq!(status.lifecycle_status(), lifecycle);

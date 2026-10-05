@@ -762,7 +762,12 @@ where
                             self.append(input.session_id, input.run_id, cursor, facts, None)?;
                         *durable_output = true;
                         match outcome {
-                            ToolResultOutcomeDto::Succeeded { content } => {
+                            // A partial tool result answers its call like a
+                            // completed one: the model owns the decision about
+                            // what the captured output means, and the loop
+                            // continues instead of terminalizing the run.
+                            ToolResultOutcomeDto::Succeeded { content }
+                            | ToolResultOutcomeDto::Partial { content } => {
                                 let message =
                                     ModelMessageDto::tool_result(call.call_id(), content)?;
                                 messages.push(message);

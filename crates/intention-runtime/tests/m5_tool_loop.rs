@@ -921,6 +921,75 @@ fn tool_call_executes_tool_records_result_and_completes() {
 }
 
 #[test]
+fn partial_tool_result_continues_the_loop_without_terminalizing() {
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let config = snapshot("fixture");
+    let repository = FakeRepository::new(session_id, run_id, config.clone());
+    let call = ToolCallDto::new(ToolCallId::new(), "execute", "{}").expect("call is valid");
+    let driver = ScriptedDriver::with_rounds(vec![
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::tool_call(call.clone())),
+        ],
+        vec![
+            Ok(ModelEventDto::started()),
+            Ok(ModelEventDto::text_delta("recovered").expect("text is valid")),
+            Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+        ],
+    ]);
+    let partial_content = "captured output\n[The tool call did not receive a final result; the output above is partial.]";
+    let port = ScriptedPort::new(vec![Ok(
+        ToolResultOutcomeDto::partial(partial_content).expect("partial content is valid")
+    )]);
+
+    let outcome = execute(
+        &repository,
+        &driver,
+        &port,
+        request(run_id, "fixture"),
+        config,
+        ModelCancellationSignal::new(),
+    )
+    .expect("the loop continues after a partial tool result");
+
+    assert_eq!(
+        outcome,
+        ModelRunExecutionOutcomeDto::Completed {
+            cursor: RunEventCursorDto::new(5)
+        }
+    );
+    assert_eq!(*driver.executions.borrow(), 2);
+    let appends = repository.appends.borrow();
+    assert!(matches!(
+        appends[2].facts(),
+        [ModelRunFactInputDto::ToolResultRecorded {
+            call_id,
+            outcome: ToolResultOutcomeDto::Partial { content },
+        }] if *call_id == call.call_id() && content == partial_content
+    ));
+    assert!(
+        appends
+            .iter()
+            .all(|append| !matches!(append.facts(), [ModelRunFactInputDto::Failed { .. }])),
+        "a partial tool result never records a failed fact"
+    );
+    drop(appends);
+    let requests = driver.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].messages(),
+        vec![
+            ModelMessageDto::new(ModelRoleDto::User, "hello").expect("message is valid"),
+            ModelMessageDto::assistant_tool_calls(None, vec![call.clone()])
+                .expect("message is valid"),
+            ModelMessageDto::tool_result(call.call_id(), partial_content)
+                .expect("message is valid"),
+        ]
+    );
+}
+
+#[test]
 fn multiple_tool_calls_execute_sequentially_in_provider_order() {
     let session_id = SessionId::new();
     let run_id = RunId::new();

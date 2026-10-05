@@ -12,7 +12,7 @@
 use intention_domain::WorkspaceRootDto;
 use intention_tools::{
     BoundedText, CancellationSignal, EditInput, GlobInput, GrepInput, GrepMatch, GrepScope,
-    ToolInput, ToolResult, ToolService, WriteInput,
+    ToolDispatchOutcome, ToolInput, ToolResult, ToolService, WriteInput,
 };
 use intention_types::{ToolCallId, WorkspaceRelativePathDto};
 use serde_json::json;
@@ -49,6 +49,36 @@ fn serialized_match_bytes(matched: &GrepMatch) -> usize {
 /// retained path: its JSON string bytes plus the one-byte list separator.
 fn serialized_path_bytes(path: &WorkspaceRelativePathDto) -> usize {
     path.as_str().len() + 3
+}
+
+/// Test adapter: unwraps one completed dispatch and fails loudly on any
+/// interruption, so fixtures that expect a final typed result stay direct.
+trait DispatchCompleted {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult;
+}
+
+impl DispatchCompleted for ToolService {
+    fn dispatch_completed(
+        &self,
+        call: ToolCallId,
+        input: ToolInput,
+        cancellation: CancellationSignal,
+    ) -> ToolResult {
+        match self
+            .dispatch_with_cancellation(call, input, cancellation)
+            .expect("completed dispatch succeeds")
+        {
+            ToolDispatchOutcome::Completed(result) => result,
+            ToolDispatchOutcome::Interrupted { cause, partial } => {
+                unreachable!("unexpected interrupted dispatch: {cause:?} {partial:?}")
+            }
+        }
+    }
 }
 
 #[test]
@@ -138,19 +168,17 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
     let mut large = vec![b'\n'; 70 * 1024];
     large.extend_from_slice(b"needle-in-the-tail\n");
     std::fs::write(haystack.join("tail.txt"), large).expect("seed tail file");
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle-in-the-tail").expect("pattern"),
-                scope: Some(GrepScope::Directory {
-                    path: relative("haystack"),
-                }),
-                path: None,
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle-in-the-tail").expect("pattern"),
+            scope: Some(GrepScope::Directory {
+                path: relative("haystack"),
             }),
-            CancellationSignal::new(),
-        )
-        .expect("directory grep dispatches");
+            path: None,
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
@@ -172,19 +200,17 @@ fn directory_grep_caps_scanned_file_content_and_retained_aggregate() {
         )
         .expect("seed matching file");
     }
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("prefix-").expect("pattern"),
-                scope: Some(GrepScope::Directory {
-                    path: relative("haystack"),
-                }),
-                path: None,
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("prefix-").expect("pattern"),
+            scope: Some(GrepScope::Directory {
+                path: relative("haystack"),
             }),
-            CancellationSignal::new(),
-        )
-        .expect("directory grep dispatches");
+            path: None,
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
@@ -209,17 +235,15 @@ fn pattern_only_file_grep_matches_bounded_lines_and_rejects_invalid_targets() {
     let haystack = format!("plain line\nprefix-{} needle\n{}", "x".repeat(700), "tail");
     std::fs::write(root_dir.path().join("needles.txt"), haystack).expect("seed");
     let service = ToolService::new(workspace(&root_dir));
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("needle").expect("pattern"),
-                scope: None,
-                path: Some(relative("needles.txt")),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("pattern-only file grep dispatches");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("needle").expect("pattern"),
+            scope: None,
+            path: Some(relative("needles.txt")),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
@@ -371,17 +395,15 @@ fn single_file_grep_truncates_at_the_serialized_search_window() {
     }
     std::fs::write(root_dir.path().join("many.txt"), haystack).expect("seed many matches");
     let service = ToolService::new(workspace(&root_dir));
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("a").expect("pattern"),
-                scope: None,
-                path: Some(relative("many.txt")),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("file grep dispatches");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("a").expect("pattern"),
+            scope: None,
+            path: Some(relative("many.txt")),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
@@ -418,19 +440,17 @@ fn scoped_directory_grep_truncates_at_the_serialized_search_window() {
     }
     std::fs::write(haystack.join("many.txt"), content).expect("seed many matches");
     let service = ToolService::new(workspace(&root_dir));
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Grep(GrepInput {
-                pattern: BoundedText::new("a").expect("pattern"),
-                scope: Some(GrepScope::Directory {
-                    path: relative("haystack"),
-                }),
-                path: None,
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Grep(GrepInput {
+            pattern: BoundedText::new("a").expect("pattern"),
+            scope: Some(GrepScope::Directory {
+                path: relative("haystack"),
             }),
-            CancellationSignal::new(),
-        )
-        .expect("scoped grep dispatches");
+            path: None,
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Grep(grep) = result else {
         unreachable!("grep returns a grep result")
     };
@@ -465,15 +485,13 @@ fn glob_truncates_at_the_serialized_search_window() {
         std::fs::write(many.join(format!("{:0>100}", index)), "x").expect("seed path");
     }
     let service = ToolService::new(workspace(&root_dir));
-    let result = service
-        .dispatch_with_cancellation(
-            ToolCallId::new(),
-            ToolInput::Glob(GlobInput {
-                pattern: BoundedText::new("many/*").expect("pattern"),
-            }),
-            CancellationSignal::new(),
-        )
-        .expect("glob dispatches");
+    let result = service.dispatch_completed(
+        ToolCallId::new(),
+        ToolInput::Glob(GlobInput {
+            pattern: BoundedText::new("many/*").expect("pattern"),
+        }),
+        CancellationSignal::new(),
+    );
     let ToolResult::Glob(glob) = result else {
         unreachable!("glob returns a paths result")
     };

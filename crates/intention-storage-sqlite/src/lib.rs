@@ -1220,6 +1220,21 @@ impl StorageRepositoryDto for SqliteStorageRepository {
                     )
                     .map_err(|_| run_model_context_unavailable())?,
                 );
+                // A recovered run can leave tool calls whose latest durable
+                // lifecycle status is `Started` and which never recorded a
+                // result. The next context tells the model about each one, so
+                // it learns that a previous call never finished.
+                for tool_id in unfinished_tool_calls(&transaction, session_id, historical_run_id)? {
+                    messages.push(
+                        ModelContextMessageDto::new(
+                            ModelContextRoleDto::Notice,
+                            format!(
+                                "[The tool call \"{tool_id}\" did not receive a final result.]"
+                            ),
+                        )
+                        .map_err(|_| run_model_context_unavailable())?,
+                    );
+                }
                 if historical.status() == RunStatusDto::Completed
                     && let Some(content) = completed_assistant_content(&transaction, historical)?
                 {
@@ -1664,6 +1679,58 @@ fn completed_assistant_content(
     } else {
         Ok(Some(content.to_owned()))
     }
+}
+
+/// Returns the tool identities of one run's calls whose latest durable
+/// lifecycle status is `Started` and which have no recorded tool-result fact.
+///
+/// A daemon restart can leave such calls behind: the durable `Started`
+/// lifecycle event exists, but no terminal lifecycle event or runtime
+/// tool-result fact ever followed it. Both conditions are evaluated over the
+/// existing session event stream, so no new durable record is required.
+fn unfinished_tool_calls(
+    connection: &sqlite::Connection,
+    session_id: SessionId,
+    run_id: RunId,
+) -> DtoResult<Vec<String>> {
+    let mut statement = connection
+        .prepare("SELECT envelope_json FROM domain_events WHERE session_id=?1 ORDER BY sequence")
+        .map_err(|_| run_model_context_unavailable())?;
+    let rows = statement
+        .query_map([session_id.to_string()], |row| row.get::<_, String>(0))
+        .map_err(|_| run_model_context_unavailable())?;
+    let mut started: Vec<(ToolCallId, String)> = Vec::new();
+    let mut recorded: Vec<ToolCallId> = Vec::new();
+    for row in rows {
+        let encoded = row.map_err(|_| run_model_context_unavailable())?;
+        let event: EventEnvelopeDto<DomainEventDto> =
+            serde_json::from_str(&encoded).map_err(|_| run_model_context_unavailable())?;
+        if event.session_id() != session_id {
+            return Err(run_model_context_unavailable());
+        }
+        match event.payload() {
+            DomainEventDto::ToolLifecycle(lifecycle) if lifecycle.run_id() == run_id => {
+                if lifecycle.status() == &ToolLifecycleStatusDto::Started {
+                    started.push((lifecycle.call_id(), lifecycle.tool_id().to_owned()));
+                } else {
+                    started.retain(|(call, _)| *call != lifecycle.call_id());
+                }
+            }
+            DomainEventDto::ModelToolResultRecorded(fact) if fact.run_id() == run_id => {
+                if let ModelRunFactInputDto::ToolResultRecorded { call_id, .. } =
+                    fact.fact().input()
+                {
+                    recorded.push(*call_id);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(started
+        .into_iter()
+        .filter(|(call, _)| !recorded.contains(call))
+        .map(|(_, tool_id)| tool_id)
+        .collect())
 }
 
 const fn domain_model_fact(event: &DomainEventDto) -> Option<&ModelRunFactEventDto> {

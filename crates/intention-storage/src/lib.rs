@@ -87,7 +87,7 @@ const fn is_terminal_tool_lifecycle_status(
             | intention_domain::ToolLifecycleStatusDto::Completed
             | intention_domain::ToolLifecycleStatusDto::Failed
             | intention_domain::ToolLifecycleStatusDto::Cancelled
-            | intention_domain::ToolLifecycleStatusDto::ExternalEffectUnknown
+            | intention_domain::ToolLifecycleStatusDto::Partial
     )
 }
 
@@ -661,6 +661,8 @@ pub enum ModelContextRoleDto {
     User,
     /// Final non-blank content from a completed assistant run.
     Assistant,
+    /// A daemon-synthesized notice about prior run state.
+    Notice,
 }
 
 /// One non-blank DTO-only message in persisted model context.

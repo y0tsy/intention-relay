@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use intention::DaemonApplicationFacade;
+use intention::{DaemonApplicationFacade, LocalToolInvocationOutcomeDto};
 use intention_domain::{RunEventCursorDto, RunFailureDto, RunStatusDto, ToolResultOutcomeDto};
 use intention_model::ModelCancellationSignal;
 use intention_protocol::{
@@ -874,7 +874,12 @@ impl intention_runtime::ToolExecutionPort for DaemonToolExecutor {
             // Tool-level failures are typed outcomes, not port errors; only a
             // lost execution task is a port-level infrastructure failure.
             match result {
-                Ok(result) => normalize_tool_result(result),
+                Ok(LocalToolInvocationOutcomeDto::Completed(result)) => {
+                    normalize_tool_result(result)
+                }
+                Ok(LocalToolInvocationOutcomeDto::Partial { stopped, result }) => {
+                    partial_tool_result(stopped, result)
+                }
                 Err(error) => Ok(ToolResultOutcomeDto::failed(RunFailureDto::new(
                     error.code(),
                     error.retry(),
@@ -931,13 +936,44 @@ fn unknown_tool() -> ErrorDto {
 }
 
 /// Normalizes one typed tool result into bounded durable outcome content.
+fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
+    ToolResultOutcomeDto::succeeded(normalize_tool_result_content(result)?)
+}
+
+/// Maps one interrupted invocation into bounded, model-visible partial content.
+///
+/// Captured output is normalized exactly like a completed result; the notice
+/// line tells the model that the call never received a final result, and the
+/// model decides what the captured output means.
+fn partial_tool_result(
+    stopped: bool,
+    result: Option<ToolResult>,
+) -> DtoResult<ToolResultOutcomeDto> {
+    let notice = match (stopped, &result) {
+        (true, Some(_)) => {
+            "[The tool call was stopped before a final result; the output above is partial.]"
+        }
+        (false, Some(_)) => {
+            "[The tool call did not receive a final result; the output above is partial.]"
+        }
+        (true, None) => "[The tool call was stopped before a final result.]",
+        (false, None) => "[The tool call did not receive a final result.]",
+    };
+    let content = match result {
+        Some(result) => format!("{}\n{notice}", normalize_tool_result_content(result)?),
+        None => notice.to_owned(),
+    };
+    ToolResultOutcomeDto::partial(content)
+}
+
+/// Normalizes one typed tool result into bounded durable content.
 ///
 /// The projection is redacted and workspace-relative by construction, and
 /// `ToolResultOutcomeDto::succeeded` keeps the durable outcome within its own
 /// content bound. Search results serialize their own typed result DTO, so the
 /// retained window and its truncation flag stay self-describing and identical
 /// for glob paths and grep matches (C-04).
-fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> {
+fn normalize_tool_result_content(result: ToolResult) -> DtoResult<String> {
     let content = match result.projection().content {
         ToolProjectedContent::Text { text, truncated } => {
             if truncated {
@@ -964,7 +1000,7 @@ fn normalize_tool_result(result: ToolResult) -> DtoResult<ToolResultOutcomeDto> 
         }
         ToolProjectedContent::Mutation { bytes } => format!("{bytes} bytes"),
     };
-    ToolResultOutcomeDto::succeeded(content)
+    Ok(content)
 }
 
 /// Runs the local daemon host until its process is terminated.
@@ -2097,6 +2133,40 @@ mod tests {
             panic!("a grep result succeeds")
         };
         assert_eq!(content, "{\"matches\":[],\"truncated\":true}");
+    }
+
+    #[test]
+    fn partial_tool_result_carries_captured_output_and_an_interruption_notice() {
+        let captured = ToolResult::Read(intention_tools::TextResult {
+            text: intention_tools::BoundedText::new("half a line").expect("fixture text"),
+            truncated: false,
+        });
+        let ToolResultOutcomeDto::Partial { content } =
+            partial_tool_result(true, Some(captured)).expect("a partial outcome normalizes")
+        else {
+            panic!("an interrupted call yields a partial outcome")
+        };
+        assert_eq!(
+            content,
+            "half a line\n[The tool call was stopped before a final result; the output above is partial.]"
+        );
+
+        let ToolResultOutcomeDto::Partial { content } =
+            partial_tool_result(false, None).expect("a lost partial outcome normalizes")
+        else {
+            panic!("an interrupted call yields a partial outcome")
+        };
+        assert_eq!(content, "[The tool call did not receive a final result.]");
+
+        let ToolResultOutcomeDto::Partial { content } =
+            partial_tool_result(true, None).expect("a stopped partial outcome normalizes")
+        else {
+            panic!("an interrupted call yields a partial outcome")
+        };
+        assert_eq!(
+            content,
+            "[The tool call was stopped before a final result.]"
+        );
     }
 
     #[test]

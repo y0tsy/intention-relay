@@ -52,7 +52,9 @@ use intention_runtime::{
 };
 use intention_storage::{AppendModelRunFactsInputDto, StorageRepositoryDto};
 use intention_storage_sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-use intention_tools::{CancellationSignal, ToolInput, ToolResult};
+#[cfg(test)]
+use intention_tools::ToolResult;
+use intention_tools::{CancellationSignal, ToolInput};
 use intention_types::{
     ConfigRevisionId, CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, EventEnvelopeDto,
     RunId, SchemaVersionDto, SessionEventSequenceDto, SessionId, TimestampDto,
@@ -67,6 +69,13 @@ const PROTOCOL_VERSION: intention_protocol::ProtocolVersionDto =
 /// The single live configuration snapshot schema (intention-config current schema).
 const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
+
+/// The terminal outcome of one facade local tool invocation.
+///
+/// Re-exported for the daemon host, which maps the outcome onto the
+/// model-visible tool-result fact without depending on the application crate
+/// directly.
+pub use intention_application::LocalToolInvocationOutcomeDto;
 
 /// Public M3 daemon application facade over a private durable composition.
 #[derive(Clone)]
@@ -310,7 +319,7 @@ impl DaemonApplicationFacade {
         tool_id: impl Into<String>,
         input: ToolInput,
         workspace: WorkspaceRoot,
-    ) -> DtoResult<ToolResult> {
+    ) -> DtoResult<LocalToolInvocationOutcomeDto> {
         // The publication reread is scoped to this exact pre-invocation durable
         // position, so it can only observe this invocation's committed evidence.
         let after_sequence = self
@@ -1882,7 +1891,7 @@ mod tests {
             "durable model cancellation semantics stay two-step"
         );
 
-        let error = facade
+        let outcome = facade
             .invoke_local_tool_for_daemon(
                 session_id,
                 run_id,
@@ -1896,8 +1905,14 @@ mod tests {
                 }),
                 workspace,
             )
-            .expect_err("a stopped run cannot admit new local effects");
-        assert_eq!(error.code(), "tool_cancelled");
+            .expect("a stopped run yields a partial outcome, not an error");
+        assert_eq!(
+            outcome,
+            LocalToolInvocationOutcomeDto::Partial {
+                stopped: true,
+                result: None,
+            }
+        );
         assert!(
             !workspace_directory.path().join("late.txt").exists(),
             "no workspace effect may occur after the stop"
@@ -1905,7 +1920,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_stop_reaches_in_flight_execute_and_classifies_unknown_external_effect() {
+    fn daemon_stop_reaches_in_flight_execute_and_records_a_partial_result() {
         let (_directory, facade) = test_facade();
         let session_id = SessionId::new();
         create(&facade, session_id);
@@ -1964,11 +1979,14 @@ mod tests {
             .stop_run_for_daemon_host(session_id, run_id)
             .expect("host stop commits cancelling while execute runs");
 
-        let error = worker
+        let outcome = worker
             .join()
             .expect("worker completes")
-            .expect_err("in-flight execution observes the stop");
-        assert_eq!(error.code(), "tool_execute_external_effect_unknown");
+            .expect("in-flight execution observes the stop as a partial outcome");
+        let LocalToolInvocationOutcomeDto::Partial { stopped, .. } = outcome else {
+            unreachable!("the stopped execute must be a partial outcome")
+        };
+        assert!(stopped);
         assert_eq!(
             facade
                 .load_current_run_snapshot_for_daemon(session_id, run_id)
@@ -2003,8 +2021,10 @@ mod tests {
                 )
                 .expect("reads complete before any stop");
             match result {
-                ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
-                _ => unreachable!("read dispatch returns a read result"),
+                LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(text)) => {
+                    assert_eq!(text.text.as_str(), "hello")
+                }
+                _ => unreachable!("read dispatch returns a completed read result"),
             }
         }
 
@@ -2012,7 +2032,7 @@ mod tests {
             .stop_run_for_daemon_host(session_id, run_id)
             .expect("host stop commits cancelling after completed effects");
 
-        let error = facade
+        let outcome = facade
             .invoke_local_tool_for_daemon(
                 session_id,
                 run_id,
@@ -2026,8 +2046,14 @@ mod tests {
                 }),
                 workspace,
             )
-            .expect_err("follow-on effects stay fenced after the stop");
-        assert_eq!(error.code(), "tool_cancelled");
+            .expect("a fenced follow-on yields a partial outcome");
+        assert_eq!(
+            outcome,
+            LocalToolInvocationOutcomeDto::Partial {
+                stopped: true,
+                result: None,
+            }
+        );
         assert!(
             !workspace_directory.path().join("late.txt").exists(),
             "the committed read results stand; no late effect occurs"
@@ -2072,8 +2098,10 @@ mod tests {
             )
             .expect("read completes before any stop");
         match result {
-            ToolResult::Read(text) => assert_eq!(text.text.as_str(), "hello"),
-            _ => unreachable!("read dispatch returns a read result"),
+            LocalToolInvocationOutcomeDto::Completed(ToolResult::Read(text)) => {
+                assert_eq!(text.text.as_str(), "hello")
+            }
+            _ => unreachable!("read dispatch returns a completed read result"),
         }
 
         let durable_tail = facade

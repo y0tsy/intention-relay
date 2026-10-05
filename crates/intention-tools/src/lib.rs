@@ -23,7 +23,7 @@ mod timeout_tests {
     use std::process::Command;
 
     #[test]
-    fn timeout_is_classified_as_unknown_effect_without_waiting_thirty_seconds() {
+    fn timeout_is_classified_as_a_lost_interruption_without_waiting_thirty_seconds() {
         let mut command = if cfg!(windows) {
             let mut command = Command::new("ping");
             command.args(["-n", "3", "127.0.0.1"]);
@@ -43,7 +43,10 @@ mod timeout_tests {
         );
         assert!(matches!(
             result,
-            Err("tool_execute_external_effect_unknown")
+            Err(ExecuteFailure::Interrupted {
+                cause: InterruptCause::Lost,
+                ..
+            })
         ));
         // The deadline bound is the controlling invariant: the tool must
         // return promptly (far below the thirty-second execute default) even
@@ -80,7 +83,10 @@ mod timeout_tests {
         );
         assert!(matches!(
             result,
-            Err("tool_execute_external_effect_unknown")
+            Err(ExecuteFailure::Interrupted {
+                cause: InterruptCause::Lost,
+                ..
+            })
         ));
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -207,7 +213,7 @@ impl CancellationSignal {
     /// Returns whether the spawn was observed. This is a test-only
     /// synchronization point for deterministic cancellation fixtures: waiting
     /// on a confirmed spawn replaces blind sleeps while keeping the
-    /// platform-independent unknown external-effect classification intact. It
+    /// platform-independent interruption classification intact. It
     /// is hidden from the public documentation because no production caller
     /// should depend on it.
     #[doc(hidden)]
@@ -261,8 +267,9 @@ pub enum ToolPolicy {
 ///
 /// Per the external-attempt taxonomy, a known non-zero exit or known signal
 /// termination is a normalized program result carried on the typed output, not
-/// a transport-level tool failure. Only lost terminal evidence (cancellation,
-/// timeout) classifies as an unknown-effect error.
+/// a transport-level tool failure. Lost terminal evidence (cancellation,
+/// timeout) classifies as an interrupted dispatch whose captured output, when
+/// any, stays partial.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolProcessStatus {
@@ -389,7 +396,7 @@ struct BoundedOutput {
 fn bounded_output(
     child: Child,
     cancellation: CancellationSignal,
-) -> Result<BoundedOutput, &'static str> {
+) -> Result<BoundedOutput, ExecuteFailure> {
     bounded_output_with_timeout(child, cancellation, EXECUTE_TIMEOUT)
 }
 
@@ -427,11 +434,84 @@ fn progress_add(progress: &AtomicU64, count: usize) {
     let _ = progress.fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed);
 }
 
+/// Raw output captured before a program was stopped, with its truncation flag.
+struct PartialOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+}
+
+impl PartialOutput {
+    /// Keeps whatever the pipe drain collected; a stalled drain has no bytes.
+    fn from_drain(drain: PipeDrain) -> Option<Self> {
+        let PipeDrain::Complete { stdout, stderr } = drain else {
+            return None;
+        };
+        let (stdout, stdout_truncated) = stdout.unwrap_or_default();
+        let (stderr, stderr_truncated) = stderr.unwrap_or_default();
+        Some(Self {
+            stdout,
+            stderr,
+            truncated: stdout_truncated || stderr_truncated,
+        })
+    }
+
+    /// Renders the captured bytes exactly like a completed execute result,
+    /// without the exit status line that only a finished program has.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when the rendered text violates the bounded
+    /// text contract.
+    fn into_result(self) -> DtoResult<ToolResult> {
+        let (stdout, _) = bounded_lossy(&self.stdout);
+        let (stderr, _) = bounded_lossy(&self.stderr);
+        let text = format!(
+            "stdout:\n{stdout}\nstderr:\n{stderr}{}",
+            if self.truncated { "\n[truncated]" } else { "" }
+        );
+        Ok(ToolResult::Execute(TextResult {
+            text: BoundedText::new(text)?,
+            truncated: self.truncated,
+        }))
+    }
+}
+
+/// Why one bounded program collection stopped without a final result.
+enum ExecuteFailure {
+    /// A pipe reader failed or panicked.
+    ReadFailed,
+    /// The program was interrupted; captured bytes are kept when available.
+    Interrupted {
+        cause: InterruptCause,
+        partial: Option<PartialOutput>,
+    },
+}
+
+/// Classifies one observed interruption: an explicit cancellation is a stop,
+/// anything else (deadline, stalled drain, failed wait) is lost evidence.
+fn interruption_cause(cancellation: &CancellationSignal) -> InterruptCause {
+    if cancellation.is_cancelled() {
+        InterruptCause::Stopped
+    } else {
+        InterruptCause::Lost
+    }
+}
+
+/// Stable error code for one interrupted execution surfaced through the
+/// envelope boundary.
+const fn interruption_code(cause: InterruptCause) -> &'static str {
+    match cause {
+        InterruptCause::Stopped => "tool_cancelled",
+        InterruptCause::Lost => "tool_execution_interrupted",
+    }
+}
+
 fn bounded_output_with_timeout(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Duration,
-) -> Result<BoundedOutput, &'static str> {
+) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
     let stdout_progress = Arc::new(AtomicU64::new(0));
     let stderr_progress = Arc::new(AtomicU64::new(0));
@@ -464,36 +544,46 @@ fn bounded_output_with_timeout(
             // The direct child is killed and, on Unix, its whole process
             // group, so a backgrounded descendant that inherited the pipes
             // cannot keep the reader threads alive after the tool returns.
+            let cause = interruption_cause(&cancellation);
             terminate_process_tree(&mut child, child_id);
             let _ = child.wait();
-            let _ = drain_pipes(
+            // The interruption is already observed: the drain joins the
+            // killed readers within its existing bound instead of bailing on
+            // the signal, so their captured output survives as the partial
+            // result whenever the pipes were collected.
+            let drained = drain_pipes(
                 stdout,
                 stderr,
                 &progress,
                 READER_DRAIN_GRACE,
                 deadline,
-                &cancellation,
+                None,
             );
-            return Err("tool_execute_external_effect_unknown");
+            return Err(ExecuteFailure::Interrupted {
+                cause,
+                partial: PartialOutput::from_drain(drained),
+            });
         }
         match child.try_wait() {
             Ok(Some(status)) => {
                 // The direct child is reaped, but a descendant may still hold
                 // the output pipes open. Collect while the readers keep making
                 // progress, within the grace bound; a drain that stalls is
-                // killed and classified unknown so Execute still returns
-                // within its deadline.
+                // killed and classified as a lost interruption so Execute
+                // still returns within its deadline.
                 match drain_pipes(
                     stdout,
                     stderr,
                     &progress,
                     READER_DRAIN_GRACE,
                     deadline,
-                    &cancellation,
+                    Some(&cancellation),
                 ) {
                     PipeDrain::Complete { stdout, stderr } => {
-                        let (stdout, stdout_was_truncated) = stdout?;
-                        let (stderr, stderr_was_truncated) = stderr?;
+                        let (stdout, stdout_was_truncated) =
+                            stdout.map_err(|_| ExecuteFailure::ReadFailed)?;
+                        let (stderr, stderr_was_truncated) =
+                            stderr.map_err(|_| ExecuteFailure::ReadFailed)?;
                         return Ok(BoundedOutput {
                             status,
                             stdout,
@@ -503,25 +593,33 @@ fn bounded_output_with_timeout(
                         });
                     }
                     PipeDrain::Stalled => {
+                        let cause = interruption_cause(&cancellation);
                         terminate_process_tree(&mut child, child_id);
                         let _ = child.wait();
-                        return Err("tool_execute_external_effect_unknown");
+                        return Err(ExecuteFailure::Interrupted {
+                            cause,
+                            partial: None,
+                        });
                     }
                 }
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(_) => {
+                let cause = interruption_cause(&cancellation);
                 terminate_process_tree(&mut child, child_id);
                 let _ = child.wait();
-                let _ = drain_pipes(
+                let drained = drain_pipes(
                     stdout,
                     stderr,
                     &progress,
                     READER_DRAIN_GRACE,
                     deadline,
-                    &cancellation,
+                    None,
                 );
-                return Err("tool_execute_external_effect_unknown");
+                return Err(ExecuteFailure::Interrupted {
+                    cause,
+                    partial: PartialOutput::from_drain(drained),
+                });
             }
         }
     }
@@ -558,20 +656,23 @@ enum PipeDrain {
     Stalled,
 }
 
-/// Joins both pipe readers until the stall window or `deadline`, observing
-/// cancellation.
+/// Joins both pipe readers until the stall window or `deadline`.
 ///
 /// A reader that keeps consuming bytes is descheduled rather than stalled, so
 /// observed progress re-arms the stall window up to `deadline`; a reader that
 /// stops making progress for the whole window is treated as a descendant
-/// holding the pipes open.
+/// holding the pipes open. The success path passes the invocation's signal so
+/// a cancellation ends the drain early; an interrupted collection passes
+/// `None`, because the interruption is already observed and the readers killed
+/// with their process tree must be joined so their captured output survives as
+/// the partial result.
 fn drain_pipes(
     mut stdout: Option<ReaderHandle>,
     mut stderr: Option<ReaderHandle>,
     progress: &[&AtomicU64],
     stall: Duration,
     deadline: Instant,
-    cancellation: &CancellationSignal,
+    cancellation: Option<&CancellationSignal>,
 ) -> PipeDrain {
     // An absent reader is already collected: the joined pair must complete even
     // when a caller pipes only one of the two streams.
@@ -602,7 +703,7 @@ fn drain_pipes(
                 (stdout_result, stderr_result) = partial;
             }
         }
-        if cancellation.is_cancelled() || Instant::now() >= until {
+        if cancellation.is_some_and(CancellationSignal::is_cancelled) || Instant::now() >= until {
             return PipeDrain::Stalled;
         }
         thread::sleep(Duration::from_millis(5));
@@ -645,7 +746,7 @@ mod drain_progress_tests {
             &[&*progress],
             Duration::from_millis(50),
             Instant::now() + Duration::from_secs(5),
-            &CancellationSignal::new(),
+            None,
         );
         assert!(matches!(drain, PipeDrain::Complete { .. }));
     }
@@ -665,7 +766,7 @@ mod drain_progress_tests {
             &[&*progress],
             Duration::from_millis(50),
             started + Duration::from_secs(30),
-            &CancellationSignal::new(),
+            None,
         );
         assert!(matches!(drain, PipeDrain::Stalled));
         assert!(started.elapsed() < Duration::from_secs(5));
@@ -1613,6 +1714,40 @@ impl ExecutedTool {
     }
 }
 
+/// Why one tool dispatch stopped before producing a final result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InterruptCause {
+    /// Cancellation was observed while the tool was running.
+    Stopped,
+    /// The tool lost its process evidence: deadline, stalled pipes, or a
+    /// failed wait probe.
+    Lost,
+}
+
+/// Outcome of one admitted tool dispatch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ToolDispatchOutcome {
+    /// The tool produced its final typed result.
+    Completed(ToolResult),
+    /// The tool stopped before a final result; `partial` carries the output
+    /// captured before the interruption when the pipes were collected.
+    Interrupted {
+        cause: InterruptCause,
+        partial: Option<ToolResult>,
+    },
+}
+
+/// Outcome of one admitted execution before the result-boundary projection.
+pub(crate) enum ExecutedOutcome {
+    /// The tool produced its final typed result.
+    Completed(ExecutedTool),
+    /// The tool stopped before a final result.
+    Interrupted {
+        cause: InterruptCause,
+        partial: Option<ToolResult>,
+    },
+}
+
 /// Local execution service rooted at an authorized workspace.
 pub struct ToolService {
     root: WorkspaceRoot,
@@ -1627,15 +1762,19 @@ impl ToolService {
     ///
     /// # Errors
     ///
-    /// Returns a safe typed error when cancellation, validation, workspace resolution, or execution fails.
+    /// Returns a safe typed error when validation, workspace resolution, or execution fails.
     pub fn dispatch_with_cancellation(
         &self,
         call: ToolCallId,
         input: ToolInput,
         cancellation: CancellationSignal,
-    ) -> DtoResult<ToolResult> {
-        self.execute_checked(call, input, cancellation)
-            .map(|executed| executed.result)
+    ) -> DtoResult<ToolDispatchOutcome> {
+        Ok(match self.execute_checked(call, input, cancellation)? {
+            ExecutedOutcome::Completed(executed) => ToolDispatchOutcome::Completed(executed.result),
+            ExecutedOutcome::Interrupted { cause, partial } => {
+                ToolDispatchOutcome::Interrupted { cause, partial }
+            }
+        })
     }
 
     /// Validates admission, executes one tool effect, and reports the typed
@@ -1645,22 +1784,32 @@ impl ToolService {
         call: ToolCallId,
         input: ToolInput,
         cancellation: CancellationSignal,
-    ) -> DtoResult<ExecutedTool> {
+    ) -> DtoResult<ExecutedOutcome> {
         let _ = call;
         // Keep the identity on the real dispatch path: adapters cannot execute
         // a call while silently substituting another call id.
         if cancellation.is_cancelled() {
-            return Err(intention_types::ErrorDto::validation(
-                "tool_cancelled",
-                "tool invocation was cancelled before execution",
-            ));
+            return Ok(ExecutedOutcome::Interrupted {
+                cause: InterruptCause::Stopped,
+                partial: None,
+            });
         }
         Ok(match input {
-            ToolInput::Read(i) => ExecutedTool::bare(file::read(&self.root, i)?),
-            ToolInput::Write(i) => ExecutedTool::bare(file::write(&self.root, i)?),
-            ToolInput::Edit(i) => ExecutedTool::bare(file::edit(&self.root, i)?),
-            ToolInput::Glob(i) => ExecutedTool::bare(search::glob(&self.root, i)?),
-            ToolInput::Grep(i) => ExecutedTool::bare(search::grep(&self.root, i)?),
+            ToolInput::Read(i) => {
+                ExecutedOutcome::Completed(ExecutedTool::bare(file::read(&self.root, i)?))
+            }
+            ToolInput::Write(i) => {
+                ExecutedOutcome::Completed(ExecutedTool::bare(file::write(&self.root, i)?))
+            }
+            ToolInput::Edit(i) => {
+                ExecutedOutcome::Completed(ExecutedTool::bare(file::edit(&self.root, i)?))
+            }
+            ToolInput::Glob(i) => {
+                ExecutedOutcome::Completed(ExecutedTool::bare(search::glob(&self.root, i)?))
+            }
+            ToolInput::Grep(i) => {
+                ExecutedOutcome::Completed(ExecutedTool::bare(search::grep(&self.root, i)?))
+            }
             ToolInput::Execute(i) => execute::run(&self.root, i, cancellation)?,
         })
     }
@@ -1678,6 +1827,10 @@ impl ToolService {
 
     /// Invokes a tool with cancellation and records result-boundary metadata.
     ///
+    /// An interrupted execution has no result-boundary envelope: the envelope
+    /// carries only a completed typed result, so the interruption surfaces as
+    /// its stable typed error code through this boundary.
+    ///
     /// # Errors
     ///
     /// Returns the typed error produced while validating and dispatching.
@@ -1694,18 +1847,21 @@ impl ToolService {
         let executed =
             self.execute_checked(invocation.context.call_id, invocation.input, cancellation);
         let elapsed_ms = started.elapsed().as_millis() as u64;
-        let outcome = if executed.is_ok() {
-            ToolOutcome::Succeeded
-        } else {
-            ToolOutcome::Failed
+        let executed = match executed? {
+            ExecutedOutcome::Completed(executed) => executed,
+            ExecutedOutcome::Interrupted { cause, .. } => {
+                return Err(intention_types::ErrorDto::validation(
+                    interruption_code(cause),
+                    "workspace command execution was interrupted",
+                ));
+            }
         };
-        let executed = executed?;
         Ok(ToolResultEnvelope {
             schema_version: invocation.schema_version,
             context: invocation.context,
             result: executed.result,
             observability: ToolObservability {
-                outcome,
+                outcome: ToolOutcome::Succeeded,
                 policy: ToolPolicy::Allowed,
                 elapsed_ms,
             },
@@ -1737,7 +1893,7 @@ fn execute_tool(
     root: &WorkspaceRoot,
     input: ExecuteInput,
     cancellation: CancellationSignal,
-) -> DtoResult<ExecutedTool> {
+) -> DtoResult<ExecutedOutcome> {
     let mut command = Command::new(input.program.as_str());
     command.args(input.args.iter().map(BoundedText::as_str));
     command.current_dir(root.execute_cwd());
@@ -1760,9 +1916,19 @@ fn execute_tool(
         )
     })?;
     cancellation.observe_spawn();
-    let output = bounded_output(child, cancellation).map_err(|code| {
-        intention_types::ErrorDto::validation(code, "workspace command execution failed")
-    })?;
+    let output = match bounded_output(child, cancellation) {
+        Ok(output) => output,
+        Err(ExecuteFailure::ReadFailed) => {
+            return Err(intention_types::ErrorDto::validation(
+                "tool_execute_read_failed",
+                "workspace command execution failed",
+            ));
+        }
+        Err(ExecuteFailure::Interrupted { cause, partial }) => {
+            let partial = partial.map(PartialOutput::into_result).transpose()?;
+            return Ok(ExecutedOutcome::Interrupted { cause, partial });
+        }
+    };
     let process_status = ToolProcessStatus::classify(output.status);
     let (stdout, _) = bounded_lossy(&output.stdout);
     let (stderr, _) = bounded_lossy(&output.stderr);
@@ -1778,16 +1944,13 @@ fn execute_tool(
         "stdout:\n{stdout}\nstderr:\n{stderr}\n{status_text}{}",
         if truncated { "\n[truncated]" } else { "" }
     );
-    // A known non-zero exit or known signal termination is a normalized
-    // program result, not a transport error; only the unknown-effect paths in
-    // `bounded_output` turn into typed errors.
-    Ok(ExecutedTool {
+    Ok(ExecutedOutcome::Completed(ExecutedTool {
         result: ToolResult::Execute(TextResult {
             text: BoundedText::new(text)?,
             truncated,
         }),
         process_status: Some(process_status),
-    })
+    }))
 }
 
 fn write_tool(root: &WorkspaceRoot, input: WriteInput) -> DtoResult<ToolResult> {

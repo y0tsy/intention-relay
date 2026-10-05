@@ -645,6 +645,11 @@ fn translate_message(
             content: message.content().to_owned(),
         }),
         ModelRoleDto::Assistant => translate_assistant_message(message, attachments),
+        // A notice is daemon-synthesized context for the model: the wire
+        // carries it as a user-role message with its text unchanged.
+        ModelRoleDto::Notice => Ok(WireMessage::User {
+            content: message.content().to_owned(),
+        }),
         ModelRoleDto::Tool => {
             let tool_call_id = message.tool_call_id().ok_or_else(|| {
                 ErrorDto::validation(
@@ -709,6 +714,33 @@ fn translate_assistant_message(
 mod tests {
     use super::*;
     use intention_types::{ErrorRetryDto, RunId};
+
+    #[test]
+    fn notice_role_translates_as_a_user_message_with_its_text_unchanged() {
+        let request = ModelRequestDto::new(
+            RunId::new(),
+            "fixture",
+            vec![
+                ModelMessageDto::new(
+                    ModelRoleDto::Notice,
+                    "[The tool call \"read\" did not receive a final result.]",
+                )
+                .expect("notice is valid"),
+            ],
+            None,
+            None,
+        )
+        .expect("request is valid");
+        let wire = serde_json::to_value(translate_request(&request).expect("request translates"))
+            .expect("request serializes");
+        assert_eq!(
+            wire["messages"][0],
+            serde_json::json!({
+                "role": "user",
+                "content": "[The tool call \"read\" did not receive a final result.]",
+            })
+        );
+    }
 
     #[test]
     fn generic_chat_translates_assistant_tool_calls_and_tool_results() {

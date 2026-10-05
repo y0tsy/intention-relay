@@ -31,6 +31,8 @@ pub enum ModelRoleDto {
     Assistant,
     /// A tool-role message carrying the result of one tool call.
     Tool,
+    /// A daemon-synthesized notice about prior run state.
+    Notice,
 }
 
 /// A validated model-context message, text-only or carrying tool calls or a tool result.
@@ -69,7 +71,10 @@ impl<'de> Deserialize<'de> for ModelMessageDto {
                 Self::assistant_tool_calls(Some(raw.content), tool_calls)
             }
             (
-                role @ (ModelRoleDto::System | ModelRoleDto::User | ModelRoleDto::Assistant),
+                role @ (ModelRoleDto::System
+                | ModelRoleDto::User
+                | ModelRoleDto::Assistant
+                | ModelRoleDto::Notice),
                 None,
                 None,
             ) => Self::new(role, raw.content),
